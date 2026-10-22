@@ -21,6 +21,20 @@ export const ID_PREFIXES = {
   node: "node",
   joinToken: "njt",
   message: "msg",
+  project: "prj",
+  environment: "env",
+  service: "svc",
+  serviceConfig: "cfg",
+  variable: "var",
+  build: "bld",
+  deployment: "dep",
+  deploymentEvent: "dev",
+  placement: "plc",
+  domain: "dom",
+  githubInstallation: "ghi",
+  logChunk: "log",
+  /** A replica on a node; also the container's identity in desired_state. */
+  workload: "wl",
 } as const;
 
 /** An entity kind that has an ID prefix. */

@@ -15,6 +15,14 @@ export const SettingKey = {
   setupLock: "setup_lock",
   setupCompletedAt: "setup_completed_at",
   signingKey: "signing_key",
+  /** Parent domain of generated hostnames (a string); unset until an owner sets it. */
+  appsDomain: "apps_domain",
+  /** Ingress TLS mode (`TlsMode`); `DEFAULT_TLS_MODE` when unset. */
+  tlsMode: "tls_mode",
+  /** GitHub App credentials from the manifest flow, sealed like the signing key. */
+  githubApp: "github_app",
+  /** Pending manifest-flow state token and its expiry, checked by the callback. */
+  githubManifestState: "github_manifest_state",
 } as const;
 
 /**

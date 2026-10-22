@@ -1,0 +1,13 @@
+{
+  "type": "logs",
+  "source": {
+    "type": "runtime",
+    "workload_id": "wl_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "deployment_id": "dep_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "lines": [
+    { "ts": 1700000000000, "stream": "stdout", "text": "listening on :3000" },
+    { "ts": 1700000000001, "stream": "stderr", "text": "warn: héllo \"quoted\" 🚀" },
+    { "ts": 1700000000002, "stream": "system", "text": "health check passed" }
+  ]
+}

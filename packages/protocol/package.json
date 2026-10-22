@@ -10,7 +10,7 @@
     "typecheck": "tsc -p .",
     "test": "vitest run",
     "gen:schema": "tsx scripts/gen-schema.ts",
-    "gen:fixtures": "tsx scripts/gen-signed-fixture.ts"
+    "gen:fixtures": "tsx scripts/gen-fixtures.ts"
   },
   "dependencies": {
     "zod": "^4.6.7"

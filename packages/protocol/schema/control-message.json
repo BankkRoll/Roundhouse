@@ -69,23 +69,445 @@
           "maximum": 9007199254740991
         },
         "workloads": {
+          "maxItems": 128,
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
               "id": {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "service",
+                  "system"
+                ]
+              },
+              "project_id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "environment_id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "service_id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "deployment_id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "replica": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 999
               },
               "image": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 1024,
+                "pattern": "^(?:[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?::[0-9]{1,5})?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$"
+              },
+              "registry_auth": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "server": {
+                        "type": "string",
+                        "maxLength": 260,
+                        "pattern": "^[A-Za-z0-9.-]+(:[0-9]{1,5})?$"
+                      },
+                      "username": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "password": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "server",
+                      "username",
+                      "password"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "command": {
+                "minItems": 1,
+                "maxItems": 256,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 0
+                }
+              },
+              "entrypoint": {
+                "minItems": 1,
+                "maxItems": 256,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 0
+                }
+              },
+              "env": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 0
+                }
+              },
+              "ports": {
+                "maxItems": 32,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "container_port": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65535
+                    },
+                    "protocol": {
+                      "type": "string",
+                      "enum": [
+                        "http",
+                        "tcp"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "container_port",
+                    "protocol"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "routes": {
+                "maxItems": 32,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "hostname": {
+                      "type": "string",
+                      "maxLength": 253,
+                      "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+                    },
+                    "container_port": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65535
+                    },
+                    "path_prefix": {
+                      "type": "string",
+                      "maxLength": 256,
+                      "pattern": "^\\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
+                    }
+                  },
+                  "required": [
+                    "hostname",
+                    "container_port"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "healthcheck": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "http",
+                          "tcp",
+                          "none"
+                        ]
+                      },
+                      "path": {
+                        "type": "string",
+                        "maxLength": 1024,
+                        "pattern": "^\\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
+                      },
+                      "port": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      "interval_s": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3600
+                      },
+                      "timeout_s": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 300
+                      },
+                      "retries": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100
+                      },
+                      "start_period_s": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 3600
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "port",
+                      "interval_s",
+                      "timeout_s",
+                      "retries",
+                      "start_period_s"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "resources": {
+                "type": "object",
+                "properties": {
+                  "cpu_millis": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 512000
+                  },
+                  "memory_mb": {
+                    "type": "integer",
+                    "minimum": 16,
+                    "maximum": 2097152
+                  },
+                  "pids": {
+                    "type": "integer",
+                    "minimum": 16,
+                    "maximum": 65536
+                  }
+                },
+                "required": [
+                  "cpu_millis",
+                  "memory_mb",
+                  "pids"
+                ],
+                "additionalProperties": false
+              },
+              "restart": {
+                "type": "object",
+                "properties": {
+                  "policy": {
+                    "type": "string",
+                    "enum": [
+                      "always",
+                      "on_failure",
+                      "never"
+                    ]
+                  },
+                  "max_retries": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  }
+                },
+                "required": [
+                  "policy",
+                  "max_retries"
+                ],
+                "additionalProperties": false
+              },
+              "network": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+              },
+              "labels": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9]([A-Za-z0-9._/-]*[A-Za-z0-9])?$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 0
+                }
+              },
+              "drain_s": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3600
+              },
+              "spec_hash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
               }
             },
             "required": [
               "id",
-              "image"
+              "kind",
+              "project_id",
+              "environment_id",
+              "service_id",
+              "deployment_id",
+              "replica",
+              "image",
+              "env",
+              "ports",
+              "routes",
+              "healthcheck",
+              "resources",
+              "restart",
+              "network",
+              "labels",
+              "drain_s",
+              "spec_hash"
             ],
             "additionalProperties": false
           }
+        },
+        "tls_mode": {
+          "type": "string",
+          "enum": [
+            "acme",
+            "internal",
+            "off"
+          ]
+        },
+        "apps_domain": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "registry": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "listen": {
+                  "type": "string",
+                  "const": "127.0.0.1:5000"
+                },
+                "storage": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "filesystem"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "s3"
+                        },
+                        "endpoint": {
+                          "type": "string",
+                          "maxLength": 2048,
+                          "pattern": "^https?:\\/\\/[^\\s/?#]+(\\/[^\\s?#]*)?$"
+                        },
+                        "bucket": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+                        },
+                        "region": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9-]{1,64}$"
+                        },
+                        "access_key_id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "secret_access_key": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "endpoint",
+                        "bucket",
+                        "region",
+                        "access_key_id",
+                        "secret_access_key"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "listen",
+                "storage"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -95,7 +517,131 @@
         "iat",
         "exp",
         "generation",
-        "workloads"
+        "workloads",
+        "tls_mode",
+        "apps_domain",
+        "registry"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "build_job"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "build_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "deployment_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "git"
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^https:\\/\\/[^\\s/@?#]+\\/[^\\s?#]+$"
+            },
+            "commit_sha": {
+              "type": "string",
+              "pattern": "^([a-f0-9]{40}|[a-f0-9]{64})$"
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "token": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "url",
+            "commit_sha"
+          ],
+          "additionalProperties": false
+        },
+        "builder": {
+          "type": "string",
+          "enum": [
+            "railpack",
+            "dockerfile"
+          ]
+        },
+        "dockerfile_path": {
+          "type": "string"
+        },
+        "context_dir": {
+          "type": "string"
+        },
+        "build_args": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 256,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 0
+          }
+        },
+        "image_repository": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?::[0-9]{1,5})?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$"
+        },
+        "cache_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "timeout_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 7200
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "build_id",
+        "deployment_id",
+        "source",
+        "builder",
+        "context_dir",
+        "build_args",
+        "image_repository",
+        "cache_key",
+        "timeout_s"
       ],
       "additionalProperties": false
     }

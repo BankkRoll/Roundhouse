@@ -10,7 +10,8 @@
       "!**/migrations",
       "!**/worker-configuration.d.ts",
       "!packages/protocol/schema",
-      "!packages/protocol/fixtures/signed-envelope.json"
+      "!packages/protocol/fixtures/signed-*.json",
+      "!packages/protocol/fixtures/spec-hash.json"
     ]
   },
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },

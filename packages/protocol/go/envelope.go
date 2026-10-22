@@ -1,13 +1,11 @@
 package protocol
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -69,11 +67,8 @@ func ParsePublicKey(b64 string) (ed25519.PublicKey, error) {
 // ParseEnvelope decodes an envelope frame off the wire. Errors wrap
 // [ErrMalformed].
 func ParseEnvelope(data []byte) (Envelope, error) {
-	if err := requireKeys(data, "v", "kid", "payload", "sig"); err != nil {
-		return Envelope{}, fmt.Errorf("%w: envelope: %v", ErrMalformed, err)
-	}
 	var env Envelope
-	if err := json.Unmarshal(data, &env); err != nil {
+	if err := decodeStrict(data, &env, false); err != nil {
 		return Envelope{}, fmt.Errorf("%w: envelope: %v", ErrMalformed, err)
 	}
 	return env, nil
@@ -135,12 +130,13 @@ func SignEnvelope(msg ControlMessage, priv ed25519.PrivateKey, kid string) (Enve
 }
 
 // DecodeControlMessage parses and validates a control payload, returning a
-// [*Welcome] or [*DesiredState].
+// [*Welcome], [*DesiredState] or [*BuildJob].
 //
 // Like the zod schemas it mirrors, unknown fields are ignored so that the
 // control plane can add optional fields without breaking older agents, but
-// every known field must be present with a valid value. Keys that match a known field
-// only case-insensitively are rejected; see [requireKeys].
+// every required field must be present with a valid value, at every level of
+// nesting. Keys that match a known field only case-insensitively are
+// rejected; see [checkShape].
 func DecodeControlMessage(data []byte) (ControlMessage, error) {
 	var probe struct {
 		Type string `json:"type"`
@@ -148,51 +144,33 @@ func DecodeControlMessage(data []byte) (ControlMessage, error) {
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, err
 	}
-	header := []string{"type", "id", "node_id", "iat", "exp"}
+	var msg interface {
+		ControlMessage
+		Validator
+	}
 	switch probe.Type {
 	case TypeWelcome:
-		var m Welcome
-		if err := strictDecode(data, &m, append(header, "heartbeat_interval_ms")...); err != nil {
-			return nil, err
-		}
-		if err := m.ControlHeader.validate(); err != nil {
-			return nil, err
-		}
-		if m.HeartbeatIntervalMS <= 0 {
-			return nil, errors.New("heartbeat_interval_ms must be positive")
-		}
-		return &m, nil
+		msg = &Welcome{}
 	case TypeDesiredState:
-		var m DesiredState
-		if err := strictDecode(data, &m, append(header, "generation", "workloads")...); err != nil {
-			return nil, err
-		}
-		if err := m.ControlHeader.validate(); err != nil {
-			return nil, err
-		}
-		if m.Generation < 0 {
-			return nil, errors.New("generation must be non-negative")
-		}
-		var raw struct {
-			Workloads []json.RawMessage `json:"workloads"`
-		}
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return nil, err
-		}
-		for i, w := range raw.Workloads {
-			if err := requireKeys(w, "id", "image"); err != nil {
-				return nil, fmt.Errorf("workloads[%d]: %w", i, err)
-			}
-		}
-		return &m, nil
+		msg = &DesiredState{}
+	case TypeBuildJob:
+		msg = &BuildJob{}
 	default:
 		return nil, fmt.Errorf("unknown control message type %q", probe.Type)
 	}
+	if err := decodeStrict(data, msg, false); err != nil {
+		return nil, err
+	}
+	if err := msg.Validate(); err != nil {
+		return nil, err
+	}
+	return msg, nil
 }
 
-// DecodeAgentMessage parses an agent → control frame, returning a [*Hello] or
-// [*Heartbeat]. Unknown fields are rejected, matching what the control plane
-// accepts.
+// DecodeAgentMessage parses and validates an agent → control frame,
+// returning a [*Hello], [*Heartbeat], [*WorkloadStatus], [*Logs] or
+// [*BuildResult]. Unknown fields are rejected, matching what the control
+// plane accepts, as are case-variant keys and missing required fields.
 func DecodeAgentMessage(data []byte) (AgentMessage, error) {
 	var probe struct {
 		Type string `json:"type"`
@@ -200,64 +178,29 @@ func DecodeAgentMessage(data []byte) (AgentMessage, error) {
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, err
 	}
-	var msg AgentMessage
+	var msg interface {
+		AgentMessage
+		Validator
+	}
 	switch probe.Type {
 	case TypeHello:
 		msg = &Hello{}
 	case TypeHeartbeat:
 		msg = &Heartbeat{}
+	case TypeWorkloadStatus:
+		msg = &WorkloadStatus{}
+	case TypeLogs:
+		msg = &Logs{}
+	case TypeBuildResult:
+		msg = &BuildResult{}
 	default:
 		return nil, fmt.Errorf("unknown agent message type %q", probe.Type)
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(msg); err != nil {
+	if err := decodeStrict(data, msg, true); err != nil {
+		return nil, err
+	}
+	if err := msg.Validate(); err != nil {
 		return nil, err
 	}
 	return msg, nil
-}
-
-func (h ControlHeader) validate() error {
-	if h.IssuedAt < 0 || h.ExpiresAt < 0 {
-		return errors.New("iat and exp must be non-negative")
-	}
-	return nil
-}
-
-// strictDecode unmarshals data into v after checking that every key in
-// required is present and non-null, since encoding/json silently zero-fills
-// missing fields.
-func strictDecode(data []byte, v any, required ...string) error {
-	if err := requireKeys(data, required...); err != nil {
-		return err
-	}
-	return json.Unmarshal(data, v)
-}
-
-func requireKeys(data []byte, keys ...string) error {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(data, &obj); err != nil {
-		return err
-	}
-	if obj == nil {
-		return errors.New("expected a JSON object")
-	}
-	for _, k := range keys {
-		v, ok := obj[k]
-		if !ok || bytes.Equal(v, []byte("null")) {
-			return fmt.Errorf("missing field %q", k)
-		}
-	}
-	// SECURITY: encoding/json matches object keys case-insensitively while
-	// JavaScript does not, so {"node_id":"a","NODE_ID":"b"} would mean
-	// different things to the signer and to this verifier. Reject any key
-	// that differs from a known field only by case.
-	for got := range obj {
-		for _, k := range keys {
-			if got != k && strings.EqualFold(got, k) {
-				return fmt.Errorf("field %q differs from %q only by case", got, k)
-			}
-		}
-	}
-	return nil
 }

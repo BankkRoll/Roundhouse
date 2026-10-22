@@ -36,6 +36,22 @@ const VERBS: Record<AuditAction, string> = {
   "node.joined": "connected",
   "node.removed": "removed server",
   "node.went_offline": "lost contact with a server",
+  "project.created": "created project",
+  "project.updated": "updated project",
+  "project.deleted": "deleted project",
+  "service.created": "created service",
+  "service.updated": "updated service",
+  "service.deleted": "deleted service",
+  "variables.updated": "updated variables of",
+  "variables.revealed": "revealed secret variables of",
+  "deployment.created": "deployed",
+  "deployment.rolled_back": "rolled back",
+  "deployment.cancelled": "cancelled a deployment of",
+  "deployment.succeeded": "deployment succeeded for",
+  "deployment.failed": "deployment failed for",
+  "github.app_created": "created the GitHub App",
+  "github.installation_added": "installed the GitHub App on",
+  "instance.settings_updated": "updated instance settings",
 };
 
 /**

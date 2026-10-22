@@ -1,0 +1,7 @@
+{
+  "type": "logs",
+  "source": { "type": "build", "build_id": "bld_01JAAAAAAAAAAAAAAAAAAAAAAA" },
+  "lines": [
+    { "ts": 1700000000000, "stream": "stdout", "text": "#1 [internal] load build definition" }
+  ]
+}

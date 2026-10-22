@@ -1,0 +1,30 @@
+{
+  "type": "hello",
+  "protocol_version": 2,
+  "node_id": "node_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  "agent_version": "0.2.0",
+  "os": "ubuntu 24.04",
+  "arch": "amd64",
+  "kernel": "6.8.0-45-generic",
+  "docker_version": "27.3.1",
+  "hardware": { "cpu_cores": 4, "mem_bytes": 8589934592, "disk_bytes": 85899345920 },
+  "capabilities": { "docker": true, "gvisor": false, "builder": true },
+  "observed_generation": 8,
+  "statuses": [
+    {
+      "workload_id": "wl_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      "deployment_id": "dep_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      "state": "healthy",
+      "container_id": "4f2a9c1d7e3b",
+      "restarts": 0,
+      "ts": 1700000000000
+    },
+    {
+      "workload_id": "sys_registry",
+      "deployment_id": null,
+      "state": "running",
+      "restarts": 0,
+      "ts": 1700000000000
+    }
+  ]
+}

@@ -30,6 +30,12 @@ func TestFixturesRoundTrip(t *testing.T) {
 	}{
 		{"hello.json", &Hello{}},
 		{"heartbeat.json", &Heartbeat{}},
+		{"hello-statuses.json", &Hello{}},
+		{"workload-status.json", &WorkloadStatus{}},
+		{"logs-runtime.json", &Logs{}},
+		{"logs-build.json", &Logs{}},
+		{"build-result-ok.json", &BuildResult{}},
+		{"build-result-failed.json", &BuildResult{}},
 		{"join-request.json", &JoinRequest{}},
 		{"join-response.json", &JoinResponse{}},
 	}
@@ -60,15 +66,26 @@ func TestFixturesRoundTrip(t *testing.T) {
 }
 
 func TestDecodeAgentMessageFixtures(t *testing.T) {
-	if m, err := DecodeAgentMessage(readFixture(t, "hello.json")); err != nil {
-		t.Fatal(err)
-	} else if _, ok := m.(*Hello); !ok {
-		t.Fatalf("got %T, want *Hello", m)
+	cases := map[string]AgentMessage{
+		"hello.json":               &Hello{},
+		"hello-statuses.json":      &Hello{},
+		"heartbeat.json":           &Heartbeat{},
+		"workload-status.json":     &WorkloadStatus{},
+		"logs-runtime.json":        &Logs{},
+		"logs-build.json":          &Logs{},
+		"build-result-ok.json":     &BuildResult{},
+		"build-result-failed.json": &BuildResult{},
 	}
-	if m, err := DecodeAgentMessage(readFixture(t, "heartbeat.json")); err != nil {
-		t.Fatal(err)
-	} else if _, ok := m.(*Heartbeat); !ok {
-		t.Fatalf("got %T, want *Heartbeat", m)
+	for file, want := range cases {
+		t.Run(file, func(t *testing.T) {
+			m, err := DecodeAgentMessage(readFixture(t, file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reflect.TypeOf(m) != reflect.TypeOf(want) {
+				t.Fatalf("got %T, want %T", m, want)
+			}
+		})
 	}
 	if _, err := DecodeAgentMessage([]byte(`{"type":"heartbeat","seq":1,"extra":true}`)); err == nil {
 		t.Fatal("expected unknown field to be rejected")
@@ -109,7 +126,8 @@ func TestVerifySignedFixture(t *testing.T) {
 			ExpiresAt: 4102444800000,
 		},
 		Generation: 7,
-		Workloads:  []Workload{{ID: "wl_1", Image: "nginx:1.27"}},
+		Workloads:  []WorkloadSpec{},
+		TLSMode:    TLSOff,
 	}
 	if !reflect.DeepEqual(msg, want) {
 		t.Errorf("got %+v, want %+v", msg, want)
@@ -150,5 +168,133 @@ func assertRejected(t *testing.T, env Envelope, pub ed25519.PublicKey, nodeID st
 	got, ok := RejectionOf(err)
 	if !ok || got != want {
 		t.Fatalf("got error %v, want %s", err, want)
+	}
+}
+
+// fixtureIAT is the iat of every signed fixture. Credential-bearing fixtures
+// expire 60 s later, so verification pins the clock to it.
+var fixtureIAT = time.UnixMilli(1_700_000_000_000)
+
+func verifyFixture(t *testing.T, name string) (ControlMessage, string) {
+	t.Helper()
+	var f signedFixture
+	if err := json.Unmarshal(readFixture(t, name), &f); err != nil {
+		t.Fatal(err)
+	}
+	env, err := ParseEnvelope(f.Envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := ParsePublicKey(f.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := VerifyEnvelope(env, pub, f.NodeID, fixtureIAT)
+	if err != nil {
+		t.Fatalf("verify %s: %v", name, err)
+	}
+	if _, err := VerifyEnvelope(env, pub, f.NodeID, fixtureIAT.Add(CredentialFrameTTLMS*time.Millisecond+time.Millisecond)); err == nil {
+		t.Errorf("%s: credential-bearing fixture should expire within %d ms", name, CredentialFrameTTLMS)
+	}
+	return msg, env.Payload
+}
+
+// assertRoundTrip checks that re-encoding msg reproduces payload exactly as
+// JSON values, so no field is lost or invented by the Go types.
+func assertRoundTrip(t *testing.T, msg ControlMessage, payload string) {
+	t.Helper()
+	out, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want, got any
+	if err := json.Unmarshal([]byte(payload), &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Errorf("round trip mismatch\nwant: %s\ngot:  %s", payload, out)
+	}
+}
+
+func TestVerifySignedDesiredStateFixture(t *testing.T) {
+	msg, payload := verifyFixture(t, "signed-desired-state.json")
+	ds, ok := msg.(*DesiredState)
+	if !ok {
+		t.Fatalf("got %T, want *DesiredState", msg)
+	}
+	if !CarriesCredentials(ds) {
+		t.Error("fixture should carry credentials")
+	}
+	if len(ds.Workloads) == 0 || ds.Registry == nil || ds.AppsDomain == nil {
+		t.Fatalf("fixture is missing parts: %+v", ds)
+	}
+	for _, w := range ds.Workloads {
+		got, err := ComputeSpecHash(w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != w.SpecHash {
+			t.Errorf("%s: spec_hash %s, computed %s", w.ID, w.SpecHash, got)
+		}
+	}
+	assertRoundTrip(t, ds, payload)
+}
+
+func TestVerifySignedBuildJobFixture(t *testing.T) {
+	msg, payload := verifyFixture(t, "signed-build-job.json")
+	job, ok := msg.(*BuildJob)
+	if !ok {
+		t.Fatalf("got %T, want *BuildJob", msg)
+	}
+	if job.Source.Token == "" || !CarriesCredentials(job) {
+		t.Error("fixture should carry a git token")
+	}
+	assertRoundTrip(t, job, payload)
+}
+
+// TestSpecHashFixture is the Go half of the spec-hash agreement check: the
+// TypeScript suite recomputes the same cases with computeSpecHash.
+func TestSpecHashFixture(t *testing.T) {
+	var f struct {
+		Cases []struct {
+			Name      string          `json:"name"`
+			Spec      json.RawMessage `json:"spec"`
+			Canonical string          `json:"canonical"`
+			SpecHash  string          `json:"spec_hash"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(readFixture(t, "spec-hash.json"), &f); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Cases) < 4 {
+		t.Fatalf("expected at least 4 cases, got %d", len(f.Cases))
+	}
+	for _, c := range f.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			var w WorkloadSpec
+			if err := decodeStrict(c.Spec, &w, true); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			input, err := SpecHashInput(w)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if input != c.Canonical {
+				t.Errorf("canonical mismatch\nwant: %s\ngot:  %s", c.Canonical, input)
+			}
+			got, err := ComputeSpecHash(w)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.SpecHash || w.SpecHash != c.SpecHash {
+				t.Errorf("spec_hash: fixture %s, spec %s, computed %s", c.SpecHash, w.SpecHash, got)
+			}
+		})
 	}
 }

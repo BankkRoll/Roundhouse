@@ -138,6 +138,8 @@ export class NodeConnection extends DurableObject<Env> {
       return;
     }
     if (!attachment.helloReceived) return ws.close(CloseCode.policy, "hello required first");
+    // TODO(phase-1): handle workload_status, logs and build_result frames.
+    if (message.type !== "heartbeat") return;
 
     // SECURITY: A leaked node credential must not be able to flood D1 with writes.
     const now = Date.now();
@@ -245,12 +247,16 @@ export class NodeConnection extends DurableObject<Env> {
       ...this.header(attachment.nodeId, now),
       heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,
     });
-    // TODO(phase-1): populate workloads from placements once deployments exist.
+    // TODO(phase-1): populate workloads from placements, and tls_mode,
+    // apps_domain and registry from instance settings and node capabilities.
     await this.send(ws, {
       type: "desired_state",
       ...this.header(attachment.nodeId, now),
       generation: node.desiredGeneration,
       workloads: [],
+      tls_mode: "off",
+      apps_domain: null,
+      registry: null,
     });
   }
 

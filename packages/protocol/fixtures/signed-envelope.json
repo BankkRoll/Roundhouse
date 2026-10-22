@@ -4,7 +4,7 @@
   "envelope": {
     "v": 1,
     "kid": "fixture",
-    "payload": "{\"type\":\"desired_state\",\"id\":\"msg_fixture\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":4102444800000,\"generation\":7,\"workloads\":[{\"id\":\"wl_1\",\"image\":\"nginx:1.27\"}]}",
-    "sig": "3spSQ/xAX9k4JGfXlRkZfU+gVYFGXW7qk4dI4ji7xMxLrlXCp3tDLwXxHmUciSJvoiLPvPOOEubHo3c0fyFQCQ=="
+    "payload": "{\"type\":\"desired_state\",\"id\":\"msg_fixture\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":4102444800000,\"generation\":7,\"workloads\":[],\"tls_mode\":\"off\",\"apps_domain\":null,\"registry\":null}",
+    "sig": "H8pS7a3sT4szdZBHlrH0ergC5y5sgoqAiwbdbSgjScOsR2IibFVi4MwJz4dg3xQbnijl2aMDXiK9BxXO6Bj9Cw=="
   }
 }

@@ -15,6 +15,10 @@ describe("slugify", () => {
     expect(slugify(input)).toBe(expected);
   });
 
+  it("uses the given fallback", () => {
+    expect(slugify("!!!", 40, "service")).toBe("service");
+  });
+
   it("truncates without leaving a trailing dash", () => {
     expect(slugify("aaaa bbbb", 5)).toBe("aaaa");
     expect(slugify("a".repeat(100))).toHaveLength(40);

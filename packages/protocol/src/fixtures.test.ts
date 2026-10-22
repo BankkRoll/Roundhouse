@@ -1,16 +1,20 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   AgentMessageSchema,
   type ControlMessage,
+  computeSpecHash,
   EnvelopeSchema,
   generateSigningKey,
   importSigningKey,
   JoinRequestSchema,
   JoinResponseSchema,
   signEnvelope,
+  specHashInput,
   verifyEnvelope,
+  WorkloadSpecSchema,
 } from "./index";
 
 const fixture = (name: string): unknown =>
@@ -22,22 +26,72 @@ describe("shared fixtures", () => {
   it.each([
     ["hello.json", AgentMessageSchema],
     ["heartbeat.json", AgentMessageSchema],
+    ["hello-statuses.json", AgentMessageSchema],
+    ["workload-status.json", AgentMessageSchema],
+    ["logs-runtime.json", AgentMessageSchema],
+    ["logs-build.json", AgentMessageSchema],
+    ["build-result-ok.json", AgentMessageSchema],
+    ["build-result-failed.json", AgentMessageSchema],
     ["join-request.json", JoinRequestSchema],
     ["join-response.json", JoinResponseSchema],
   ] as const)("%s matches its schema", (file, schema) => {
     expect(() => schema.parse(fixture(file))).not.toThrow();
   });
 
-  it("verifies the checked-in signed envelope", async () => {
-    const f = fixture("signed-envelope.json") as {
-      public_key: string;
-      node_id: string;
-      envelope: unknown;
+  it.each([
+    ["signed-envelope.json", "desired_state"],
+    ["signed-desired-state.json", "desired_state"],
+    ["signed-build-job.json", "build_job"],
+  ])("verifies the checked-in %s", async (file, type) => {
+    const f = fixture(file) as SignedFixture;
+    const result = await verifyEnvelope(
+      EnvelopeSchema.parse(f.envelope),
+      f.public_key,
+      f.node_id,
+      FIXTURE_IAT,
+    );
+    expect(result).toMatchObject({ ok: true, message: { type } });
+  });
+
+  it("signs workloads whose spec_hash matches their content", async () => {
+    const f = fixture("signed-desired-state.json") as SignedFixture;
+    const payload = JSON.parse(f.envelope.payload) as { workloads: unknown[] };
+    expect(payload.workloads.length).toBeGreaterThan(0);
+    for (const raw of payload.workloads) {
+      const spec = WorkloadSpecSchema.parse(raw);
+      expect(await computeSpecHash(spec)).toBe(spec.spec_hash);
+    }
+  });
+
+  it("keeps every workload readable by a protocol v1 agent", () => {
+    // Phase 0 agents decode each workload as { id, image } and ignore the rest.
+    const v1Workload = z.object({ id: z.string(), image: z.string() });
+    const f = fixture("signed-desired-state.json") as SignedFixture;
+    const payload = JSON.parse(f.envelope.payload) as { workloads: unknown[] };
+    for (const raw of payload.workloads) expect(() => v1Workload.parse(raw)).not.toThrow();
+  });
+
+  it("reproduces every spec-hash case", async () => {
+    const { cases } = fixture("spec-hash.json") as {
+      cases: { name: string; spec: unknown; canonical: string; spec_hash: string }[];
     };
-    const result = await verifyEnvelope(EnvelopeSchema.parse(f.envelope), f.public_key, f.node_id);
-    expect(result.ok).toBe(true);
+    expect(cases.length).toBeGreaterThanOrEqual(4);
+    for (const c of cases) {
+      const spec = WorkloadSpecSchema.parse(c.spec);
+      expect(specHashInput(spec), c.name).toBe(c.canonical);
+      expect(await computeSpecHash(spec), c.name).toBe(c.spec_hash);
+    }
   });
 });
+
+interface SignedFixture {
+  public_key: string;
+  node_id: string;
+  envelope: { payload: string };
+}
+
+// Credential-bearing fixtures expire 60 s after this, so verification pins the clock to it.
+const FIXTURE_IAT = 1_700_000_000_000;
 
 describe("envelopes", () => {
   const message = (overrides: Partial<ControlMessage> = {}): ControlMessage =>

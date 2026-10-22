@@ -1,0 +1,212 @@
+{
+  "cases": [
+    {
+      "name": "full",
+      "spec": {
+        "id": "wl_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "kind": "service",
+        "project_id": "prj_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "environment_id": "env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "service_id": "svc_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "deployment_id": "dep_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "replica": 0,
+        "image": "127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab",
+        "registry_auth": {
+          "server": "127.0.0.1:5000",
+          "username": "openrail",
+          "password": "registry-secret"
+        },
+        "command": [
+          "node",
+          "server.js"
+        ],
+        "entrypoint": [
+          "/sbin/tini",
+          "--"
+        ],
+        "env": {
+          "PORT": "3000",
+          "DATABASE_URL": "postgres://db:5432/app",
+          "GREETING": "héllo 🚀"
+        },
+        "ports": [
+          {
+            "container_port": 3000,
+            "protocol": "http"
+          },
+          {
+            "container_port": 9229,
+            "protocol": "tcp"
+          }
+        ],
+        "routes": [
+          {
+            "hostname": "api-production-x7k2.127.0.0.1.nip.io",
+            "container_port": 3000
+          },
+          {
+            "hostname": "api.example.com",
+            "container_port": 3000,
+            "path_prefix": "/v1"
+          }
+        ],
+        "healthcheck": {
+          "type": "http",
+          "path": "/healthz",
+          "port": 3000,
+          "interval_s": 10,
+          "timeout_s": 3,
+          "retries": 3,
+          "start_period_s": 15
+        },
+        "resources": {
+          "cpu_millis": 500,
+          "memory_mb": 512,
+          "pids": 512
+        },
+        "restart": {
+          "policy": "on_failure",
+          "max_retries": 5
+        },
+        "network": "openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "labels": {
+          "openrail.service_name": "api",
+          "com.example.team": "platform"
+        },
+        "drain_s": 30,
+        "spec_hash": "c544423b288610aaaf6fe9669bf5604ad91b2abc1227bd06ec285d2cb8775f51"
+      },
+      "canonical": "{\"command\":[\"node\",\"server.js\"],\"deployment_id\":\"dep_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"entrypoint\":[\"/sbin/tini\",\"--\"],\"env\":{\"DATABASE_URL\":\"postgres://db:5432/app\",\"GREETING\":\"héllo 🚀\",\"PORT\":\"3000\"},\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"interval_s\":10,\"path\":\"/healthz\",\"port\":3000,\"retries\":3,\"start_period_s\":15,\"timeout_s\":3,\"type\":\"http\"},\"id\":\"wl_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"image\":\"127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab\",\"kind\":\"service\",\"labels\":{\"com.example.team\":\"platform\",\"openrail.service_name\":\"api\"},\"network\":\"openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[{\"container_port\":3000,\"protocol\":\"http\"},{\"container_port\":9229,\"protocol\":\"tcp\"}],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":0,\"resources\":{\"cpu_millis\":500,\"memory_mb\":512,\"pids\":512},\"restart\":{\"max_retries\":5,\"policy\":\"on_failure\"},\"service_id\":\"svc_01JAAAAAAAAAAAAAAAAAAAAAAA\"}",
+      "spec_hash": "c544423b288610aaaf6fe9669bf5604ad91b2abc1227bd06ec285d2cb8775f51"
+    },
+    {
+      "name": "minimal",
+      "spec": {
+        "id": "wl_01JBBBBBBBBBBBBBBBBBBBBBBB",
+        "kind": "service",
+        "project_id": "prj_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "environment_id": "env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "service_id": "svc_01JBBBBBBBBBBBBBBBBBBBBBBB",
+        "deployment_id": "dep_01JBBBBBBBBBBBBBBBBBBBBBBB",
+        "replica": 2,
+        "image": "nginx:1.27",
+        "env": {},
+        "ports": [],
+        "routes": [],
+        "healthcheck": null,
+        "resources": {
+          "cpu_millis": 10,
+          "memory_mb": 16,
+          "pids": 16
+        },
+        "restart": {
+          "policy": "always",
+          "max_retries": 0
+        },
+        "network": "openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "labels": {},
+        "drain_s": 0,
+        "spec_hash": "29bc78eae494cbcc617a915cf9d773e3e33d262939e2b24205a005eb62a3c4c9"
+      },
+      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"env\":{},\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"id\":\"wl_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{},\"network\":\"openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
+      "spec_hash": "29bc78eae494cbcc617a915cf9d773e3e33d262939e2b24205a005eb62a3c4c9"
+    },
+    {
+      "name": "escaping",
+      "spec": {
+        "id": "wl_01JCCCCCCCCCCCCCCCCCCCCCCC",
+        "kind": "service",
+        "project_id": "prj_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "environment_id": "env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "service_id": "svc_01JBBBBBBBBBBBBBBBBBBBBBBB",
+        "deployment_id": "dep_01JBBBBBBBBBBBBBBBBBBBBBBB",
+        "replica": 2,
+        "image": "nginx:1.27",
+        "env": {
+          "QUOTES": "say \"hi\" \\ bye",
+          "CONTROL": "tab\there\nnew\u0001line\u001f",
+          "HTML": "<script>&amp;</script>",
+          "SEPARATORS": "line para end",
+          "UNICODE": "日本語 ñ 🚀  ",
+          "DEL": "",
+          "a_lower": "sorted after uppercase",
+          "Z_UPPER": "sorted before lowercase"
+        },
+        "ports": [],
+        "routes": [],
+        "healthcheck": {
+          "type": "tcp",
+          "port": 5432,
+          "interval_s": 1,
+          "timeout_s": 1,
+          "retries": 0,
+          "start_period_s": 0
+        },
+        "resources": {
+          "cpu_millis": 10,
+          "memory_mb": 16,
+          "pids": 16
+        },
+        "restart": {
+          "policy": "always",
+          "max_retries": 0
+        },
+        "network": "openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "labels": {
+          "x.unicode": "café",
+          "a.empty": ""
+        },
+        "drain_s": 0,
+        "spec_hash": "1e74eb2988f27c9201431f9b05a1d3b6052dc0cd4c00f77413c977bb506e106d"
+      },
+      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"env\":{\"CONTROL\":\"tab\\u0009here\\u000anew\\u0001line\\u001f\",\"DEL\":\"\",\"HTML\":\"<script>&amp;</script>\",\"QUOTES\":\"say \\\"hi\\\" \\\\ bye\",\"SEPARATORS\":\"line para end\",\"UNICODE\":\"日本語 ñ 🚀  \",\"Z_UPPER\":\"sorted before lowercase\",\"a_lower\":\"sorted after uppercase\"},\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"interval_s\":1,\"port\":5432,\"retries\":0,\"start_period_s\":0,\"timeout_s\":1,\"type\":\"tcp\"},\"id\":\"wl_01JCCCCCCCCCCCCCCCCCCCCCCC\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{\"a.empty\":\"\",\"x.unicode\":\"café\"},\"network\":\"openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
+      "spec_hash": "1e74eb2988f27c9201431f9b05a1d3b6052dc0cd4c00f77413c977bb506e106d"
+    },
+    {
+      "name": "system",
+      "spec": {
+        "id": "sys_registry",
+        "kind": "system",
+        "project_id": null,
+        "environment_id": null,
+        "service_id": null,
+        "deployment_id": null,
+        "replica": 0,
+        "image": "registry:3",
+        "env": {
+          "REGISTRY_HTTP_ADDR": "0.0.0.0:5000"
+        },
+        "ports": [
+          {
+            "container_port": 5000,
+            "protocol": "tcp"
+          }
+        ],
+        "routes": [],
+        "healthcheck": {
+          "type": "none",
+          "port": 5000,
+          "interval_s": 30,
+          "timeout_s": 5,
+          "retries": 3,
+          "start_period_s": 0
+        },
+        "resources": {
+          "cpu_millis": 1000,
+          "memory_mb": 256,
+          "pids": 256
+        },
+        "restart": {
+          "policy": "always",
+          "max_retries": 0
+        },
+        "network": "openrail-system",
+        "labels": {},
+        "drain_s": 0,
+        "spec_hash": "3acd6bff51a322076d6011439d65426460631cdb95dd72abcef2bd4c24f85327"
+      },
+      "canonical": "{\"env\":{\"REGISTRY_HTTP_ADDR\":\"0.0.0.0:5000\"},\"healthcheck\":{\"interval_s\":30,\"port\":5000,\"retries\":3,\"start_period_s\":0,\"timeout_s\":5,\"type\":\"none\"},\"id\":\"sys_registry\",\"image\":\"registry:3\",\"kind\":\"system\",\"labels\":{},\"network\":\"openrail-system\",\"ports\":[{\"container_port\":5000,\"protocol\":\"tcp\"}],\"replica\":0,\"resources\":{\"cpu_millis\":1000,\"memory_mb\":256,\"pids\":256},\"restart\":{\"max_retries\":0,\"policy\":\"always\"}}",
+      "spec_hash": "3acd6bff51a322076d6011439d65426460631cdb95dd72abcef2bd4c24f85327"
+    }
+  ]
+}

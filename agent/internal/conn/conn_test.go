@@ -194,7 +194,8 @@ func desired(id string, gen int64, exp time.Time) *protocol.DesiredState {
 		Type:          protocol.TypeDesiredState,
 		ControlHeader: header(id, exp),
 		Generation:    gen,
-		Workloads:     []protocol.Workload{{ID: "wl_1", Image: "nginx:1.27"}},
+		Workloads:     []protocol.WorkloadSpec{},
+		TLSMode:       protocol.TLSOff,
 	}
 }
 

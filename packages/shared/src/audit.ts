@@ -27,6 +27,22 @@ export const AUDIT_ACTIONS = [
   "node.joined",
   "node.removed",
   "node.went_offline",
+  "project.created",
+  "project.updated",
+  "project.deleted",
+  "service.created",
+  "service.updated",
+  "service.deleted",
+  "variables.updated",
+  "variables.revealed",
+  "deployment.created",
+  "deployment.rolled_back",
+  "deployment.cancelled",
+  "deployment.succeeded",
+  "deployment.failed",
+  "github.app_created",
+  "github.installation_added",
+  "instance.settings_updated",
 ] as const;
 
 /** An audited action name. */

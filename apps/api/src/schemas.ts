@@ -2,11 +2,63 @@
  * Response/request schemas shared across routes. They drive both runtime
  * validation and the generated OpenAPI document.
  *
+ * - Phase 0: errors, workspaces, members, invites, nodes, audit log.
+ * - Phase 1: projects, environments, services and their config versions,
+ *   variables, deployments, builds, logs, domains, instance settings, the
+ *   GitHub App, and realtime messages. Routes using them are in `./contracts`.
+ *
+ * Config part schemas are checked against the `@openrail/shared` types they
+ * store (`satisfies z.ZodType<…>`), so the API, the database and the
+ * dashboard can't drift apart.
+ *
  * @module
  */
 import { z } from "@hono/zod-openapi";
-import { CapabilitiesSchema } from "@openrail/protocol";
-import { AUDIT_ACTIONS, AUDIT_ACTOR_TYPES, NODE_STATUSES, ROLES } from "@openrail/shared";
+import {
+  CapabilitiesSchema,
+  ENV_KEY_RE,
+  HOSTNAME_RE,
+  IMAGE_REFERENCE_RE,
+  isSafeRelativePath,
+  LABEL_KEY_RE,
+  LOG_STREAMS,
+  MAX_ENV_KEY_BYTES,
+  MAX_ENV_VALUE_BYTES,
+  MAX_HOSTNAME_LENGTH,
+  TLS_MODES as PROTOCOL_TLS_MODES,
+  type TlsMode as ProtocolTlsMode,
+  utf8ByteLength,
+  WORKLOAD_STATES,
+} from "@openrail/protocol";
+import {
+  AUDIT_ACTIONS,
+  AUDIT_ACTOR_TYPES,
+  BUILD_STATUSES,
+  BUILDERS,
+  type BuildConfig,
+  DEPLOYMENT_EVENT_TYPES,
+  DEPLOYMENT_STATUSES,
+  DEPLOYMENT_TRIGGERS,
+  type DeployConfig,
+  DOMAIN_TLS_STATUSES,
+  DOMAIN_TYPES,
+  DOMAIN_VERIFICATION_STATUSES,
+  ENVIRONMENT_KINDS,
+  GITHUB_ACCOUNT_TYPES,
+  HEALTHCHECK_TYPES,
+  type HealthcheckConfig,
+  type NetworkingConfig,
+  NODE_STATUSES,
+  type PlacementConfig,
+  RESERVED_SERVICE_SLUGS,
+  RESTART_POLICIES,
+  type ResourcesConfig,
+  ROLES,
+  SERVICE_KINDS,
+  type ServiceSource,
+  TLS_MODES,
+  type TlsMode,
+} from "@openrail/shared";
 
 /** Error envelope returned by every non-2xx response. */
 export const ErrorSchema = z
@@ -148,3 +200,580 @@ export const SESSION_SCHEME = "session";
 
 /** `security` requirement for routes that need a signed-in browser session. */
 export const sessionAuth = [{ [SESSION_SCHEME]: [] }];
+
+// -----------------------------------------------------------------------------
+// Phase 1: common fields
+// -----------------------------------------------------------------------------
+
+/** Display name of a project, environment or service. */
+export const NameField = z.string().trim().min(1).max(100);
+
+/** URL- and DNS-safe identifier, unique within its parent; see `slugify`. */
+export const SlugField = z
+  .string()
+  .max(40)
+  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, "expected a lowercase slug")
+  .openapi({ example: "api" });
+
+/** Environment variable or build arg name. */
+export const VariableKeyField = z
+  .string()
+  .min(1)
+  .max(MAX_ENV_KEY_BYTES)
+  .regex(ENV_KEY_RE, "expected a name like DATABASE_URL")
+  .openapi({ example: "DATABASE_URL" });
+
+/** Plain-text variable value as written by a user; may contain `${{…}}` references. */
+export const VariableValueField = z
+  .string()
+  .refine((v) => utf8ByteLength(v) <= MAX_ENV_VALUE_BYTES && !v.includes("\0"), {
+    message: `must be at most ${MAX_ENV_VALUE_BYTES} bytes and contain no NUL`,
+  });
+
+/** Lowercase DNS hostname with at least two labels. */
+export const HostnameField = z
+  .string()
+  .max(MAX_HOSTNAME_LENGTH)
+  .regex(HOSTNAME_RE, "expected a lowercase hostname")
+  .openapi({ example: "apps.example.com" });
+
+/** Path inside a repository; no leading `/` and no `..`. */
+export const RepoPathField = z
+  .string()
+  .refine(isSafeRelativePath, { message: "expected a relative path inside the repository" })
+  .openapi({ example: "apps/web" });
+
+/** Opaque pagination cursor from a previous page's `next_cursor`. */
+export const CursorField = z.string().min(1).max(200).optional();
+
+/** Page size for cursor-paginated lists. */
+export const LimitField = z.coerce.number().int().min(1).max(100).default(50);
+
+/** Port a process listens on. */
+export const PortField = z.number().int().min(1).max(65535);
+
+// -----------------------------------------------------------------------------
+// Phase 1: projects, environments, services
+// -----------------------------------------------------------------------------
+
+/** A project in a workspace. */
+export const ProjectSchema = z
+  .object({
+    id: z.string(),
+    workspace_id: z.string(),
+    name: z.string(),
+    slug: z.string(),
+    description: z.string().nullable(),
+    created_at: Millis,
+    updated_at: Millis,
+  })
+  .openapi("Project");
+
+/** An environment of a project. */
+export const EnvironmentSchema = z
+  .object({
+    id: z.string(),
+    project_id: z.string(),
+    name: z.string(),
+    slug: z.string(),
+    kind: z.enum(ENVIRONMENT_KINDS),
+    pr_number: z.number().int().nullable(),
+    source_branch: z.string().nullable(),
+    created_at: Millis,
+  })
+  .openapi("Environment");
+
+/** A service of a project. Its config lives in versions per environment. */
+export const ServiceSchema = z
+  .object({
+    id: z.string(),
+    project_id: z.string(),
+    name: z.string(),
+    slug: z.string(),
+    kind: z.enum(SERVICE_KINDS),
+    icon: z.string().nullable(),
+    created_at: Millis,
+    updated_at: Millis,
+  })
+  .openapi("Service");
+
+/** A project with everything the project canvas needs in one request. */
+export const ProjectDetailSchema = ProjectSchema.extend({
+  environments: z.array(EnvironmentSchema),
+  services: z.array(ServiceSchema),
+}).openapi("ProjectDetail");
+
+/** Service slug, excluding names reserved for reference namespaces. */
+export const ServiceSlugField = SlugField.refine(
+  (s) => !(RESERVED_SERVICE_SLUGS as readonly string[]).includes(s),
+  { message: `reserved slugs: ${RESERVED_SERVICE_SLUGS.join(", ")}` },
+);
+
+// -----------------------------------------------------------------------------
+// Phase 1: service config parts
+// -----------------------------------------------------------------------------
+
+/** Run an image as-is. */
+export const ImageSourceSchema = z.object({
+  type: z.literal("image"),
+  image: z.string().max(1024).regex(IMAGE_REFERENCE_RE, "expected an image reference"),
+});
+
+/** Git branch name: no leading `/`, no `..`, not ending in `/` or `.`. */
+const BranchField = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[A-Za-z0-9._/-]+$/, "expected a branch name")
+  .refine((b) => !b.startsWith("/") && !b.includes("..") && !/[/.]$/.test(b), {
+    message: "expected a branch name",
+  });
+
+/** Build from a git repository. */
+export const GitSourceSchema = z.object({
+  type: z.literal("git"),
+  repo_url: z
+    .string()
+    .max(2048)
+    .regex(/^https:\/\/[^\s/@?#]+\/[^\s?#]+$/, "expected an https clone URL without credentials"),
+  branch: BranchField,
+  root_dir: RepoPathField,
+  github_installation_id: z.string().optional(),
+});
+
+/** Where a service's code comes from. */
+export const ServiceSourceSchema = z
+  .discriminatedUnion("type", [ImageSourceSchema, GitSourceSchema])
+  .openapi("ServiceSource") satisfies z.ZodType<ServiceSource>;
+
+const BuildConfigFields = z.object({
+  builder: z.enum(BUILDERS),
+  dockerfile_path: RepoPathField.optional(),
+  build_args: z
+    .record(VariableKeyField, z.string().max(4096))
+    .refine((a) => Object.keys(a).length <= 64, { message: "at most 64 build args" }),
+});
+
+/** How a git source is built. */
+export const BuildConfigSchema = BuildConfigFields.openapi(
+  "BuildConfig",
+) satisfies z.ZodType<BuildConfig>;
+
+const CommandField = z.string().min(1).max(4096);
+
+const DeployConfigFields = z.object({
+  start_command: CommandField.optional(),
+  replicas: z.number().int().min(0).max(20),
+  restart_policy: z.enum(RESTART_POLICIES),
+  max_retries: z.number().int().min(0).max(100),
+  drain_s: z.number().int().min(0).max(3600),
+  pre_deploy_command: CommandField.optional(),
+});
+
+/** How a service runs. */
+export const DeployConfigSchema = DeployConfigFields.openapi(
+  "DeployConfig",
+) satisfies z.ZodType<DeployConfig>;
+
+const ResourcesConfigFields = z.object({
+  cpu_millis: z.number().int().min(10).max(64_000),
+  memory_mb: z.number().int().min(16).max(262_144),
+});
+
+/** Per-replica limits. */
+export const ResourcesConfigSchema = ResourcesConfigFields.openapi(
+  "ResourcesConfig",
+) satisfies z.ZodType<ResourcesConfig>;
+
+/** Health probe run before a replica receives traffic. */
+export const HealthcheckConfigSchema = z
+  .object({
+    type: z.enum(HEALTHCHECK_TYPES),
+    path: z
+      .string()
+      .max(1024)
+      .regex(/^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/, "expected a path starting with /")
+      .optional(),
+    port: PortField.optional(),
+    interval_s: z.number().int().min(1).max(3600),
+    timeout_s: z.number().int().min(1).max(300),
+    retries: z.number().int().min(0).max(100),
+    start_period_s: z.number().int().min(0).max(3600),
+  })
+  .refine((h) => (h.type === "http") === (h.path !== undefined), {
+    message: "path is required for http probes and only allowed for them",
+    path: ["path"],
+  })
+  .openapi("HealthcheckConfig") satisfies z.ZodType<HealthcheckConfig>;
+
+const NetworkingConfigFields = z.object({
+  port: PortField.nullable(),
+  generated_domain: z.boolean(),
+});
+
+/** How a service is reached. */
+export const NetworkingConfigSchema = NetworkingConfigFields.openapi(
+  "NetworkingConfig",
+) satisfies z.ZodType<NetworkingConfig>;
+
+const PlacementConfigFields = z.object({
+  node_selector: z
+    .record(z.string().max(128).regex(LABEL_KEY_RE, "expected a label key"), z.string().max(256))
+    .refine((s) => Object.keys(s).length <= 16, { message: "at most 16 selector labels" }),
+});
+
+/** Which nodes may run a service. */
+export const PlacementConfigSchema = PlacementConfigFields.openapi(
+  "PlacementConfig",
+) satisfies z.ZodType<PlacementConfig>;
+
+/** One immutable config version of a service in an environment. */
+export const ServiceConfigSchema = z
+  .object({
+    id: z.string(),
+    service_id: z.string(),
+    environment_id: z.string(),
+    version: z.number().int().positive(),
+    created_by: z.string().nullable(),
+    created_at: Millis,
+    source: ServiceSourceSchema,
+    build: BuildConfigSchema,
+    deploy: DeployConfigSchema,
+    resources: ResourcesConfigSchema,
+    healthcheck: HealthcheckConfigSchema.nullable(),
+    networking: NetworkingConfigSchema,
+    placement: PlacementConfigSchema,
+  })
+  .openapi("ServiceConfig");
+
+/**
+ * Changes to a service's config. Each part present is shallow-merged into the
+ * latest version's part; `source` and `healthcheck` are replaced whole
+ * (`healthcheck: null` removes the probe). The result is stored as a new
+ * version, and absent parts carry over unchanged.
+ */
+export const ServiceConfigPatchSchema = z
+  .object({
+    source: ServiceSourceSchema.optional(),
+    build: BuildConfigFields.partial().optional(),
+    deploy: DeployConfigFields.partial().optional(),
+    resources: ResourcesConfigFields.partial().optional(),
+    healthcheck: HealthcheckConfigSchema.nullable().optional(),
+    networking: NetworkingConfigFields.partial().optional(),
+    placement: PlacementConfigFields.partial().optional(),
+  })
+  .openapi("ServiceConfigPatch");
+
+/** Names of the parts {@link ServiceConfigPatchSchema} accepts. */
+export const SERVICE_CONFIG_PARTS = [
+  "source",
+  "build",
+  "deploy",
+  "resources",
+  "healthcheck",
+  "networking",
+  "placement",
+] as const;
+
+// -----------------------------------------------------------------------------
+// Phase 1: variables
+// -----------------------------------------------------------------------------
+
+/** A variable as listed. Secret values are masked (`null`) until revealed. */
+export const VariableSchema = z
+  .object({
+    key: z.string(),
+    /** `null` when `is_secret`; use the reveal route to read it. */
+    value: z.string().nullable(),
+    is_secret: z.boolean(),
+    version: z.number().int().positive(),
+    updated_at: Millis,
+  })
+  .openapi("Variable");
+
+/** Bulk change to the variables of one scope in one environment. */
+export const VariablesPutSchema = z
+  .object({
+    /** Created or overwritten. Omitting `is_secret` keeps an existing variable's flag. */
+    set: z
+      .array(
+        z.object({
+          key: VariableKeyField,
+          value: VariableValueField,
+          is_secret: z.boolean().optional(),
+        }),
+      )
+      .max(256)
+      .default([]),
+    /** Removed; unknown keys are ignored. */
+    delete: z.array(VariableKeyField).max(256).default([]),
+  })
+  .refine(
+    (b) => {
+      const keys = [...b.set.map((s) => s.key), ...b.delete];
+      return new Set(keys).size === keys.length;
+    },
+    { message: "each key may appear once across set and delete" },
+  )
+  .openapi("VariablesPut");
+
+/** Keys whose plaintext to return. Every reveal is audited. */
+export const VariablesRevealSchema = z
+  .object({ keys: z.array(VariableKeyField).min(1).max(256) })
+  .openapi("VariablesReveal");
+
+/** Revealed plaintext values. */
+export const RevealedVariablesSchema = z
+  .object({ variables: z.array(z.object({ key: z.string(), value: z.string() })) })
+  .openapi("RevealedVariables");
+
+// -----------------------------------------------------------------------------
+// Phase 1: deployments, builds, logs, domains
+// -----------------------------------------------------------------------------
+
+/** An image build. */
+export const BuildSchema = z
+  .object({
+    id: z.string(),
+    deployment_id: z.string(),
+    service_id: z.string(),
+    commit_sha: z.string(),
+    commit_message: z.string().nullable(),
+    commit_author: z.string().nullable(),
+    status: z.enum(BUILD_STATUSES),
+    node_id: z.string().nullable(),
+    image_repository: z.string(),
+    image_digest: z.string().nullable(),
+    started_at: Millis.nullable(),
+    finished_at: Millis.nullable(),
+    error: z.string().nullable(),
+    created_at: Millis,
+  })
+  .openapi("Build");
+
+/** A deployment, with its build when it has one. */
+export const DeploymentSchema = z
+  .object({
+    id: z.string(),
+    service_id: z.string(),
+    environment_id: z.string(),
+    config_version: z.number().int().positive(),
+    build_id: z.string().nullable(),
+    build: BuildSchema.nullable(),
+    image: z.string().nullable(),
+    status: z.enum(DEPLOYMENT_STATUSES),
+    trigger: z.enum(DEPLOYMENT_TRIGGERS),
+    triggered_by: z.string().nullable(),
+    rollback_of: z.string().nullable(),
+    failure_reason: z.string().nullable(),
+    started_at: Millis.nullable(),
+    finished_at: Millis.nullable(),
+    created_at: Millis,
+    updated_at: Millis,
+  })
+  .openapi("Deployment");
+
+/** One entry of a deployment's timeline. */
+export const DeploymentEventSchema = z
+  .object({
+    id: z.string(),
+    deployment_id: z.string(),
+    type: z.enum(DEPLOYMENT_EVENT_TYPES),
+    message: z.string(),
+    data: z.record(z.string(), z.unknown()).nullable(),
+    created_at: Millis,
+  })
+  .openapi("DeploymentEvent");
+
+/** Where one replica runs and its last reported state. */
+export const PlacementSchema = z
+  .object({
+    id: z.string(),
+    deployment_id: z.string(),
+    replica: z.number().int().nonnegative(),
+    node_id: z.string(),
+    node_name: z.string().nullable(),
+    workload_id: z.string(),
+    container_id: z.string().nullable(),
+    state: z.enum(WORKLOAD_STATES),
+    last_status_at: Millis.nullable(),
+  })
+  .openapi("Placement");
+
+/** A deployment with its timeline and replicas. */
+export const DeploymentDetailSchema = DeploymentSchema.extend({
+  events: z.array(DeploymentEventSchema),
+  placements: z.array(PlacementSchema),
+}).openapi("DeploymentDetail");
+
+/** One stored log line. */
+export const LogEntrySchema = z
+  .object({
+    ts: Millis,
+    stream: z.enum(LOG_STREAMS),
+    text: z.string(),
+    /** Replica that wrote it; absent for build logs. */
+    workload_id: z.string().optional(),
+  })
+  .openapi("LogEntry");
+
+/**
+ * A page of log lines, oldest first. Without a cursor it holds the most
+ * recent lines; `next_cursor` fetches the page before it and is `null` at the
+ * beginning. New lines arrive over the realtime socket.
+ */
+export const LogPageSchema = z
+  .object({ lines: z.array(LogEntrySchema), next_cursor: z.string().nullable() })
+  .openapi("LogPage");
+
+/** A hostname routed to a service. */
+export const DomainSchema = z
+  .object({
+    id: z.string(),
+    service_id: z.string(),
+    environment_id: z.string(),
+    hostname: z.string(),
+    /** `https://` or `http://` depending on the TLS mode. */
+    url: z.string(),
+    type: z.enum(DOMAIN_TYPES),
+    target_port: z.number().int(),
+    verification_status: z.enum(DOMAIN_VERIFICATION_STATUSES),
+    tls_status: z.enum(DOMAIN_TLS_STATUSES),
+    created_at: Millis,
+  })
+  .openapi("Domain");
+
+// -----------------------------------------------------------------------------
+// Phase 1: instance settings and GitHub
+// -----------------------------------------------------------------------------
+
+/**
+ * Ingress TLS mode. `@openrail/shared` and `@openrail/protocol` both define
+ * the values; the two `satisfies` checks fail the build if they drift apart.
+ */
+export const TlsModeSchema = z
+  .enum(TLS_MODES satisfies readonly ProtocolTlsMode[])
+  .openapi("TlsMode") satisfies z.ZodType<TlsMode>;
+
+// Checks the other direction: every protocol mode is a shared one.
+PROTOCOL_TLS_MODES satisfies readonly TlsMode[];
+
+/** Install-wide settings an owner can change. */
+export const InstanceSettingsSchema = z
+  .object({
+    /** Parent of generated hostnames; `null` until set, which disables generated domains. */
+    apps_domain: z.string().nullable(),
+    tls_mode: TlsModeSchema,
+  })
+  .openapi("InstanceSettings");
+
+/** Partial update of instance settings. */
+export const InstanceSettingsPatchSchema = z
+  .object({ apps_domain: HostnameField.nullable().optional(), tls_mode: TlsModeSchema.optional() })
+  .refine((b) => b.apps_domain !== undefined || b.tls_mode !== undefined, {
+    message: "nothing to update",
+  })
+  .openapi("InstanceSettingsPatch");
+
+/** A GitHub App installation visible to the caller's workspace. */
+export const GithubInstallationSchema = z
+  .object({
+    id: z.string(),
+    installation_id: z.number().int(),
+    account_login: z.string(),
+    account_type: z.enum(GITHUB_ACCOUNT_TYPES),
+    workspace_id: z.string().nullable(),
+    created_at: Millis,
+  })
+  .openapi("GithubInstallation");
+
+/** Whether the instance has a GitHub App, and where it is installed. */
+export const GithubStatusSchema = z
+  .object({
+    configured: z.boolean(),
+    app: z
+      .object({
+        id: z.number().int(),
+        slug: z.string(),
+        name: z.string(),
+        html_url: z.string(),
+        /** Where to send users to install the App on more accounts. */
+        install_url: z.string(),
+      })
+      .nullable(),
+    installations: z.array(GithubInstallationSchema),
+  })
+  .openapi("GithubStatus");
+
+/** A repository an installation can read. */
+export const GithubRepositorySchema = z
+  .object({
+    id: z.number().int(),
+    full_name: z.string(),
+    private: z.boolean(),
+    default_branch: z.string(),
+    clone_url: z.string(),
+    /** Our `ghi_…` ID of the installation that grants access. */
+    installation_id: z.string(),
+  })
+  .openapi("GithubRepository");
+
+// -----------------------------------------------------------------------------
+// Phase 1: realtime
+// -----------------------------------------------------------------------------
+
+/** Someone looking at the project right now. */
+export const PresenceUserSchema = z.object({
+  user_id: z.string(),
+  name: z.string(),
+  image: z.string().nullable(),
+});
+
+/** Where streamed log lines come from. */
+export const RealtimeLogSourceSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("runtime"),
+    service_id: z.string(),
+    deployment_id: z.string(),
+    workload_id: z.string(),
+  }),
+  z.object({ type: z.literal("build"), service_id: z.string(), build_id: z.string() }),
+]);
+
+/** Server → browser messages on `/v1/projects/{projectId}/realtime`. */
+export const RealtimeServerMessageSchema = z
+  .discriminatedUnion("type", [
+    z.object({ type: z.literal("deployment.updated"), deployment: DeploymentSchema }),
+    z.object({ type: z.literal("deployment.event"), event: DeploymentEventSchema }),
+    z.object({
+      type: z.literal("log.lines"),
+      source: RealtimeLogSourceSchema,
+      lines: z.array(z.object({ ts: Millis, stream: z.enum(LOG_STREAMS), text: z.string() })),
+    }),
+    z.object({ type: z.literal("service.updated"), service: ServiceSchema }),
+    z.object({ type: z.literal("presence"), users: z.array(PresenceUserSchema) }),
+  ])
+  .openapi("RealtimeServerMessage");
+
+/** Server → browser realtime message. */
+export type RealtimeServerMessage = z.infer<typeof RealtimeServerMessageSchema>;
+
+/** A log stream a browser can subscribe to. Deployment and service updates need no subscription. */
+export const RealtimeTopicSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("deployment_logs"), deployment_id: z.string() }),
+  z.object({ kind: z.literal("build_logs"), build_id: z.string() }),
+]);
+
+/**
+ * Browser → server messages. Log lines are forwarded only for subscribed
+ * topics, so an open project page doesn't receive every replica's output.
+ */
+export const RealtimeClientMessageSchema = z
+  .discriminatedUnion("type", [
+    z.object({ type: z.literal("subscribe"), topic: RealtimeTopicSchema }),
+    z.object({ type: z.literal("unsubscribe"), topic: RealtimeTopicSchema }),
+  ])
+  .openapi("RealtimeClientMessage");
+
+/** Browser → server realtime message. */
+export type RealtimeClientMessage = z.infer<typeof RealtimeClientMessageSchema>;

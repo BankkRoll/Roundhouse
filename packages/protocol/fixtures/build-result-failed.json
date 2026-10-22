@@ -1,0 +1,7 @@
+{
+  "type": "build_result",
+  "build_id": "bld_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  "ok": false,
+  "error": "railpack: no start command detected",
+  "duration_ms": 5120
+}

@@ -1,0 +1,11 @@
+{
+  "type": "workload_status",
+  "workload_id": "wl_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  "deployment_id": "dep_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  "state": "crashed",
+  "container_id": "4f2a9c1d7e3b8a6f5c0d2e1b9a8f7c6d5e4b3a2f1e0d9c8b7a6f5e4d3c2b1a09",
+  "exit_code": 137,
+  "message": "OOM killed",
+  "restarts": 2,
+  "ts": 1700000000000
+}

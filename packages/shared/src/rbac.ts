@@ -7,6 +7,9 @@ export type Role = (typeof ROLES)[number];
 /**
  * Every action gated by RBAC. Routes declare one of these; the middleware
  * resolves the caller's role and checks it against {@link ROLE_GRANTS}.
+ *
+ * `instance:manage` covers install-wide settings. Instances have no roles of
+ * their own, so it is granted to whoever is `owner` of any workspace.
  */
 export type Action =
   | "workspace:read"
@@ -16,7 +19,51 @@ export type Action =
   | "members:manage"
   | "nodes:read"
   | "nodes:manage"
-  | "audit:read";
+  | "audit:read"
+  | "projects:read"
+  | "projects:manage"
+  | "services:read"
+  | "services:manage"
+  | "deployments:create"
+  | "variables:read"
+  | "variables:reveal"
+  | "variables:manage"
+  | "instance:manage";
+
+/** Every {@link Action}, for exhaustive checks and admin UIs. */
+export const ACTIONS = [
+  "workspace:read",
+  "workspace:update",
+  "workspace:delete",
+  "members:read",
+  "members:manage",
+  "nodes:read",
+  "nodes:manage",
+  "audit:read",
+  "projects:read",
+  "projects:manage",
+  "services:read",
+  "services:manage",
+  "deployments:create",
+  "variables:read",
+  "variables:reveal",
+  "variables:manage",
+  "instance:manage",
+] as const satisfies readonly Action[];
+
+/** Read access to project resources; secrets stay masked. */
+const READ_PROJECTS: Action[] = ["projects:read", "services:read", "variables:read"];
+
+/** Day-to-day work on services: change them, deploy, set variables. */
+const BUILD_PROJECTS: Action[] = [
+  ...READ_PROJECTS,
+  "services:manage",
+  "deployments:create",
+  "variables:manage",
+];
+
+/** Create and delete projects, and read secret values. */
+const ADMIN_PROJECTS: Action[] = [...BUILD_PROJECTS, "projects:manage", "variables:reveal"];
 
 const ROLE_GRANTS: Record<Role, ReadonlySet<Action>> = {
   owner: new Set<Action>([
@@ -28,6 +75,8 @@ const ROLE_GRANTS: Record<Role, ReadonlySet<Action>> = {
     "nodes:read",
     "nodes:manage",
     "audit:read",
+    ...ADMIN_PROJECTS,
+    "instance:manage",
   ]),
   admin: new Set<Action>([
     "workspace:read",
@@ -37,9 +86,10 @@ const ROLE_GRANTS: Record<Role, ReadonlySet<Action>> = {
     "nodes:read",
     "nodes:manage",
     "audit:read",
+    ...ADMIN_PROJECTS,
   ]),
-  member: new Set<Action>(["workspace:read", "members:read", "nodes:read"]),
-  viewer: new Set<Action>(["workspace:read", "nodes:read"]),
+  member: new Set<Action>(["workspace:read", "members:read", "nodes:read", ...BUILD_PROJECTS]),
+  viewer: new Set<Action>(["workspace:read", "nodes:read", ...READ_PROJECTS]),
 };
 
 /**

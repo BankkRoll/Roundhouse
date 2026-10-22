@@ -1,0 +1,10 @@
+{
+  "type": "build_result",
+  "build_id": "bld_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  "ok": true,
+  "image": {
+    "repository": "127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa",
+    "digest": "sha256:abababababababababababababababababababababababababababababababab"
+  },
+  "duration_ms": 84213
+}
