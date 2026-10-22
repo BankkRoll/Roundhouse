@@ -1,0 +1,51 @@
+[Unit]
+Description=OpenRail node agent
+Documentation=https://github.com/BankkRoll/Open-Rail
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/openrail-agent run --config /etc/openrail/agent.yaml
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+LimitNOFILE=65536
+UMask=0077
+
+# Runs as root so it owns its files and can open /var/run/docker.sock
+# (root:docker 0660) as the socket's owner. It needs no capabilities: Docker
+# API calls run in the daemon, and every file it touches is root-owned.
+# Later phases that manage WireGuard will add CAP_NET_ADMIN here.
+CapabilityBoundingSet=
+StateDirectory=openrail
+StateDirectoryMode=0700
+# The agent records the control plane's key id in its config after the
+# first verified welcome.
+ReadWritePaths=-/etc/openrail
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateMounts=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# /var/run/docker.sock stays reachable under ProtectSystem=strict because
+# connecting to a socket is not a filesystem write. PrivateDevices,
+# PrivateNetwork and ProtectProc are left off; they would hide the host the
+# agent reports on and manages.
+
+[Install]
+WantedBy=multi-user.target

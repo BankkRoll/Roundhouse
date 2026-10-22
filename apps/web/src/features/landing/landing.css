@@ -1,0 +1,249 @@
+/*
+ * Landing page: page tokens, the type scale, entrance motion and the pinned scene.
+ *
+ * The page follows a no-ornament house style: surfaces are told apart by tone, not lines or
+ * shadows. Lines, small radii and monospace live only inside `[data-ui]` fragments, which
+ * reproduce the dashboard's own interface.
+ */
+
+:root {
+  --lp-header-h: 68px;
+}
+
+.lp-root {
+  --lp-margin: clamp(16px, 2.2vw, 32px);
+  --lp-gap: clamp(12px, 1.4vw, 24px);
+  /* Half the gap between two sections: each pads its own top and bottom. */
+  --lp-space: clamp(48px, 6vw, 104px);
+  --lp-edge: max(var(--lp-margin), calc((100% - 1376px) / 2));
+  /* The same edge for elements that sit in half of a full-bleed split. */
+  --lp-edge-v: max(var(--lp-margin), calc((100vw - 1376px) / 2));
+  --lp-ground: var(--background);
+  --lp-step: var(--surface);
+  --lp-step-2: var(--surface-raised);
+  --lp-field: var(--muted);
+  --lp-ink: var(--foreground);
+  --lp-soft: var(--muted-foreground);
+  --lp-display: clamp(44px, 5.6vw, 92px);
+  --lp-heading: clamp(32px, 3.4vw, 54px);
+  --lp-lead: clamp(20px, 1.6vw, 24px);
+  --lp-body: 17px;
+  --lp-small: 14px;
+  overflow-x: clip;
+  font-size: var(--lp-body);
+  line-height: 1.5;
+  background: var(--lp-ground);
+  color: var(--lp-ink);
+}
+
+.lp-root h1,
+.lp-root h2,
+.lp-root h3 {
+  text-wrap: balance;
+}
+
+.lp-root p {
+  text-wrap: pretty;
+}
+
+/* Monospace is for literal code only: interface chrome inside fragments uses the text face,
+   and identifiers, commands and logs are marked up as <code>. */
+.lp-root .font-mono:not(pre, code, pre *, code *) {
+  font-family: var(--font-sans);
+}
+
+/* One container for every section: content stops at 1376px and centres on wide screens,
+   while colour fields (the hero halves, the canvas field) still run to the viewport edge. */
+.lp-wrap {
+  padding-inline: var(--lp-edge);
+}
+
+.lp-display {
+  font-size: var(--lp-display);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+  font-weight: 600;
+}
+
+.lp-heading {
+  font-size: var(--lp-heading);
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+}
+
+.lp-lead {
+  font-size: var(--lp-lead);
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+.lp-small {
+  font-size: var(--lp-small);
+  line-height: 1.45;
+}
+
+.lp-section {
+  padding-block: var(--lp-space);
+}
+
+/* Entrances: parts of a section rise in turn once it is on screen. Content is never hidden
+   unless the page's script has armed the reveal (`.lp-armed`). */
+.lp-armed [data-reveal] {
+  opacity: 0;
+  transform: translateY(24px);
+}
+
+.lp-armed .is-in [data-reveal],
+.lp-armed [data-reveal].is-in {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 0.7s cubic-bezier(0.2, 0.7, 0.2, 1),
+    transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition-delay: calc(var(--i, 0) * 80ms);
+}
+
+/* Packets travelling along schematic paths normalised with pathLength="100". */
+.lp-packet {
+  stroke-dasharray: 3 97;
+  stroke-dashoffset: 100;
+  animation: lp-packet 2.6s linear infinite;
+}
+
+.lp-packet-slow {
+  animation-duration: 3.4s;
+}
+
+.lp-packet-reverse {
+  animation-direction: reverse;
+}
+
+@keyframes lp-packet {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.lp-flow {
+  stroke-dasharray: 4 6;
+  animation: lp-flow 1.2s linear infinite;
+}
+
+@keyframes lp-flow {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.lp-pulse {
+  animation: lp-pulse 1.6s ease-out infinite;
+}
+
+@keyframes lp-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+
+.lp-fade {
+  animation: lp-fade 0.2s ease-out both;
+}
+
+@keyframes lp-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.lp-line-in {
+  animation: lp-line-in 0.35s ease-out both;
+  animation-delay: calc(var(--i, 0) * 120ms);
+}
+
+@keyframes lp-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.lp-shake {
+  animation: lp-shake 0.4s ease-in-out;
+}
+
+@keyframes lp-shake {
+  25% {
+    transform: translateX(-4px);
+  }
+  50% {
+    transform: translateX(4px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+}
+
+.lp-menu-in {
+  animation: lp-menu-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes lp-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* Pinned scene: the section is (hold + 1) screens tall and its stage sticks for the hold.
+   Without `.is-live` (phones, reduced motion) it is an ordinary section. */
+.lp-scene.is-live {
+  height: calc((var(--hold, 4) + 1) * 100svh);
+}
+
+.lp-scene.is-live > .lp-scene-stage {
+  position: sticky;
+  top: var(--lp-header-h, 0px);
+  height: calc(100svh - var(--lp-header-h, 0px));
+  overflow: clip;
+}
+
+.lp-paused .lp-packet,
+.lp-paused .lp-flow,
+.lp-paused .lp-pulse {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-root *,
+  .lp-root *::before,
+  .lp-root *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: has to beat animation utility classes */
+    animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: has to beat transition utility classes */
+    transition-duration: 0s !important;
+  }
+
+  .lp-root .lp-packet {
+    display: none;
+  }
+
+  .lp-armed [data-reveal] {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lp-range {
+  accent-color: var(--accent);
+  height: 24px;
+  cursor: pointer;
+}
+
+.lp-range:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}

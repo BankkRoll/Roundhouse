@@ -1,0 +1,14 @@
+{
+  "type": "heartbeat",
+  "seq": 42,
+  "ts": 1700000000000,
+  "observed_generation": 3,
+  "usage": {
+    "cpu_percent": 12.5,
+    "mem_used_bytes": 2147483648,
+    "mem_total_bytes": 8589934592,
+    "disk_used_bytes": 10737418240,
+    "disk_total_bytes": 85899345920,
+    "load1": 0.42
+  }
+}

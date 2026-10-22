@@ -1,0 +1,24 @@
+{
+  "name": "@openrail/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "gen:schema": "tsx scripts/gen-schema.ts",
+    "gen:fixtures": "tsx scripts/gen-signed-fixture.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "~6.0.3",
+    "vitest": "~4.1.0"
+  }
+}

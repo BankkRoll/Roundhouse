@@ -1,0 +1,13 @@
+# Test-only values that look like secrets. Each is labeled at its source.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional test fixtures and placeholders"
+paths = [
+  '''apps/api/vitest\.config\.ts''',
+  '''e2e/constants\.mjs''',
+  '''apps/web/src/mocks/db\.ts''',
+  '''install/install\.sh''',
+  '''infra/release-signing\.md''',
+]

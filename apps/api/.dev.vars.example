@@ -1,0 +1,4 @@
+# Root secret for the install. Everything else (auth secret, encryption key)
+# is derived from it, so losing it means losing access to encrypted data.
+# Generate with: openssl rand -base64 32
+MASTER_KEY=

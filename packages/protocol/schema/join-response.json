@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "node_id": {
+      "type": "string"
+    },
+    "credential": {
+      "type": "string"
+    },
+    "control_public_key": {
+      "type": "string"
+    },
+    "connect_url": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "node_id",
+    "credential",
+    "control_public_key",
+    "connect_url"
+  ],
+  "additionalProperties": false
+}

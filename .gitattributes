@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.sh text eol=lf
+apps/web/src/routeTree.gen.ts linguist-generated
+packages/protocol/schema/** linguist-generated
+packages/db/migrations/meta/** linguist-generated
+pnpm-lock.yaml linguist-generated

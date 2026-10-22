@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in OpenRail does not work as documented.
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security issues must not be reported here. See SECURITY.md.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Control plane (API / Worker)
+        - Dashboard (web)
+        - Node agent
+        - Install script
+        - Protocol
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Control plane commit or release, and `openrail-agent --version` if relevant.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Node environment
+      description: Distribution, kernel, architecture, Docker version.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output from `journalctl -u openrail-agent`, `wrangler tail`, or the browser console. Remove secrets and tokens.
+      render: text

@@ -1,0 +1,70 @@
+# OpenRail
+
+OpenRail is an open-source, self-hosted platform for deploying applications, similar in spirit to Railway. The control plane runs on your own Cloudflare account; your workloads run on your own Linux servers.
+
+> Early development. Schema, API, and agent protocol may change without notice.
+
+## Install
+
+1. Deploy the control plane (`apps/api`) to Cloudflare and set its secret:
+
+   ```sh
+   pnpm install
+   cd apps/api
+   npx wrangler d1 create openrail          # put the id in wrangler.jsonc
+   npx wrangler secret put MASTER_KEY       # openssl rand -base64 32
+   pnpm run deploy
+   ```
+
+2. Open the Worker URL. The setup wizard asks for the master key and creates
+   the admin account.
+
+3. In **Servers → Add server**, copy the command and run it on a Linux host
+   (Ubuntu 22.04/24.04, Debian 12):
+
+   ```sh
+   curl -fsSL https://<control-plane>/install.sh | sudo bash -s -- --token <token>
+   ```
+
+   Tokens are single-use and expire after 15 minutes.
+
+## Develop
+
+Requires Node 22.19+, pnpm 10, Go 1.26.
+
+```sh
+pnpm install
+cp apps/api/.dev.vars.example apps/api/.dev.vars   # fill in MASTER_KEY
+pnpm --filter @openrail/api db:migrate:local
+pnpm dev                                           # API :8787, dashboard :5173
+```
+
+```sh
+pnpm lint && pnpm typecheck && pnpm test           # TypeScript
+go test ./agent/... ./packages/protocol/go/...     # Go
+node e2e/agent-smoke.mjs                           # control plane + real agent
+pnpm --filter @openrail/e2e test:browser           # browser end-to-end
+```
+
+## Layout
+
+| Path                | What                                   |
+| ------------------- | -------------------------------------- |
+| `apps/api`          | Control plane Worker                   |
+| `apps/web`          | Dashboard                              |
+| `agent`             | Node agent (Go)                        |
+| `install`           | Server install script and systemd unit |
+| `packages/protocol` | Control plane ↔ agent wire protocol    |
+| `packages/db`       | Database schema and migrations         |
+| `packages/shared`   | Constants, IDs, roles                  |
+| `packages/ui`       | Dashboard design system                |
+| `e2e`               | End-to-end tests                       |
+| `docs/adr`          | Architecture decisions                 |
+
+[CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) ·
+[Code of conduct](CODE_OF_CONDUCT.md)
+
+## License
+
+Not chosen yet (AGPL-3.0 or Apache-2.0). Until a `LICENSE` file exists, no
+license is granted.

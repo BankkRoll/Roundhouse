@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a change or new capability.
+labels: [enhancement, triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and why is it hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should OpenRail do? Include API, UI, or config sketches if you have them.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Does this change the agent protocol or the database schema?
+      options:
+        - "No"
+        - Protocol
+        - Database schema
+        - Both
+        - Not sure
+    validations:
+      required: true

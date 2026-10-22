@@ -1,0 +1,271 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Only PR runs are cancelled; every commit on main keeps a complete result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  node:
+    name: Node (lint, typecheck, test, build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  go:
+    name: Go (vet, test, staticcheck, cross-build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      STATICCHECK_VERSION: v0.8.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+      - name: List workspace modules
+        id: modules
+        run: |
+          modules="$(go work edit -json | jq -r '.Use[].DiskPath' | tr '\n' ' ')"
+          echo "Workspace modules: $modules"
+          echo "list=$modules" >> "$GITHUB_OUTPUT"
+      - name: gofmt
+        env:
+          MODULES: ${{ steps.modules.outputs.list }}
+        run: |
+          status=0
+          for m in $MODULES; do
+            unformatted="$(cd "$m" && gofmt -l .)"
+            if [ -n "$unformatted" ]; then
+              echo "::error::gofmt needed in $m: $unformatted"
+              status=1
+            fi
+          done
+          exit "$status"
+      - name: go mod tidy
+        env:
+          MODULES: ${{ steps.modules.outputs.list }}
+        run: |
+          for m in $MODULES; do
+            echo "::group::go mod tidy -diff $m"
+            (cd "$m" && go mod tidy -diff)
+            echo "::endgroup::"
+          done
+      - name: go vet
+        env:
+          MODULES: ${{ steps.modules.outputs.list }}
+        run: |
+          for m in $MODULES; do
+            echo "::group::go vet $m"
+            (cd "$m" && go vet ./...)
+            echo "::endgroup::"
+          done
+      - name: go test -race
+        env:
+          MODULES: ${{ steps.modules.outputs.list }}
+        run: |
+          for m in $MODULES; do
+            echo "::group::go test $m"
+            (cd "$m" && go test -race ./...)
+            echo "::endgroup::"
+          done
+      - name: staticcheck
+        env:
+          MODULES: ${{ steps.modules.outputs.list }}
+        run: |
+          go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
+          for m in $MODULES; do
+            echo "::group::staticcheck $m"
+            (cd "$m" && "$(go env GOPATH)/bin/staticcheck" ./...)
+            echo "::endgroup::"
+          done
+      - name: Cross-build agent
+        working-directory: agent
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: |
+          for arch in amd64 arm64; do
+            GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::12}" \
+              -o "bin/openrail-agent-linux-$arch" ./cmd/openrail-agent
+          done
+          file bin/openrail-agent-linux-*
+
+  protocol-drift:
+    name: Protocol schema and fixture drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @openrail/protocol gen:schema
+      - run: pnpm --filter @openrail/protocol gen:fixtures
+      - name: Fail on uncommitted generated changes
+        run: |
+          git add -N packages/protocol
+          if ! git diff --exit-code packages/protocol; then
+            echo "::error::Generated protocol schema/fixtures are stale. Run 'pnpm --filter @openrail/protocol gen:schema' and 'gen:fixtures' and commit the result."
+            exit 1
+          fi
+
+  migrations-drift:
+    name: Database migration drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @openrail/db generate
+      - name: Fail if the schema has ungenerated migrations
+        run: |
+          changes="$(git status --porcelain --untracked-files=all packages/db/migrations)"
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "::error::packages/db schema has changes without a migration. Run 'pnpm --filter @openrail/db generate' and commit the result."
+            exit 1
+          fi
+
+  e2e-agent-smoke:
+    name: E2E (real agent + browser)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+      - run: pnpm install --frozen-lockfile
+      - run: node e2e/agent-smoke.mjs
+      - run: pnpm --filter @openrail/web build
+      - run: pnpm --filter @openrail/e2e exec playwright install --with-deps chromium
+      - name: Browser end-to-end tests
+        run: pnpm --filter @openrail/e2e test:browser
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
+
+  shellcheck:
+    name: ShellCheck (install scripts)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck install/*.sh
+        run: |
+          shopt -s nullglob
+          scripts=(install/*.sh install/test/*.sh)
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "No install scripts found."
+            exit 0
+          fi
+          shellcheck --version
+          shellcheck "${scripts[@]}"
+      - name: Embedded systemd unit matches install/openrail-agent.service
+        run: |
+          if ! diff -u install/openrail-agent.service \
+               <(sed -n "/<<'UNIT'/,/^UNIT$/p" install/install.sh | sed '1d;$d'); then
+            echo "::error::install/install.sh embeds a different unit than install/openrail-agent.service; copy the file into the heredoc."
+            exit 1
+          fi
+
+  install-script:
+    name: install.sh (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "ubuntu:22.04", "debian:12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+      - name: Build agent
+        working-directory: agent
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -trimpath -ldflags "-s -w -X main.version=0.0.0-ci" \
+            -o ../dist/openrail-agent-linux-amd64 ./cmd/openrail-agent
+      - name: Run install.sh in ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD:/src:ro" -v "$PWD/dist:/dist:ro" \
+            "$IMAGE" bash /src/install/test/container-test.sh

@@ -1,0 +1,45 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "openrail",
+  "main": "src/index.ts",
+  // NOTE: Pinned to the newest date the workerd bundled with
+  // @cloudflare/vitest-plugin supports, so tests run with the same runtime
+  // behaviour as production. Bump it together with that package.
+  "compatibility_date": "2026-10-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/v1/*", "/api/*", "/install.sh"]
+  },
+  // NOTE: No `database_id` on purpose: `wrangler deploy` provisions the D1
+  // database on the first deploy and reuses it afterwards, so a self-hoster
+  // never copies IDs around. That is also why `pnpm run deploy` applies
+  // migrations after `wrangler deploy`, not before: until the first deploy
+  // there is no remote database to migrate.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "openrail",
+      "migrations_dir": "../../packages/db/migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "NODE_CONNECTION", "class_name": "NodeConnection" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["NodeConnection"] }],
+  // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
+  // a small number like the docs' "1001" can collide with another project's
+  // limiter and pool their counters. Any unique positive integer works.
+  "ratelimits": [
+    {
+      "name": "AUTH_LIMITER",
+      "namespace_id": "730214591",
+      "simple": { "limit": 10, "period": 60 }
+    }
+  ],
+  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "openrail_metrics" }],
+  "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": true }],
+  "observability": { "enabled": true }
+}

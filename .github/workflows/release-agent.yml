@@ -1,0 +1,180 @@
+name: Release agent
+
+on:
+  push:
+    tags: ["agent-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-tag:
+    name: Tag is on main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Tagged commit must be reviewed code on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on origin/main. Release only from main."
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: verify-tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          # Release builds never restore a cache another workflow could have written.
+          cache: false
+          cache-dependency-path: "**/go.sum"
+      - name: Build static binary
+        working-directory: agent
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          version="${GITHUB_REF_NAME#agent-v}"
+          mkdir -p ../dist
+          go build -trimpath -buildvcs=true \
+            -ldflags "-s -w -X main.version=${version}" \
+            -o "../dist/openrail-agent-linux-${GOARCH}" ./cmd/openrail-agent
+          file "../dist/openrail-agent-linux-${GOARCH}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openrail-agent-linux-${{ matrix.arch }}
+          path: dist/openrail-agent-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Sign, attest, publish
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Holds AGENT_RELEASE_SIGNING_KEY. Configure required reviewers and a
+    # tag-only deployment rule on this environment.
+    environment: agent-release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: openrail-agent-linux-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          # The version line is signed with the checksums; install.sh rejects
+          # a pinned install whose SHA256SUMS names a different tag.
+          {
+            printf '# version: %s\n' "$GITHUB_REF_NAME"
+            sha256sum openrail-agent-linux-amd64 openrail-agent-linux-arm64
+          } > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum -c --strict SHA256SUMS
+      - name: Sign SHA256SUMS
+        working-directory: dist
+        env:
+          AGENT_RELEASE_SIGNING_KEY: ${{ secrets.AGENT_RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$AGENT_RELEASE_SIGNING_KEY" ]; then
+            echo "::error::AGENT_RELEASE_SIGNING_KEY is not set. See infra/release-signing.md."
+            exit 1
+          fi
+          umask 077
+          key="$RUNNER_TEMP/agent-release.key"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$AGENT_RELEASE_SIGNING_KEY" > "$key"
+
+          openssl pkeyutl -sign -rawin -inkey "$key" -in SHA256SUMS -out SHA256SUMS.sig
+          openssl pkey -in "$key" -pubout -out "$RUNNER_TEMP/signing.pub"
+
+          # Verify exactly as install/install.sh does before anything is published.
+          openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/signing.pub" -rawin \
+            -in SHA256SUMS -sigfile SHA256SUMS.sig
+      - name: Check signing key is one of the keys pinned in install.sh
+        run: |
+          pinned_dir="$RUNNER_TEMP/pinned"
+          mkdir -p "$pinned_dir"
+          # One file per PEM block; install.sh accepts a signature from any of them.
+          awk -v dir="$pinned_dir" '
+            /^[[:space:]]*-----BEGIN PUBLIC KEY-----[[:space:]]*$/ { file = sprintf("%s/key-%d.pem", dir, n++) }
+            file != "" { sub(/^[[:space:]]+/, ""); print > file }
+            /^[[:space:]]*-----END PUBLIC KEY-----[[:space:]]*$/ { close(file); file = "" }
+          ' install/install.sh
+          shopt -s nullglob
+          keys=("$pinned_dir"/key-*.pem)
+          if [ ${#keys[@]} -eq 0 ]; then
+            echo "::error::No PEM public key found in install/install.sh. See infra/release-signing.md."
+            exit 1
+          fi
+          signing_der="$(openssl pkey -pubin -in "$RUNNER_TEMP/signing.pub" -outform DER | base64 -w0)"
+          for k in "${keys[@]}"; do
+            if [ "$(openssl pkey -pubin -in "$k" -outform DER | base64 -w0)" = "$signing_der" ]; then
+              echo "Signing key matches pinned $(basename "$k")"
+              exit 0
+            fi
+          done
+          echo "::error::AGENT_RELEASE_SIGNING_KEY matches none of the public keys in install/install.sh; installs would reject this release."
+          exit 1
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/openrail-agent-linux-amd64
+            dist/openrail-agent-linux-arm64
+            dist/SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          prerelease=()
+          case "$tag" in *-*) prerelease=(--prerelease) ;; esac
+          # Published assets are immutable: a re-run must never swap signed
+          # files under an existing tag, so refuse rather than overwrite.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            assets="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')"
+            if [ "$assets" != "0" ]; then
+              echo "::error::Release $tag already has $assets asset(s). Cut a new tag instead of re-publishing."
+              exit 1
+            fi
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Agent ${tag#agent-}" --generate-notes "${prerelease[@]}"
+          fi
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
+            dist/openrail-agent-linux-amd64 \
+            dist/openrail-agent-linux-arm64 \
+            dist/SHA256SUMS \
+            dist/SHA256SUMS.sig

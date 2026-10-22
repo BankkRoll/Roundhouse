@@ -1,0 +1,4 @@
+.state/
+screenshots/
+test-results/
+playwright-report/

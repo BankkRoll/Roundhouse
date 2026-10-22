@@ -1,0 +1,6 @@
+{
+  "node_id": "node_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  "credential": "nc_example_credential",
+  "control_public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "connect_url": "wss://cp.example.com/v1/nodes/node_01JAAAAAAAAAAAAAAAAAAAAAAA/connect"
+}

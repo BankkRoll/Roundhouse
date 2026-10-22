@@ -1,0 +1,13 @@
+packages:
+  - apps/*
+  - packages/*
+  - e2e
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
+  - sharp
+# NOTE: jsdom 30 (an auto-installed vitest peer) asks for undici 8, which
+# requires Node >=22.19. Holding undici on 7 keeps installs and test runs
+# working on older 22.x patch releases; miniflare itself already pins 7.x.
+overrides:
+  undici: "^7.29.1"

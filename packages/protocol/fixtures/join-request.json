@@ -1,0 +1,12 @@
+{
+  "token": "njt_secret_example",
+  "name": "hetzner-fsn1-1",
+  "hostname": "hetzner-fsn1-1",
+  "agent_version": "0.1.0",
+  "os": "ubuntu 24.04",
+  "arch": "arm64",
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "public_ip": "203.0.113.10",
+  "hardware": { "cpu_cores": 2, "mem_bytes": 4294967296, "disk_bytes": 42949672960 },
+  "capabilities": { "docker": true, "gvisor": false, "builder": false }
+}

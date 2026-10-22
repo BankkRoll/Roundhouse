@@ -1,0 +1,172 @@
+/*
+ * Design tokens and Tailwind v4 theme for the dashboard.
+ *
+ * Dark is the primary palette. Light applies when the OS prefers it, unless
+ * <html> carries `.dark`; either palette can be forced with `.dark` / `.light`
+ * on <html> (see `applyTheme`).
+ *
+ * Text and indicator colours are held to WCAG AA by `styles.test.ts`. The lime
+ * `--accent` is too pale to mark state on the light palette, so indicators (active
+ * tab, active nav item, setup steps) draw with `--accent-text` instead.
+ *
+ * Consumers import this file once from their entry stylesheet:
+ *   @import "@openrail/ui/styles.css";
+ */
+@import "tailwindcss";
+
+/* NOTE: This package is linked through node_modules, which Tailwind's automatic
+   source detection skips, so its components are registered explicitly. */
+@source "./components";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: dark;
+  --background: #0b0c0d;
+  --foreground: #e8eaed;
+  --surface: #111315;
+  --surface-raised: #16181b;
+  --muted: #1a1c1f;
+  --muted-foreground: #8a8f98;
+  --subtle-foreground: #80858e;
+  --border: #1e2023;
+  --border-strong: #2a2d31;
+  --input: #2a2d31;
+  --ring: #d4f53c;
+  --accent: #d4f53c;
+  --accent-hover: #c4e62a;
+  --accent-foreground: #0b0c0d;
+  --accent-text: #d4f53c;
+  --accent-subtle: rgb(212 245 60 / 0.12);
+  --meter-track: #1f2124;
+  --meter-fill: #c9ccd1;
+  --success: #3fcf7f;
+  --warning: #f2a93b;
+  --danger: #f0524f;
+  /* NOTE: White on this red is only 3.5:1; near-black reaches 5.6:1. */
+  --danger-foreground: #0b0c0d;
+  --info: #5aa2ff;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not(.dark) {
+    color-scheme: light;
+    --background: #f7f7f8;
+    --foreground: #111315;
+    --surface: #ffffff;
+    --surface-raised: #ffffff;
+    --muted: #f0f1f3;
+    --muted-foreground: #626771;
+    --subtle-foreground: #6b7079;
+    --border: #e4e5e8;
+    --border-strong: #d3d5da;
+    --input: #d3d5da;
+    --ring: #7a9a00;
+    --accent-text: #5b7400;
+    --accent-subtle: rgb(122 154 0 / 0.12);
+    --meter-track: #e8e9ec;
+    --meter-fill: #6b7079;
+    --success: #178045;
+    --warning: #9e5c00;
+    --danger: #c42f2c;
+    --danger-foreground: #ffffff;
+    --info: #1f6bcf;
+  }
+}
+
+:root.light {
+  color-scheme: light;
+  --background: #f7f7f8;
+  --foreground: #111315;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --muted: #f0f1f3;
+  --muted-foreground: #626771;
+  --subtle-foreground: #6b7079;
+  --border: #e4e5e8;
+  --border-strong: #d3d5da;
+  --input: #d3d5da;
+  --ring: #7a9a00;
+  --accent-text: #5b7400;
+  --accent-subtle: rgb(122 154 0 / 0.12);
+  --meter-track: #e8e9ec;
+  --meter-fill: #6b7079;
+  --success: #178045;
+  --warning: #9e5c00;
+  --danger: #c42f2c;
+  --danger-foreground: #ffffff;
+  --info: #1f6bcf;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-text: var(--accent-text);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-meter-track: var(--meter-track);
+  --color-meter-fill: var(--meter-fill);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-info: var(--info);
+}
+
+@theme {
+  --font-sans:
+    "Inter Variable", "Inter", "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+  --font-mono:
+    "JetBrains Mono Variable", "JetBrains Mono", "Geist Mono", ui-monospace, "SF Mono",
+    "Cascadia Code", Menlo, Consolas, monospace;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
+
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-border);
+  }
+
+  html {
+    font-size: 14px;
+    background-color: var(--color-background);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: var(--color-accent-subtle);
+  }
+}

@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.turbo/
+.wrangler/
+.dev.vars
+*.log
+.DS_Store
+coverage/
+/agent/bin/
+/e2e/test-results/
+/e2e/playwright-report/
+.dev.vars.*
+!.dev.vars.example
+.dev/
+.env*
+*.tsbuildinfo
+*.exe
+.vscode/
+.idea/
+Thumbs.db
+/.taste-skill/
+
+# Local agent tooling (installed per machine; third-party)
+.agents/
+.claude/
+skills-lock.json

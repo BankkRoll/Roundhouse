@@ -1,0 +1,20 @@
+{
+  "name": "@openrail/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ulidx": "^2.4.1"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3",
+    "vitest": "~4.1.0"
+  }
+}

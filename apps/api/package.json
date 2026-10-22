@@ -1,0 +1,30 @@
+{
+  "name": "@openrail/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "pnpm --filter @openrail/web build && wrangler deploy && wrangler d1 migrations apply DB --remote",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/zod-openapi": "^1.6.3",
+    "@openrail/db": "workspace:*",
+    "@openrail/protocol": "workspace:*",
+    "@openrail/shared": "workspace:*",
+    "better-auth": "^1.7.12",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.13",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.7",
+    "@cloudflare/workers-types": "^5.20261022.1",
+    "typescript": "~6.0.3",
+    "vitest": "~4.1.0",
+    "wrangler": "^4.152.0"
+  }
+}

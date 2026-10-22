@@ -1,0 +1,144 @@
+/**
+ * Node management for operators (list, inspect, remove, join tokens).
+ * Agent-facing endpoints live in `./agent.ts`.
+ *
+ * @module
+ */
+import { createRoute, z } from "@hono/zod-openapi";
+import { nodeJoinTokens, nodes } from "@openrail/db";
+import { JOIN_TOKEN_TTL_MS, newId } from "@openrail/shared";
+import { and, asc, eq, isNull } from "drizzle-orm";
+import { clientIp, createRouter, originOf, requireWorkspace } from "../context";
+import { recordAudit } from "../lib/audit";
+import { hashToken, randomToken } from "../lib/crypto";
+import { notFound } from "../lib/errors";
+import { installCommand, toApiNode } from "../lib/nodes";
+import { errors, json, Millis, NodeSchema, sessionAuth, WorkspaceParams } from "../schemas";
+
+const NodeParams = WorkspaceParams.extend({ nodeId: z.string() });
+
+const list = createRoute({
+  method: "get",
+  path: "/v1/workspaces/{workspaceId}/nodes",
+  tags: ["nodes"],
+  summary: "List servers",
+  security: sessionAuth,
+  request: { params: WorkspaceParams },
+  responses: { 200: json(z.object({ nodes: z.array(NodeSchema) })), ...errors(401, 403, 404) },
+});
+
+const get = createRoute({
+  method: "get",
+  path: "/v1/workspaces/{workspaceId}/nodes/{nodeId}",
+  tags: ["nodes"],
+  summary: "Get a server",
+  security: sessionAuth,
+  request: { params: NodeParams },
+  responses: { 200: json(NodeSchema), ...errors(401, 403, 404) },
+});
+
+const remove = createRoute({
+  method: "delete",
+  path: "/v1/workspaces/{workspaceId}/nodes/{nodeId}",
+  tags: ["nodes"],
+  summary: "Remove a server and revoke its credential",
+  security: sessionAuth,
+  request: { params: NodeParams },
+  responses: { 204: { description: "Removed" }, ...errors(401, 403, 404) },
+});
+
+const createJoinToken = createRoute({
+  method: "post",
+  path: "/v1/workspaces/{workspaceId}/nodes/join-tokens",
+  tags: ["nodes"],
+  summary: "Create a single-use join token and install command",
+  security: sessionAuth,
+  request: { params: WorkspaceParams },
+  responses: {
+    201: json(
+      z.object({ token: z.string(), expires_at: Millis, install_command: z.string() }),
+      "Created",
+    ),
+    ...errors(401, 403, 404),
+  },
+});
+
+const liveNode = (workspaceId: string, nodeId: string) =>
+  and(eq(nodes.id, nodeId), eq(nodes.workspaceId, workspaceId), isNull(nodes.deletedAt));
+
+/** Operator-facing node routes. */
+export const nodeRoutes = createRouter()
+  .openapi(list, async (c) => {
+    const { workspaceId } = c.req.valid("param");
+    await requireWorkspace(c, workspaceId, "nodes:read");
+    const rows = await c
+      .get("db")
+      .select()
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), isNull(nodes.deletedAt)))
+      .orderBy(asc(nodes.name));
+    const now = Date.now();
+    return c.json({ nodes: rows.map((n) => toApiNode(n, now)) }, 200);
+  })
+  .openapi(get, async (c) => {
+    const { workspaceId, nodeId } = c.req.valid("param");
+    await requireWorkspace(c, workspaceId, "nodes:read");
+    const [row] = await c.get("db").select().from(nodes).where(liveNode(workspaceId, nodeId));
+    if (!row) throw notFound("Server");
+    return c.json(toApiNode(row), 200);
+  })
+  .openapi(remove, async (c) => {
+    const { workspaceId, nodeId } = c.req.valid("param");
+    const m = await requireWorkspace(c, workspaceId, "nodes:manage");
+    const [row] = await c
+      .get("db")
+      .update(nodes)
+      .set({ deletedAt: new Date(), status: "offline" })
+      .where(liveNode(workspaceId, nodeId))
+      .returning({ id: nodes.id, name: nodes.name });
+    if (!row) throw notFound("Server");
+    // The connect route rejects deleted nodes, but an already-open socket
+    // must be cut explicitly.
+    await c.env.NODE_CONNECTION.get(c.env.NODE_CONNECTION.idFromName(nodeId)).disconnect("removed");
+    await recordAudit(c.get("db"), {
+      workspaceId,
+      actorType: "user",
+      actorId: m.user.id,
+      action: "node.removed",
+      targetType: "node",
+      targetId: nodeId,
+      metadata: { name: row.name },
+      ip: clientIp(c),
+    });
+    return c.body(null, 204);
+  })
+  .openapi(createJoinToken, async (c) => {
+    const { workspaceId } = c.req.valid("param");
+    const m = await requireWorkspace(c, workspaceId, "nodes:manage");
+    const token = randomToken("njt");
+    const id = newId("joinToken");
+    const expiresAt = new Date(Date.now() + JOIN_TOKEN_TTL_MS);
+    await c
+      .get("db")
+      .insert(nodeJoinTokens)
+      .values({
+        id,
+        workspaceId,
+        tokenHash: await hashToken(token),
+        createdBy: m.user.id,
+        expiresAt,
+      });
+    await recordAudit(c.get("db"), {
+      workspaceId,
+      actorType: "user",
+      actorId: m.user.id,
+      action: "node.join_token_created",
+      targetType: "join_token",
+      targetId: id,
+      ip: clientIp(c),
+    });
+    return c.json(
+      { token, expires_at: +expiresAt, install_command: installCommand(originOf(c), token) },
+      201,
+    );
+  });
