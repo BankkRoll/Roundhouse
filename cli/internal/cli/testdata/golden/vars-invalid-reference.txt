@@ -1,0 +1,4 @@
+error: invalid variable reference
+  BAD: Invalid reference ${{db.}}; expected ${{service.NAME}}, ${{shared.NAME}} or ${{NAME}}
+      postgres://${{db.}}/x
+                 ^^^^^^^^

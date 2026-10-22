@@ -1,0 +1,22 @@
+[
+  {
+    "id": "svc_api",
+    "project_id": "prj_shop",
+    "name": "API",
+    "slug": "api",
+    "kind": "app",
+    "icon": null,
+    "created_at": 1792584000000,
+    "updated_at": 1792584000000
+  },
+  {
+    "id": "svc_db",
+    "project_id": "prj_shop",
+    "name": "Postgres",
+    "slug": "db",
+    "kind": "database",
+    "icon": null,
+    "created_at": 1792584000000,
+    "updated_at": 1792584000000
+  }
+]

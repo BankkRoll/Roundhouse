@@ -66,7 +66,7 @@ func (f *fakeControlPlane) errorf(format string, args ...any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.ended {
-		f.errorf(format, args...)
+		f.t.Errorf(format, args...)
 	}
 }
 

@@ -1,0 +1,11 @@
+{
+  "name": "phase1-sample-app",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}

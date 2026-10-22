@@ -1,0 +1,342 @@
+package api
+
+import (
+	"encoding/json"
+	"slices"
+)
+
+// Wire types mirror the zod schemas in apps/api/src/schemas.ts. Field names
+// and nullability follow the API exactly; nullable fields are pointers so a
+// `null` survives a decode/encode round trip in --json output.
+
+// User is the signed-in user.
+type User struct {
+	ID    string  `json:"id"`
+	Name  string  `json:"name"`
+	Email string  `json:"email"`
+	Image *string `json:"image"`
+}
+
+// Membership is a workspace the user belongs to, with their role in it.
+type Membership struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	Role string `json:"role"`
+	// MemberID is the caller's own membership row.
+	MemberID string `json:"member_id"`
+}
+
+// Me is the response of GET /v1/me.
+type Me struct {
+	User       User         `json:"user"`
+	Workspaces []Membership `json:"workspaces"`
+}
+
+// Project is a project in a workspace.
+type Project struct {
+	ID          string  `json:"id"`
+	WorkspaceID string  `json:"workspace_id"`
+	Name        string  `json:"name"`
+	Slug        string  `json:"slug"`
+	Description *string `json:"description"`
+	CreatedAt   int64   `json:"created_at"`
+	UpdatedAt   int64   `json:"updated_at"`
+}
+
+// ProjectDetail is a project with its environments and services.
+type ProjectDetail struct {
+	Project
+	Environments []Environment `json:"environments"`
+	Services     []Service     `json:"services"`
+}
+
+// Environment is an environment of a project.
+type Environment struct {
+	ID           string  `json:"id"`
+	ProjectID    string  `json:"project_id"`
+	Name         string  `json:"name"`
+	Slug         string  `json:"slug"`
+	Kind         string  `json:"kind"`
+	PRNumber     *int    `json:"pr_number"`
+	SourceBranch *string `json:"source_branch"`
+	CreatedAt    int64   `json:"created_at"`
+}
+
+// Service is a service of a project. Its config lives per environment.
+type Service struct {
+	ID        string  `json:"id"`
+	ProjectID string  `json:"project_id"`
+	Name      string  `json:"name"`
+	Slug      string  `json:"slug"`
+	Kind      string  `json:"kind"`
+	Icon      *string `json:"icon"`
+	CreatedAt int64   `json:"created_at"`
+	UpdatedAt int64   `json:"updated_at"`
+}
+
+// ServiceSource says where a service's code comes from: an image, or a git
+// repository to build.
+type ServiceSource struct {
+	// Type is "image" or "git".
+	Type                 string `json:"type"`
+	Image                string `json:"image,omitempty"`
+	RepoURL              string `json:"repo_url,omitempty"`
+	Branch               string `json:"branch,omitempty"`
+	RootDir              string `json:"root_dir,omitempty"`
+	GithubInstallationID string `json:"github_installation_id,omitempty"`
+}
+
+// NetworkingConfig is how a service is reached.
+type NetworkingConfig struct {
+	Port            *int `json:"port"`
+	GeneratedDomain bool `json:"generated_domain"`
+}
+
+// ServiceConfig is one config version of a service in an environment. Parts
+// the CLI does not interpret are kept raw so --json output stays complete.
+type ServiceConfig struct {
+	ID            string           `json:"id"`
+	ServiceID     string           `json:"service_id"`
+	EnvironmentID string           `json:"environment_id"`
+	Version       int              `json:"version"`
+	CreatedBy     *string          `json:"created_by"`
+	CreatedAt     int64            `json:"created_at"`
+	Source        ServiceSource    `json:"source"`
+	Build         json.RawMessage  `json:"build"`
+	Deploy        json.RawMessage  `json:"deploy"`
+	Resources     json.RawMessage  `json:"resources"`
+	Healthcheck   json.RawMessage  `json:"healthcheck"`
+	Networking    NetworkingConfig `json:"networking"`
+	Placement     json.RawMessage  `json:"placement"`
+}
+
+// CreatedService is the response of POST /v1/projects/{projectId}/services.
+type CreatedService struct {
+	Service Service         `json:"service"`
+	Configs []ServiceConfig `json:"configs"`
+}
+
+// Variable is a variable as listed. Value is nil for secrets until revealed.
+type Variable struct {
+	Key       string  `json:"key"`
+	Value     *string `json:"value"`
+	IsSecret  bool    `json:"is_secret"`
+	Version   int     `json:"version"`
+	UpdatedAt int64   `json:"updated_at"`
+}
+
+// VariableSet is one entry of [VariablesPut.Set].
+type VariableSet struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+	// IsSecret nil keeps an existing variable's flag (false for new ones).
+	IsSecret *bool `json:"is_secret,omitempty"`
+}
+
+// VariablesPut is a bulk change to the variables of one scope.
+type VariablesPut struct {
+	Set    []VariableSet `json:"set"`
+	Delete []string      `json:"delete"`
+}
+
+// RevealedVariable is a plaintext value returned by a reveal route.
+type RevealedVariable struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// Build is an image build.
+type Build struct {
+	ID              string  `json:"id"`
+	DeploymentID    string  `json:"deployment_id"`
+	ServiceID       string  `json:"service_id"`
+	CommitSHA       string  `json:"commit_sha"`
+	CommitMessage   *string `json:"commit_message"`
+	CommitAuthor    *string `json:"commit_author"`
+	Status          string  `json:"status"`
+	NodeID          *string `json:"node_id"`
+	ImageRepository string  `json:"image_repository"`
+	ImageDigest     *string `json:"image_digest"`
+	StartedAt       *int64  `json:"started_at"`
+	FinishedAt      *int64  `json:"finished_at"`
+	Error           *string `json:"error"`
+	CreatedAt       int64   `json:"created_at"`
+}
+
+// Deployment is a deployment, with its build when it has one.
+type Deployment struct {
+	ID            string  `json:"id"`
+	ServiceID     string  `json:"service_id"`
+	EnvironmentID string  `json:"environment_id"`
+	ConfigVersion int     `json:"config_version"`
+	BuildID       *string `json:"build_id"`
+	Build         *Build  `json:"build"`
+	Image         *string `json:"image"`
+	Status        string  `json:"status"`
+	Trigger       string  `json:"trigger"`
+	TriggeredBy   *string `json:"triggered_by"`
+	RollbackOf    *string `json:"rollback_of"`
+	FailureReason *string `json:"failure_reason"`
+	StartedAt     *int64  `json:"started_at"`
+	FinishedAt    *int64  `json:"finished_at"`
+	CreatedAt     int64   `json:"created_at"`
+	UpdatedAt     int64   `json:"updated_at"`
+}
+
+// DeploymentPage is a page of deployments, newest first.
+type DeploymentPage struct {
+	Deployments []Deployment `json:"deployments"`
+	NextCursor  *string      `json:"next_cursor"`
+}
+
+// DeploymentEvent is one entry of a deployment's timeline.
+type DeploymentEvent struct {
+	ID           string         `json:"id"`
+	DeploymentID string         `json:"deployment_id"`
+	Type         string         `json:"type"`
+	Message      string         `json:"message"`
+	Data         map[string]any `json:"data"`
+	CreatedAt    int64          `json:"created_at"`
+}
+
+// Placement is where one replica runs and its last reported state.
+type Placement struct {
+	ID           string  `json:"id"`
+	DeploymentID string  `json:"deployment_id"`
+	Replica      int     `json:"replica"`
+	NodeID       string  `json:"node_id"`
+	NodeName     *string `json:"node_name"`
+	WorkloadID   string  `json:"workload_id"`
+	ContainerID  *string `json:"container_id"`
+	State        string  `json:"state"`
+	LastStatusAt *int64  `json:"last_status_at"`
+}
+
+// DeploymentDetail is a deployment with its timeline and replicas.
+type DeploymentDetail struct {
+	Deployment
+	Events     []DeploymentEvent `json:"events"`
+	Placements []Placement       `json:"placements"`
+}
+
+// LogEntry is one stored log line.
+type LogEntry struct {
+	TS     int64  `json:"ts"`
+	Stream string `json:"stream"`
+	Text   string `json:"text"`
+	// WorkloadID is the replica that wrote the line; empty for build logs.
+	WorkloadID string `json:"workload_id,omitempty"`
+}
+
+// LogPage is a page of log lines, oldest first. NextCursor fetches the page
+// before it and is nil at the beginning.
+type LogPage struct {
+	Lines      []LogEntry `json:"lines"`
+	NextCursor *string    `json:"next_cursor"`
+}
+
+// Domain is a hostname routed to a service.
+type Domain struct {
+	ID                 string `json:"id"`
+	ServiceID          string `json:"service_id"`
+	EnvironmentID      string `json:"environment_id"`
+	Hostname           string `json:"hostname"`
+	URL                string `json:"url"`
+	Type               string `json:"type"`
+	TargetPort         int    `json:"target_port"`
+	VerificationStatus string `json:"verification_status"`
+	TLSStatus          string `json:"tls_status"`
+	CreatedAt          int64  `json:"created_at"`
+}
+
+// Node is a server running the node agent.
+type Node struct {
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	Hostname        *string         `json:"hostname"`
+	Status          string          `json:"status"`
+	Provider        string          `json:"provider"`
+	Region          *string         `json:"region"`
+	PublicIP        *string         `json:"public_ip"`
+	OS              *string         `json:"os"`
+	Arch            *string         `json:"arch"`
+	Kernel          *string         `json:"kernel"`
+	DockerVersion   *string         `json:"docker_version"`
+	AgentVersion    *string         `json:"agent_version"`
+	Capabilities    json.RawMessage `json:"capabilities"`
+	CPUTotal        *float64        `json:"cpu_total"`
+	MemTotal        *float64        `json:"mem_total"`
+	DiskTotal       *float64        `json:"disk_total"`
+	CPUPercent      *float64        `json:"cpu_percent"`
+	MemUsed         *float64        `json:"mem_used"`
+	DiskUsed        *float64        `json:"disk_used"`
+	Load1           *float64        `json:"load1"`
+	LastHeartbeatAt *int64          `json:"last_heartbeat_at"`
+	CreatedAt       int64           `json:"created_at"`
+}
+
+// JoinToken is a single-use node join token and the command that uses it.
+type JoinToken struct {
+	Token          string `json:"token"`
+	ExpiresAt      int64  `json:"expires_at"`
+	InstallCommand string `json:"install_command"`
+}
+
+// CreateProjectInput is the body of POST /v1/workspaces/{workspaceId}/projects.
+type CreateProjectInput struct {
+	Name        string `json:"name"`
+	Slug        string `json:"slug,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// CreateServiceInput is the body of POST /v1/projects/{projectId}/services.
+type CreateServiceInput struct {
+	Name   string        `json:"name"`
+	Slug   string        `json:"slug,omitempty"`
+	Kind   string        `json:"kind,omitempty"`
+	Source ServiceSource `json:"source"`
+	// Config holds overrides of the default config; nil sends none.
+	Config map[string]any `json:"config,omitempty"`
+}
+
+// Deployment statuses, from DEPLOYMENT_STATUSES in packages/shared.
+const (
+	StatusQueued     = "queued"
+	StatusBuilding   = "building"
+	StatusDeploying  = "deploying"
+	StatusActive     = "active"
+	StatusFailed     = "failed"
+	StatusCrashed    = "crashed"
+	StatusCancelled  = "cancelled"
+	StatusRemoved    = "removed"
+	StatusRolledBack = "rolled_back"
+)
+
+// IsSettled reports whether a deployment has stopped progressing: it is
+// active, or it ended. A deploy watcher stops at a settled status.
+func IsSettled(status string) bool {
+	return status != StatusQueued && status != StatusBuilding && status != StatusDeploying
+}
+
+// IsSuccess reports whether a settled deployment came up. `removed` and
+// `rolled_back` are only reachable from `active`, so they count as success:
+// the deployment ran and was superseded.
+func IsSuccess(status string) bool {
+	return status == StatusActive || status == StatusRemoved || status == StatusRolledBack
+}
+
+// IsCancellable mirrors CANCELLABLE_DEPLOYMENT_STATUSES.
+func IsCancellable(status string) bool {
+	return !IsSettled(status)
+}
+
+// IsRollbackSource mirrors ROLLBACK_SOURCE_STATUSES.
+func IsRollbackSource(status string) bool {
+	return slices.Contains([]string{StatusActive, StatusCrashed, StatusRemoved, StatusRolledBack}, status)
+}
+
+// IsBuildFinished reports whether a build status is terminal.
+func IsBuildFinished(status string) bool {
+	return status == "succeeded" || status == "failed" || status == "cancelled"
+}

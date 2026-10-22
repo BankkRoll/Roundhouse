@@ -6,6 +6,10 @@ export interface ShellActions {
   openAddServer: () => void;
   /** Opens the invite-member dialog. */
   openInviteMember: () => void;
+  /** Opens the new-project dialog. */
+  openNewProject: () => void;
+  /** Opens the new-service flow for a project. */
+  openNewService: (projectId: string) => void;
 }
 
 /** Provides {@link ShellActions} to everything under the app shell. */

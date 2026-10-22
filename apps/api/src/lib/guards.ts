@@ -12,7 +12,7 @@ import { errorBody } from "./errors";
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /** Routes called by agents and scripts, which send no Origin and use bearer credentials. */
-const NON_BROWSER_ROUTES = [/^\/v1\/nodes\/join$/];
+const NON_BROWSER_ROUTES = [/^\/v1\/nodes\/join$/, /^\/v1\/webhooks\/github\/?$/];
 
 /**
  * Rejects cross-origin state-changing requests to `/v1/*`.
@@ -62,7 +62,7 @@ function canonicalPath(path: string): string {
  *
  * @param method - HTTP method.
  * @param path - Request path as received, before any decoding.
- * @returns A bucket name (`auth`, `setup`, `join`, `invite`, or
+ * @returns A bucket name (`auth`, `setup`, `join`, `invite`, `webhook`, or
  *   `connect:<nodeId>`), or `null` if the request isn't limited.
  * @example
  * rateLimitBucket("POST", "/api/auth/change-password"); // "auth"
@@ -80,12 +80,14 @@ export function rateLimitBucket(method: string, path: string): string | null {
   if (p === "/v1/setup") return "setup";
   if (p === "/v1/nodes/join") return "join";
   if (/^\/v1\/invites\/[^/]+\/accept$/.test(p)) return "invite";
+  if (p === "/v1/webhooks/github") return "webhook";
   return null;
 }
 
 /**
  * Per-IP rate limit for secret-accepting endpoints, backed by the Workers
- * rate-limiting binding so it holds across isolates. Agent connects are keyed
+ * rate-limiting binding so it holds across isolates. The GitHub webhook has
+ * its own, looser limiter. Agent connects are keyed
  * by node and IP, so one noisy node can't lock out others behind the same NAT.
  *
  * NOTE: The binding is optional so local tooling without it still works; a
@@ -93,7 +95,7 @@ export function rateLimitBucket(method: string, path: string): string | null {
  */
 export const rateLimitSecrets = createMiddleware<AppEnv>(async (c, next) => {
   const bucket = rateLimitBucket(c.req.method, new URL(c.req.url).pathname);
-  const limiter = c.env.AUTH_LIMITER;
+  const limiter = bucket === "webhook" ? c.env.WEBHOOK_LIMITER : c.env.AUTH_LIMITER;
   if (!bucket || !limiter) return next();
   const { success } = await limiter.limit({ key: `${bucket}:${clientIp(c) ?? "unknown"}` });
   if (!success) {

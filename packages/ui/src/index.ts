@@ -3,6 +3,10 @@
  * built on Radix, and domain widgets (server cards, meters, status glyphs, command
  * palette). Components rely only on the CSS tokens, never on app state.
  *
+ * Heavier controls used only by some pages (sliders, switches, segmented controls, the
+ * ANSI renderer and list windowing) live in `@openrail/ui/controls`, so apps that split
+ * code by route don't load them up front.
+ *
  * @module
  */
 export * from "./components/activity-item";

@@ -11,7 +11,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 /** Purposes a subkey can be derived for. Each yields an independent key. */
-export type KeyPurpose = "auth-secret" | "kek";
+export type KeyPurpose = "auth-secret" | "kek" | "state-token";
 
 /**
  * Validates that `MASTER_KEY` decodes to at least 32 bytes.
@@ -147,4 +147,161 @@ export async function constantTimeEqual(a: string, b: string): Promise<boolean> 
 export async function hashToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(token));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// -----------------------------------------------------------------------------
+// Project data keys
+// -----------------------------------------------------------------------------
+
+/**
+ * Generates a fresh 256-bit project data encryption key (DEK).
+ *
+ * @returns The raw key, base64. Seal it with {@link seal} before storing.
+ */
+export function generateDataKey(): string {
+  return toBase64(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+/**
+ * AAD a project's sealed DEK is bound to, so a DEK row can't be moved to
+ * another project.
+ *
+ * @param projectId - Owning project.
+ * @returns The AAD string.
+ */
+export function projectKeyAad(projectId: string): string {
+  return `project-key:${projectId}`;
+}
+
+/**
+ * Unseals a project's DEK and imports it for AES-256-GCM.
+ *
+ * @param masterKey - Base64 master key.
+ * @param projectId - Owning project; part of the AAD.
+ * @param sealed - The stored `project_keys.dek_sealed`.
+ * @returns A non-extractable AES-GCM key.
+ */
+export async function deriveProjectKey(
+  masterKey: string,
+  projectId: string,
+  sealed: Sealed,
+): Promise<CryptoKey> {
+  const raw = await unseal(masterKey, sealed, projectKeyAad(projectId));
+  return crypto.subtle.importKey("raw", fromBase64(raw), "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+/**
+ * Encrypts a string with AES-256-GCM under a data key.
+ *
+ * @param key - Key from {@link deriveProjectKey}.
+ * @param plaintext - Value to protect.
+ * @param aad - Context the ciphertext is bound to.
+ * @returns Sealed value safe to persist.
+ */
+export async function sealWith(key: CryptoKey, plaintext: string, aad: string): Promise<Sealed> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: encoder.encode(aad) },
+    key,
+    encoder.encode(plaintext),
+  );
+  return { v: 1, iv: toBase64(iv), ct: toBase64(ct) };
+}
+
+/**
+ * Decrypts a value produced by {@link sealWith}.
+ *
+ * @param key - The same data key.
+ * @param sealed - Stored ciphertext.
+ * @param aad - Must equal the AAD used when sealing.
+ * @returns The plaintext.
+ * @throws When the key, AAD, or ciphertext doesn't match.
+ */
+export async function unsealWith(key: CryptoKey, sealed: Sealed, aad: string): Promise<string> {
+  const pt = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromBase64(sealed.iv), additionalData: encoder.encode(aad) },
+    key,
+    fromBase64(sealed.ct),
+  );
+  return decoder.decode(pt);
+}
+
+// -----------------------------------------------------------------------------
+// Signed state tokens
+// -----------------------------------------------------------------------------
+
+function base64url(bytes: ArrayBuffer | Uint8Array): string {
+  return toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromBase64url(value: string): Uint8Array<ArrayBuffer> {
+  const b64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  return fromBase64(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
+}
+
+async function stateKey(masterKey: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "raw",
+    await deriveKey(masterKey, "state-token"),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"],
+  );
+}
+
+/**
+ * Signs a small JSON payload into a URL-safe token with an expiry, for state
+ * that round-trips through a third party (e.g. GitHub's install redirect).
+ *
+ * @param masterKey - Base64 master key; the HMAC key is derived from it.
+ * @param purpose - Bound into the signature so tokens can't be reused elsewhere.
+ * @param payload - Data to carry; not encrypted, so never put secrets in it.
+ * @param ttlMs - Lifetime.
+ * @returns `<payload>.<signature>`, base64url.
+ */
+export async function signState(
+  masterKey: string,
+  purpose: string,
+  payload: Record<string, unknown>,
+  ttlMs: number,
+): Promise<string> {
+  const body = base64url(
+    encoder.encode(JSON.stringify({ ...payload, p: purpose, exp: Date.now() + ttlMs })),
+  );
+  const sig = await crypto.subtle.sign("HMAC", await stateKey(masterKey), encoder.encode(body));
+  return `${body}.${base64url(sig)}`;
+}
+
+/**
+ * Verifies a token from {@link signState}.
+ *
+ * @param masterKey - Base64 master key.
+ * @param purpose - Must match the purpose it was signed for.
+ * @param token - Untrusted token.
+ * @returns The payload, or `null` when forged, expired, or for another purpose.
+ */
+export async function verifyState(
+  masterKey: string,
+  purpose: string,
+  token: string,
+): Promise<Record<string, unknown> | null> {
+  const [body, sig] = token.split(".");
+  if (!body || !sig) return null;
+  try {
+    // SECURITY: WebCrypto's HMAC verify compares in constant time.
+    const ok = await crypto.subtle.verify(
+      "HMAC",
+      await stateKey(masterKey),
+      fromBase64url(sig),
+      encoder.encode(body),
+    );
+    if (!ok) return null;
+    const payload = JSON.parse(decoder.decode(fromBase64url(body))) as Record<string, unknown>;
+    if (payload.p !== purpose || typeof payload.exp !== "number" || payload.exp < Date.now()) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
 }

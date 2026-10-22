@@ -11,7 +11,18 @@ export type Millis = number;
 
 /** Error envelope returned with every non-2xx response. */
 export interface ApiErrorBody {
-  error: { code: string; message: string };
+  error: { code: string; message: string; details?: ApiErrorDetail[] };
+}
+
+/** A per-field problem attached to an error, e.g. a malformed `${{…}}` reference. */
+export interface ApiErrorDetail {
+  /** The field it concerns; for variables, the variable key. */
+  field: string;
+  code: string;
+  message: string;
+  /** Span of the problem within the field's value, in UTF-16 code units. */
+  start?: number;
+  end?: number;
 }
 
 /** `GET /v1/setup` */

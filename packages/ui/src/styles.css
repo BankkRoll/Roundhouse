@@ -46,6 +46,23 @@
   /* NOTE: White on this red is only 3.5:1; near-black reaches 5.6:1. */
   --danger-foreground: #0b0c0d;
   --info: #5aa2ff;
+  /* Terminal colors for ANSI log output (0-7 normal, 8-15 bright), tuned for the dark surface. */
+  --ansi-0: #4b5058;
+  --ansi-1: #f0605d;
+  --ansi-2: #4fd28a;
+  --ansi-3: #f2c14b;
+  --ansi-4: #5aa2ff;
+  --ansi-5: #c98bf2;
+  --ansi-6: #4fc8d6;
+  --ansi-7: #c9ccd1;
+  --ansi-8: #80858e;
+  --ansi-9: #ff8582;
+  --ansi-10: #7be3a8;
+  --ansi-11: #f7d77e;
+  --ansi-12: #8cc0ff;
+  --ansi-13: #ddb0f7;
+  --ansi-14: #82dde7;
+  --ansi-15: #f4f5f7;
 }
 
 @media (prefers-color-scheme: light) {
@@ -71,6 +88,22 @@
     --danger: #c42f2c;
     --danger-foreground: #ffffff;
     --info: #1f6bcf;
+    --ansi-0: #3a3e45;
+    --ansi-1: #c42f2c;
+    --ansi-2: #178045;
+    --ansi-3: #8a5a00;
+    --ansi-4: #1f6bcf;
+    --ansi-5: #8a3fb8;
+    --ansi-6: #0b7a87;
+    --ansi-7: #4a4f57;
+    --ansi-8: #6b7079;
+    --ansi-9: #d6403d;
+    --ansi-10: #1d9152;
+    --ansi-11: #9e6a00;
+    --ansi-12: #2a7be0;
+    --ansi-13: #9c4fca;
+    --ansi-14: #0d8c9a;
+    --ansi-15: #111315;
   }
 }
 
@@ -96,6 +129,22 @@
   --danger: #c42f2c;
   --danger-foreground: #ffffff;
   --info: #1f6bcf;
+  --ansi-0: #3a3e45;
+  --ansi-1: #c42f2c;
+  --ansi-2: #178045;
+  --ansi-3: #8a5a00;
+  --ansi-4: #1f6bcf;
+  --ansi-5: #8a3fb8;
+  --ansi-6: #0b7a87;
+  --ansi-7: #4a4f57;
+  --ansi-8: #6b7079;
+  --ansi-9: #d6403d;
+  --ansi-10: #1d9152;
+  --ansi-11: #9e6a00;
+  --ansi-12: #2a7be0;
+  --ansi-13: #9c4fca;
+  --ansi-14: #0d8c9a;
+  --ansi-15: #111315;
 }
 
 @theme inline {

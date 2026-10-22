@@ -1,14 +1,30 @@
-import type { NodeStatus } from "@openrail/shared";
+import type { DeploymentStatus, NodeStatus } from "@openrail/shared";
 import { cn } from "../lib/cn";
 
 type StatusShape = "dot" | "half" | "cross";
 
-interface StatusMeta {
+/** How a status is drawn: label, glyph, color class, and whether it pulses. */
+export interface StatusMeta {
   label: string;
   shape: StatusShape;
   color: string;
   pulse?: boolean;
 }
+
+/** Which vocabulary a status string belongs to. */
+export type StatusKind = "node" | "deployment" | "workload";
+
+/** Replica states reported by the agent; mirrors `WORKLOAD_STATES` in `@openrail/protocol`. */
+export type WorkloadState =
+  | "pending"
+  | "pulling"
+  | "starting"
+  | "running"
+  | "healthy"
+  | "unhealthy"
+  | "exited"
+  | "crashed"
+  | "removed";
 
 /** Display label, glyph and color for every node status. */
 export const NODE_STATUS_META: Record<NodeStatus, Readonly<StatusMeta>> = {
@@ -20,6 +36,51 @@ export const NODE_STATUS_META: Record<NodeStatus, Readonly<StatusMeta>> = {
   maintenance: { label: "Maintenance", shape: "half", color: "text-info" },
 };
 
+/** Display label, glyph and color for every deployment status. */
+export const DEPLOYMENT_STATUS_META: Record<DeploymentStatus, Readonly<StatusMeta>> = {
+  queued: { label: "Queued", shape: "dot", color: "text-subtle-foreground", pulse: true },
+  building: { label: "Building", shape: "dot", color: "text-info", pulse: true },
+  deploying: { label: "Deploying", shape: "dot", color: "text-info", pulse: true },
+  active: { label: "Active", shape: "dot", color: "text-success" },
+  failed: { label: "Failed", shape: "cross", color: "text-danger" },
+  crashed: { label: "Crashed", shape: "cross", color: "text-danger" },
+  cancelled: { label: "Cancelled", shape: "half", color: "text-subtle-foreground" },
+  removed: { label: "Removed", shape: "dot", color: "text-subtle-foreground" },
+  rolled_back: { label: "Rolled back", shape: "half", color: "text-subtle-foreground" },
+};
+
+/** Display label, glyph and color for every replica (workload) state. */
+export const WORKLOAD_STATE_META: Record<WorkloadState, Readonly<StatusMeta>> = {
+  pending: { label: "Pending", shape: "dot", color: "text-subtle-foreground", pulse: true },
+  pulling: { label: "Pulling", shape: "dot", color: "text-info", pulse: true },
+  starting: { label: "Starting", shape: "dot", color: "text-info", pulse: true },
+  running: { label: "Running", shape: "dot", color: "text-info" },
+  healthy: { label: "Healthy", shape: "dot", color: "text-success" },
+  unhealthy: { label: "Unhealthy", shape: "half", color: "text-warning" },
+  exited: { label: "Exited", shape: "dot", color: "text-subtle-foreground" },
+  crashed: { label: "Crashed", shape: "cross", color: "text-danger" },
+  removed: { label: "Removed", shape: "dot", color: "text-subtle-foreground" },
+};
+
+const META_BY_KIND: Record<StatusKind, Readonly<Record<string, Readonly<StatusMeta>>>> = {
+  node: NODE_STATUS_META,
+  deployment: DEPLOYMENT_STATUS_META,
+  workload: WORKLOAD_STATE_META,
+};
+
+/**
+ * Looks up how to draw a status, tolerating unknown values from newer servers.
+ *
+ * @param status - Status string from the API.
+ * @param kind - Vocabulary the status belongs to. Defaults to `node`.
+ * @returns Label, glyph and color; unknown statuses get a neutral dot.
+ */
+export function statusMeta(status: string, kind: StatusKind = "node"): StatusMeta {
+  const table = META_BY_KIND[kind];
+  if (Object.hasOwn(table, status)) return table[status] as StatusMeta;
+  return { label: status, shape: "dot", color: "text-subtle-foreground" };
+}
+
 /**
  * Human-readable label for a node status, tolerating unknown values from newer servers.
  *
@@ -27,17 +88,7 @@ export const NODE_STATUS_META: Record<NodeStatus, Readonly<StatusMeta>> = {
  * @returns The display label.
  */
 export function nodeStatusLabel(status: string): string {
-  return NODE_STATUS_META[status as NodeStatus]?.label ?? status;
-}
-
-function metaFor(status: string): StatusMeta {
-  return (
-    NODE_STATUS_META[status as NodeStatus] ?? {
-      label: status,
-      shape: "dot",
-      color: "text-subtle-foreground",
-    }
-  );
+  return statusMeta(status, "node").label;
 }
 
 function Glyph({ shape }: { shape: StatusShape }) {
@@ -64,8 +115,10 @@ function Glyph({ shape }: { shape: StatusShape }) {
 
 /** Props for {@link StatusDot}. */
 export interface StatusDotProps {
-  /** Node status. Unknown strings render as a neutral dot. */
-  status: NodeStatus | (string & {});
+  /** Status string. Unknown strings render as a neutral dot. */
+  status: NodeStatus | DeploymentStatus | WorkloadState | (string & {});
+  /** Vocabulary of `status`. Defaults to `node`. */
+  kind?: StatusKind;
   /** Extra classes. */
   className?: string;
   /**
@@ -76,14 +129,14 @@ export interface StatusDotProps {
 }
 
 /**
- * Status glyph: green dot for online, amber half circle for degraded/draining, red cross
- * for offline, pulsing gray dot while pending.
+ * Status glyph: green dot for online/active, amber half circle for degraded states, red
+ * cross for offline/failed, pulsing dot while something is in progress.
  *
- * @param props - Status and labelling options.
+ * @param props - Status, vocabulary and labelling options.
  * @returns The rendered glyph.
  */
-export function StatusDot({ status, className, label }: StatusDotProps) {
-  const meta = metaFor(status);
+export function StatusDot({ status, kind, className, label }: StatusDotProps) {
+  const meta = statusMeta(status, kind);
   const accessibleLabel = label === undefined ? meta.label : label;
   return (
     <svg
@@ -101,8 +154,10 @@ export function StatusDot({ status, className, label }: StatusDotProps) {
 
 /** Props for {@link StatusBadge}. */
 export interface StatusBadgeProps {
-  /** Node status. */
-  status: NodeStatus | (string & {});
+  /** Status string. */
+  status: NodeStatus | DeploymentStatus | WorkloadState | (string & {});
+  /** Vocabulary of `status`. Defaults to `node`. */
+  kind?: StatusKind;
   /** Extra classes. */
   className?: string;
 }
@@ -113,8 +168,8 @@ export interface StatusBadgeProps {
  * @param props - Status to show.
  * @returns The rendered badge.
  */
-export function StatusBadge({ status, className }: StatusBadgeProps) {
-  const meta = metaFor(status);
+export function StatusBadge({ status, kind, className }: StatusBadgeProps) {
+  const meta = statusMeta(status, kind);
   return (
     <span
       className={cn(
@@ -123,7 +178,7 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
         className,
       )}
     >
-      <StatusDot status={status} label={null} />
+      <StatusDot status={status} kind={kind} label={null} />
       <span>{meta.label}</span>
     </span>
   );

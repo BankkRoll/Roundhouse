@@ -1,0 +1,4 @@
+{"ts":1792670398000,"stream":"stdout","text":"request 248","workload_id":"wl_0001"}
+{"ts":1792670399000,"stream":"stderr","text":"request 249","workload_id":"wl_0001"}
+{"ts":1792670400000,"stream":"stdout","text":"live one","workload_id":"wl_0001"}
+{"ts":1792670400001,"stream":"stdout","text":"live two","workload_id":"wl_0001"}

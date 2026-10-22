@@ -56,6 +56,9 @@ type Options struct {
 	Force bool
 	// Insecure permits plaintext http:// and ws:// to non-loopback hosts.
 	Insecure bool
+	// Builder makes the node a builder; it is recorded in the config and
+	// advertised in capabilities.builder.
+	Builder bool
 	// AgentVersion is reported to the control plane in the join request.
 	AgentVersion string
 	// Facts describes this host; it is sent in the join request.
@@ -101,7 +104,7 @@ func Join(ctx context.Context, opts Options) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, err
 	}
-	cfg := config.Config{ControlPlaneURL: base.String(), Insecure: opts.Insecure}.WithDataDir(opts.DataDir, registration)
+	cfg := config.Config{ControlPlaneURL: base.String(), Insecure: opts.Insecure, Builder: opts.Builder}.WithDataDir(opts.DataDir, registration)
 	committed := false
 	defer func() {
 		if !committed {
@@ -127,7 +130,7 @@ func Join(ctx context.Context, opts Options) (config.Config, error) {
 		PublicKey:    base64.StdEncoding.EncodeToString(pub),
 		PublicIP:     opts.Facts.PublicIP,
 		Hardware:     opts.Facts.Hardware,
-		Capabilities: opts.Facts.Capabilities,
+		Capabilities: capabilities(opts),
 	})
 	if err != nil {
 		return config.Config{}, err
@@ -263,4 +266,12 @@ func joinError(status int, payload []byte) error {
 		return fmt.Errorf("join rejected (HTTP %d): %s", status, e.Error.Message)
 	}
 	return fmt.Errorf("join rejected (HTTP %d, %s): %s", status, e.Error.Code, e.Error.Message)
+}
+
+// capabilities reports the host's capabilities with the operator's builder
+// choice, which facts cannot detect.
+func capabilities(opts Options) protocol.Capabilities {
+	c := opts.Facts.Capabilities
+	c.Builder = opts.Builder
+	return c
 }

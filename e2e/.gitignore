@@ -2,3 +2,4 @@
 screenshots/
 test-results/
 playwright-report/
+.artifacts/

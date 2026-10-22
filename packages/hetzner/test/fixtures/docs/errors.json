@@ -1,0 +1,43 @@
+{
+  "unauthorized": {
+    "error": { "code": "unauthorized", "message": "unable to authenticate", "details": null }
+  },
+  "forbidden": {
+    "error": {
+      "code": "forbidden",
+      "message": "insufficient permissions for this request",
+      "details": null
+    }
+  },
+  "invalid_input": {
+    "error": {
+      "code": "invalid_input",
+      "message": "invalid input in field 'broken_field': is too long",
+      "details": { "fields": [{ "name": "broken_field", "messages": ["is too long"] }] }
+    }
+  },
+  "uniqueness_error": {
+    "error": {
+      "code": "uniqueness_error",
+      "message": "SSH key with the same fingerprint already exists",
+      "details": { "fields": [{ "name": "public_key" }] }
+    }
+  },
+  "resource_limit_exceeded": {
+    "error": {
+      "code": "resource_limit_exceeded",
+      "message": "project limit exceeded",
+      "details": { "limits": [{ "name": "project_limit" }] }
+    }
+  },
+  "rate_limit_exceeded": {
+    "error": {
+      "code": "rate_limit_exceeded",
+      "message": "limit of 3600 requests per hour reached",
+      "details": null
+    }
+  },
+  "not_found": {
+    "error": { "code": "not_found", "message": "server with ID '1' not found", "details": null }
+  }
+}

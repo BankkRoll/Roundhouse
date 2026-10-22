@@ -4,7 +4,7 @@
 //
 // Usage:
 //
-//	openrail-agent join --url <control-plane> (--token <token> | --token-file <path>) [--name <name>] [--config <path>] [--force] [--insecure]
+//	openrail-agent join --url <control-plane> (--token <token> | --token-file <path>) [--name <name>] [--config <path>] [--builder] [--force] [--insecure]
 //	openrail-agent run [--config <path>]
 //	openrail-agent version
 package main
@@ -102,6 +102,7 @@ func cmdJoin(args []string, logger *slog.Logger, stderr io.Writer) error {
 	dataDir := fset.String("data-dir", "", "directory for credential, identity key and state (default: /var/lib/openrail on Linux, next to --config elsewhere)")
 	force := fset.Bool("force", false, "replace an existing joined config")
 	insecure := fset.Bool("insecure", false, "allow plaintext http:// and ws:// to a non-loopback control plane (testing only)")
+	builderNode := fset.Bool("builder", false, "make this node a builder: run the local image registry and accept build jobs")
 	if err := fset.Parse(args); err != nil {
 		return err
 	}
@@ -134,6 +135,7 @@ func cmdJoin(args []string, logger *slog.Logger, stderr io.Writer) error {
 		DataDir:         *dataDir,
 		Force:           *force,
 		Insecure:        *insecure,
+		Builder:         *builderNode,
 		Logger:          logger,
 		AgentVersion:    version,
 		Facts:           f,
@@ -185,9 +187,11 @@ func cmdRun(args []string, logger *slog.Logger, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	f.Capabilities.Builder = cfg.Builder
 	sampler := facts.NewSampler(ctx)
 	logger = logger.With("node_id", cfg.NodeID)
-	logger.Info("starting agent", "version", version, "os", f.OS, "arch", f.Arch, "docker", f.DockerVersion != nil)
+	logger.Info("starting agent", "version", version, "os", f.OS, "arch", f.Arch,
+		"docker", f.DockerVersion != nil, "builder", cfg.Builder)
 	if cfg.Insecure {
 		warnInsecure(logger)
 	}
@@ -201,15 +205,21 @@ func cmdRun(args []string, logger *slog.Logger, stderr io.Writer) error {
 		OnControlKeyID: func(kid string) error {
 			return pinKeyID(*cfgPath, kid)
 		},
-		Hello: func(ctx context.Context, observed int64) protocol.Hello {
-			return f.Hello(ctx, cfg.NodeID, version, observed)
-		},
 		Usage:  sampler.Sample,
 		State:  state.NewStore(cfg.StateFile),
 		Logger: logger,
 	}
+	a, err := newAgent(cfg, client, logger)
+	if err != nil {
+		return err
+	}
+	client.Hello = func(ctx context.Context, observed int64) protocol.Hello {
+		h := f.Hello(ctx, cfg.NodeID, version, observed)
+		h.Statuses = a.runtime.Statuses()
+		return h
+	}
 	start := time.Now()
-	if err := client.Run(ctx); err != nil {
+	if err := a.run(ctx); err != nil {
 		return err
 	}
 	logger.Info("agent stopped", "uptime", time.Since(start).Round(time.Second).String())

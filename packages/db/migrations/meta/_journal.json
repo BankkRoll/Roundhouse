@@ -15,6 +15,13 @@
       "when": 1792699350829,
       "tag": "0001_deploy_pipeline",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792700585142,
+      "tag": "0002_phase1_runtime",
+      "breakpoints": true
     }
   ]
 }

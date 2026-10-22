@@ -11,6 +11,9 @@ export default defineConfig({
       // The MSW contract test reads the API's route definitions (and their zod schemas)
       // straight from source. Only tests may import through this alias.
       "@openrail/api-source": resolve(import.meta.dirname, "../api/src"),
+      // The API's Phase 1 routers import Durable Object and Workflow classes; the contract
+      // test only reads their route registries, so a stub of the runtime module suffices.
+      "cloudflare:workers": resolve(import.meta.dirname, "src/test/cloudflare-workers-stub.ts"),
     },
   },
   test: {

@@ -1,7 +1,8 @@
 /**
  * In-memory backing store for the MSW handlers. Each test starts from {@link resetDb},
  * which seeds a signed-in owner with a workspace, four members, one pending invite, two
- * nodes (one reporting, one still pending) and a few audit entries.
+ * nodes (one reporting, one still pending), a few audit entries, and the Phase 1 data
+ * described in `./deploy-db`.
  *
  * @module
  */
@@ -15,6 +16,7 @@ import type {
   User,
   Workspace,
 } from "../lib/api/types";
+import { type DeployDb, emptyDeploy, seedDeploy } from "./deploy-db";
 
 /** A stored user, including the password the sign-in handler checks. */
 export interface DbUser extends User {
@@ -54,6 +56,8 @@ export interface MockDb {
   nodes: (Node & { workspace_id: string })[];
   joinTokens: (JoinToken & { workspace_id: string })[];
   audit: DbAuditEntry[];
+  /** Projects, services, deployments and the rest of the deploy pipeline. */
+  deploy: DeployDb;
   counter: number;
 }
 
@@ -232,6 +236,7 @@ function seed(): MockDb {
         created_at: now - 86_400_000,
       }),
     ].map((entry) => ({ ...entry, workspace_id: WORKSPACE_ID })),
+    deploy: seedDeploy(WORKSPACE_ID, now),
     counter: 0,
   };
 }
@@ -260,6 +265,7 @@ export function seedFreshInstall(masterKeyConfigured = true): void {
     invites: [],
     nodes: [],
     audit: [],
+    deploy: emptyDeploy(),
   };
 }
 

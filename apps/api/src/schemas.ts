@@ -62,7 +62,24 @@ import {
 
 /** Error envelope returned by every non-2xx response. */
 export const ErrorSchema = z
-  .object({ error: z.object({ code: z.string(), message: z.string() }) })
+  .object({
+    error: z.object({
+      code: z.string(),
+      message: z.string(),
+      /** Per-field problems, e.g. each malformed `${{…}}` reference with its span. */
+      details: z
+        .array(
+          z.object({
+            field: z.string(),
+            code: z.string(),
+            message: z.string(),
+            start: z.number().int().optional(),
+            end: z.number().int().optional(),
+          }),
+        )
+        .optional(),
+    }),
+  })
   .openapi("Error");
 
 /** Unix-millisecond timestamp. */

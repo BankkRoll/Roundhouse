@@ -1,0 +1,295 @@
+package ingress
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"flag"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/BankkRoll/Open-Rail/agent/internal/leaktest"
+	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+)
+
+var update = flag.Bool("update", false, "rewrite golden files")
+
+var sampleRoutes = []Route{
+	{Host: "api.example.com", PathPrefix: "/v1", Upstreams: []string{"172.18.0.3:3000"}},
+	{Host: "api.example.com", Upstreams: []string{"172.18.0.2:3000"}},
+	{Host: "API.example.com", PathPrefix: "/v1/", Upstreams: []string{"172.18.0.4:3000", "172.18.0.3:3000"}},
+	{Host: "web-production-x7k2.127.0.0.1.nip.io", PathPrefix: "/", Upstreams: []string{"172.19.0.2:8080"}},
+	{Host: "idle.example.com", Upstreams: nil},
+}
+
+func TestBuildConfigGolden(t *testing.T) {
+	opts := BuildOptions{AdminListen: DefaultAdminListen, AskURL: DefaultAskURL}
+	for _, mode := range []protocol.TLSMode{protocol.TLSOff, protocol.TLSInternal, protocol.TLSACME} {
+		t.Run(string(mode), func(t *testing.T) {
+			got := BuildConfig(Config{TLSMode: mode, Routes: sampleRoutes}, opts)
+			var pretty bytes.Buffer
+			if err := json.Indent(&pretty, got, "", "  "); err != nil {
+				t.Fatal(err)
+			}
+			pretty.WriteByte('\n')
+			golden := filepath.Join("testdata", "caddy-"+string(mode)+".json")
+			if *update {
+				if err := os.WriteFile(golden, pretty.Bytes(), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want, err := os.ReadFile(golden)
+			if err != nil {
+				t.Fatalf("%v (run with -update to create)", err)
+			}
+			if !bytes.Equal(bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n")), pretty.Bytes()) {
+				t.Fatalf("config differs from %s; run with -update if intended:\n%s", golden, pretty.String())
+			}
+		})
+	}
+}
+
+func TestBuildConfigDeterministic(t *testing.T) {
+	a := BuildConfig(Config{TLSMode: protocol.TLSInternal, Routes: sampleRoutes}, BuildOptions{})
+	reversed := []Route{sampleRoutes[4], sampleRoutes[3], sampleRoutes[2], sampleRoutes[1], sampleRoutes[0]}
+	b := BuildConfig(Config{TLSMode: protocol.TLSInternal, Routes: reversed}, BuildOptions{})
+	if Hash(a) != Hash(b) {
+		t.Fatal("route order changed the config")
+	}
+	c := BuildConfig(Config{TLSMode: protocol.TLSInternal, Routes: sampleRoutes[:1]}, BuildOptions{})
+	if Hash(a) == Hash(c) {
+		t.Fatal("different routes gave the same hash")
+	}
+}
+
+func TestInternalWithoutRoutesHasNoTLSPolicy(t *testing.T) {
+	var cfg struct {
+		Apps map[string]json.RawMessage `json:"apps"`
+	}
+	if err := json.Unmarshal(BuildConfig(Config{TLSMode: protocol.TLSInternal}, BuildOptions{}), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Apps["tls"]; ok {
+		t.Fatal("a subject-less internal policy would issue certificates for any name")
+	}
+}
+
+func TestAsk(t *testing.T) {
+	m := New(Options{AdminURL: "http://127.0.0.1:1"})
+	_ = m.Apply(context.Background(), Config{TLSMode: protocol.TLSACME, AllowedHosts: []string{"App.Example.com"}})
+	for _, tc := range []struct {
+		method, target string
+		want           int
+	}{
+		{"GET", "/ask?domain=app.example.com", 200},
+		{"GET", "/ask?domain=APP.example.com.", 200},
+		{"GET", "/ask?domain=other.example.com", 404},
+		{"GET", "/ask?domain=", 404},
+		{"GET", "/ask", 404},
+		{"POST", "/ask?domain=app.example.com", 405},
+		{"GET", "/other?domain=app.example.com", 404},
+	} {
+		rec := httptest.NewRecorder()
+		m.ServeAsk(rec, httptest.NewRequest(tc.method, tc.target, nil))
+		if rec.Code != tc.want {
+			t.Errorf("%s %s = %d, want %d", tc.method, tc.target, rec.Code, tc.want)
+		}
+	}
+	_ = m.Apply(context.Background(), Config{TLSMode: protocol.TLSACME})
+	rec := httptest.NewRecorder()
+	m.ServeAsk(rec, httptest.NewRequest("GET", "/ask?domain=app.example.com", nil))
+	if rec.Code != 404 {
+		t.Fatalf("removed host still allowed: %d", rec.Code)
+	}
+}
+
+func TestListenAskLoopbackOnly(t *testing.T) {
+	leaktest.Check(t)
+	if _, err := ListenAsk("0.0.0.0:0"); err == nil {
+		t.Fatal("wildcard address accepted")
+	}
+	if _, err := ListenAsk("localhost:0"); err == nil {
+		t.Fatal("hostname accepted; it may resolve to a non-loopback address")
+	}
+	ln, err := ListenAsk("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{})
+	_ = m.Apply(context.Background(), Config{AllowedHosts: []string{"a.example.com"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.ServeAskOn(ctx, ln) }()
+	resp, err := http.Get("http://" + ln.Addr().String() + "/ask?domain=a.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	http.DefaultClient.CloseIdleConnections()
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fakeCaddy is a minimal admin API: /load stores the config, /config/
+// returns it, and down makes every request fail.
+type fakeCaddy struct {
+	mu     sync.Mutex
+	config []byte
+	loads  int
+	down   bool
+}
+
+func (f *fakeCaddy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.down {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+		return
+	}
+	switch {
+	case r.Method == http.MethodPost && r.URL.Path == "/load":
+		body, _ := io.ReadAll(r.Body)
+		if !json.Valid(body) {
+			http.Error(w, "bad json", 400)
+			return
+		}
+		f.config = body
+		f.loads++
+	case r.Method == http.MethodGet && r.URL.Path == "/config/":
+		if f.config == nil {
+			_, _ = io.WriteString(w, "null\n")
+			return
+		}
+		_, _ = w.Write(f.config)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (f *fakeCaddy) state() (loads int, cfg []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.loads, f.config
+}
+
+func (f *fakeCaddy) set(fn func(*fakeCaddy)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(f)
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestManagerLoadsOnlyOnChange(t *testing.T) {
+	leaktest.Check(t)
+	caddy := &fakeCaddy{}
+	srv := httptest.NewServer(caddy)
+	defer srv.Close()
+	m := New(Options{AdminURL: srv.URL})
+	ctx := context.Background()
+	cfg := Config{TLSMode: protocol.TLSOff, Routes: sampleRoutes[:1]}
+	for range 3 {
+		if err := m.Apply(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if loads, _ := caddy.state(); loads != 1 {
+		t.Fatalf("loads = %d, want 1", loads)
+	}
+	// AllowedHosts are not part of Caddy's config.
+	cfg.AllowedHosts = []string{"x.example.com"}
+	_ = m.Apply(ctx, cfg)
+	if loads, _ := caddy.state(); loads != 1 {
+		t.Fatalf("allowlist change reloaded caddy: loads = %d", loads)
+	}
+	cfg.Routes = sampleRoutes[:2]
+	_ = m.Apply(ctx, cfg)
+	loads, got := caddy.state()
+	if loads != 2 || !bytes.Equal(got, BuildConfig(cfg, m.opts.Build)) {
+		t.Fatalf("loads = %d", loads)
+	}
+	if !m.Healthy() || m.AppliedHash() != Hash(got) {
+		t.Fatal("manager does not report the applied config")
+	}
+}
+
+func TestManagerRetriesWhileCaddyIsDown(t *testing.T) {
+	leaktest.Check(t)
+	caddy := &fakeCaddy{down: true}
+	srv := httptest.NewServer(caddy)
+	defer srv.Close()
+	m := New(Options{AdminURL: srv.URL, MinBackoff: 10 * time.Millisecond, MaxBackoff: 20 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	if err := m.Apply(ctx, Config{TLSMode: protocol.TLSOff, Routes: sampleRoutes}); err == nil {
+		t.Fatal("Apply succeeded against a down caddy")
+	}
+	if m.Healthy() {
+		t.Fatal("healthy while caddy is down")
+	}
+	time.Sleep(50 * time.Millisecond)
+	caddy.set(func(f *fakeCaddy) { f.down = false })
+	waitFor(t, "retry to load the config", m.Healthy)
+}
+
+func TestManagerReloadsAfterCaddyRestart(t *testing.T) {
+	leaktest.Check(t)
+	caddy := &fakeCaddy{}
+	srv := httptest.NewServer(caddy)
+	defer srv.Close()
+	m := New(Options{AdminURL: srv.URL, VerifyInterval: 10 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	if err := m.Apply(ctx, Config{TLSMode: protocol.TLSOff, Routes: sampleRoutes}); err != nil {
+		t.Fatal(err)
+	}
+	caddy.set(func(f *fakeCaddy) { f.config = nil })
+	waitFor(t, "reload after restart", func() bool {
+		loads, cfg := caddy.state()
+		return loads == 2 && cfg != nil
+	})
+}
+
+func TestServeAskOnStopsWithListenerError(t *testing.T) {
+	leaktest.Check(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+	if err := New(Options{}).ServeAskOn(context.Background(), ln); err == nil {
+		t.Fatal("closed listener did not fail")
+	}
+}

@@ -17,6 +17,10 @@
 #   --version <v>     Agent version to install, e.g. 0.1.0 (default: the version
 #                     the control plane pins, else latest).
 #   --rejoin          Re-register even if this host has already joined.
+#   --builder         Make this node a builder: it builds images from git with
+#                     BuildKit and Railpack and hosts the local registry. Also
+#                     installs Railpack and pre-pulls the BuildKit and registry
+#                     images. Chosen at join time; re-runs on a builder keep it.
 #   --binary <p>      DEV ONLY: install a local agent binary, skipping download
 #                     and signature verification.
 #
@@ -32,6 +36,14 @@
 # Order of work: the join token is single-use and short-lived, so the agent
 # is downloaded and joined first, and only then are Docker and the other slow
 # dependencies installed.
+#
+# Every node gets Docker, git and Caddy (ingress). Caddy is configured only by
+# the agent, through its admin API on localhost:2019.
+#
+# Firewall: OpenRail needs no inbound port for its control traffic (the agent
+# dials out). Allow inbound TCP 80 and 443 (and UDP 443 for HTTP/3) for
+# ingress, and keep everything else closed. If ufw is active, the installer
+# adds those rules itself.
 #
 # Safe to re-run: packages already present are kept, the binary and systemd
 # unit are replaced, and an already-joined host is not re-registered.
@@ -71,6 +83,32 @@ MIN_CPUS=1
 # so the floor sits below the advertised requirement.
 MIN_MEM_KIB=$((900 * 1024))
 MIN_DISK_KIB=$((10 * 1024 * 1024))
+# Builders also hold BuildKit's cache (capped at 20 GiB, with GC) and the
+# registry.
+MIN_BUILDER_DISK_KIB=$((20 * 1024 * 1024))
+
+# Caddy comes from its official Cloudsmith apt repository. The repository key
+# is trusted only if its primary key fingerprint matches.
+CADDY_KEY_URL="https://dl.cloudsmith.io/public/caddy/stable/gpg.key"
+CADDY_KEY_FINGERPRINT="65760C51EDEA2017CEA2CA15155B6D79CA56EA34"
+CADDY_REPO="https://dl.cloudsmith.io/public/caddy/stable/deb/debian"
+CADDY_KEYRING=/etc/apt/keyrings/caddy-stable.asc
+CADDY_LIST=/etc/apt/sources.list.d/caddy-stable.list
+CADDY_DROPIN=/etc/systemd/system/caddy.service.d/openrail.conf
+
+# IMPORTANT: builder pins. The Railpack CLI version must match the frontend
+# image the agent builds with, and the image references must match the
+# agent's (agent/internal/builder); a Go test fails if they drift.
+RAILPACK_VERSION=0.43.0
+RAILPACK_SHA256_AMD64=248a8f60f36854aabed6124113631078a802de3461660855fc4de9c26065c1fb
+RAILPACK_SHA256_ARM64=732ece14eb4f4676a43ebba19431f954edf7b130acb76159ef0f2ff86ac42ac9
+RAILPACK_BIN=/usr/local/bin/railpack
+BUILDKIT_IMAGE="moby/buildkit:v0.34.1-rootless@sha256:f68752a5a94acfcdad2d07867b7075601a421638e17fc5f28efc1c814d0c4f89"
+REGISTRY_IMAGE="registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2"
+# The build network's bridge and the agent's per-build registry proxy port,
+# which BuildKit's container must reach on the host.
+BUILD_BRIDGE=openrail-bk0
+REGISTRY_PROXY_PORT=5001
 
 # NOTE: these globals must not share names with /etc/os-release variables
 # (NAME, VERSION, ID, ...); os-release is only ever read in a subshell.
@@ -80,6 +118,7 @@ NODE_NAME=""
 AGENT_VERSION=""
 LOCAL_BINARY=""
 REJOIN=0
+BUILDER=0
 URL="$CONTROL_PLANE_URL"
 WORK_DIR=""
 JOINED_THIS_RUN=0
@@ -98,7 +137,7 @@ die() {
 usage() {
 	cat <<'EOF'
 Usage: install.sh [--token <JOIN_TOKEN> | --token-file <path>] [--name <n>] [--url <u>]
-                  [--version <v>] [--rejoin] [--binary <path>]
+                  [--version <v>] [--rejoin] [--builder] [--binary <path>]
 
 See the header of this script for details.
 EOF
@@ -128,6 +167,7 @@ parse_args() {
 		--version) AGENT_VERSION="${2:?--version needs a value}"; shift 2 ;;
 		--binary) LOCAL_BINARY="${2:?--binary needs a value}"; shift 2 ;;
 		--rejoin) REJOIN=1; shift ;;
+		--builder) BUILDER=1; shift ;;
 		-h | --help) usage 0 ;;
 		*) die "unknown option: $1 (see --help)" ;;
 		esac
@@ -253,10 +293,29 @@ check_resources() {
 		return
 	fi
 	# Docker images and volumes land under /var/lib.
+	local min_kib="$MIN_DISK_KIB"
+	if [ "$BUILDER" = 1 ]; then min_kib="$MIN_BUILDER_DISK_KIB"; fi
 	disk_kib="$(df -Pk /var/lib | awk 'NR == 2 { print $4 }')"
-	[ "$disk_kib" -ge "$MIN_DISK_KIB" ] ||
-		die "need at least 10 GiB free disk on /var/lib, found $((disk_kib / 1024 / 1024)) GiB"
+	[ "$disk_kib" -ge "$min_kib" ] ||
+		die "need at least $((min_kib / 1024 / 1024)) GiB free disk on /var/lib, found $((disk_kib / 1024 / 1024)) GiB"
 	log "resources OK: ${cpus} vCPU, $((mem_kib / 1024)) MiB RAM, $((disk_kib / 1024 / 1024)) GiB free"
+}
+
+joined_as_builder() {
+	already_joined && grep -Eq '^builder: *true *$' "$CONFIG_PATH"
+}
+
+# check_builder_role settles whether this is a builder node before the join
+# token is spent. The role is fixed at join time and recorded in the agent's
+# config, so re-runs keep it without --builder.
+check_builder_role() {
+	if joined_as_builder; then
+		BUILDER=1
+		return
+	fi
+	if [ "$BUILDER" = 1 ] && already_joined && [ "$REJOIN" != 1 ]; then
+		die "this host joined as a non-builder node; to make it a builder, re-run with --rejoin --builder and a new join token"
+	fi
 }
 
 # check_docker_flavour refuses Docker installs the agent cannot drive, before
@@ -421,6 +480,7 @@ join_control_plane() {
 	local args=(join --url "$URL" --config "$CONFIG_PATH" --token-file "$TOKEN_FILE")
 	if [ -n "$NODE_NAME" ]; then args+=(--name "$NODE_NAME"); fi
 	if [ "$REJOIN" = 1 ]; then args+=(--force); fi
+	if [ "$BUILDER" = 1 ]; then args+=(--builder); fi
 
 	log "joining ${URL}"
 	"$BIN_PATH" "${args[@]}"
@@ -433,7 +493,8 @@ join_control_plane() {
 install_packages() {
 	log "installing node dependencies"
 	apt_update
-	apt_install wireguard-tools
+	# gpg verifies the Caddy repository key; git fetches sources on builders.
+	apt_install wireguard-tools git ca-certificates gpg
 
 	if command -v docker >/dev/null; then
 		log "Docker already installed ($(docker --version 2>/dev/null || echo unknown version))"
@@ -449,8 +510,132 @@ install_packages() {
 	fi
 	systemctl enable --now docker >/dev/null
 
-	# TODO(phase-1): install Caddy for ingress and TLS termination.
+	install_caddy
+	if [ "$BUILDER" = 1 ]; then
+		install_railpack
+		prepull_builder_images
+	fi
 	# TODO(phase-2): install gVisor (runsc) and register it as a Docker runtime.
+}
+
+# install_caddy installs Caddy from its official apt repository and runs it
+# with no configuration of its own: the agent owns the config and pushes it
+# through the admin API, which listens on localhost only.
+install_caddy() {
+	local key="${WORK_DIR}/caddy.asc" gnupg="${WORK_DIR}/gnupg" fpr
+	fetch "$CADDY_KEY_URL" "$key"
+	# SECURITY: the key is trusted only if its primary fingerprint is the one
+	# pinned above; the signed repository metadata then vouches for the
+	# packages.
+	mkdir -m 0700 "$gnupg"
+	fpr="$(GNUPGHOME="$gnupg" gpg --batch --quiet --show-keys --with-colons "$key" 2>/dev/null |
+		awk -F: '$1 == "pub" { want = 1; next } want && $1 == "fpr" { print $10; exit }')"
+	[ "$fpr" = "$CADDY_KEY_FINGERPRINT" ] ||
+		die "Caddy repository key fingerprint is ${fpr:-unreadable}, expected ${CADDY_KEY_FINGERPRINT}; refusing to install"
+
+	install -m 0755 -d /etc/apt/keyrings
+	install -m 0644 "$key" "$CADDY_KEYRING"
+	local list
+	list="$(printf 'deb [signed-by=%s] %s any-version main' "$CADDY_KEYRING" "$CADDY_REPO")"
+	if [ ! -f "$CADDY_LIST" ] || [ "$(cat "$CADDY_LIST")" != "$list" ]; then
+		printf '%s\n' "$list" >"$CADDY_LIST"
+		apt_update
+	fi
+	if command -v caddy >/dev/null && dpkg -s caddy >/dev/null 2>&1; then
+		log "Caddy already installed ($(caddy version 2>/dev/null | awk '{ print $1 }'))"
+	else
+		log "installing Caddy from the official Cloudsmith repository"
+		apt_install caddy
+	fi
+
+	# NOTE: --resume starts from the config the agent last pushed (Caddy
+	# autosaves it), or from an empty config on first start, instead of the
+	# packaged Caddyfile. Reload is disabled because it would replace the
+	# agent's config with that Caddyfile.
+	local dropin
+	dropin="$(
+		cat <<'CADDY'
+# Managed by the OpenRail installer. openrail-agent configures Caddy through
+# its admin API; the packaged Caddyfile is not used.
+[Service]
+Environment=CADDY_ADMIN=localhost:2019
+ExecStart=
+ExecStart=/usr/bin/caddy run --environ --resume
+ExecReload=
+CADDY
+	)"
+	local changed=0
+	if [ ! -f "$CADDY_DROPIN" ] || [ "$(cat "$CADDY_DROPIN")" != "$dropin" ]; then
+		install -m 0755 -d "$(dirname "$CADDY_DROPIN")"
+		printf '%s\n' "$dropin" >"$CADDY_DROPIN"
+		changed=1
+	fi
+	systemctl daemon-reload
+	systemctl enable caddy.service >/dev/null
+	# NOTE: restarting drops in-flight requests, so only a changed drop-in
+	# restarts a running Caddy.
+	if [ "$changed" = 1 ]; then
+		systemctl restart caddy.service
+	else
+		systemctl start caddy.service
+	fi
+}
+
+# install_railpack installs the pinned Railpack CLI, which plans builds on
+# builder nodes, after checking its sha256.
+install_railpack() {
+	local current="" triple sum asset
+	if [ -x "$RAILPACK_BIN" ]; then
+		current="$("$RAILPACK_BIN" --version 2>/dev/null | awk '{ print $NF }')"
+	fi
+	if [ "$current" = "$RAILPACK_VERSION" ]; then
+		log "Railpack ${RAILPACK_VERSION} already installed"
+		return
+	fi
+	case "$ARCH" in
+	amd64) triple=x86_64-unknown-linux-musl sum="$RAILPACK_SHA256_AMD64" ;;
+	arm64) triple=arm64-unknown-linux-musl sum="$RAILPACK_SHA256_ARM64" ;;
+	esac
+	asset="railpack-v${RAILPACK_VERSION}-${triple}.tar.gz"
+	log "installing Railpack ${RAILPACK_VERSION}"
+	fetch "https://github.com/railwayapp/railpack/releases/download/v${RAILPACK_VERSION}/${asset}" "${WORK_DIR}/${asset}"
+	printf '%s  %s\n' "$sum" "${WORK_DIR}/${asset}" | sha256sum -c --quiet - ||
+		die "checksum mismatch for ${asset}; refusing to install"
+	mkdir -p "${WORK_DIR}/railpack"
+	tar -xzf "${WORK_DIR}/${asset}" -C "${WORK_DIR}/railpack" railpack
+	install -m 0755 "${WORK_DIR}/railpack/railpack" "${RAILPACK_BIN}.new"
+	mv -f "${RAILPACK_BIN}.new" "$RAILPACK_BIN"
+}
+
+# prepull_builder_images fetches the pinned BuildKit and registry images so
+# the first build does not wait for them.
+prepull_builder_images() {
+	local image
+	for image in "$BUILDKIT_IMAGE" "$REGISTRY_IMAGE"; do
+		if docker image inspect "$image" >/dev/null 2>&1; then
+			continue
+		fi
+		log "pulling ${image%@*}"
+		docker pull --quiet "$image" >/dev/null || die "could not pull ${image}"
+	done
+}
+
+# configure_firewall opens ingress when ufw is active, and otherwise says
+# what to open. Nothing else needs to be reachable from outside.
+configure_firewall() {
+	if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
+		log "ufw is active: allowing inbound 80/tcp, 443/tcp and 443/udp for ingress"
+		ufw allow 80/tcp >/dev/null
+		ufw allow 443/tcp >/dev/null
+		ufw allow 443/udp >/dev/null
+		if [ "$BUILDER" = 1 ]; then
+			# BuildKit's container pushes through the agent's per-build
+			# registry proxy on the build network's gateway.
+			ufw allow in on "$BUILD_BRIDGE" to any port "$REGISTRY_PROXY_PORT" proto tcp >/dev/null
+		fi
+	else
+		log "firewall: allow inbound 80/tcp and 443/tcp (443/udp for HTTP/3) for ingress; OpenRail needs no other inbound port"
+	fi
 }
 
 # NOTE: the unit below is a verbatim copy of install/openrail-agent.service,
@@ -462,8 +647,8 @@ install_service() {
 [Unit]
 Description=OpenRail node agent
 Documentation=https://github.com/BankkRoll/Open-Rail
-Wants=network-online.target docker.service
-After=network-online.target docker.service
+Wants=network-online.target docker.service caddy.service
+After=network-online.target docker.service caddy.service
 
 [Service]
 Type=simple
@@ -477,7 +662,9 @@ UMask=0077
 # Runs as root so it owns its files and can open /var/run/docker.sock
 # (root:docker 0660) as the socket's owner. It needs no capabilities: Docker
 # API calls run in the daemon, and every file it touches is root-owned.
-# Later phases that manage WireGuard will add CAP_NET_ADMIN here.
+# Later phases that manage WireGuard will add CAP_NET_ADMIN here. On builder
+# nodes it also runs git and railpack, which inherit this sandbox; their
+# checkouts live in the state directory and are removed after each build.
 CapabilityBoundingSet=
 StateDirectory=openrail
 StateDirectoryMode=0700
@@ -522,6 +709,7 @@ main() {
 	require_root
 	check_os
 	check_arch
+	check_builder_role
 	check_resources
 	check_docker_flavour
 
@@ -534,6 +722,7 @@ main() {
 	install_agent
 	join_control_plane
 	install_packages
+	configure_firewall
 	install_service
 
 	log "OpenRail agent is running. Follow logs with: journalctl -u openrail-agent -f"

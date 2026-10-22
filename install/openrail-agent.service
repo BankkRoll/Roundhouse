@@ -1,8 +1,8 @@
 [Unit]
 Description=OpenRail node agent
 Documentation=https://github.com/BankkRoll/Open-Rail
-Wants=network-online.target docker.service
-After=network-online.target docker.service
+Wants=network-online.target docker.service caddy.service
+After=network-online.target docker.service caddy.service
 
 [Service]
 Type=simple
@@ -16,7 +16,9 @@ UMask=0077
 # Runs as root so it owns its files and can open /var/run/docker.sock
 # (root:docker 0660) as the socket's owner. It needs no capabilities: Docker
 # API calls run in the daemon, and every file it touches is root-owned.
-# Later phases that manage WireGuard will add CAP_NET_ADMIN here.
+# Later phases that manage WireGuard will add CAP_NET_ADMIN here. On builder
+# nodes it also runs git and railpack, which inherit this sandbox; their
+# checkouts live in the state directory and are removed after each build.
 CapabilityBoundingSet=
 StateDirectory=openrail
 StateDirectoryMode=0700

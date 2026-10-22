@@ -206,3 +206,47 @@ export function formatAgentVersion(version: string | null): string | null {
   if (!version) return null;
   return /^\d/.test(version) ? `v${version}` : version;
 }
+
+/**
+ * Shortens a git commit SHA for display.
+ *
+ * @param sha - Full SHA-1 or SHA-256 hex.
+ * @returns The first 7 characters, or {@link EMPTY}.
+ * @example
+ * formatCommit("3f9c2b1d8e7a6f5c4b3a29180716253443526170"); // "3f9c2b1"
+ */
+export function formatCommit(sha: string | null | undefined): string {
+  return sha ? sha.slice(0, 7) : EMPTY;
+}
+
+/**
+ * Formats a CPU limit given in thousandths of a core.
+ *
+ * @param millis - e.g. `1500`.
+ * @returns e.g. `"1.5 vCPU"`, or {@link EMPTY}.
+ */
+export function formatCpu(millis: number | null | undefined): string {
+  if (!isNumber(millis) || millis < 0) return EMPTY;
+  return `${trimFixed(millis / 1000, 2)} vCPU`;
+}
+
+/**
+ * Formats a memory limit given in MiB.
+ *
+ * @param mb - e.g. `1536`.
+ * @returns e.g. `"512 MB"` or `"1.5 GB"`, or {@link EMPTY}.
+ */
+export function formatMemoryMb(mb: number | null | undefined): string {
+  if (!isNumber(mb) || mb < 0) return EMPTY;
+  return mb >= 1024 ? `${trimFixed(mb / 1024, 2)} GB` : `${Math.round(mb)} MB`;
+}
+
+/**
+ * Formats a clock time for log lines, in UTC to match {@link formatTimestamp}.
+ *
+ * @param timestamp - Unix ms.
+ * @returns e.g. `"12:41:05.123"`.
+ */
+export function formatLogTime(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(11, 23);
+}

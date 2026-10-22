@@ -5,13 +5,13 @@ export type UpcomingFeature = "canvas" | "logs" | "templates" | "usage";
 export const UPCOMING: Record<UpcomingFeature, { title: string; phase: string; body: string }> = {
   canvas: {
     title: "Canvas",
-    phase: "Phase 1",
-    body: "A live map of your services, how they connect, and which server each one runs on. It arrives with projects.",
+    phase: "Phase 2",
+    body: "A live map of your services, how they connect, and which server each one runs on. Until then, each project lists its services.",
   },
   logs: {
     title: "Logs",
     phase: "Later phase",
-    body: "Search and live-tail logs from every service, with saved searches and level filters.",
+    body: "Search across every service at once, with saved searches and level filters. Live logs for one service are on its Logs tab today.",
   },
   templates: {
     title: "Templates",

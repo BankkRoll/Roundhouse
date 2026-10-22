@@ -1,0 +1,14 @@
+{
+  "path": "{{DIR}}/.roundhouse/config.json",
+  "link": {
+    "url": "{{URL}}",
+    "workspace_id": "ws_acme",
+    "project_id": "prj_shop",
+    "environment_id": "env_staging",
+    "service_id": "svc_api",
+    "project_name": "Shop",
+    "environment_name": "staging",
+    "service_name": "API"
+  },
+  "gitignore": "added"
+}

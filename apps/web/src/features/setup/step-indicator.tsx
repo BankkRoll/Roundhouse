@@ -2,21 +2,29 @@ import { cn } from "@openrail/ui";
 import { CheckIcon } from "lucide-react";
 
 /**
- * Numbered progress indicator for the setup wizard.
+ * Numbered progress indicator for multi-step flows (setup wizard, new service).
  *
- * @param props - Step labels and the 1-based current step.
+ * @param props - Step labels, the 1-based current step, and the list's accessible name.
  * @returns The indicator.
  */
-export function StepIndicator({ steps, current }: { steps: readonly string[]; current: number }) {
+export function StepIndicator({
+  steps,
+  current,
+  label = "Setup progress",
+}: {
+  steps: readonly string[];
+  current: number;
+  label?: string;
+}) {
   return (
-    <ol aria-label="Setup progress" className="mb-4 flex items-center gap-2">
-      {steps.map((label, index) => {
+    <ol aria-label={label} className="mb-4 flex items-center gap-2">
+      {steps.map((name, index) => {
         const step = index + 1;
         const done = step < current;
         const active = step === current;
         return (
           <li
-            key={label}
+            key={name}
             aria-current={active ? "step" : undefined}
             className="flex flex-1 items-center gap-2"
           >
@@ -36,7 +44,7 @@ export function StepIndicator({ steps, current }: { steps: readonly string[]; cu
                 active ? "text-foreground" : "text-subtle-foreground",
               )}
             >
-              {label}
+              {name}
               {done ? <span className="sr-only"> (done)</span> : null}
             </span>
             {step < steps.length ? (

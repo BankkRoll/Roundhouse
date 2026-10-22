@@ -44,6 +44,12 @@ type Config struct {
 	// Insecure permits plaintext http:// and ws:// to non-loopback hosts. Set
 	// only by `join --insecure`.
 	Insecure bool `yaml:"insecure,omitempty"`
+	// DataDir holds the log buffer, the registry's storage and other runtime
+	// data. Empty means the directory of StateFile.
+	DataDir string `yaml:"data_dir,omitempty"`
+	// Builder makes this node a builder: it runs the local registry and
+	// accepts build jobs. Set by `join --builder`.
+	Builder bool `yaml:"builder,omitempty"`
 }
 
 // DefaultPath returns the config path used when --config is not given:
@@ -93,6 +99,9 @@ func (c Config) WithDataDir(dir, registration string) Config {
 	}
 	if c.StateFile == "" {
 		c.StateFile = filepath.Join(dir, "state"+suffix+".json")
+	}
+	if c.DataDir == "" {
+		c.DataDir = dir
 	}
 	return c
 }
@@ -188,4 +197,13 @@ func ReadSecret(path string) (string, error) {
 // WriteSecret atomically writes a secret readable only by the owner.
 func WriteSecret(path string, data []byte) error {
 	return atomicfile.Write(path, data, 0o600)
+}
+
+// RuntimeDir returns the directory for runtime data: DataDir, or the
+// directory of StateFile for configs written before DataDir existed.
+func (c Config) RuntimeDir() string {
+	if c.DataDir != "" {
+		return c.DataDir
+	}
+	return filepath.Dir(c.StateFile)
 }

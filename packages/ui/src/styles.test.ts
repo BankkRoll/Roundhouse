@@ -88,3 +88,30 @@ describe("light palette definitions", () => {
     expect(media).toEqual(lightOverrides);
   });
 });
+
+describe("ANSI terminal colors", () => {
+  const ansi = (selector: string) =>
+    Object.fromEntries(
+      [...blockAfter(selector).matchAll(/--ansi-(\d+):\s*([^;]+);/g)].map(([, n, v]) => [
+        Number(n),
+        (v ?? "").trim(),
+      ]),
+    );
+
+  it.each([":root", ":root.light", ":root:not(.dark)"])("defines all 16 in %s", (selector) => {
+    expect(Object.keys(ansi(selector))).toHaveLength(16);
+  });
+
+  it.each([
+    ["dark", ":root", dark],
+    ["light", ":root.light", light],
+  ])("keeps the %s colors readable on the log background (3:1)", (_, selector, palette) => {
+    const colors = ansi(selector);
+    for (let index = 1; index < 16; index++) {
+      if (index === 7 && selector === ":root.light") continue;
+      expect(
+        contrast(colors[index] as string, palette.background as string),
+      ).toBeGreaterThanOrEqual(3);
+    }
+  });
+});

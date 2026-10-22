@@ -1,0 +1,22 @@
+{
+  "id": "prj_0004",
+  "workspace_id": "ws_acme",
+  "name": "Internal Tools",
+  "slug": "tools",
+  "description": null,
+  "created_at": 1792670400000,
+  "updated_at": 1792670400000,
+  "environments": [
+    {
+      "id": "env_0005",
+      "project_id": "prj_0004",
+      "name": "production",
+      "slug": "production",
+      "kind": "production",
+      "pr_number": null,
+      "source_branch": null,
+      "created_at": 1792670400000
+    }
+  ],
+  "services": []
+}

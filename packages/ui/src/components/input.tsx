@@ -25,3 +25,23 @@ export function Input({ className, type = "text", ...props }: ComponentProps<"in
 export function Select({ className, ...props }: ComponentProps<"select">) {
   return <select className={cn(fieldClasses, "cursor-pointer pr-7", className)} {...props} />;
 }
+
+/**
+ * Multi-line text input styled like {@link Input}, in mono for pasted config such as
+ * `.env` files.
+ *
+ * @param props - Native textarea props.
+ * @returns The rendered textarea.
+ */
+export function Textarea({ className, ...props }: ComponentProps<"textarea">) {
+  return (
+    <textarea
+      className={cn(
+        fieldClasses,
+        "h-auto min-h-24 resize-y py-2 font-mono text-xs leading-relaxed",
+        className,
+      )}
+      {...props}
+    />
+  );
+}

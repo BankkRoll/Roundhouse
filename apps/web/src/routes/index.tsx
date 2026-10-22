@@ -1,10 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { LandingPage } from "../features/landing/landing-page";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-// IMPORTANT: Public page. It sits outside the `_app` layout and has no `beforeLoad`, so it
-// renders signed out, before setup, and with the API down. The router plugin's automatic
-// code splitting keeps the component out of the dashboard's main bundle.
-/** Public landing page. */
+// NOTE: The public site lives in landing/ and is published to GitHub Pages; an install's
+// root URL goes straight to its dashboard, which routes to setup or sign-in as needed.
+/** Root URL: sends visitors to the dashboard. */
 export const Route = createFileRoute("/")({
-  component: LandingPage,
+  beforeLoad: () => {
+    throw redirect({ to: "/dashboard" });
+  },
 });

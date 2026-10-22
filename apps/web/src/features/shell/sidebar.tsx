@@ -9,14 +9,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   KbdHint,
-  SectionLabel,
 } from "@openrail/ui";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { GlobeIcon, LogOutIcon, MoonIcon, SunIcon } from "lucide-react";
+import { LogOutIcon, MoonIcon, SunIcon } from "lucide-react";
 import { Brand } from "../../components/brand";
 import { useTheme } from "../../lib/use-theme";
 import { useMe, useSignOut } from "../../queries/me";
 import { activeNavId, NAV_ITEMS } from "./nav";
+import { ProjectsNav } from "./projects-nav";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
 /**
@@ -72,21 +72,7 @@ export function Sidebar({
           })}
         </ul>
       </nav>
-      <div className="grid gap-2 px-1.5">
-        <SectionLabel>Projects</SectionLabel>
-        <p className="text-xs text-subtle-foreground">No projects yet.</p>
-      </div>
-      <div className="grid gap-1">
-        <SectionLabel className="px-1.5">Prototype</SectionLabel>
-        <Link
-          to="/"
-          onClick={onNavigate}
-          className="flex h-8 items-center gap-2.5 rounded-md border border-transparent px-2 text-sm text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <GlobeIcon className="size-4 shrink-0" aria-hidden="true" />
-          <span className="flex-1">Landing page</span>
-        </Link>
-      </div>
+      <ProjectsNav workspaceId={workspaceId} onNavigate={onNavigate} />
       <div className="mt-auto">
         <UserBlock />
       </div>

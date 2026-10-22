@@ -41,6 +41,11 @@ export const nodes = sqliteTable(
     kernel: text("kernel"),
     dockerVersion: text("docker_version"),
     agentVersion: text("agent_version"),
+    /**
+     * `hello.protocol_version` of the agent's latest connection. Builds and
+     * workloads only go to agents at `WORKLOADS_PROTOCOL_VERSION` or later.
+     */
+    protocolVersion: integer("protocol_version").notNull().default(1),
     capabilities: json<Capabilities>("capabilities"),
     cpuTotal: integer("cpu_total"),
     memTotal: integer("mem_total"),

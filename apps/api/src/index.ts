@@ -5,6 +5,8 @@
  * - REST API under `/v1` (OpenAPI document at `/v1/openapi.json`)
  * - Better Auth under `/api/auth/*`
  * - Agent join/connect endpoints and the install script
+ * - The project realtime socket (`ProjectRoom`) and the deploy workflow
+ *   (`DeployWorkflow`), exported for their bindings
  * - Static SPA assets (served by the platform for everything else)
  *
  * @module
@@ -17,13 +19,22 @@ import { ApiError, errorBody, errorCodeForStatus } from "./lib/errors";
 import { rateLimitSecrets, sameOriginMutations } from "./lib/guards";
 import { agentRoutes } from "./routes/agent";
 import { auditRoutes } from "./routes/audit";
+import { deploymentRoutes } from "./routes/deployments";
+import { githubRoutes } from "./routes/github";
+import { instanceRoutes } from "./routes/instance";
 import { inviteRoutes } from "./routes/invites";
 import { nodeRoutes } from "./routes/nodes";
+import { projectRoutes } from "./routes/projects";
+import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
+import { serviceRoutes } from "./routes/services";
 import { setupRoutes } from "./routes/setup";
+import { variableRoutes } from "./routes/variables";
 import { workspaceRoutes } from "./routes/workspaces";
 import { SESSION_SCHEME } from "./schemas";
 
 export { NodeConnection } from "./durable/node-connection";
+export { ProjectRoom } from "./durable/project-room";
+export { DeployWorkflow } from "./workflows/deploy";
 
 /** Version of the REST API advertised in the OpenAPI document. */
 const API_VERSION = "0.1.0";
@@ -33,11 +44,13 @@ const AGENT_CONNECT_PATH = /^\/v1\/nodes\/[^/]+\/connect$/;
 const app = createRouter();
 
 const headers = secureHeaders();
-// NOTE: The agent's WebSocket upgrade response comes back from the Durable
-// Object with immutable headers, and security headers mean nothing on it.
-// Every other response, including any other request claiming an upgrade, gets them.
+// NOTE: WebSocket upgrade responses (agent and realtime) come back from a
+// Durable Object with immutable headers, and security headers mean nothing
+// on them. Every other response, including any other request claiming an
+// upgrade, gets them.
 app.use("*", (c, next) =>
-  c.req.header("upgrade")?.toLowerCase() === "websocket" && AGENT_CONNECT_PATH.test(c.req.path)
+  c.req.header("upgrade")?.toLowerCase() === "websocket" &&
+  (AGENT_CONNECT_PATH.test(c.req.path) || REALTIME_PATH.test(c.req.path))
     ? next()
     : headers(c, next),
 );
@@ -53,7 +66,14 @@ app
   .route("/", inviteRoutes)
   .route("/", nodeRoutes)
   .route("/", auditRoutes)
-  .route("/", agentRoutes);
+  .route("/", agentRoutes)
+  .route("/", projectRoutes)
+  .route("/", serviceRoutes)
+  .route("/", variableRoutes)
+  .route("/", deploymentRoutes)
+  .route("/", instanceRoutes)
+  .route("/", githubRoutes)
+  .route("/", realtimeRoutes);
 
 app.openAPIRegistry.registerComponent("securitySchemes", SESSION_SCHEME, {
   type: "apiKey",
@@ -72,7 +92,9 @@ app.doc31("/v1/openapi.json", {
 app.notFound((c) => c.json(errorBody("not_found", "No such endpoint"), 404));
 
 app.onError((err, c) => {
-  if (err instanceof ApiError) return c.json(errorBody(err.code, err.message), err.status);
+  if (err instanceof ApiError) {
+    return c.json(errorBody(err.code, err.message, err.details), err.status);
+  }
   if (err instanceof HTTPException) {
     if (err.status >= 500) console.error("http exception", err);
     return c.json(errorBody(errorCodeForStatus(err.status), err.message), err.status);

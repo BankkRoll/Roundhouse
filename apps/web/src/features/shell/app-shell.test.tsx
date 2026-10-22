@@ -277,8 +277,13 @@ describe("app shell", () => {
   });
 
   it("sends the user to login when the session expires mid-use", async () => {
-    const { router, user } = renderApp(BASE);
+    const { router, user, queryClient } = renderApp(BASE);
     await findPageHeading("Home");
+    // Home loads project summaries in the background; let them finish so the 401 comes
+    // from opening Settings, not from a summary still in flight.
+    const services = await screen.findByRole("region", { name: "Services" });
+    await waitFor(() => expect(services).toHaveTextContent("live"));
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
     signInAs(null);
     await user.click(screen.getByRole("link", { name: "Settings" }));
     await expectPath(router, "/login");

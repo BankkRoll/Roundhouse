@@ -172,6 +172,19 @@ jobs:
             exit 1
           fi
 
+  agent-integration:
+    name: Agent integration (Docker, Caddy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run agent integration tests against the runner's Docker Engine
+        run: bash agent/test/integration.sh -count=1 -race
+
   e2e-agent-smoke:
     name: E2E (real agent + browser)
     runs-on: ubuntu-24.04
@@ -205,6 +218,41 @@ jobs:
           path: |
             e2e/playwright-report
             e2e/test-results
+          retention-days: 7
+
+  e2e-phase1:
+    name: E2E Phase 1 (wrangler dev + agent + Docker, BuildKit, registry, Caddy)
+    runs-on: ubuntu-24.04
+    # Cold Railpack builds pull a few hundred MB; a warm run takes ~5 minutes.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @openrail/e2e exec playwright install --with-deps chromium
+      - name: Phase 1 end-to-end suite
+        env:
+          CI: "true"
+        run: pnpm --filter @openrail/e2e test:phase1
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-phase1-artifacts
+          path: e2e/phase1/.artifacts
+          include-hidden-files: true
           retention-days: 7
 
   shellcheck:
@@ -262,6 +310,11 @@ jobs:
         run: |
           go build -trimpath -ldflags "-s -w -X main.version=0.0.0-ci" \
             -o ../dist/openrail-agent-linux-amd64 ./cmd/openrail-agent
+      - name: Installer pins match the agent's builder
+        working-directory: agent
+        run: go test -count=1 -run TestInstallScriptPins ./internal/builder/
+      # Installs Caddy (Cloudsmith) and Railpack (GitHub releases) for real,
+      # runs install.sh as a builder, then re-runs it to check idempotency.
       - name: Run install.sh in ${{ matrix.image }}
         env:
           IMAGE: ${{ matrix.image }}
@@ -269,3 +322,66 @@ jobs:
           docker run --rm --platform linux/amd64 \
             -v "$PWD:/src:ro" -v "$PWD/dist:/dist:ro" \
             "$IMAGE" bash /src/install/test/container-test.sh
+
+  cli:
+    name: CLI (vet, test, staticcheck, govulncheck, cross-build, API contract)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      STATICCHECK_VERSION: v0.8.2
+      GOVULNCHECK_VERSION: v1.9.0
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed in cli: $unformatted"
+            exit 1
+          fi
+      - name: go mod tidy
+        run: go mod tidy -diff
+      - name: go vet
+        run: go vet ./...
+      - name: go test -race
+        run: go test -race ./...
+      - name: staticcheck
+        run: |
+          go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
+          "$(go env GOPATH)/bin/staticcheck" ./...
+      - name: govulncheck
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          "$(go env GOPATH)/bin/govulncheck" ./...
+      - name: shellcheck scripts
+        run: shellcheck scripts/*.sh
+      - name: Cross-build (linux, darwin, windows × amd64, arm64) with SHA256SUMS
+        run: VERSION="0.0.0-ci+${GITHUB_SHA::12}" bash scripts/build.sh
+      # The snapshot lets the contract test run offline; here it is
+      # regenerated from the API source so a removed or renamed route fails
+      # the build even before the snapshot is refreshed.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+      - name: API contract (routes and wire types vs. the current OpenAPI document)
+        run: |
+          bash scripts/gen-openapi.sh
+          go test -count=1 -run 'OpenAPI|Schema' ./internal/api/
+          if ! git diff --quiet -- internal/api/testdata/openapi.json; then
+            echo "::warning::cli/internal/api/testdata/openapi.json is stale; run cli/scripts/gen-openapi.sh and commit the result."
+          fi

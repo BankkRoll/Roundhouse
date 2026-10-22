@@ -6,13 +6,12 @@ import { findPageHeading, renderApp } from "../test/render";
 const BASE = `/w/${WORKSPACE_ID}`;
 
 describe("home page", () => {
-  it("shows the workspace subline and phase-gated actions", async () => {
+  it("shows the workspace subline, New project, and the phase-gated templates action", async () => {
     renderApp(BASE);
     expect(await findPageHeading("Home")).toBeInTheDocument();
     expect(screen.getByText("Acme · self-hosted control plane on Cloudflare")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New project" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "New project" })).not.toHaveAttribute(
       "aria-disabled",
-      "true",
     );
     expect(screen.getByRole("button", { name: "Browse templates" })).toHaveAttribute(
       "aria-disabled",
@@ -20,13 +19,22 @@ describe("home page", () => {
     );
   });
 
-  it("explains why phase-gated actions are unavailable", async () => {
+  it("explains why templates are unavailable", async () => {
     const { router, user } = renderApp(BASE);
-    const button = await screen.findByRole("button", { name: "New project" });
+    const button = await screen.findByRole("button", { name: "Browse templates" });
     await user.hover(button);
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("Projects arrive in Phase 1");
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Templates arrive in a later phase",
+    );
     await user.click(button);
     expect(router.state.location.pathname).toBe(BASE);
+  });
+
+  it("hides New project from roles that can't create projects", async () => {
+    signInAs(USERS.member.id);
+    renderApp(BASE);
+    await findPageHeading("Home");
+    expect(screen.queryByRole("button", { name: "New project" })).not.toBeInTheDocument();
   });
 
   it("summarises the fleet from real node data", async () => {
@@ -50,13 +58,26 @@ describe("home page", () => {
     );
   });
 
-  it("renders the other stat cards as empty states, never fake numbers", async () => {
+  it("never shows invented costs, and counts services from real deployments", async () => {
     renderApp(BASE);
-    for (const label of ["This month", "Deploys · 7d", "Incidents"]) {
-      const region = await screen.findByRole("region", { name: label });
-      expect(region).toHaveTextContent("—");
-      expect(region.textContent).not.toMatch(/\$\d|\d+ deploys/);
-    }
+    const month = await screen.findByRole("region", { name: "This month" });
+    expect(month).toHaveTextContent("—");
+    expect(month.textContent).not.toMatch(/\$\d/);
+    const services = await screen.findByRole("region", { name: "Services" });
+    await waitFor(() => expect(services).toHaveTextContent("3 live · 1 deploying · 2 projects"));
+    expect(services).toHaveTextContent(/^Services4/);
+    expect(await screen.findByRole("region", { name: "Incidents" })).toHaveTextContent(
+      "Nothing to report",
+    );
+  });
+
+  it("reports failing services as incidents", async () => {
+    const latest = db.deploy.deployments.find((row) => row.id === "dep_api_2");
+    if (latest) latest.status = "crashed";
+    renderApp(BASE);
+    const incidents = await screen.findByRole("region", { name: "Incidents" });
+    await waitFor(() => expect(incidents).toHaveTextContent("1 failing"));
+    expect(incidents).toHaveTextContent("api");
   });
 
   it("lists recent activity from the audit log", async () => {
@@ -104,7 +125,7 @@ describe("home page", () => {
 
 describe("coming soon sections", () => {
   it.each([
-    ["canvas", "Canvas", "Phase 1"],
+    ["canvas", "Canvas", "Phase 2"],
     ["logs", "Logs", "Later phase"],
     ["templates", "Templates", "Later phase"],
     ["usage", "Usage", "Later phase"],

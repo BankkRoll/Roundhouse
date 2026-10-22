@@ -1,12 +1,13 @@
 /**
- * Install-wide settings: the first-run setup lock and completion marker, and
- * the control-plane signing key.
+ * Install-wide settings: the first-run setup lock and completion marker, the
+ * control-plane signing key, and the ingress settings (`apps_domain`, `tls_mode`).
  *
  * @module
  */
 import { type Db, instanceSettings } from "@openrail/db";
 import { generateSigningKey, importSigningKey } from "@openrail/protocol";
-import { and, eq, sql } from "drizzle-orm";
+import { DEFAULT_TLS_MODE, TLS_MODES, type TlsMode } from "@openrail/shared";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { seal, unseal } from "./crypto";
 
@@ -165,4 +166,52 @@ export function loadSigningKey(db: Db, masterKey: string): Promise<SigningKey> {
     throw err;
   });
   return cached;
+}
+
+// -----------------------------------------------------------------------------
+// Ingress settings
+// -----------------------------------------------------------------------------
+
+/** Install-wide ingress settings as handlers use them. */
+export interface IngressSettings {
+  appsDomain: string | null;
+  tlsMode: TlsMode;
+}
+
+/**
+ * Reads `apps_domain` and `tls_mode`, applying defaults for unset keys.
+ *
+ * @param db - Database client.
+ * @returns The effective ingress settings.
+ */
+export async function getIngressSettings(db: Db): Promise<IngressSettings> {
+  const rows = await db
+    .select()
+    .from(instanceSettings)
+    .where(inArray(instanceSettings.key, [SettingKey.appsDomain, SettingKey.tlsMode]));
+  const byKey = new Map(rows.map((r) => [r.key, r.value]));
+  const appsDomain = byKey.get(SettingKey.appsDomain);
+  const tlsMode = byKey.get(SettingKey.tlsMode);
+  return {
+    appsDomain: typeof appsDomain === "string" ? appsDomain : null,
+    tlsMode: (TLS_MODES as readonly unknown[]).includes(tlsMode)
+      ? (tlsMode as TlsMode)
+      : DEFAULT_TLS_MODE,
+  };
+}
+
+/**
+ * Writes one setting, creating or replacing it. `null` deletes it.
+ *
+ * @param db - Database client.
+ * @param key - Setting key.
+ * @param value - New value, or `null` to unset.
+ * @returns The statement, for `db.batch`.
+ */
+export function putSetting(db: Db, key: string, value: unknown) {
+  if (value === null) return db.delete(instanceSettings).where(eq(instanceSettings.key, key));
+  return db
+    .insert(instanceSettings)
+    .values({ key, value })
+    .onConflictDoUpdate({ target: instanceSettings.key, set: { value, updatedAt: new Date() } });
 }

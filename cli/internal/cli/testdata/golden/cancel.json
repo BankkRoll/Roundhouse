@@ -1,0 +1,18 @@
+{
+  "id": "dep_0004",
+  "service_id": "svc_api",
+  "environment_id": "env_prod",
+  "config_version": 1,
+  "build_id": null,
+  "build": null,
+  "image": null,
+  "status": "cancelled",
+  "trigger": "manual",
+  "triggered_by": "usr_ada",
+  "rollback_of": null,
+  "failure_reason": "Cancelled by a user",
+  "started_at": null,
+  "finished_at": null,
+  "created_at": 1792670400000,
+  "updated_at": 1792670400000
+}

@@ -4,25 +4,55 @@ import {
   DialogTitle,
   isOverlayOpen,
   SheetContent,
+  toast,
   useCommandPaletteHotkey,
 } from "@openrail/ui";
-import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePermissions } from "../../lib/permissions";
+import { useQuery } from "@tanstack/react-query";
+import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
+import {
+  lazy,
+  type RefObject,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { errorMessage } from "../../lib/api/client";
+import { canManageInstance, usePermissions } from "../../lib/permissions";
 import { useTheme } from "../../lib/use-theme";
-import { useSignOut } from "../../queries/me";
+import { useDeploy } from "../../queries/deployments";
+import { useMe, useSignOut } from "../../queries/me";
+import { pickEnvironment, projectQueryOptions, useProjects } from "../../queries/projects";
 import { InviteMemberDialog } from "../members/invite-member-dialog";
 import { AddServerDialog } from "../servers/add-server-dialog";
+import { SERVICE_TAB_PATHS, type ServiceTab } from "../services/tabs";
 import { buildCommands } from "./commands";
+import { KEEP_FOCUS_ATTRIBUTE } from "./focus";
 import type { NavPath } from "./nav";
 import { type ShellActions, ShellActionsContext } from "./shell-actions";
 import { Sidebar } from "./sidebar";
 import { TopBar } from "./top-bar";
-import { useGoShortcuts } from "./use-go-shortcuts";
+import { type ContextShortcut, useGoShortcuts } from "./use-go-shortcuts";
+
+// PERF: The project dialogs (and the repository picker inside the service flow) are only
+// needed once someone creates something, so they stay out of the shell chunk.
+const NewProjectDialog = lazy(() =>
+  import("../projects/new-project-dialog").then((module) => ({
+    default: module.NewProjectDialog,
+  })),
+);
+const NewServiceDialog = lazy(() =>
+  import("../projects/new-service/new-service-dialog").then((module) => ({
+    default: module.NewServiceDialog,
+  })),
+);
 
 /**
  * Moves focus to `target` after client-side navigation, so screen readers announce the
- * new page instead of staying on the link that was followed. Skips the first render.
+ * new page instead of staying on the link that was followed. Skips the first render, and
+ * navigation started from a tab bar, where focus must stay on the tab.
  *
  * @param target - Element to focus, usually `<main>`.
  */
@@ -32,13 +62,15 @@ function useFocusOnNavigation(target: RefObject<HTMLElement | null>): void {
   useEffect(() => {
     if (previous.current === pathname) return;
     previous.current = pathname;
+    if (document.activeElement?.closest(`[${KEEP_FOCUS_ATTRIBUTE}]`)) return;
     target.current?.focus({ preventScroll: true });
   }, [pathname, target]);
 }
 
 /**
  * Authenticated layout for a workspace: sidebar, top bar, page outlet, command palette,
- * keyboard shortcuts, and the shell-owned dialogs (add server, invite member).
+ * keyboard shortcuts, and the shell-owned dialogs (add server, invite member, new
+ * project, new service).
  *
  * @param props - The workspace from the URL.
  * @returns The shell.
@@ -48,19 +80,47 @@ export function AppShell({ workspaceId }: { workspaceId: string }) {
   const permissions = usePermissions(workspaceId);
   const theme = useTheme();
   const signOut = useSignOut();
-
+  const { data: me } = useMe();
+  const deploy = useDeploy();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [newServiceFor, setNewServiceFor] = useState<string | null>(null);
   const main = useRef<HTMLElement>(null);
+  const { projectId, serviceId } = useParams({ strict: false }) as {
+    projectId?: string;
+    serviceId?: string;
+  };
+  const projects = useProjects(workspaceId, permissions.can("projects:read"));
+  const project = useQuery({
+    ...projectQueryOptions(projectId ?? ""),
+    enabled: Boolean(projectId),
+  });
 
   const go = useCallback(
     (to: NavPath) => void navigate({ to, params: { workspaceId } }),
     [navigate, workspaceId],
   );
+  const openService = useCallback(
+    (target: string, service: string, tab: ServiceTab = "deployments") =>
+      void navigate({
+        to: SERVICE_TAB_PATHS[tab],
+        params: { workspaceId, projectId: target, serviceId: service },
+      }),
+    [navigate, workspaceId],
+  );
 
-  useGoShortcuts(go);
+  const shortcuts = useMemo<ContextShortcut[]>(() => {
+    if (!projectId || !serviceId) return [];
+    return [
+      { key: "d", label: "Deployments", run: () => openService(projectId, serviceId) },
+      { key: "l", label: "Logs", run: () => openService(projectId, serviceId, "logs") },
+      { key: "v", label: "Variables", run: () => openService(projectId, serviceId, "variables") },
+    ];
+  }, [projectId, serviceId, openService]);
+  useGoShortcuts(go, shortcuts);
   useFocusOnNavigation(main);
   useCommandPaletteHotkey(() => {
     // NOTE: Read before toggling, because an open palette is itself an overlay.
@@ -72,9 +132,33 @@ export function AppShell({ workspaceId }: { workspaceId: string }) {
     () => ({
       openAddServer: () => setAddServerOpen(true),
       openInviteMember: () => setInviteOpen(true),
+      openNewProject: () => setNewProjectOpen(true),
+      openNewService: (target) => setNewServiceFor(target),
     }),
     [],
   );
+
+  function deployService(target: string, service: string) {
+    const detail = project.data?.id === target ? project.data : undefined;
+    const environment = detail ? pickEnvironment(detail.environments) : undefined;
+    const name = detail?.services.find((entry) => entry.id === service)?.name ?? "service";
+    if (!environment) return;
+    deploy.mutate(
+      { serviceId: service, environmentId: environment.id },
+      {
+        onSuccess: () => {
+          toast({ title: `Deploying ${name}`, description: environment.name, tone: "success" });
+          openService(target, service);
+        },
+        onError: (error) =>
+          toast({
+            title: `Could not deploy ${name}`,
+            description: errorMessage(error),
+            tone: "error",
+          }),
+      },
+    );
+  }
 
   const commands = buildCommands({
     navigate: go,
@@ -83,7 +167,19 @@ export function AppShell({ workspaceId }: { workspaceId: string }) {
     openInviteMember: actions.openInviteMember,
     toggleTheme: theme.toggle,
     signOut: () => signOut.mutate(),
-    openLanding: () => void navigate({ to: "/" }),
+    openPlatform: canManageInstance(me) ? () => go("/w/$workspaceId/platform") : undefined,
+    projects: projects.data,
+    project: project.data,
+    openNewProject: actions.openNewProject,
+    openProject: (target) =>
+      void navigate({
+        to: "/w/$workspaceId/p/$projectId",
+        params: { workspaceId, projectId: target },
+      }),
+    openNewService: actions.openNewService,
+    openService: (target, service) => openService(target, service),
+    deployService,
+    openLogs: (target, service) => openService(target, service, "logs"),
   });
 
   return (
@@ -131,6 +227,25 @@ export function AppShell({ workspaceId }: { workspaceId: string }) {
         open={inviteOpen}
         onOpenChange={setInviteOpen}
       />
+      <Suspense fallback={null}>
+        {newProjectOpen ? (
+          <NewProjectDialog
+            workspaceId={workspaceId}
+            open={newProjectOpen}
+            onOpenChange={setNewProjectOpen}
+          />
+        ) : null}
+        {newServiceFor ? (
+          <NewServiceDialog
+            workspaceId={workspaceId}
+            projectId={newServiceFor}
+            open
+            onOpenChange={(open) => {
+              if (!open) setNewServiceFor(null);
+            }}
+          />
+        ) : null}
+      </Suspense>
     </ShellActionsContext.Provider>
   );
 }

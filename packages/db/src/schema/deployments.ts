@@ -26,7 +26,7 @@ import {
 import { users } from "./auth";
 import { id, json, timestamp, timestamps } from "./columns";
 import { nodes } from "./nodes";
-import { environments, projects, services } from "./projects";
+import { environments, projects, type SealedValue, services } from "./projects";
 
 /** A deployment of one service config version to one environment. */
 export const deployments = sqliteTable(
@@ -55,6 +55,12 @@ export const deployments = sqliteTable(
     rollbackOf: text("rollback_of").references((): AnySQLiteColumn => deployments.id, {
       onDelete: "set null",
     }),
+    /**
+     * The replicas' resolved environment as JSON, sealed under the project DEK
+     * with AAD `deployment-env:<id>`. Resolved once per deployment so later
+     * variable edits never change (and restart) a running deployment.
+     */
+    envSealed: json<SealedValue>("env_sealed"),
     /** Cloudflare Workflow instance driving the pipeline. */
     workflowInstanceId: text("workflow_instance_id"),
     failureReason: text("failure_reason"),

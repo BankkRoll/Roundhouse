@@ -1,5 +1,6 @@
 import type { RouterHistory } from "@tanstack/react-router";
 import { createQueryClient } from "./lib/query-client";
+import { endSession } from "./lib/session";
 import { createAppRouter } from "./router";
 
 /** Options for {@link createAppContext}. */
@@ -21,13 +22,7 @@ export interface AppContextOptions {
 export function createAppContext(options: AppContextOptions = {}) {
   const queryClient = createQueryClient({
     retry: options.retry,
-    onUnauthorized: () => {
-      const { pathname, href } = router.state.location;
-      if (pathname.startsWith("/login") || pathname.startsWith("/invite")) return;
-      if (pathname.startsWith("/setup")) return;
-      queryClient.clear();
-      void router.navigate({ to: "/login", search: { redirect: href } });
-    },
+    onUnauthorized: () => endSession(queryClient, router),
   });
   const router = createAppRouter(queryClient, options.history);
   return { queryClient, router };

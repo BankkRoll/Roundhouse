@@ -1,0 +1,29 @@
+[
+  {
+    "id": "node_0001",
+    "name": "edge-1",
+    "hostname": "edge-1",
+    "status": "online",
+    "provider": "manual",
+    "region": null,
+    "public_ip": "203.0.113.10",
+    "os": "linux",
+    "arch": "amd64",
+    "kernel": null,
+    "docker_version": null,
+    "agent_version": "0.4.0",
+    "capabilities": {
+      "docker": true,
+      "builder": true
+    },
+    "cpu_total": null,
+    "mem_total": null,
+    "disk_total": null,
+    "cpu_percent": null,
+    "mem_used": null,
+    "disk_used": null,
+    "load1": null,
+    "last_heartbeat_at": 1792670395000,
+    "created_at": 1792584000000
+  }
+]

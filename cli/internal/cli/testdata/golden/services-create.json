@@ -1,0 +1,82 @@
+{
+  "service": {
+    "id": "svc_0004",
+    "project_id": "prj_shop",
+    "name": "Web",
+    "slug": "web",
+    "kind": "app",
+    "icon": null,
+    "created_at": 1792670400000,
+    "updated_at": 1792670400000
+  },
+  "configs": [
+    {
+      "id": "cfg_svc_0004_env_prod",
+      "service_id": "svc_0004",
+      "environment_id": "env_prod",
+      "version": 1,
+      "created_by": null,
+      "created_at": 1792584000000,
+      "source": {
+        "type": "image",
+        "image": "nginx:1.27"
+      },
+      "build": {
+        "builder": "railpack",
+        "build_args": {}
+      },
+      "deploy": {
+        "replicas": 1,
+        "restart_policy": "on_failure",
+        "max_retries": 10,
+        "drain_s": 10
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "memory_mb": 512
+      },
+      "healthcheck": null,
+      "networking": {
+        "port": 80,
+        "generated_domain": true
+      },
+      "placement": {
+        "node_selector": {}
+      }
+    },
+    {
+      "id": "cfg_svc_0004_env_staging",
+      "service_id": "svc_0004",
+      "environment_id": "env_staging",
+      "version": 1,
+      "created_by": null,
+      "created_at": 1792584000000,
+      "source": {
+        "type": "image",
+        "image": "nginx:1.27"
+      },
+      "build": {
+        "builder": "railpack",
+        "build_args": {}
+      },
+      "deploy": {
+        "replicas": 1,
+        "restart_policy": "on_failure",
+        "max_retries": 10,
+        "drain_s": 10
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "memory_mb": 512
+      },
+      "healthcheck": null,
+      "networking": {
+        "port": 80,
+        "generated_domain": true
+      },
+      "placement": {
+        "node_selector": {}
+      }
+    }
+  ]
+}

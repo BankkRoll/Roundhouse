@@ -9,6 +9,8 @@ export interface FormFieldProps extends Omit<ComponentProps<"input">, "id"> {
   error?: string | null;
   /** Helper text under the input. */
   hint?: string;
+  /** Extra classes for the input itself, e.g. `font-mono` for commands and hostnames. */
+  inputClassName?: string;
 }
 
 /**
@@ -17,18 +19,26 @@ export interface FormFieldProps extends Omit<ComponentProps<"input">, "id"> {
  * @param props - Input props plus label, hint and error.
  * @returns The field.
  */
-export function FormField({ label, error, hint, className, ...props }: FormFieldProps) {
+export function FormField({
+  label,
+  error,
+  hint,
+  className,
+  inputClassName,
+  ...props
+}: FormFieldProps) {
   const id = useId();
   const hintId = `${id}-hint`;
   const errorId = `${id}-error`;
   const describedBy = [hint ? hintId : null, error ? errorId : null].filter(Boolean).join(" ");
   return (
-    <div className={className ?? "grid gap-1.5"}>
+    <div className={className ?? "grid content-start gap-1.5"}>
       <Label htmlFor={id}>{label}</Label>
       <Input
         id={id}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy || undefined}
+        className={inputClassName}
         {...props}
       />
       {hint && !error ? (

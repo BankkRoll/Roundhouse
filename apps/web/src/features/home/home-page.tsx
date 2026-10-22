@@ -1,31 +1,25 @@
-import { Button, EmptyState, SectionLabel, Tooltip } from "@openrail/ui";
-import { FolderKanbanIcon, PlusIcon } from "lucide-react";
+import { Button, SectionLabel, Tooltip } from "@openrail/ui";
+import { PlusIcon } from "lucide-react";
 import { PageHeader } from "../../components/page-header";
+import { usePermissions } from "../../lib/permissions";
 import { useMembership } from "../../queries/me";
+import { ProjectsGrid } from "../projects/projects-grid";
+import { useShellActions } from "../shell/shell-actions";
 import { ActivityCard } from "./activity-card";
 import { FleetCard } from "./fleet-card";
 import { StatRow } from "./stat-row";
 
-function PhaseGatedButton({
-  label,
-  reason,
-  primary,
-}: {
-  label: string;
-  reason: string;
-  primary?: boolean;
-}) {
+function PhaseGatedButton({ label, reason }: { label: string; reason: string }) {
   // NOTE: aria-disabled instead of disabled: a disabled button gets no hover or focus, so
   // the tooltip explaining why it is unavailable could never appear.
   return (
     <Tooltip content={reason}>
       <Button
-        variant={primary ? "primary" : "secondary"}
+        variant="secondary"
         aria-disabled="true"
         onClick={(event) => event.preventDefault()}
         className="aria-disabled:pointer-events-auto aria-disabled:cursor-not-allowed"
       >
-        {primary ? <PlusIcon /> : null}
         {label}
       </Button>
     </Tooltip>
@@ -33,7 +27,7 @@ function PhaseGatedButton({
 }
 
 /**
- * Workspace home: fleet stats, projects (empty until Phase 1), recent activity and a
+ * Workspace home: fleet and service stats, the projects grid, recent activity and a
  * per-server RAM overview.
  *
  * @param props - Workspace id.
@@ -41,6 +35,8 @@ function PhaseGatedButton({
  */
 export function HomePage({ workspaceId }: { workspaceId: string }) {
   const workspace = useMembership(workspaceId);
+  const { can } = usePermissions(workspaceId);
+  const { openNewProject } = useShellActions();
 
   return (
     <>
@@ -50,7 +46,12 @@ export function HomePage({ workspaceId }: { workspaceId: string }) {
         actions={
           <>
             <PhaseGatedButton label="Browse templates" reason="Templates arrive in a later phase" />
-            <PhaseGatedButton label="New project" reason="Projects arrive in Phase 1" primary />
+            {can("projects:manage") ? (
+              <Button variant="primary" onClick={openNewProject}>
+                <PlusIcon />
+                New project
+              </Button>
+            ) : null}
           </>
         }
       />
@@ -60,13 +61,7 @@ export function HomePage({ workspaceId }: { workspaceId: string }) {
           <SectionLabel id="projects-heading" className="mb-3">
             Projects
           </SectionLabel>
-          <EmptyState
-            icon={<FolderKanbanIcon />}
-            eyebrow="Phase 1"
-            title="No projects yet"
-            description="Projects group the services you deploy onto your servers. They arrive in Phase 1; for now, connect the servers they will run on."
-            className="py-16"
-          />
+          <ProjectsGrid workspaceId={workspaceId} />
         </section>
         <div className="grid content-start gap-4">
           <ActivityCard workspaceId={workspaceId} />

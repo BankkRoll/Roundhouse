@@ -15,17 +15,31 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as InviteTokenRouteImport } from './routes/invite.$token'
+import { Route as AppDeploymentsDeploymentIdRouteImport } from './routes/_app/deployments/$deploymentId'
+import { Route as AppSettingsGithubRouteImport } from './routes/_app/settings/github'
 import { Route as AppWWorkspaceIdRouteRouteImport } from './routes/_app/w/$workspaceId/route'
 import { Route as AppWWorkspaceIdIndexRouteImport } from './routes/_app/w/$workspaceId/index'
 import { Route as AppWWorkspaceIdAuditRouteImport } from './routes/_app/w/$workspaceId/audit'
 import { Route as AppWWorkspaceIdCanvasRouteImport } from './routes/_app/w/$workspaceId/canvas'
 import { Route as AppWWorkspaceIdLogsRouteImport } from './routes/_app/w/$workspaceId/logs'
 import { Route as AppWWorkspaceIdMembersRouteImport } from './routes/_app/w/$workspaceId/members'
+import { Route as AppWWorkspaceIdPlatformRouteImport } from './routes/_app/w/$workspaceId/platform'
 import { Route as AppWWorkspaceIdSettingsRouteImport } from './routes/_app/w/$workspaceId/settings'
 import { Route as AppWWorkspaceIdTemplatesRouteImport } from './routes/_app/w/$workspaceId/templates'
 import { Route as AppWWorkspaceIdUsageRouteImport } from './routes/_app/w/$workspaceId/usage'
+import { Route as AppWWorkspaceIdPProjectIdRouteRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/route'
 import { Route as AppWWorkspaceIdServersIndexRouteImport } from './routes/_app/w/$workspaceId/servers/index'
 import { Route as AppWWorkspaceIdServersNodeIdRouteImport } from './routes/_app/w/$workspaceId/servers/$nodeId'
+import { Route as AppWWorkspaceIdPProjectIdIndexRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/index'
+import { Route as AppWWorkspaceIdPProjectIdSettingsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/settings'
+import { Route as AppWWorkspaceIdPProjectIdSServiceIdRouteRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/route'
+import { Route as AppWWorkspaceIdPProjectIdSServiceIdIndexRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/index'
+import { Route as AppWWorkspaceIdPProjectIdSServiceIdDomainsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/domains'
+import { Route as AppWWorkspaceIdPProjectIdSServiceIdLogsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/logs'
+import { Route as AppWWorkspaceIdPProjectIdSServiceIdSettingsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings'
+import { Route as AppWWorkspaceIdPProjectIdSServiceIdVariablesRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables'
+import { Route as AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/index'
+import { Route as AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -55,6 +69,17 @@ const InviteTokenRoute = InviteTokenRouteImport.update({
   id: '/invite/$token',
   path: '/invite/$token',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppDeploymentsDeploymentIdRoute =
+  AppDeploymentsDeploymentIdRouteImport.update({
+    id: '/deployments/$deploymentId',
+    path: '/deployments/$deploymentId',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppSettingsGithubRoute = AppSettingsGithubRouteImport.update({
+  id: '/settings/github',
+  path: '/settings/github',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppWWorkspaceIdRouteRoute = AppWWorkspaceIdRouteRouteImport.update({
   id: '/w/$workspaceId',
@@ -86,6 +111,11 @@ const AppWWorkspaceIdMembersRoute = AppWWorkspaceIdMembersRouteImport.update({
   path: '/members',
   getParentRoute: () => AppWWorkspaceIdRouteRoute,
 } as any)
+const AppWWorkspaceIdPlatformRoute = AppWWorkspaceIdPlatformRouteImport.update({
+  id: '/platform',
+  path: '/platform',
+  getParentRoute: () => AppWWorkspaceIdRouteRoute,
+} as any)
 const AppWWorkspaceIdSettingsRoute = AppWWorkspaceIdSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -102,6 +132,12 @@ const AppWWorkspaceIdUsageRoute = AppWWorkspaceIdUsageRouteImport.update({
   path: '/usage',
   getParentRoute: () => AppWWorkspaceIdRouteRoute,
 } as any)
+const AppWWorkspaceIdPProjectIdRouteRoute =
+  AppWWorkspaceIdPProjectIdRouteRouteImport.update({
+    id: '/p/$projectId',
+    path: '/p/$projectId',
+    getParentRoute: () => AppWWorkspaceIdRouteRoute,
+  } as any)
 const AppWWorkspaceIdServersIndexRoute =
   AppWWorkspaceIdServersIndexRouteImport.update({
     id: '/servers/',
@@ -114,6 +150,66 @@ const AppWWorkspaceIdServersNodeIdRoute =
     path: '/servers/$nodeId',
     getParentRoute: () => AppWWorkspaceIdRouteRoute,
   } as any)
+const AppWWorkspaceIdPProjectIdIndexRoute =
+  AppWWorkspaceIdPProjectIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSettingsRoute =
+  AppWWorkspaceIdPProjectIdSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSServiceIdRouteRoute =
+  AppWWorkspaceIdPProjectIdSServiceIdRouteRouteImport.update({
+    id: '/s/$serviceId',
+    path: '/s/$serviceId',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSServiceIdIndexRoute =
+  AppWWorkspaceIdPProjectIdSServiceIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute =
+  AppWWorkspaceIdPProjectIdSServiceIdDomainsRouteImport.update({
+    id: '/domains',
+    path: '/domains',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSServiceIdLogsRoute =
+  AppWWorkspaceIdPProjectIdSServiceIdLogsRouteImport.update({
+    id: '/logs',
+    path: '/logs',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute =
+  AppWWorkspaceIdPProjectIdSServiceIdSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute =
+  AppWWorkspaceIdPProjectIdSServiceIdVariablesRouteImport.update({
+    id: '/variables',
+    path: '/variables',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRoute =
+  AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRouteImport.update({
+    id: '/deployments/',
+    path: '/deployments/',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute =
+  AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRouteImport.update({
+    id: '/deployments/$deploymentId',
+    path: '/deployments/$deploymentId',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -122,16 +218,30 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AppDashboardRoute
   '/invite/$token': typeof InviteTokenRoute
   '/w/$workspaceId': typeof AppWWorkspaceIdRouteRouteWithChildren
+  '/deployments/$deploymentId': typeof AppDeploymentsDeploymentIdRoute
+  '/settings/github': typeof AppSettingsGithubRoute
   '/w/$workspaceId/audit': typeof AppWWorkspaceIdAuditRoute
   '/w/$workspaceId/canvas': typeof AppWWorkspaceIdCanvasRoute
   '/w/$workspaceId/logs': typeof AppWWorkspaceIdLogsRoute
   '/w/$workspaceId/members': typeof AppWWorkspaceIdMembersRoute
+  '/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
   '/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
   '/w/$workspaceId/templates': typeof AppWWorkspaceIdTemplatesRoute
   '/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
   '/w/$workspaceId/': typeof AppWWorkspaceIdIndexRoute
+  '/w/$workspaceId/p/$projectId': typeof AppWWorkspaceIdPProjectIdRouteRouteWithChildren
   '/w/$workspaceId/servers/$nodeId': typeof AppWWorkspaceIdServersNodeIdRoute
   '/w/$workspaceId/servers/': typeof AppWWorkspaceIdServersIndexRoute
+  '/w/$workspaceId/p/$projectId/settings': typeof AppWWorkspaceIdPProjectIdSettingsRoute
+  '/w/$workspaceId/p/$projectId/': typeof AppWWorkspaceIdPProjectIdIndexRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId': typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren
+  '/w/$workspaceId/p/$projectId/s/$serviceId/domains': typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/logs': typeof AppWWorkspaceIdPProjectIdSServiceIdLogsRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/settings': typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/variables': typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/': typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId': typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/': typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -139,16 +249,28 @@ export interface FileRoutesByTo {
   '/setup': typeof SetupRoute
   '/dashboard': typeof AppDashboardRoute
   '/invite/$token': typeof InviteTokenRoute
+  '/deployments/$deploymentId': typeof AppDeploymentsDeploymentIdRoute
+  '/settings/github': typeof AppSettingsGithubRoute
   '/w/$workspaceId/audit': typeof AppWWorkspaceIdAuditRoute
   '/w/$workspaceId/canvas': typeof AppWWorkspaceIdCanvasRoute
   '/w/$workspaceId/logs': typeof AppWWorkspaceIdLogsRoute
   '/w/$workspaceId/members': typeof AppWWorkspaceIdMembersRoute
+  '/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
   '/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
   '/w/$workspaceId/templates': typeof AppWWorkspaceIdTemplatesRoute
   '/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
   '/w/$workspaceId': typeof AppWWorkspaceIdIndexRoute
   '/w/$workspaceId/servers/$nodeId': typeof AppWWorkspaceIdServersNodeIdRoute
   '/w/$workspaceId/servers': typeof AppWWorkspaceIdServersIndexRoute
+  '/w/$workspaceId/p/$projectId/settings': typeof AppWWorkspaceIdPProjectIdSettingsRoute
+  '/w/$workspaceId/p/$projectId': typeof AppWWorkspaceIdPProjectIdIndexRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/domains': typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/logs': typeof AppWWorkspaceIdPProjectIdSServiceIdLogsRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/settings': typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/variables': typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId': typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId': typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/deployments': typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -159,16 +281,30 @@ export interface FileRoutesById {
   '/_app/dashboard': typeof AppDashboardRoute
   '/invite/$token': typeof InviteTokenRoute
   '/_app/w/$workspaceId': typeof AppWWorkspaceIdRouteRouteWithChildren
+  '/_app/deployments/$deploymentId': typeof AppDeploymentsDeploymentIdRoute
+  '/_app/settings/github': typeof AppSettingsGithubRoute
   '/_app/w/$workspaceId/audit': typeof AppWWorkspaceIdAuditRoute
   '/_app/w/$workspaceId/canvas': typeof AppWWorkspaceIdCanvasRoute
   '/_app/w/$workspaceId/logs': typeof AppWWorkspaceIdLogsRoute
   '/_app/w/$workspaceId/members': typeof AppWWorkspaceIdMembersRoute
+  '/_app/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
   '/_app/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
   '/_app/w/$workspaceId/templates': typeof AppWWorkspaceIdTemplatesRoute
   '/_app/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
   '/_app/w/$workspaceId/': typeof AppWWorkspaceIdIndexRoute
+  '/_app/w/$workspaceId/p/$projectId': typeof AppWWorkspaceIdPProjectIdRouteRouteWithChildren
   '/_app/w/$workspaceId/servers/$nodeId': typeof AppWWorkspaceIdServersNodeIdRoute
   '/_app/w/$workspaceId/servers/': typeof AppWWorkspaceIdServersIndexRoute
+  '/_app/w/$workspaceId/p/$projectId/settings': typeof AppWWorkspaceIdPProjectIdSettingsRoute
+  '/_app/w/$workspaceId/p/$projectId/': typeof AppWWorkspaceIdPProjectIdIndexRoute
+  '/_app/w/$workspaceId/p/$projectId/s/$serviceId': typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren
+  '/_app/w/$workspaceId/p/$projectId/s/$serviceId/domains': typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
+  '/_app/w/$workspaceId/p/$projectId/s/$serviceId/logs': typeof AppWWorkspaceIdPProjectIdSServiceIdLogsRoute
+  '/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings': typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
+  '/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables': typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
+  '/_app/w/$workspaceId/p/$projectId/s/$serviceId/': typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
+  '/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId': typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute
+  '/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/': typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -179,16 +315,30 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/invite/$token'
     | '/w/$workspaceId'
+    | '/deployments/$deploymentId'
+    | '/settings/github'
     | '/w/$workspaceId/audit'
     | '/w/$workspaceId/canvas'
     | '/w/$workspaceId/logs'
     | '/w/$workspaceId/members'
+    | '/w/$workspaceId/platform'
     | '/w/$workspaceId/settings'
     | '/w/$workspaceId/templates'
     | '/w/$workspaceId/usage'
     | '/w/$workspaceId/'
+    | '/w/$workspaceId/p/$projectId'
     | '/w/$workspaceId/servers/$nodeId'
     | '/w/$workspaceId/servers/'
+    | '/w/$workspaceId/p/$projectId/settings'
+    | '/w/$workspaceId/p/$projectId/'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/domains'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/logs'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/settings'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/variables'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -196,16 +346,28 @@ export interface FileRouteTypes {
     | '/setup'
     | '/dashboard'
     | '/invite/$token'
+    | '/deployments/$deploymentId'
+    | '/settings/github'
     | '/w/$workspaceId/audit'
     | '/w/$workspaceId/canvas'
     | '/w/$workspaceId/logs'
     | '/w/$workspaceId/members'
+    | '/w/$workspaceId/platform'
     | '/w/$workspaceId/settings'
     | '/w/$workspaceId/templates'
     | '/w/$workspaceId/usage'
     | '/w/$workspaceId'
     | '/w/$workspaceId/servers/$nodeId'
     | '/w/$workspaceId/servers'
+    | '/w/$workspaceId/p/$projectId/settings'
+    | '/w/$workspaceId/p/$projectId'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/domains'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/logs'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/settings'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/variables'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/deployments'
   id:
     | '__root__'
     | '/'
@@ -215,16 +377,30 @@ export interface FileRouteTypes {
     | '/_app/dashboard'
     | '/invite/$token'
     | '/_app/w/$workspaceId'
+    | '/_app/deployments/$deploymentId'
+    | '/_app/settings/github'
     | '/_app/w/$workspaceId/audit'
     | '/_app/w/$workspaceId/canvas'
     | '/_app/w/$workspaceId/logs'
     | '/_app/w/$workspaceId/members'
+    | '/_app/w/$workspaceId/platform'
     | '/_app/w/$workspaceId/settings'
     | '/_app/w/$workspaceId/templates'
     | '/_app/w/$workspaceId/usage'
     | '/_app/w/$workspaceId/'
+    | '/_app/w/$workspaceId/p/$projectId'
     | '/_app/w/$workspaceId/servers/$nodeId'
     | '/_app/w/$workspaceId/servers/'
+    | '/_app/w/$workspaceId/p/$projectId/settings'
+    | '/_app/w/$workspaceId/p/$projectId/'
+    | '/_app/w/$workspaceId/p/$projectId/s/$serviceId'
+    | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/domains'
+    | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/logs'
+    | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings'
+    | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables'
+    | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/'
+    | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId'
+    | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -279,6 +455,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InviteTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/deployments/$deploymentId': {
+      id: '/_app/deployments/$deploymentId'
+      path: '/deployments/$deploymentId'
+      fullPath: '/deployments/$deploymentId'
+      preLoaderRoute: typeof AppDeploymentsDeploymentIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/github': {
+      id: '/_app/settings/github'
+      path: '/settings/github'
+      fullPath: '/settings/github'
+      preLoaderRoute: typeof AppSettingsGithubRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/w/$workspaceId': {
       id: '/_app/w/$workspaceId'
       path: '/w/$workspaceId'
@@ -321,6 +511,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWWorkspaceIdMembersRouteImport
       parentRoute: typeof AppWWorkspaceIdRouteRoute
     }
+    '/_app/w/$workspaceId/platform': {
+      id: '/_app/w/$workspaceId/platform'
+      path: '/platform'
+      fullPath: '/w/$workspaceId/platform'
+      preLoaderRoute: typeof AppWWorkspaceIdPlatformRouteImport
+      parentRoute: typeof AppWWorkspaceIdRouteRoute
+    }
     '/_app/w/$workspaceId/settings': {
       id: '/_app/w/$workspaceId/settings'
       path: '/settings'
@@ -342,6 +539,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWWorkspaceIdUsageRouteImport
       parentRoute: typeof AppWWorkspaceIdRouteRoute
     }
+    '/_app/w/$workspaceId/p/$projectId': {
+      id: '/_app/w/$workspaceId/p/$projectId'
+      path: '/p/$projectId'
+      fullPath: '/w/$workspaceId/p/$projectId'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdRouteRouteImport
+      parentRoute: typeof AppWWorkspaceIdRouteRoute
+    }
     '/_app/w/$workspaceId/servers/': {
       id: '/_app/w/$workspaceId/servers/'
       path: '/servers'
@@ -356,18 +560,143 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWWorkspaceIdServersNodeIdRouteImport
       parentRoute: typeof AppWWorkspaceIdRouteRoute
     }
+    '/_app/w/$workspaceId/p/$projectId/': {
+      id: '/_app/w/$workspaceId/p/$projectId/'
+      path: '/'
+      fullPath: '/w/$workspaceId/p/$projectId/'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdIndexRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/settings': {
+      id: '/_app/w/$workspaceId/p/$projectId/settings'
+      path: '/settings'
+      fullPath: '/w/$workspaceId/p/$projectId/settings'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSettingsRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/s/$serviceId': {
+      id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId'
+      path: '/s/$serviceId'
+      fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/s/$serviceId/': {
+      id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/'
+      path: '/'
+      fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId/'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/s/$serviceId/domains': {
+      id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/domains'
+      path: '/domains'
+      fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId/domains'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/s/$serviceId/logs': {
+      id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/logs'
+      path: '/logs'
+      fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId/logs'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdLogsRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings': {
+      id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings'
+      path: '/settings'
+      fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId/settings'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables': {
+      id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables'
+      path: '/variables'
+      fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId/variables'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/': {
+      id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/'
+      path: '/deployments'
+      fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId': {
+      id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId'
+      path: '/deployments/$deploymentId'
+      fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
+    }
   }
 }
+
+interface AppWWorkspaceIdPProjectIdSServiceIdRouteRouteChildren {
+  AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
+  AppWWorkspaceIdPProjectIdSServiceIdLogsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdLogsRoute
+  AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
+  AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
+  AppWWorkspaceIdPProjectIdSServiceIdIndexRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
+  AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute
+  AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRoute
+}
+
+const AppWWorkspaceIdPProjectIdSServiceIdRouteRouteChildren: AppWWorkspaceIdPProjectIdSServiceIdRouteRouteChildren =
+  {
+    AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute:
+      AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute,
+    AppWWorkspaceIdPProjectIdSServiceIdLogsRoute:
+      AppWWorkspaceIdPProjectIdSServiceIdLogsRoute,
+    AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute:
+      AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute,
+    AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute:
+      AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute,
+    AppWWorkspaceIdPProjectIdSServiceIdIndexRoute:
+      AppWWorkspaceIdPProjectIdSServiceIdIndexRoute,
+    AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute:
+      AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute,
+    AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRoute:
+      AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRoute,
+  }
+
+const AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren =
+  AppWWorkspaceIdPProjectIdSServiceIdRouteRoute._addFileChildren(
+    AppWWorkspaceIdPProjectIdSServiceIdRouteRouteChildren,
+  )
+
+interface AppWWorkspaceIdPProjectIdRouteRouteChildren {
+  AppWWorkspaceIdPProjectIdSettingsRoute: typeof AppWWorkspaceIdPProjectIdSettingsRoute
+  AppWWorkspaceIdPProjectIdIndexRoute: typeof AppWWorkspaceIdPProjectIdIndexRoute
+  AppWWorkspaceIdPProjectIdSServiceIdRouteRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren
+}
+
+const AppWWorkspaceIdPProjectIdRouteRouteChildren: AppWWorkspaceIdPProjectIdRouteRouteChildren =
+  {
+    AppWWorkspaceIdPProjectIdSettingsRoute:
+      AppWWorkspaceIdPProjectIdSettingsRoute,
+    AppWWorkspaceIdPProjectIdIndexRoute: AppWWorkspaceIdPProjectIdIndexRoute,
+    AppWWorkspaceIdPProjectIdSServiceIdRouteRoute:
+      AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren,
+  }
+
+const AppWWorkspaceIdPProjectIdRouteRouteWithChildren =
+  AppWWorkspaceIdPProjectIdRouteRoute._addFileChildren(
+    AppWWorkspaceIdPProjectIdRouteRouteChildren,
+  )
 
 interface AppWWorkspaceIdRouteRouteChildren {
   AppWWorkspaceIdAuditRoute: typeof AppWWorkspaceIdAuditRoute
   AppWWorkspaceIdCanvasRoute: typeof AppWWorkspaceIdCanvasRoute
   AppWWorkspaceIdLogsRoute: typeof AppWWorkspaceIdLogsRoute
   AppWWorkspaceIdMembersRoute: typeof AppWWorkspaceIdMembersRoute
+  AppWWorkspaceIdPlatformRoute: typeof AppWWorkspaceIdPlatformRoute
   AppWWorkspaceIdSettingsRoute: typeof AppWWorkspaceIdSettingsRoute
   AppWWorkspaceIdTemplatesRoute: typeof AppWWorkspaceIdTemplatesRoute
   AppWWorkspaceIdUsageRoute: typeof AppWWorkspaceIdUsageRoute
   AppWWorkspaceIdIndexRoute: typeof AppWWorkspaceIdIndexRoute
+  AppWWorkspaceIdPProjectIdRouteRoute: typeof AppWWorkspaceIdPProjectIdRouteRouteWithChildren
   AppWWorkspaceIdServersNodeIdRoute: typeof AppWWorkspaceIdServersNodeIdRoute
   AppWWorkspaceIdServersIndexRoute: typeof AppWWorkspaceIdServersIndexRoute
 }
@@ -377,10 +706,13 @@ const AppWWorkspaceIdRouteRouteChildren: AppWWorkspaceIdRouteRouteChildren = {
   AppWWorkspaceIdCanvasRoute: AppWWorkspaceIdCanvasRoute,
   AppWWorkspaceIdLogsRoute: AppWWorkspaceIdLogsRoute,
   AppWWorkspaceIdMembersRoute: AppWWorkspaceIdMembersRoute,
+  AppWWorkspaceIdPlatformRoute: AppWWorkspaceIdPlatformRoute,
   AppWWorkspaceIdSettingsRoute: AppWWorkspaceIdSettingsRoute,
   AppWWorkspaceIdTemplatesRoute: AppWWorkspaceIdTemplatesRoute,
   AppWWorkspaceIdUsageRoute: AppWWorkspaceIdUsageRoute,
   AppWWorkspaceIdIndexRoute: AppWWorkspaceIdIndexRoute,
+  AppWWorkspaceIdPProjectIdRouteRoute:
+    AppWWorkspaceIdPProjectIdRouteRouteWithChildren,
   AppWWorkspaceIdServersNodeIdRoute: AppWWorkspaceIdServersNodeIdRoute,
   AppWWorkspaceIdServersIndexRoute: AppWWorkspaceIdServersIndexRoute,
 }
@@ -391,11 +723,15 @@ const AppWWorkspaceIdRouteRouteWithChildren =
 interface AppRouteChildren {
   AppDashboardRoute: typeof AppDashboardRoute
   AppWWorkspaceIdRouteRoute: typeof AppWWorkspaceIdRouteRouteWithChildren
+  AppDeploymentsDeploymentIdRoute: typeof AppDeploymentsDeploymentIdRoute
+  AppSettingsGithubRoute: typeof AppSettingsGithubRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppDashboardRoute: AppDashboardRoute,
   AppWWorkspaceIdRouteRoute: AppWWorkspaceIdRouteRouteWithChildren,
+  AppDeploymentsDeploymentIdRoute: AppDeploymentsDeploymentIdRoute,
+  AppSettingsGithubRoute: AppSettingsGithubRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

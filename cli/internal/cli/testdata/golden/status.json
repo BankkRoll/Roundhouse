@@ -1,0 +1,105 @@
+{
+  "url": "{{URL}}",
+  "project": {
+    "id": "prj_shop",
+    "name": "Shop",
+    "slug": "shop"
+  },
+  "environment": {
+    "id": "env_prod",
+    "name": "production",
+    "slug": "production"
+  },
+  "service": {
+    "id": "svc_api",
+    "project_id": "prj_shop",
+    "name": "API",
+    "slug": "api",
+    "kind": "app",
+    "icon": null,
+    "created_at": 1792584000000,
+    "updated_at": 1792584000000
+  },
+  "services": [
+    {
+      "id": "svc_api",
+      "project_id": "prj_shop",
+      "name": "API",
+      "slug": "api",
+      "kind": "app",
+      "icon": null,
+      "created_at": 1792584000000,
+      "updated_at": 1792584000000
+    },
+    {
+      "id": "svc_db",
+      "project_id": "prj_shop",
+      "name": "Postgres",
+      "slug": "db",
+      "kind": "database",
+      "icon": null,
+      "created_at": 1792584000000,
+      "updated_at": 1792584000000
+    }
+  ],
+  "latest_deployment": {
+    "id": "dep_0003",
+    "service_id": "svc_api",
+    "environment_id": "env_prod",
+    "config_version": 1,
+    "build_id": "bld_0003",
+    "build": {
+      "id": "bld_0003",
+      "deployment_id": "dep_0003",
+      "service_id": "svc_api",
+      "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "commit_message": "Add checkout",
+      "commit_author": "ada",
+      "status": "succeeded",
+      "node_id": null,
+      "image_repository": "127.0.0.1:5000/prj_shop/svc_api",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "started_at": 1792666900000,
+      "finished_at": 1792667000000,
+      "error": null,
+      "created_at": 1792666800000
+    },
+    "image": null,
+    "status": "active",
+    "trigger": "manual",
+    "triggered_by": "usr_ada",
+    "rollback_of": null,
+    "failure_reason": null,
+    "started_at": null,
+    "finished_at": null,
+    "created_at": 1792666800000,
+    "updated_at": 1792666800000
+  },
+  "domains": [
+    {
+      "id": "dom_0001",
+      "service_id": "svc_api",
+      "environment_id": "env_prod",
+      "hostname": "api-production-x7k2.apps.example.com",
+      "url": "https://api-production-x7k2.apps.example.com",
+      "type": "generated",
+      "target_port": 8080,
+      "verification_status": "verified",
+      "tls_status": "active",
+      "created_at": 1792584000000
+    },
+    {
+      "id": "dom_0002",
+      "service_id": "svc_api",
+      "environment_id": "env_prod",
+      "hostname": "shop.example.com",
+      "url": "https://shop.example.com",
+      "type": "custom",
+      "target_port": 8080,
+      "verification_status": "verified",
+      "tls_status": "active",
+      "created_at": 1792670399000
+    }
+  ],
+  "dashboard_url": "{{URL}}/w/ws_acme/p/prj_shop/s/svc_api"
+}

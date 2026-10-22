@@ -1,0 +1,11 @@
+[
+  {
+    "id": "prj_shop",
+    "workspace_id": "ws_acme",
+    "name": "Shop",
+    "slug": "shop",
+    "description": "Storefront",
+    "created_at": 1792584000000,
+    "updated_at": 1792584000000
+  }
+]

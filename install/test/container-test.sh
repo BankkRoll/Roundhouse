@@ -10,10 +10,13 @@
 #
 # A stub control plane on 127.0.0.1 serves a release signed with a throwaway
 # key and answers the join; systemctl and docker are stubbed because
-# containers run neither systemd nor a Docker daemon. The test asserts that
+# containers run neither systemd nor a Docker daemon. Caddy and Railpack are
+# installed for real, from their pinned sources. The test asserts that
 # preflight passes, that /etc/os-release does not clobber the script's own
 # name and version settings, that the pinned version is the one downloaded
-# and verified, and that a re-run is idempotent.
+# and verified, that --builder joins as a builder, installs Railpack and
+# pre-pulls the builder images, that Caddy is installed and starts with an
+# empty, agent-owned config, and that a re-run is idempotent.
 
 set -euo pipefail
 
@@ -28,19 +31,33 @@ fail() {
 	exit 1
 }
 
+# pinned prints the value of NAME=... (quotes stripped) from install.sh.
+pinned() {
+	sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" /src/install/install.sh
+}
+
 log "harness dependencies"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends python3 openssl >/dev/null
+apt-get install -y -qq --no-install-recommends python3 openssl curl ca-certificates >/dev/null
 
 log "stubs for systemctl and docker"
 cat >/usr/local/bin/systemctl <<'EOF'
 #!/bin/sh
 echo "$*" >>/tmp/systemctl.log
 EOF
+# The docker stub records its calls and reports an image present once pulled.
 cat >/usr/local/bin/docker <<'EOF'
 #!/bin/sh
-echo "Docker version 27.0.0, build ci"
+echo "$*" >>/tmp/docker.log
+case "$1" in
+--version) echo "Docker version 29.0.0, build ci" ;;
+image) [ "$2" = inspect ] && grep -qxF "$3" /tmp/docker-images 2>/dev/null ;;
+pull)
+	for a in "$@"; do ref="$a"; done
+	echo "$ref" >>/tmp/docker-images
+	;;
+esac
 EOF
 chmod +x /usr/local/bin/systemctl /usr/local/bin/docker
 mkdir -p /etc/systemd/system
@@ -101,7 +118,12 @@ http.server.ThreadingHTTPServer(("127.0.0.1", ${PORT}), H).serve_forever()
 EOF
 python3 /tmp/cp.py 2>/tmp/cp.log &
 cp_pid=$!
-trap 'kill "$cp_pid" 2>/dev/null || true' EXIT
+caddy_pid=""
+cleanup() {
+	kill "$cp_pid" 2>/dev/null || true
+	if [ -n "$caddy_pid" ]; then kill "$caddy_pid" 2>/dev/null || true; fi
+}
+trap cleanup EXIT
 for _ in $(seq 50); do
 	python3 -c "import socket; socket.create_connection(('127.0.0.1', ${PORT}), 1)" 2>/dev/null && break
 	sleep 0.1
@@ -109,10 +131,10 @@ done
 
 export OPENRAIL_DOWNLOAD_BASE="http://127.0.0.1:${PORT}/rel"
 
-log "first install"
-bash /tmp/install.sh --token njt_ci --name "$NODE"
+log "first install, as a builder"
+bash /tmp/install.sh --token njt_ci --name "$NODE" --builder
 
-log "assertions"
+log "assertions: agent"
 [ "$(wc -l </tmp/joins.jsonl)" -eq 1 ] || fail "expected exactly one join"
 python3 - "$NODE" "$VERSION" <<'EOF'
 import json, sys
@@ -121,20 +143,78 @@ req = json.loads(open("/tmp/joins.jsonl").readline())
 assert req["name"] == node, f"name {req['name']!r} != {node!r}"
 assert req["agent_version"] == version, f"agent_version {req['agent_version']!r} != {version!r}"
 assert req["token"] == "njt_ci", "token not passed through"
-print("join request OK:", req["name"], req["agent_version"], req["os"])
+assert req["capabilities"]["builder"] is True, f"not joined as a builder: {req['capabilities']!r}"
+print("join request OK:", req["name"], req["agent_version"], req["os"], req["capabilities"])
 EOF
 [ "$(/usr/local/bin/openrail-agent version)" = "$VERSION" ] || fail "installed agent is not ${VERSION}"
 grep -q '^node_id: node_ci$' /etc/openrail/agent.yaml || fail "config not written"
+grep -q '^builder: true$' /etc/openrail/agent.yaml || fail "builder role not recorded in the config"
 cmp /etc/systemd/system/openrail-agent.service /src/install/openrail-agent.service ||
 	fail "installed unit differs from install/openrail-agent.service"
 grep -q 'restart openrail-agent.service' /tmp/systemctl.log || fail "service not restarted"
 if find /tmp -maxdepth 2 -name token -type f | grep -q .; then
 	fail "token temp file left behind"
 fi
+command -v git >/dev/null || fail "git not installed"
+[ -s /etc/ssl/certs/ca-certificates.crt ] || fail "ca-certificates not installed"
+
+log "assertions: Caddy"
+command -v caddy >/dev/null || fail "caddy not installed"
+caddy version
+grep -q "signed-by=/etc/apt/keyrings/caddy-stable.asc" /etc/apt/sources.list.d/caddy-stable.list ||
+	fail "Caddy repository not configured with the pinned key"
+dropin=/etc/systemd/system/caddy.service.d/openrail.conf
+grep -qx 'ExecStart=/usr/bin/caddy run --environ --resume' "$dropin" || fail "Caddy not started with --resume"
+grep -qx 'Environment=CADDY_ADMIN=localhost:2019' "$dropin" || fail "Caddy admin API not pinned to localhost:2019"
+grep -qx 'ExecReload=' "$dropin" || fail "Caddy reload not disabled"
+grep -q 'enable caddy.service' /tmp/systemctl.log || fail "caddy not enabled"
+[ "$(grep -c 'restart caddy.service' /tmp/systemctl.log)" -eq 1 ] || fail "caddy not restarted exactly once"
+
+# Run Caddy as its unit would, and check it comes up with an empty config on
+# the admin API rather than the packaged Caddyfile.
+read -ra exec_start <<<"$(sed -n 's/^ExecStart=\(.\{1,\}\)$/\1/p' "$dropin")"
+(cd / && CADDY_ADMIN=localhost:2019 XDG_CONFIG_HOME=/tmp/caddy-config XDG_DATA_HOME=/tmp/caddy-data \
+	"${exec_start[@]}" >/tmp/caddy.log 2>&1) &
+caddy_pid=$!
+config=""
+for _ in $(seq 50); do
+	config="$(curl -fsS http://localhost:2019/config/ 2>/dev/null)" && break
+	sleep 0.2
+done
+[ "$config" = "null" ] || fail "Caddy started with config ${config:-<no answer>}: $(cat /tmp/caddy.log)"
+if curl -fsS -m 2 http://127.0.0.1:80/ >/dev/null 2>&1; then
+	fail "Caddy serves the packaged Caddyfile"
+fi
+kill "$caddy_pid"
+wait "$caddy_pid" 2>/dev/null || true
+caddy_pid=""
+
+log "assertions: builder"
+[ "$(/usr/local/bin/railpack --version | awk '{ print $NF }')" = "$(pinned RAILPACK_VERSION)" ] ||
+	fail "railpack $(pinned RAILPACK_VERSION) not installed"
+for image in "$(pinned BUILDKIT_IMAGE)" "$(pinned REGISTRY_IMAGE)"; do
+	[ "$(grep -cxF "pull --quiet ${image}" /tmp/docker.log)" -eq 1 ] || fail "${image} not pulled exactly once"
+done
 
 log "re-run without a token is idempotent"
+railpack_mtime="$(stat -c %Y /usr/local/bin/railpack)"
+sleep 1
 bash /tmp/install.sh
 [ "$(wc -l </tmp/joins.jsonl)" -eq 1 ] || fail "re-run joined again"
+[ "$(stat -c %Y /usr/local/bin/railpack)" = "$railpack_mtime" ] || fail "re-run reinstalled railpack"
+[ "$(grep -c '^pull ' /tmp/docker.log)" -eq 2 ] || fail "re-run pulled images again"
+[ "$(grep -c 'restart caddy.service' /tmp/systemctl.log)" -eq 1 ] || fail "re-run restarted caddy"
+grep -q '^builder: true$' /etc/openrail/agent.yaml || fail "re-run lost the builder role"
+[ "$(grep -c 'restart openrail-agent.service' /tmp/systemctl.log)" -eq 2 ] || fail "re-run did not restart the agent"
+
+log "a joined non-builder cannot become a builder without re-joining"
+cp /etc/openrail/agent.yaml /tmp/agent.yaml.bak
+sed -i '/^builder:/d' /etc/openrail/agent.yaml
+if bash /tmp/install.sh --builder 2>/tmp/builder.log; then
+	fail "installer accepted --builder on a joined non-builder"
+fi
+grep -q "re-run with --rejoin --builder" /tmp/builder.log || fail "unexpected failure: $(cat /tmp/builder.log)"
+cp /tmp/agent.yaml.bak /etc/openrail/agent.yaml
 
 log "a pinned version must match the signed version line"
 # A correctly signed release served under another version's path, as a

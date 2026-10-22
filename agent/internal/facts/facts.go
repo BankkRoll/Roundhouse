@@ -81,7 +81,8 @@ func Collect(ctx context.Context) (Static, error) {
 	s.Capabilities = protocol.Capabilities{
 		Docker: s.DockerVersion != nil,
 		GVisor: runscErr == nil,
-		// TODO(phase-1): advertise builder once nodes can run image builds.
+		// NOTE: builder is an operator choice (join --builder), not a fact;
+		// callers set it from the config.
 		Builder: false,
 	}
 	s.PublicIP = publicIP()

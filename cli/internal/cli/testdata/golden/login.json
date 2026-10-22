@@ -1,0 +1,10 @@
+{
+  "profile": "default",
+  "url": "{{URL}}",
+  "user": {
+    "id": "usr_ada",
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "image": null
+  }
+}

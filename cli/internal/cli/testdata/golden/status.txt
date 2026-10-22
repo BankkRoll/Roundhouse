@@ -1,0 +1,7 @@
+Project:       Shop (prj_shop)
+Environment:   production
+Service:       API (svc_api)
+Deployment:    active  dep_0003  1h ago  manual
+Domain:        https://api-production-x7k2.apps.example.com
+               https://shop.example.com
+Dashboard:     {{URL}}/w/ws_acme/p/prj_shop/s/svc_api

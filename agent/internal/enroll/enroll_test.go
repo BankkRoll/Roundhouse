@@ -289,3 +289,24 @@ func TestJoinNameLengthCountsCharacters(t *testing.T) {
 		t.Fatal("64-character name accepted")
 	}
 }
+
+func TestJoinAsBuilder(t *testing.T) {
+	cp := newFakeJoin(t)
+	opts := testOptions(t, cp.srv.URL)
+	opts.Builder = true
+	opts.Insecure = true
+	cfg, err := Join(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cp.got.Capabilities.Builder {
+		t.Fatal("join request did not advertise capabilities.builder")
+	}
+	saved, err := config.Load(opts.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Builder || !saved.Builder || saved.DataDir != opts.DataDir || saved.RuntimeDir() != opts.DataDir {
+		t.Fatalf("saved config %+v", saved)
+	}
+}

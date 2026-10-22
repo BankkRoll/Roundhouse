@@ -1,0 +1,37 @@
+[
+  {
+    "key": "API_KEY",
+    "value": null,
+    "is_secret": true,
+    "version": 1,
+    "updated_at": 1792670400000
+  },
+  {
+    "key": "DATABASE_URL",
+    "value": "postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.OPENRAIL_PRIVATE_DOMAIN}}:${{db.PORT}}/shop",
+    "is_secret": false,
+    "version": 2,
+    "updated_at": 1792670400000
+  },
+  {
+    "key": "LISTEN",
+    "value": "0.0.0.0:${{PORT}}",
+    "is_secret": false,
+    "version": 1,
+    "updated_at": 1792670400000
+  },
+  {
+    "key": "NODE_ENV",
+    "value": "production",
+    "is_secret": false,
+    "version": 1,
+    "updated_at": 1792670400000
+  },
+  {
+    "key": "REGION",
+    "value": "${{shared.REGION}}",
+    "is_secret": false,
+    "version": 1,
+    "updated_at": 1792670400000
+  }
+]

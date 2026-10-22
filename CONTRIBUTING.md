@@ -7,16 +7,16 @@ agreed before you write code. Design decisions are recorded in
 ## Setup
 
 Requires Node 22.19+, pnpm 10 (via Corepack), and Go (version in `go.work`). On
-Windows, use Git Bash or WSL 2.
+Windows, PowerShell, Git Bash, and WSL 2 all work.
 
 ```sh
 corepack enable
 pnpm install
-cp apps/api/.dev.vars.example apps/api/.dev.vars
-sed -i "s|^MASTER_KEY=.*|MASTER_KEY=$(openssl rand -base64 32)|" apps/api/.dev.vars
-pnpm --filter @openrail/api db:migrate:local
+pnpm setup:dev                    # creates MASTER_KEY in apps/api/.dev.vars, migrates the local DB
 pnpm dev                          # API :8787, dashboard :5173
 ```
+
+`pnpm setup:dev` prints the master key; the setup wizard asks for it once.
 
 Local D1 and Durable Object state lives in `apps/api/.wrangler/`; delete it to
 start fresh.

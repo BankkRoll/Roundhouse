@@ -1,0 +1,26 @@
+[
+  {
+    "id": "dom_0001",
+    "service_id": "svc_api",
+    "environment_id": "env_prod",
+    "hostname": "api-production-x7k2.apps.example.com",
+    "url": "https://api-production-x7k2.apps.example.com",
+    "type": "generated",
+    "target_port": 8080,
+    "verification_status": "verified",
+    "tls_status": "active",
+    "created_at": 1792584000000
+  },
+  {
+    "id": "dom_0002",
+    "service_id": "svc_api",
+    "environment_id": "env_prod",
+    "hostname": "shop.example.com",
+    "url": "https://shop.example.com",
+    "type": "custom",
+    "target_port": 8080,
+    "verification_status": "verified",
+    "tls_status": "active",
+    "created_at": 1792670399000
+  }
+]

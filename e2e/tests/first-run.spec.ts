@@ -47,10 +47,9 @@ test.describe
   .serial("first run", () => {
     let workspacePath = "";
 
-    test("the root URL is the public landing page, even before setup", async ({ page }) => {
+    test("the root URL goes to the setup wizard on a fresh install", async ({ page }) => {
       await page.goto("/");
-      await expect(page).toHaveURL(/\/$/);
-      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await expect(page).toHaveURL(/\/setup/);
     });
 
     test("a fresh install sends dashboard visitors to the setup wizard", async ({ page }) => {

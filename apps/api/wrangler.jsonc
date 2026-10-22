@@ -25,10 +25,21 @@
       "migrations_dir": "../../packages/db/migrations"
     }
   ],
+  // Created on the first deploy if missing, like the D1 database.
+  "r2_buckets": [{ "binding": "LOGS", "bucket_name": "openrail-logs" }],
   "durable_objects": {
-    "bindings": [{ "name": "NODE_CONNECTION", "class_name": "NodeConnection" }]
+    "bindings": [
+      { "name": "NODE_CONNECTION", "class_name": "NodeConnection" },
+      { "name": "PROJECT_ROOM", "class_name": "ProjectRoom" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["NodeConnection"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["NodeConnection"] },
+    { "tag": "v2", "new_sqlite_classes": ["ProjectRoom"] }
+  ],
+  "workflows": [
+    { "name": "openrail-deploy", "binding": "DEPLOY_WORKFLOW", "class_name": "DeployWorkflow" }
+  ],
   // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
   // a small number like the docs' "1001" can collide with another project's
   // limiter and pool their counters. Any unique positive integer works.
@@ -37,6 +48,13 @@
       "name": "AUTH_LIMITER",
       "namespace_id": "730214591",
       "simple": { "limit": 10, "period": 60 }
+    },
+    {
+      // GitHub sends bursts (one delivery per push, per installation event)
+      // from a small pool of addresses, so this one is far looser.
+      "name": "WEBHOOK_LIMITER",
+      "namespace_id": "730214592",
+      "simple": { "limit": 300, "period": 60 }
     }
   ],
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "openrail_metrics" }],

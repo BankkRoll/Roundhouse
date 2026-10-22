@@ -1,0 +1,5 @@
+{
+  "token": "njt_secret_join_token",
+  "expires_at": 1792674000000,
+  "install_command": "curl -fsSL http://127.0.0.1/install.sh | sudo bash -s -- --token njt_secret_join_token"
+}

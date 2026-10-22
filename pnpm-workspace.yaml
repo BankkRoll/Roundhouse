@@ -2,6 +2,7 @@ packages:
   - apps/*
   - packages/*
   - e2e
+  - landing
 onlyBuiltDependencies:
   - esbuild
   - workerd

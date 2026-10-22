@@ -6,6 +6,7 @@
 import { type Db, workspaceMembers, workspaces } from "@openrail/db";
 import { newId, slugify } from "@openrail/shared";
 import { like } from "drizzle-orm";
+import { isUniqueViolation } from "./errors";
 
 /** Retries after a slug collision before giving up. */
 const SLUG_RETRIES = 3;
@@ -42,13 +43,6 @@ function randomSlug(name: string): string {
     .map((b) => (b % 36).toString(36))
     .join("");
   return `${base}-${suffix}`;
-}
-
-function isUniqueViolation(err: unknown, column: string): boolean {
-  for (let e = err; e instanceof Error; e = e.cause) {
-    if (e.message.includes(`UNIQUE constraint failed: ${column}`)) return true;
-  }
-  return false;
 }
 
 /**

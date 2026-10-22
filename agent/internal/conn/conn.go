@@ -6,7 +6,11 @@
 //   - send hello on every connection, then heartbeats on the interval the
 //     control plane's welcome sets, from a single writer goroutine;
 //   - verify every inbound signed envelope against the pinned control-plane
-//     key and act on welcome and desired_state, dropping anything else.
+//     key, act on welcome, and dispatch desired_state (in generation order)
+//     and build_job to a [Handler];
+//   - carry workload_status, logs and build_result frames from the rest of
+//     the agent through that same writer ([Client.Send]), within the
+//     protocol's frame size limit.
 package conn
 
 import (
@@ -18,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -63,6 +68,31 @@ const (
 
 var errUnauthorized = errors.New("control plane rejected credential")
 
+// ErrNotConnected is returned by [Client.Send] when no session is up. Callers
+// either drop the frame (statuses: hello resynchronises them) or keep it for
+// later (logs, build results).
+var ErrNotConnected = errors.New("not connected to the control plane")
+
+// ErrFrameTooLarge is returned by [Client.Send] for a frame over
+// [protocol.MaxAgentFrameBytes], which the control plane would reject.
+var ErrFrameTooLarge = errors.New("agent frame exceeds the protocol size limit")
+
+// Handler receives verified control messages. Its methods are called from
+// the connection's read loop and must return quickly.
+type Handler interface {
+	// HasDesiredState reports whether a desired state is loaded in memory.
+	// Until one is, a desired state whose generation equals the persisted
+	// observed generation is applied rather than ignored: desired states
+	// carry secrets and are never persisted, so after a restart the agent
+	// needs the control plane to send the current one again.
+	HasDesiredState() bool
+	// ApplyDesiredState takes a desired state newer than any applied and
+	// reports whether it accepted it.
+	ApplyDesiredState(m *protocol.DesiredState) bool
+	// StartBuild takes a build job.
+	StartBuild(m *protocol.BuildJob)
+}
+
 // Client is a long-lived connection to the control plane. Configure the
 // exported fields, then call [Client.Run].
 type Client struct {
@@ -88,6 +118,12 @@ type Client struct {
 	// State persists the observed generation across restarts; nil keeps it
 	// in memory only.
 	State *state.Store
+	// Handler receives desired states and build jobs; nil only records the
+	// observed generation.
+	Handler Handler
+	// OnConnect is called after hello is sent on each new connection, when
+	// [Client.Send] starts to succeed. It must not block.
+	OnConnect func()
 	// Logger receives connection and message logs; nil discards them.
 	Logger *slog.Logger
 
@@ -104,6 +140,9 @@ type Client struct {
 	// clockOffset is how far the control plane's clock is ahead of ours, in
 	// nanoseconds, as of the latest handshake.
 	clockOffset atomic.Int64
+	// cur is the session whose writer accepts [Client.Send] frames, nil
+	// while disconnected.
+	cur atomic.Pointer[session]
 }
 
 // ObservedGeneration returns the newest desired_state generation applied.
@@ -222,7 +261,13 @@ func (c *Client) session(ctx context.Context) (connected bool, err error) {
 		}
 	}()
 
-	s := &session{Client: c, ws: ws, interval: make(chan time.Duration, 1)}
+	s := &session{
+		Client:   c,
+		ws:       ws,
+		interval: make(chan time.Duration, 1),
+		out:      make(chan *outbound),
+		done:     make(chan struct{}),
+	}
 	writeErr := make(chan error, 1)
 	go func() {
 		writeErr <- s.writeLoop(ioCtx)
@@ -240,12 +285,70 @@ type session struct {
 	// interval carries heartbeat interval changes from the reader to the
 	// writer, which owns the socket's write side.
 	interval chan time.Duration
+	// out carries frames from [Client.Send] to the writer.
+	out chan *outbound
+	// done is closed when the writer exits.
+	done chan struct{}
+}
+
+// outbound is one encoded frame and where to report its write result.
+type outbound struct {
+	data   []byte
+	result chan error
+}
+
+// Send writes msg through the active connection's single writer and waits
+// for the write to finish. It returns [ErrNotConnected] when no connection
+// is up (or it drops before the write), and [ErrFrameTooLarge] for a frame
+// over the protocol limit.
+func (c *Client) Send(ctx context.Context, msg protocol.AgentMessage) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	if len(data) > protocol.MaxAgentFrameBytes {
+		return fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(data))
+	}
+	s := c.cur.Load()
+	if s == nil {
+		return ErrNotConnected
+	}
+	ob := &outbound{data: data, result: make(chan error, 1)}
+	select {
+	case s.out <- ob:
+	case <-s.done:
+		return ErrNotConnected
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-ob.result:
+		return err
+	case <-s.done:
+		// The writer may have exited before or after writing this frame.
+		select {
+		case err := <-ob.result:
+			return err
+		default:
+			return ErrNotConnected
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *session) writeLoop(ctx context.Context) error {
-	hello := s.Hello(ctx, s.observed.Load())
+	defer func() {
+		s.cur.CompareAndSwap(s, nil)
+		close(s.done)
+	}()
+	hello := fitHello(s.Hello(ctx, s.observed.Load()))
 	if err := s.write(ctx, &hello); err != nil {
 		return fmt.Errorf("send hello: %w", err)
+	}
+	s.cur.Store(s)
+	if s.OnConnect != nil {
+		s.OnConnect()
 	}
 
 	heartbeat := func() error {
@@ -279,6 +382,12 @@ func (s *session) writeLoop(ctx context.Context) error {
 			if err := heartbeat(); err != nil {
 				return err
 			}
+		case ob := <-s.out:
+			err := s.writeRaw(ctx, ob.data)
+			ob.result <- err
+			if err != nil {
+				return fmt.Errorf("send frame: %w", err)
+			}
 		}
 	}
 }
@@ -288,6 +397,13 @@ func (s *session) write(ctx context.Context, msg protocol.AgentMessage) error {
 	if err != nil {
 		return err
 	}
+	if len(data) > protocol.MaxAgentFrameBytes {
+		return fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(data))
+	}
+	return s.writeRaw(ctx, data)
+}
+
+func (s *session) writeRaw(ctx context.Context, data []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
 	return s.ws.Write(ctx, websocket.MessageText, data)
@@ -387,12 +503,21 @@ func (s *session) apply(kid string, msg protocol.ControlMessage) {
 		s.Logger.Info("welcomed by control plane", "msg_id", m.ID, "heartbeat_interval", d)
 	case *protocol.DesiredState:
 		s.applyDesiredState(m)
+	case *protocol.BuildJob:
+		if s.Handler == nil {
+			s.Logger.Warn("dropping build job", "reason", "no_handler", "build_id", m.BuildID)
+			return
+		}
+		s.Logger.Info("received build job", "msg_id", m.ID, "build_id", m.BuildID, "deployment_id", m.DeploymentID)
+		s.Handler.StartBuild(m)
 	}
 }
 
 func (s *session) applyDesiredState(m *protocol.DesiredState) {
 	observed := s.observed.Load()
-	if m.Generation <= observed {
+	// An equal generation is re-applied only when nothing is loaded in
+	// memory: the state a restarted agent persisted the generation of.
+	if m.Generation < observed || (m.Generation == observed && (s.Handler == nil || s.Handler.HasDesiredState())) {
 		s.Logger.Debug("ignoring stale desired state", "msg_id", m.ID, "generation", m.Generation, "observed_generation", observed)
 		return
 	}
@@ -408,8 +533,9 @@ func (s *session) applyDesiredState(m *protocol.DesiredState) {
 		slog.GroupAttrs("workloads", workloads...),
 	)
 
-	// TODO(phase-1): reconcile running containers against m.Workloads before
-	// recording the generation as observed.
+	if s.Handler != nil && !s.Handler.ApplyDesiredState(m) {
+		return
+	}
 
 	s.observed.Store(m.Generation)
 	if s.State == nil {
@@ -428,4 +554,25 @@ func (s *session) applyDesiredState(m *protocol.DesiredState) {
 func clampHeartbeatInterval(ms int64) time.Duration {
 	ms = max(min(ms, MaxHeartbeatInterval.Milliseconds()), MinHeartbeatInterval.Milliseconds())
 	return time.Duration(ms) * time.Millisecond
+}
+
+// fitHello keeps hello within the frame limit. Status messages go first,
+// then statuses from the end: hello must always get through, and the
+// control plane learns the rest from workload_status frames.
+func fitHello(h protocol.Hello) protocol.Hello {
+	fits := func() bool {
+		data, err := json.Marshal(&h)
+		return err == nil && len(data) <= protocol.MaxAgentFrameBytes
+	}
+	if fits() {
+		return h
+	}
+	h.Statuses = slices.Clone(h.Statuses)
+	for i := range h.Statuses {
+		h.Statuses[i].Message = ""
+	}
+	for len(h.Statuses) > 0 && !fits() {
+		h.Statuses = h.Statuses[:len(h.Statuses)/2]
+	}
+	return h
 }

@@ -24,3 +24,19 @@ export const githubInstallations = sqliteTable(
   },
   (t) => [index("github_installations_workspace_idx").on(t.workspaceId)],
 );
+
+/**
+ * Webhook deliveries already accepted, keyed by `X-GitHub-Delivery`, so a
+ * redelivered or replayed payload is processed at most once.
+ */
+export const githubDeliveries = sqliteTable(
+  "github_deliveries",
+  {
+    /** GitHub's delivery GUID. */
+    id: text("id").primaryKey(),
+    /** `X-GitHub-Event`. */
+    event: text("event").notNull(),
+    ...timestamps,
+  },
+  (t) => [index("github_deliveries_created_idx").on(t.createdAt)],
+);

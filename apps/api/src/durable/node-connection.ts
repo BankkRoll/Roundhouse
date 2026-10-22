@@ -1,7 +1,19 @@
 /**
  * One Durable Object per node. It owns the agent's WebSocket (hibernatable,
- * so idle nodes cost nothing), validates agent frames, persists heartbeat
- * snapshots, signs control frames, and detects silent nodes with an alarm.
+ * so idle nodes cost nothing) and is the control plane's only channel to it.
+ *
+ * Responsibilities:
+ * - validate every agent frame against the protocol schemas, with size and
+ *   per-type rate limits, and reject agents below `MIN_PROTOCOL_VERSION`;
+ * - persist heartbeat snapshots and detect silent nodes with an alarm;
+ * - apply `workload_status` (and `hello.statuses`) to placements, move
+ *   deployments between `active` and `crashed`, and wake deploy workflows;
+ * - record `build_result`s and wake the waiting workflow;
+ * - redact, store (R2 + `log_chunks`) and forward `logs` to the project room;
+ * - sign and send control frames: `welcome`, `desired_state` (always
+ *   computed from D1, so a reconnect gets the truth) and `build_job`, never
+ *   sending workloads or builds below `WORKLOADS_PROTOCOL_VERSION`, and giving
+ *   credential-carrying frames at most `CREDENTIAL_FRAME_TTL_MS`.
  *
  * Only the Worker can reach this object, and it authenticates the agent
  * before forwarding the upgrade, so the node ID header is trusted here.
@@ -10,25 +22,54 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { createDb, type Db, nodes } from "@openrail/db";
+import {
+  builds,
+  createDb,
+  type Db,
+  deployments,
+  logChunks,
+  nodes,
+  placements,
+  services,
+} from "@openrail/db";
 import {
   type AgentMessage,
   AgentMessageSchema,
+  type BuildJob,
+  type BuildResult,
   type ControlMessage,
+  ControlMessageSchema,
+  CREDENTIAL_FRAME_TTL_MS,
+  carriesCredentials,
   type Heartbeat,
   type Hello,
+  type LogLine,
+  type Logs,
+  MAX_AGENT_FRAME_BYTES,
+  MAX_CONTROL_FRAME_BYTES,
+  MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   signEnvelope,
+  WORKLOADS_PROTOCOL_VERSION,
+  type WorkloadState,
+  type WorkloadStatusReport,
 } from "@openrail/protocol";
 import { HEARTBEAT_INTERVAL_MS, type NodeStatus, newId, OFFLINE_AFTER_MS } from "@openrail/shared";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
+import {
+  addDeploymentEvent,
+  IllegalTransitionError,
+  transitionDeployment,
+  wakeWorkflow,
+} from "../lib/deployments";
+import { buildDesiredState } from "../lib/desired-state";
+import { logChunkKey, redact, redactionList, type StoredLogLine, toNdjson } from "../lib/logs";
 import { NODE_ID_HEADER } from "../lib/nodes";
+import { projectRoom } from "../lib/realtime";
 import { loadSigningKey } from "../lib/settings";
-
-/** Agent frames larger than this are rejected; heartbeats are a few hundred bytes. */
-const MAX_FRAME_BYTES = 64 * 1024;
+import { loadEnvironmentVariables, projectKey } from "../lib/variables";
 
 /** Signed control frames expire quickly so a captured frame can't be replayed later. */
 const CONTROL_TTL_MS = 5 * 60 * 1000;
@@ -54,8 +95,37 @@ const MIN_HEARTBEAT_GAP_MS = HEARTBEAT_INTERVAL_MS / 2;
  */
 const MAX_RATE_STRIKES = 5;
 
+/**
+ * Frames of each type accepted per {@link RATE_WINDOW_MS}. An agent flushes
+ * logs once a second per source and reports statuses on change, so these
+ * leave headroom for a node running `MAX_WORKLOADS_PER_NODE` replicas.
+ */
+export const FRAME_RATE_LIMITS = {
+  workload_status: 64,
+  logs: 256,
+  build_result: 8,
+} as const;
+
+/** Window of {@link FRAME_RATE_LIMITS}. */
+const RATE_WINDOW_MS = 1000;
+
+/** Frames over the limit dropped in one connection before it is closed. */
+const MAX_DROPPED_FRAMES = 200;
+
+/** Buffered log bytes for one source before it is flushed to R2. */
+const LOG_FLUSH_BYTES = 256 * 1024;
+
+/** How long log lines may sit in memory before they are flushed to R2. */
+const LOG_FLUSH_DELAY_MS = 2000;
+
+/** How long redaction lists and log-source lookups are reused. */
+const LOOKUP_TTL_MS = 30_000;
+
 /** Statuses an agent's hello or heartbeat may move to `online`. */
 const AGENT_DRIVEN_STATUSES: NodeStatus[] = ["pending", "offline", "online", "degraded"];
+
+/** Replica states that mean a deployment is not (or no longer) serving. */
+const BAD_STATES: readonly WorkloadState[] = ["unhealthy", "crashed", "exited"];
 
 /**
  * SET expression that marks a node online unless an operator has put it in
@@ -68,13 +138,42 @@ function liveStatus() {
 interface Attachment {
   nodeId: string;
   helloReceived: boolean;
+  protocolVersion: number;
   lastBeatAt: number;
   strikes: number;
+  windowStart: number;
+  counts: Partial<Record<keyof typeof FRAME_RATE_LIMITS, number>>;
+  dropped: number;
 }
+
+/** Where a log source's lines belong. */
+interface LogOwner {
+  projectId: string;
+  serviceId: string;
+  environmentId: string;
+  deploymentId: string | null;
+  buildId: string | null;
+}
+
+interface LogBuffer {
+  owner: LogOwner;
+  lines: StoredLogLine[];
+  bytes: number;
+}
+
+/** Fields a caller supplies for a build job; the header is added when sent. */
+export type BuildJobBody = Omit<BuildJob, "id" | "node_id" | "iat" | "exp" | "type">;
+
+/** Why {@link NodeConnection.sendBuildJob} could not deliver. */
+export type BuildJobRejection = "not_connected" | "protocol_too_old";
 
 /** Durable Object holding a single node's agent connection. */
 export class NodeConnection extends DurableObject<Env> {
   private db: Db;
+  private logBuffers = new Map<string, LogBuffer>();
+  private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private owners = new Map<string, { owner: LogOwner | null; at: number }>();
+  private secrets = new Map<string, { values: string[]; at: number }>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -94,8 +193,12 @@ export class NodeConnection extends DurableObject<Env> {
     server.serializeAttachment({
       nodeId,
       helloReceived: false,
+      protocolVersion: 0,
       lastBeatAt: 0,
       strikes: 0,
+      windowStart: 0,
+      counts: {},
+      dropped: 0,
     } satisfies Attachment);
     // Stored now (not on hello) so the alarm can also evict a socket that
     // authenticates but never says hello.
@@ -107,7 +210,7 @@ export class NodeConnection extends DurableObject<Env> {
   override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     const attachment = ws.deserializeAttachment() as Attachment;
     const size = typeof raw === "string" ? raw.length : raw.byteLength;
-    if (size > MAX_FRAME_BYTES) return ws.close(CloseCode.tooBig, "frame too large");
+    if (size > MAX_AGENT_FRAME_BYTES) return ws.close(CloseCode.tooBig, "frame too large");
     if (typeof raw !== "string") return ws.close(CloseCode.policy, "binary frames not supported");
 
     let message: AgentMessage;
@@ -124,7 +227,10 @@ export class NodeConnection extends DurableObject<Env> {
       if (attachment.helloReceived) return ws.close(CloseCode.policy, "duplicate hello");
       if (message.node_id !== attachment.nodeId)
         return ws.close(CloseCode.policy, "node id mismatch");
-      if (message.protocol_version > PROTOCOL_VERSION) {
+      if (
+        message.protocol_version > PROTOCOL_VERSION ||
+        message.protocol_version < MIN_PROTOCOL_VERSION
+      ) {
         return ws.close(
           CloseCode.policy,
           `unsupported protocol version ${message.protocol_version}`,
@@ -132,25 +238,46 @@ export class NodeConnection extends DurableObject<Env> {
       }
       // Marked before the first await: a second hello arriving while D1 is
       // busy must see it, or both would pass the duplicate check.
-      const greeted = { ...attachment, helloReceived: true } satisfies Attachment;
+      const greeted = {
+        ...attachment,
+        helloReceived: true,
+        protocolVersion: message.protocol_version,
+      } satisfies Attachment;
       ws.serializeAttachment(greeted);
       await this.onHello(ws, greeted, message);
       return;
     }
     if (!attachment.helloReceived) return ws.close(CloseCode.policy, "hello required first");
-    // TODO(phase-1): handle workload_status, logs and build_result frames.
-    if (message.type !== "heartbeat") return;
 
-    // SECURITY: A leaked node credential must not be able to flood D1 with writes.
-    const now = Date.now();
-    if (now - attachment.lastBeatAt < MIN_HEARTBEAT_GAP_MS) {
-      const strikes = attachment.strikes + 1;
-      if (strikes >= MAX_RATE_STRIKES) return ws.close(CloseCode.policy, "heartbeat rate exceeded");
-      ws.serializeAttachment({ ...attachment, strikes } satisfies Attachment);
+    if (message.type === "heartbeat") {
+      // SECURITY: A leaked node credential must not be able to flood D1 with writes.
+      const now = Date.now();
+      if (now - attachment.lastBeatAt < MIN_HEARTBEAT_GAP_MS) {
+        const strikes = attachment.strikes + 1;
+        if (strikes >= MAX_RATE_STRIKES)
+          return ws.close(CloseCode.policy, "heartbeat rate exceeded");
+        ws.serializeAttachment({ ...attachment, strikes } satisfies Attachment);
+        return;
+      }
+      ws.serializeAttachment({ ...attachment, lastBeatAt: now, strikes: 0 } satisfies Attachment);
+      await this.onHeartbeat(attachment.nodeId, message);
       return;
     }
-    ws.serializeAttachment({ ...attachment, lastBeatAt: now, strikes: 0 } satisfies Attachment);
-    await this.onHeartbeat(attachment.nodeId, message);
+
+    // Workload frames are a version 2 feature; an older agent has none to send.
+    if (attachment.protocolVersion < WORKLOADS_PROTOCOL_VERSION) return;
+    if (!this.admit(ws, attachment, message.type)) return;
+    switch (message.type) {
+      case "workload_status":
+        await this.applyStatuses(attachment.nodeId, [message]);
+        return;
+      case "build_result":
+        await this.onBuildResult(attachment.nodeId, message);
+        return;
+      case "logs":
+        await this.onLogs(attachment.nodeId, message);
+        return;
+    }
   }
 
   override async webSocketClose(ws: WebSocket, code: number): Promise<void> {
@@ -166,6 +293,7 @@ export class NodeConnection extends DurableObject<Env> {
     } catch {
       // Already closed by the runtime's automatic close reply.
     }
+    await this.flushLogs();
   }
 
   override async webSocketError(ws: WebSocket): Promise<void> {
@@ -207,6 +335,10 @@ export class NodeConnection extends DurableObject<Env> {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // RPC
+  // ---------------------------------------------------------------------------
+
   /**
    * Closes the agent's socket. Called when a node is removed.
    *
@@ -216,6 +348,60 @@ export class NodeConnection extends DurableObject<Env> {
     for (const ws of this.ctx.getWebSockets()) ws.close(CloseCode.removed, reason);
     await this.ctx.storage.deleteAll();
   }
+
+  /**
+   * Recomputes the node's desired state from D1 and sends it, if the agent
+   * is connected. Callers bump `desired_generation` first.
+   *
+   * @returns Whether a frame was sent.
+   */
+  async pushDesiredState(): Promise<boolean> {
+    const ws = this.greetedSocket();
+    if (!ws) return false;
+    const { nodeId } = ws.deserializeAttachment() as Attachment;
+    return this.sendDesiredState(ws, nodeId);
+  }
+
+  /**
+   * Signs and sends a `build_job`. Its `exp` is at most
+   * `CREDENTIAL_FRAME_TTL_MS` after issue whether or not it carries a token.
+   *
+   * @param job - Job fields.
+   * @returns `{ sent: true }`, or why the job could not be delivered.
+   */
+  async sendBuildJob(
+    job: BuildJobBody,
+  ): Promise<{ sent: true } | { sent: false; reason: BuildJobRejection }> {
+    const ws = this.greetedSocket();
+    if (!ws) return { sent: false, reason: "not_connected" };
+    const attachment = ws.deserializeAttachment() as Attachment;
+    if (attachment.protocolVersion < WORKLOADS_PROTOCOL_VERSION) {
+      return { sent: false, reason: "protocol_too_old" };
+    }
+    const now = Date.now();
+    await this.send(ws, {
+      type: "build_job",
+      ...this.header(attachment.nodeId, now, CREDENTIAL_FRAME_TTL_MS),
+      ...job,
+    });
+    return { sent: true };
+  }
+
+  /**
+   * Writes every buffered log line to R2 now. Called on a timer, when a
+   * buffer fills, and when the socket closes; exposed for tests.
+   */
+  async flushLogs(): Promise<void> {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = undefined;
+    const buffers = [...this.logBuffers.values()];
+    this.logBuffers.clear();
+    for (const b of buffers) await this.writeChunk(b);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Frames
+  // ---------------------------------------------------------------------------
 
   private async onHello(ws: WebSocket, attachment: Attachment, hello: Hello): Promise<void> {
     const now = Date.now();
@@ -228,6 +414,7 @@ export class NodeConnection extends DurableObject<Env> {
         kernel: hello.kernel,
         dockerVersion: hello.docker_version,
         agentVersion: hello.agent_version,
+        protocolVersion: hello.protocol_version,
         capabilities: hello.capabilities,
         cpuTotal: hello.hardware.cpu_cores,
         memTotal: hello.hardware.mem_bytes,
@@ -236,7 +423,7 @@ export class NodeConnection extends DurableObject<Env> {
         lastHeartbeatAt: new Date(now),
       })
       .where(and(eq(nodes.id, attachment.nodeId), isNull(nodes.deletedAt)))
-      .returning({ desiredGeneration: nodes.desiredGeneration });
+      .returning({ id: nodes.id });
     if (!node) return ws.close(CloseCode.removed, "node removed");
 
     await this.ctx.storage.put({ node_id: attachment.nodeId, last_seen: now });
@@ -247,17 +434,10 @@ export class NodeConnection extends DurableObject<Env> {
       ...this.header(attachment.nodeId, now),
       heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,
     });
-    // TODO(phase-1): populate workloads from placements, and tls_mode,
-    // apps_domain and registry from instance settings and node capabilities.
-    await this.send(ws, {
-      type: "desired_state",
-      ...this.header(attachment.nodeId, now),
-      generation: node.desiredGeneration,
-      workloads: [],
-      tls_mode: "off",
-      apps_domain: null,
-      registry: null,
-    });
+    await this.sendDesiredState(ws, attachment.nodeId);
+    if (hello.statuses?.length && hello.protocol_version >= WORKLOADS_PROTOCOL_VERSION) {
+      await this.applyStatuses(attachment.nodeId, hello.statuses);
+    }
   }
 
   private async onHeartbeat(nodeId: string, hb: Heartbeat): Promise<void> {
@@ -293,14 +473,345 @@ export class NodeConnection extends DurableObject<Env> {
     });
   }
 
-  private header(nodeId: string, now: number) {
-    return { id: newId("message"), node_id: nodeId, iat: now, exp: now + CONTROL_TTL_MS };
+  /**
+   * Applies status reports to this node's placements, then re-evaluates each
+   * affected deployment once.
+   */
+  private async applyStatuses(nodeId: string, reports: readonly WorkloadStatusReport[]) {
+    const touched = new Set<string>();
+    for (const r of reports) {
+      // System workloads have no placement.
+      if (!r.deployment_id) continue;
+      // SECURITY: Scoped to this node's placements, so an agent can only
+      // report on replicas it was asked to run. Older reports never
+      // overwrite newer ones.
+      const [row] = await this.db
+        .update(placements)
+        .set({
+          state: r.state,
+          ...(r.container_id ? { containerId: r.container_id } : {}),
+          lastStatusAt: new Date(r.ts),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(placements.workloadId, r.workload_id),
+            eq(placements.nodeId, nodeId),
+            eq(placements.deploymentId, r.deployment_id),
+            or(isNull(placements.lastStatusAt), lte(placements.lastStatusAt, new Date(r.ts))),
+          ),
+        )
+        .returning({ deploymentId: placements.deploymentId, replica: placements.replica });
+      if (!row) continue;
+      touched.add(row.deploymentId);
+      await this.onReplicaStatus(row.deploymentId, row.replica, r);
+    }
+    for (const deploymentId of touched) await this.evaluateDeployment(deploymentId);
+  }
+
+  private async deploymentContext(deploymentId: string) {
+    const [row] = await this.db
+      .select({ deployment: deployments, projectId: services.projectId })
+      .from(deployments)
+      .innerJoin(services, eq(services.id, deployments.serviceId))
+      .where(eq(deployments.id, deploymentId))
+      .limit(1);
+    return row;
+  }
+
+  private async onReplicaStatus(deploymentId: string, replica: number, r: WorkloadStatusReport) {
+    const row = await this.deploymentContext(deploymentId);
+    // Rollouts get a timeline entry per replica change; settled deployments
+    // only record transitions, or a crash loop would flood the table.
+    if (row?.deployment.status !== "deploying") return;
+    await addDeploymentEvent(
+      this.lifecycle(),
+      row.projectId,
+      deploymentId,
+      "replica_status",
+      `Replica ${replica} is ${r.state}${r.message ? `: ${r.message}` : ""}`,
+      {
+        replica,
+        workload_id: r.workload_id,
+        state: r.state,
+        restarts: r.restarts,
+        ...(r.exit_code !== undefined ? { exit_code: r.exit_code } : {}),
+      },
+    );
+  }
+
+  private async evaluateDeployment(deploymentId: string) {
+    const row = await this.deploymentContext(deploymentId);
+    if (!row) return;
+    const { deployment, projectId } = row;
+    const states = (
+      await this.db
+        .select({ state: placements.state })
+        .from(placements)
+        .where(eq(placements.deploymentId, deploymentId))
+    ).map((p) => p.state);
+    const allHealthy = states.length > 0 && states.every((s) => s === "healthy");
+    const anyBad = states.some((s) => BAD_STATES.includes(s));
+    const ctx = this.lifecycle();
+    try {
+      if (deployment.status === "deploying" && (allHealthy || anyBad)) {
+        await wakeWorkflow(this.env, deployment, "health", { healthy: allHealthy });
+      } else if (deployment.status === "active" && anyBad) {
+        await transitionDeployment(ctx, projectId, deploymentId, "crashed", {
+          reason: "A replica stopped being healthy",
+        });
+      } else if (deployment.status === "crashed" && allHealthy) {
+        await transitionDeployment(ctx, projectId, deploymentId, "active", { reason: "Recovered" });
+      }
+    } catch (err) {
+      // A concurrent finalize or cancel already moved it on.
+      if (!(err instanceof IllegalTransitionError)) throw err;
+    }
+  }
+
+  private async onBuildResult(nodeId: string, result: BuildResult) {
+    const build = await this.db.query.builds.findFirst({
+      where: and(eq(builds.id, result.build_id), eq(builds.nodeId, nodeId)),
+    });
+    if (!build) return;
+    const now = new Date();
+    // SECURITY: The image must land in the repository the job named, or a
+    // compromised builder could point a service at another service's image.
+    const ok = result.ok && result.image?.repository === build.imageRepository;
+    const error = result.ok
+      ? ok
+        ? null
+        : `Builder pushed to ${result.image?.repository}, expected ${build.imageRepository}`
+      : (result.error ?? "build failed");
+    const [updated] = await this.db
+      .update(builds)
+      .set({
+        status: ok ? "succeeded" : "failed",
+        imageDigest: ok ? result.image!.digest : null,
+        error,
+        finishedAt: now,
+        updatedAt: now,
+      })
+      .where(and(eq(builds.id, build.id), inArray(builds.status, ["queued", "running"])))
+      .returning();
+    if (!updated) return;
+    const deployment = await this.db.query.deployments.findFirst({
+      where: eq(deployments.id, build.deploymentId),
+    });
+    if (deployment) await wakeWorkflow(this.env, deployment, "build", { ok });
+  }
+
+  private async onLogs(nodeId: string, frame: Logs) {
+    const owner = await this.logOwner(nodeId, frame);
+    if (!owner) return;
+    const secrets = await this.redactions(owner);
+    const lines: LogLine[] = frame.lines.map((l) => ({ ...l, text: redact(l.text, secrets) }));
+    const workloadId = frame.source.type === "runtime" ? frame.source.workload_id : undefined;
+
+    const key = owner.deploymentId ? `d:${owner.deploymentId}` : `b:${owner.buildId}`;
+    let buffer = this.logBuffers.get(key);
+    if (!buffer) {
+      buffer = { owner, lines: [], bytes: 0 };
+      this.logBuffers.set(key, buffer);
+    }
+    for (const l of lines) {
+      buffer.lines.push(workloadId ? { ...l, workload_id: workloadId } : { ...l });
+      buffer.bytes += l.text.length + 64;
+    }
+    if (buffer.bytes >= LOG_FLUSH_BYTES) {
+      this.logBuffers.delete(key);
+      await this.writeChunk(buffer);
+    } else {
+      this.flushTimer ??= setTimeout(() => void this.flushLogs(), LOG_FLUSH_DELAY_MS);
+    }
+
+    try {
+      await projectRoom(this.env, owner.projectId).publishLogs(
+        owner.serviceId,
+        frame.source,
+        lines,
+      );
+    } catch (err) {
+      console.warn("log fan-out failed", err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  private lifecycle() {
+    return { db: this.db, env: this.env };
+  }
+
+  private greetedSocket(): WebSocket | undefined {
+    return this.ctx
+      .getWebSockets()
+      .find((ws) => (ws.deserializeAttachment() as Attachment).helloReceived);
+  }
+
+  /**
+   * Counts a frame against its per-second budget. Over-budget frames are
+   * dropped; a connection that keeps exceeding it is closed.
+   */
+  private admit(ws: WebSocket, a: Attachment, type: keyof typeof FRAME_RATE_LIMITS): boolean {
+    const now = Date.now();
+    if (now - a.windowStart >= RATE_WINDOW_MS) {
+      a.windowStart = now;
+      a.counts = {};
+    }
+    const count = (a.counts[type] ?? 0) + 1;
+    a.counts[type] = count;
+    if (count > FRAME_RATE_LIMITS[type]) {
+      a.dropped += 1;
+      ws.serializeAttachment(a);
+      if (a.dropped >= MAX_DROPPED_FRAMES) ws.close(CloseCode.policy, `${type} rate exceeded`);
+      return false;
+    }
+    ws.serializeAttachment(a);
+    return true;
+  }
+
+  /**
+   * Resolves (and caches) where a `logs` frame belongs, accepting only
+   * sources this node runs: its own placements or builds sent to it.
+   */
+  private async logOwner(nodeId: string, frame: Logs): Promise<LogOwner | null> {
+    const src = frame.source;
+    const key =
+      src.type === "runtime" ? `r:${src.workload_id}:${src.deployment_id}` : `b:${src.build_id}`;
+    const cached = this.owners.get(key);
+    if (cached && Date.now() - cached.at < LOOKUP_TTL_MS) return cached.owner;
+
+    let owner: LogOwner | null = null;
+    if (src.type === "runtime") {
+      const [row] = await this.db
+        .select({
+          projectId: services.projectId,
+          serviceId: deployments.serviceId,
+          environmentId: deployments.environmentId,
+        })
+        .from(placements)
+        .innerJoin(deployments, eq(deployments.id, placements.deploymentId))
+        .innerJoin(services, eq(services.id, deployments.serviceId))
+        .where(
+          and(
+            eq(placements.workloadId, src.workload_id),
+            eq(placements.deploymentId, src.deployment_id),
+            eq(placements.nodeId, nodeId),
+          ),
+        )
+        .limit(1);
+      if (row) owner = { ...row, deploymentId: src.deployment_id, buildId: null };
+    } else {
+      const [row] = await this.db
+        .select({
+          projectId: services.projectId,
+          serviceId: builds.serviceId,
+          environmentId: deployments.environmentId,
+        })
+        .from(builds)
+        .innerJoin(deployments, eq(deployments.id, builds.deploymentId))
+        .innerJoin(services, eq(services.id, builds.serviceId))
+        .where(and(eq(builds.id, src.build_id), eq(builds.nodeId, nodeId)))
+        .limit(1);
+      if (row) owner = { ...row, deploymentId: null, buildId: src.build_id };
+    }
+    if (this.owners.size > 1024) this.owners.clear();
+    this.owners.set(key, { owner, at: Date.now() });
+    return owner;
+  }
+
+  /** Secret values of the owner's service and its environment's shared scope. */
+  private async redactions(owner: LogOwner): Promise<string[]> {
+    const key = `${owner.serviceId}:${owner.environmentId}`;
+    const cached = this.secrets.get(key);
+    if (cached && Date.now() - cached.at < LOOKUP_TTL_MS) return cached.values;
+    const masterKey = this.env.MASTER_KEY?.trim();
+    let values: string[] = [];
+    if (masterKey) {
+      const dek = await projectKey(this.db, masterKey, owner.projectId);
+      const vars = await loadEnvironmentVariables(
+        this.db,
+        dek,
+        owner.projectId,
+        owner.environmentId,
+      );
+      const [svc] = await this.db
+        .select({ slug: services.slug })
+        .from(services)
+        .where(eq(services.id, owner.serviceId))
+        .limit(1);
+      values = redactionList([
+        ...(svc ? (vars.secrets[svc.slug] ?? []) : []),
+        ...vars.sharedSecrets,
+      ]);
+    }
+    if (this.secrets.size > 256) this.secrets.clear();
+    this.secrets.set(key, { values, at: Date.now() });
+    return values;
+  }
+
+  private async writeChunk(buffer: LogBuffer): Promise<void> {
+    if (!buffer.lines.length) return;
+    const { owner, lines } = buffer;
+    const id = newId("logChunk");
+    const firstTs = lines[0]!.ts;
+    const lastTs = lines[lines.length - 1]!.ts;
+    const r2Key = logChunkKey(owner.projectId, owner.serviceId, firstTs, id);
+    const body = toNdjson(lines);
+    try {
+      await this.env.LOGS.put(r2Key, body, {
+        httpMetadata: { contentType: "application/x-ndjson" },
+      });
+      await this.db.insert(logChunks).values({
+        id,
+        projectId: owner.projectId,
+        serviceId: owner.serviceId,
+        deploymentId: owner.deploymentId,
+        buildId: owner.buildId,
+        r2Key,
+        firstTs: new Date(Math.min(firstTs, lastTs)),
+        lastTs: new Date(Math.max(firstTs, lastTs)),
+        lineCount: lines.length,
+        bytes: new TextEncoder().encode(body).byteLength,
+      });
+    } catch (err) {
+      // Live lines already reached the dashboard; losing a stored chunk must
+      // not take the agent connection down with it.
+      console.error("log chunk write failed", r2Key, err);
+    }
+  }
+
+  private async sendDesiredState(ws: WebSocket, nodeId: string): Promise<boolean> {
+    const masterKey = this.env.MASTER_KEY?.trim();
+    if (!masterKey) {
+      ws.close(1011, "control plane misconfigured");
+      return false;
+    }
+    const body = await buildDesiredState(this.db, masterKey, nodeId);
+    if (!body) return false;
+    const now = Date.now();
+    const ttl = carriesCredentials(body) ? CREDENTIAL_FRAME_TTL_MS : CONTROL_TTL_MS;
+    await this.send(ws, { ...body, ...this.header(nodeId, now, ttl) });
+    return true;
+  }
+
+  private header(nodeId: string, now: number, ttl = CONTROL_TTL_MS) {
+    return { id: newId("message"), node_id: nodeId, iat: now, exp: now + ttl };
   }
 
   private async send(ws: WebSocket, message: ControlMessage): Promise<void> {
     const masterKey = this.env.MASTER_KEY;
     if (!masterKey) return ws.close(1011, "control plane misconfigured");
+    // The agent rejects malformed or over-long-lived frames anyway; checking
+    // here turns a silent agent-side rejection into a control-plane error.
+    const checked = ControlMessageSchema.parse(message);
     const key = await loadSigningKey(this.db, masterKey.trim());
-    ws.send(JSON.stringify(await signEnvelope(message, key.privateKey, key.kid)));
+    const frame = JSON.stringify(await signEnvelope(checked, key.privateKey, key.kid));
+    if (frame.length > MAX_CONTROL_FRAME_BYTES) {
+      throw new Error(`control frame of ${frame.length} bytes exceeds the agent's read limit`);
+    }
+    ws.send(frame);
   }
 }

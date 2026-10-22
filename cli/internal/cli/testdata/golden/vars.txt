@@ -1,0 +1,6 @@
+KEY            VALUE
+API_KEY        •••••••• (secret)
+DATABASE_URL   postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.OPENRAIL_PRIVATE_DOMAIN}}:${{db.PORT}}/shop
+LISTEN         0.0.0.0:${{PORT}}
+NODE_ENV       production
+REGION         ${{shared.REGION}}

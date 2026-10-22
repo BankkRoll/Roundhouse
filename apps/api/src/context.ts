@@ -219,3 +219,26 @@ export async function requireWorkspace(
 export function clientIp(c: AppContext): string | null {
   return c.req.header("cf-connecting-ip") ?? null;
 }
+
+/**
+ * Checks an install-wide action, which has no owning workspace: the caller
+ * must hold it in at least one live workspace (in practice, be an owner).
+ *
+ * @param c - Request context.
+ * @param action - Usually `instance:manage`.
+ * @returns The signed-in user.
+ * @throws {ApiError} 401 when signed out, 403 when no membership grants `action`.
+ */
+export async function requireInstanceAction(c: AppContext, action: Action): Promise<SessionUser> {
+  const user = await requireUser(c);
+  const rows = await c
+    .get("db")
+    .select({ role: workspaceMembers.role })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+    .where(and(eq(workspaceMembers.userId, user.id), isNull(workspaces.deletedAt)));
+  if (!rows.some((r) => can(r.role, action))) {
+    throw new ApiError(403, "forbidden", `Only workspace owners can perform ${action}`);
+  }
+  return user;
+}

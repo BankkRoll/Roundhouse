@@ -1,0 +1,22 @@
+{
+  "zen": "Keep it logically awesome.",
+  "hook_id": 498765432,
+  "hook": {
+    "type": "App",
+    "id": 498765432,
+    "name": "web",
+    "active": true,
+    "events": ["push"],
+    "config": {
+      "content_type": "json",
+      "insecure_ssl": "0",
+      "url": "https://cp.test/v1/webhooks/github"
+    },
+    "app_id": 1012345
+  },
+  "sender": {
+    "login": "mara",
+    "id": 4242,
+    "type": "User"
+  }
+}

@@ -1,20 +1,29 @@
 /**
  * Contract test: every response the MSW mocks produce must be one the real API declares.
  *
- * The API's routers (`apps/api/src/routes/*.ts`) are imported from source and their
- * OpenAPI registries read for each route's statuses and zod response schemas, the same
- * schemas that generate `/v1/openapi.json`. Each scenario below drives a mock handler
- * into a success or error case, and every response is checked for:
+ * Two sources define the API's routes, and both are read from the API source:
+ * - the mounted routers (`apps/api/src/routes/*.ts`), through their OpenAPI registries;
+ * - `PHASE1_ROUTES` in `apps/api/src/contracts.ts`, the deploy pipeline's route
+ *   definitions. They are checked directly, so the Phase 1 mocks are held to the
+ *   contract before (and regardless of whether) their API handlers are mounted.
+ *
+ * Both carry each route's statuses and zod response schemas, the same schemas that
+ * generate `/v1/openapi.json`. Each scenario below drives a mock handler into a success
+ * or error case, and every response is checked for:
  *
  * 1. a matching API route (method + path),
  * 2. a status that route declares,
  * 3. a body that passes the route's zod schema for that status.
  *
  * The test also requires a one-to-one mapping between mock handlers and API routes, and
- * that every handler was exercised. Changing a schema or a mock without the other fails.
+ * that every handler was exercised. Messages the mock realtime socket sends are checked
+ * against `RealtimeServerMessageSchema`. Changing a schema or a mock without the other
+ * fails.
  */
 import { JOIN_TOKEN_TTL_MS, type Role } from "@openrail/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PHASE1_ROUTES } from "../../../api/src/contracts";
+import { RealtimeServerMessageSchema } from "../../../api/src/schemas";
 import {
   db,
   INVITE_TOKEN,
@@ -26,6 +35,8 @@ import {
   USERS,
   WORKSPACE_ID,
 } from "./db";
+import { SEED } from "./deploy-db";
+import { realtimeSubscriptions, sentRealtimeMessages } from "./deploy-handlers";
 import { handlers } from "./handlers";
 
 // -----------------------------------------------------------------------------
@@ -48,7 +59,20 @@ interface ApiRoute {
   config: RouteConfig;
 }
 
-const ROUTE_MODULES = ["setup", "workspaces", "invites", "nodes", "audit"] as const;
+const ROUTE_MODULES = [
+  "setup",
+  "workspaces",
+  "invites",
+  "nodes",
+  "audit",
+  "projects",
+  "services",
+  "variables",
+  "deployments",
+  "github",
+  "instance",
+  "realtime",
+] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
   const modules = await Promise.all(
@@ -61,24 +85,29 @@ async function loadApiRoutes(): Promise<ApiRoute[]> {
         >,
     ),
   );
-  const routes: ApiRoute[] = [];
+  // NOTE: Keyed by method and path, so a Phase 1 route that later gets a mounted handler
+  // (and so also appears in a router's registry) is still one route, not two.
+  const routes = new Map<string, ApiRoute>();
+  const add = ({ method, path, ...rest }: RouteConfig) => {
+    const key = routeKey(method, path);
+    routes.set(key, {
+      key,
+      pattern: new RegExp(`^${path.replace(/\{[^}]+\}/g, "[^/]+")}$`),
+      config: { method, path, ...rest },
+    });
+  };
+  for (const route of Object.values(PHASE1_ROUTES)) add(route as unknown as RouteConfig);
   for (const module of modules) {
     for (const router of Object.values(module)) {
       const registry = (
         router as { openAPIRegistry?: { definitions: { type: string; route?: RouteConfig }[] } }
       ).openAPIRegistry;
       for (const definition of registry?.definitions ?? []) {
-        if (definition.type !== "route" || !definition.route) continue;
-        const { method, path } = definition.route;
-        routes.push({
-          key: routeKey(method, path),
-          pattern: new RegExp(`^${path.replace(/\{[^}]+\}/g, "[^/]+")}$`),
-          config: definition.route,
-        });
+        if (definition.type === "route" && definition.route) add(definition.route);
       }
     }
   }
-  return routes;
+  return [...routes.values()];
 }
 
 /** Normalises API paths (`/v1/x/{id}`) and MSW paths (`/v1/x/:id`, origin wildcard) alike. */
@@ -114,12 +143,23 @@ interface Call {
  * Sends a request through MSW and checks the response against the API's declaration.
  * Violations are collected rather than thrown so one run reports all of them.
  */
-async function call(method: string, path: string, body?: unknown): Promise<Call> {
+async function call(
+  method: string,
+  path: string,
+  body?: unknown,
+  init: { headers?: Record<string, string>; rawBody?: string } = {},
+): Promise<Call> {
   const url = new URL(path, window.location.origin);
+  const raw = init.rawBody ?? (body === undefined ? undefined : JSON.stringify(body));
   const response = await fetch(url, {
     method,
-    headers: body === undefined ? {} : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: {
+      ...(raw === undefined ? {} : { "content-type": "application/json" }),
+      ...init.headers,
+    },
+    body: raw,
+    // NOTE: The GitHub callback answers 302; the redirect itself is what is checked.
+    redirect: "manual",
   });
   const text = await response.text();
   const parsed: unknown = text ? JSON.parse(text) : undefined;
@@ -503,6 +543,643 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // Phase 1: checked against PHASE1_ROUTES whether or not handlers are mounted
+  // ---------------------------------------------------------------------------
+
+  it("projects: list, create, read, rename, delete", async () => {
+    await fresh(async () => {
+      const list = await call("GET", `${WS}/projects`);
+      expect((list.body as { projects: { name: string }[] }).projects.map((p) => p.name)).toEqual([
+        "internal-tools",
+        "storefront",
+      ]);
+      expect((await call("GET", `${OTHER_WS}/projects`)).status).toBe(404);
+      expect((await call("POST", `${WS}/projects`, { name: "" })).status).toBe(400);
+      expect(
+        await call("POST", `${WS}/projects`, { name: "Shop", slug: "Not A Slug" }),
+      ).toMatchObject({ status: 400, body: { error: { code: "invalid_request" } } });
+      const created = await call("POST", `${WS}/projects`, {
+        name: "Data Lake",
+        description: "ETL",
+      });
+      expect(created).toMatchObject({
+        status: 201,
+        body: { slug: "data-lake", environments: [{ kind: "production" }], services: [] },
+      });
+      expect(await call("POST", `${WS}/projects`, { name: "data lake" })).toMatchObject({
+        status: 409,
+        body: { error: { code: "conflict" } },
+      });
+      const id = (created.body as { id: string }).id;
+      expect((await call("GET", `/v1/projects/${id}`)).status).toBe(200);
+      expect((await call("GET", "/v1/projects/prj_nope")).status).toBe(404);
+      expect((await call("PATCH", `/v1/projects/${id}`, {})).status).toBe(400);
+      expect((await call("PATCH", `/v1/projects/${id}`, { slug: "storefront" })).status).toBe(409);
+      expect(
+        await call("PATCH", `/v1/projects/${id}`, { name: "Lake", description: null }),
+      ).toMatchObject({ status: 200, body: { name: "Lake", description: null } });
+
+      as("member");
+      expect((await call("GET", `/v1/projects/${id}`)).status).toBe(200);
+      expect((await call("POST", `${WS}/projects`, { name: "X" })).status).toBe(403);
+      expect((await call("PATCH", `/v1/projects/${id}`, { name: "Y" })).status).toBe(403);
+      expect((await call("DELETE", `/v1/projects/${id}`)).status).toBe(403);
+      as(null);
+      expect((await call("GET", `${WS}/projects`)).status).toBe(401);
+      expect((await call("POST", `${WS}/projects`, { name: "X" })).status).toBe(401);
+      expect((await call("GET", `/v1/projects/${id}`)).status).toBe(401);
+      expect((await call("PATCH", `/v1/projects/${id}`, { name: "Y" })).status).toBe(401);
+      expect((await call("DELETE", `/v1/projects/${id}`)).status).toBe(401);
+      as("viewer");
+      expect((await call("GET", `${WS}/projects`)).status).toBe(200);
+      as("admin");
+      expect((await call("DELETE", "/v1/projects/prj_nope")).status).toBe(404);
+      expect((await call("DELETE", `/v1/projects/${id}`)).status).toBe(204);
+      expect((await call("GET", `/v1/projects/${id}`)).status).toBe(404);
+      expect(db.audit.at(-1)).toMatchObject({ action: "project.deleted" });
+    });
+  });
+
+  it("environments", async () => {
+    await fresh(async () => {
+      const P = `/v1/projects/${SEED.project}`;
+      expect(await call("GET", `${P}/environments`)).toMatchObject({
+        status: 200,
+        body: { environments: [{ kind: "production" }] },
+      });
+      expect((await call("GET", "/v1/projects/prj_nope/environments")).status).toBe(404);
+      expect(
+        (await call("POST", `${P}/environments`, { name: "Prod 2", kind: "production" })).status,
+      ).toBe(400);
+      expect(
+        (await call("POST", `${P}/environments`, { name: "Staging", kind: "staging" })).status,
+      ).toBe(201);
+      expect(
+        (await call("POST", `${P}/environments`, { name: "staging", kind: "staging" })).status,
+      ).toBe(409);
+      as("member");
+      expect(
+        (await call("POST", `${P}/environments`, { name: "QA", kind: "staging" })).status,
+      ).toBe(403);
+      as(null);
+      expect((await call("GET", `${P}/environments`)).status).toBe(401);
+      expect(
+        (await call("POST", `${P}/environments`, { name: "QA", kind: "staging" })).status,
+      ).toBe(401);
+    });
+  });
+
+  it("services: create from both sources, read, update config versions, delete", async () => {
+    await fresh(async () => {
+      const P = `/v1/projects/${SEED.project}`;
+      expect((await call("GET", `${P}/services`)).status).toBe(200);
+      expect((await call("GET", "/v1/projects/prj_nope/services")).status).toBe(404);
+      expect(
+        (
+          await call("POST", `${P}/services`, {
+            name: "x",
+            source: { type: "image", image: "Not Valid!" },
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        await call("POST", `${P}/services`, {
+          name: "shared",
+          source: { type: "image", image: "nginx" },
+        }),
+      ).toMatchObject({ status: 400 });
+      const image = await call("POST", `${P}/services`, {
+        name: "Cache",
+        source: { type: "image", image: "redis:7" },
+        config: { networking: { port: 6379, generated_domain: false } },
+      });
+      expect(image).toMatchObject({
+        status: 201,
+        body: { service: { slug: "cache" }, configs: [{ version: 1, networking: { port: 6379 } }] },
+      });
+      const git = await call("POST", `${P}/services`, {
+        name: "docs",
+        source: {
+          type: "git",
+          repo_url: "https://github.com/acme/docs.git",
+          branch: "main",
+          root_dir: ".",
+        },
+        config: { networking: { port: 8080, generated_domain: true } },
+      });
+      expect(git.status).toBe(201);
+      expect(
+        (
+          await call("POST", `${P}/services`, {
+            name: "Cache",
+            source: { type: "image", image: "redis" },
+          })
+        ).status,
+      ).toBe(409);
+      const id = (image.body as { service: { id: string } }).service.id;
+      expect((await call("GET", `/v1/services/${id}`)).status).toBe(200);
+      expect((await call("GET", "/v1/services/svc_nope")).status).toBe(404);
+
+      const S = `/v1/services/${SEED.web}`;
+      const env = `environment_id=${SEED.production}`;
+      expect((await call("GET", `${S}/config`)).status).toBe(400);
+      expect(await call("GET", `${S}/config?${env}`)).toMatchObject({
+        status: 200,
+        body: { version: 3 },
+      });
+      expect(await call("GET", `${S}/config?${env}&version=1`)).toMatchObject({
+        body: { version: 1 },
+      });
+      expect((await call("GET", `${S}/config?${env}&version=99`)).status).toBe(404);
+      expect((await call("GET", `${S}/config?environment_id=env_nope`)).status).toBe(404);
+
+      expect((await call("PATCH", S, { deploy: { replicas: 3 } })).status).toBe(400);
+      expect(
+        (await call("PATCH", S, { environment_id: SEED.production, deploy: { replicas: 99 } }))
+          .status,
+      ).toBe(400);
+      expect(
+        await call("PATCH", S, {
+          environment_id: SEED.production,
+          healthcheck: { type: "http", interval_s: 5, timeout_s: 2, retries: 3, start_period_s: 0 },
+        }),
+      ).toMatchObject({
+        status: 400,
+        body: { error: { message: expect.stringMatching(/^healthcheck\.path/) } },
+      });
+      expect(
+        await call("PATCH", S, {
+          environment_id: SEED.production,
+          expected_version: 2,
+          deploy: { replicas: 3 },
+        }),
+      ).toMatchObject({ status: 409, body: { error: { code: "conflict" } } });
+      expect(
+        await call("PATCH", S, {
+          environment_id: SEED.production,
+          expected_version: 3,
+          deploy: { replicas: 3 },
+        }),
+      ).toMatchObject({
+        status: 200,
+        body: { config: { version: 4, deploy: { replicas: 3, drain_s: 10 } } },
+      });
+      expect(await call("PATCH", S, { name: "storefront-web" })).toMatchObject({
+        status: 200,
+        body: { service: { name: "storefront-web" }, config: null },
+      });
+      expect((await call("PATCH", S, { slug: "api" })).status).toBe(409);
+      expect((await call("PATCH", "/v1/services/svc_nope", { name: "x" })).status).toBe(404);
+
+      as("viewer");
+      expect((await call("GET", S)).status).toBe(200);
+      expect((await call("GET", `${S}/config?${env}`)).status).toBe(200);
+      expect((await call("PATCH", S, { name: "nope" })).status).toBe(403);
+      expect((await call("DELETE", S)).status).toBe(403);
+      expect(
+        (
+          await call("POST", `${P}/services`, {
+            name: "v",
+            source: { type: "image", image: "nginx" },
+          })
+        ).status,
+      ).toBe(403);
+      as(null);
+      expect((await call("GET", `${P}/services`)).status).toBe(401);
+      expect((await call("GET", S)).status).toBe(401);
+      expect((await call("GET", `${S}/config?${env}`)).status).toBe(401);
+      expect((await call("PATCH", S, { name: "x" })).status).toBe(401);
+      expect((await call("DELETE", S)).status).toBe(401);
+      expect(
+        (
+          await call("POST", `${P}/services`, {
+            name: "v",
+            source: { type: "image", image: "nginx" },
+          })
+        ).status,
+      ).toBe(401);
+      as("member");
+      expect((await call("DELETE", "/v1/services/svc_nope")).status).toBe(404);
+      expect((await call("DELETE", `/v1/services/${id}`)).status).toBe(204);
+      expect((await call("GET", `/v1/services/${id}`)).status).toBe(404);
+    });
+  });
+
+  it.each([
+    ["service", `/v1/services/${SEED.web}/variables`],
+    ["shared", `/v1/projects/${SEED.project}/variables`],
+  ])("%s variables: masked list, put with reference checks, audited reveal", async (_, V) => {
+    await fresh(async () => {
+      const env = `?environment_id=${SEED.production}`;
+      expect((await call("GET", V)).status).toBe(400);
+      expect((await call("GET", `${V}?environment_id=env_nope`)).status).toBe(404);
+      const list = await call("GET", `${V}${env}`);
+      expect(list.status).toBe(200);
+      const variables = (list.body as { variables: { is_secret: boolean; value: string | null }[] })
+        .variables;
+      expect(variables.filter((v) => v.is_secret).every((v) => v.value === null)).toBe(true);
+
+      expect((await call("PUT", `${V}${env}`, { set: [{ key: "1BAD", value: "x" }] })).status).toBe(
+        400,
+      );
+      expect(
+        (await call("PUT", `${V}${env}`, { set: [{ key: "A", value: "x" }], delete: ["A"] }))
+          .status,
+      ).toBe(400);
+      expect(
+        await call("PUT", `${V}${env}`, {
+          set: [
+            { key: "OK", value: "1" },
+            { key: "B", value: "${{ bad ref" },
+          ],
+        }),
+      ).toMatchObject({
+        status: 400,
+        body: {
+          error: {
+            code: "invalid_reference",
+            message: expect.stringMatching(/^B: .*\(at 0-11\)$/),
+            details: [{ field: "B", code: "unclosed_reference", start: 0, end: 11 }],
+          },
+        },
+      });
+      const put = await call("PUT", `${V}${env}`, {
+        set: [
+          { key: "TOKEN", value: "t0p", is_secret: true },
+          { key: "PLAIN", value: `\${{shared.REGION}}` },
+        ],
+        delete: ["NODE_ENV"],
+      });
+      expect(put.status).toBe(200);
+      expect(
+        (put.body as { variables: { key: string; value: string | null }[] }).variables,
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "TOKEN", value: null, is_secret: true }),
+          expect.objectContaining({ key: "PLAIN", value: `\${{shared.REGION}}` }),
+        ]),
+      );
+      expect((await call("POST", `${V}/reveal${env}`, { keys: [] })).status).toBe(400);
+      expect(await call("POST", `${V}/reveal${env}`, { keys: ["TOKEN"] })).toMatchObject({
+        status: 200,
+        body: { variables: [{ key: "TOKEN", value: "t0p" }] },
+      });
+      expect(db.audit.at(-1)).toMatchObject({
+        action: "variables.revealed",
+        metadata: { keys: ["TOKEN"] },
+      });
+      expect(JSON.stringify(db.audit.at(-1))).not.toContain("t0p");
+
+      as("member");
+      expect((await call("PUT", `${V}${env}`, { set: [{ key: "M", value: "1" }] })).status).toBe(
+        200,
+      );
+      expect((await call("POST", `${V}/reveal${env}`, { keys: ["TOKEN"] })).status).toBe(403);
+      as("viewer");
+      expect((await call("GET", `${V}${env}`)).status).toBe(200);
+      expect((await call("PUT", `${V}${env}`, { set: [] })).status).toBe(403);
+      as(null);
+      expect((await call("GET", `${V}${env}`)).status).toBe(401);
+      expect((await call("PUT", `${V}${env}`, { set: [] })).status).toBe(401);
+      expect((await call("POST", `${V}/reveal${env}`, { keys: ["TOKEN"] })).status).toBe(401);
+    });
+  });
+
+  it("deployments: page, deploy, detail, rollback, cancel", async () => {
+    await fresh(async () => {
+      const S = `/v1/services/${SEED.web}`;
+      const env = `environment_id=${SEED.production}`;
+      expect((await call("GET", `${S}/deployments`)).status).toBe(400);
+      expect((await call("GET", `${S}/deployments?${env}&limit=101`)).status).toBe(400);
+      const first = await call("GET", `${S}/deployments?${env}&limit=2`);
+      const page = first.body as { deployments: { id: string }[]; next_cursor: string | null };
+      expect(page.deployments.map((d) => d.id)).toEqual([SEED.webActive, SEED.webFailed]);
+      expect(page.next_cursor).toBe(SEED.webFailed);
+      expect(await call("GET", `${S}/deployments?${env}&cursor=${SEED.webFailed}`)).toMatchObject({
+        body: { deployments: [{ id: SEED.webOld }, { id: SEED.webFirst }], next_cursor: null },
+      });
+
+      expect((await call("POST", `${S}/deployments?${env}`, { commit_sha: "abc" })).status).toBe(
+        400,
+      );
+      const created = await call("POST", `${S}/deployments?${env}`, {});
+      expect(created).toMatchObject({
+        status: 201,
+        body: { status: "queued", trigger: "manual", build: { status: "queued" } },
+      });
+      const image = await call("POST", `/v1/services/${SEED.api}/deployments?${env}`, {});
+      expect(image).toMatchObject({
+        status: 201,
+        body: { build: null, image: "ghcr.io/acme/api:1.4.2" },
+      });
+      await call("PATCH", `/v1/services/${SEED.api}`, {
+        environment_id: SEED.production,
+        deploy: { replicas: 0 },
+      });
+      expect((await call("POST", `/v1/services/${SEED.api}/deployments?${env}`, {})).status).toBe(
+        409,
+      );
+
+      expect(await call("GET", `/v1/deployments/${SEED.webActive}`)).toMatchObject({
+        status: 200,
+        body: { events: expect.any(Array), placements: [{ replica: 0 }, { replica: 1 }] },
+      });
+      expect((await call("GET", "/v1/deployments/dep_nope")).status).toBe(404);
+
+      expect((await call("POST", `/v1/deployments/${SEED.webFailed}/rollback`)).status).toBe(409);
+      expect(await call("POST", `/v1/deployments/${SEED.webOld}/rollback`)).toMatchObject({
+        status: 201,
+        body: { trigger: "rollback", rollback_of: SEED.webOld, build_id: null },
+      });
+      const createdId = (created.body as { id: string }).id;
+      expect(await call("POST", `/v1/deployments/${createdId}/cancel`)).toMatchObject({
+        status: 200,
+        body: { status: "cancelled" },
+      });
+      expect((await call("POST", `/v1/deployments/${createdId}/cancel`)).status).toBe(409);
+      expect((await call("POST", "/v1/deployments/dep_nope/cancel")).status).toBe(404);
+      expect((await call("POST", "/v1/deployments/dep_nope/rollback")).status).toBe(404);
+
+      as("viewer");
+      expect((await call("GET", `${S}/deployments?${env}`)).status).toBe(200);
+      expect((await call("POST", `${S}/deployments?${env}`, {})).status).toBe(403);
+      expect((await call("POST", `/v1/deployments/${SEED.webOld}/rollback`)).status).toBe(403);
+      expect((await call("POST", `/v1/deployments/${SEED.workerDeploying}/cancel`)).status).toBe(
+        403,
+      );
+      as(null);
+      expect((await call("GET", `${S}/deployments?${env}`)).status).toBe(401);
+      expect((await call("POST", `${S}/deployments?${env}`, {})).status).toBe(401);
+      expect((await call("GET", `/v1/deployments/${SEED.webActive}`)).status).toBe(401);
+      expect((await call("POST", `/v1/deployments/${SEED.webOld}/rollback`)).status).toBe(401);
+      expect((await call("POST", `/v1/deployments/${SEED.workerDeploying}/cancel`)).status).toBe(
+        401,
+      );
+    });
+  });
+
+  it("logs: newest page first, chronological, with a cursor to older lines", async () => {
+    await fresh(async () => {
+      const D = `/v1/deployments/${SEED.webActive}/logs`;
+      expect((await call("GET", `${D}?limit=0`)).status).toBe(400);
+      expect((await call("GET", `${D}?limit=1001`)).status).toBe(400);
+      const newest = await call("GET", `${D}?limit=100`);
+      const page = newest.body as { lines: { ts: number }[]; next_cursor: string | null };
+      expect(page.lines).toHaveLength(100);
+      expect(page.lines[0]!.ts).toBeLessThan(page.lines[99]!.ts);
+      const older = await call("GET", `${D}?limit=1000&cursor=${page.next_cursor}`);
+      const olderPage = older.body as { lines: { ts: number }[]; next_cursor: string | null };
+      expect(olderPage.lines).toHaveLength(350);
+      expect(olderPage.lines.at(-1)!.ts).toBeLessThan(page.lines[0]!.ts);
+      expect(olderPage.next_cursor).toBeNull();
+      expect((await call("GET", "/v1/deployments/dep_nope/logs")).status).toBe(404);
+
+      const B = `/v1/builds/${SEED.webBuild}/logs`;
+      expect(await call("GET", B)).toMatchObject({ status: 200, body: { next_cursor: null } });
+      expect((await call("GET", `${B}?limit=nope`)).status).toBe(400);
+      expect((await call("GET", "/v1/builds/bld_nope/logs")).status).toBe(404);
+      as("viewer");
+      expect((await call("GET", D)).status).toBe(200);
+      as(null);
+      expect((await call("GET", D)).status).toBe(401);
+      expect((await call("GET", B)).status).toBe(401);
+      db.memberships = db.memberships.filter((row) => row.user_id !== USERS.viewer.id);
+      as("viewer");
+      expect((await call("GET", D)).status).toBe(404);
+    });
+  });
+
+  it("domains", async () => {
+    await fresh(async () => {
+      const S = `/v1/services/${SEED.web}/domains`;
+      expect(await call("GET", S)).toMatchObject({
+        status: 200,
+        body: {
+          domains: [{ type: "generated", hostname: expect.stringMatching(/apps\.example\.com$/) }],
+        },
+      });
+      expect(await call("GET", `${S}?environment_id=env_other`)).toMatchObject({
+        body: { domains: [] },
+      });
+      expect((await call("GET", "/v1/services/svc_nope/domains")).status).toBe(404);
+      as(null);
+      expect((await call("GET", S)).status).toBe(401);
+    });
+  });
+
+  it("instance settings: owners only", async () => {
+    await fresh(async () => {
+      expect(await call("GET", "/v1/instance/settings")).toMatchObject({
+        status: 200,
+        body: { apps_domain: "apps.example.com", tls_mode: "acme" },
+      });
+      expect((await call("PATCH", "/v1/instance/settings", {})).status).toBe(400);
+      expect(
+        (await call("PATCH", "/v1/instance/settings", { apps_domain: "Not A Host" })).status,
+      ).toBe(400);
+      expect((await call("PATCH", "/v1/instance/settings", { tls_mode: "maybe" })).status).toBe(
+        400,
+      );
+      expect(
+        await call("PATCH", "/v1/instance/settings", {
+          apps_domain: "127.0.0.1.nip.io",
+          tls_mode: "internal",
+        }),
+      ).toMatchObject({
+        status: 200,
+        body: { apps_domain: "127.0.0.1.nip.io", tls_mode: "internal" },
+      });
+      expect(await call("PATCH", "/v1/instance/settings", { apps_domain: null })).toMatchObject({
+        body: { apps_domain: null },
+      });
+      as("admin");
+      expect((await call("GET", "/v1/instance/settings")).status).toBe(403);
+      expect((await call("PATCH", "/v1/instance/settings", { tls_mode: "off" })).status).toBe(403);
+      as(null);
+      expect((await call("GET", "/v1/instance/settings")).status).toBe(401);
+      expect((await call("PATCH", "/v1/instance/settings", { tls_mode: "off" })).status).toBe(401);
+    });
+  });
+
+  it("GitHub App: status, manifest, callback, repositories", async () => {
+    await fresh(async () => {
+      const status = `/v1/github/status?workspace_id=${WORKSPACE_ID}`;
+      expect((await call("GET", "/v1/github/status")).status).toBe(400);
+      expect(await call("GET", status)).toMatchObject({
+        status: 200,
+        body: { configured: true, installations: [{ account_login: "acme" }] },
+      });
+      expect((await call("GET", "/v1/github/status?workspace_id=ws_other")).status).toBe(404);
+      expect(
+        (await call("POST", "/v1/github/manifest", { workspace_id: WORKSPACE_ID })).status,
+      ).toBe(409);
+      const repos = await call("GET", `/v1/github/repositories?workspace_id=${WORKSPACE_ID}`);
+      expect((repos.body as { repositories: unknown[] }).repositories).toHaveLength(3);
+      expect(
+        await call(
+          "GET",
+          `/v1/github/repositories?workspace_id=${WORKSPACE_ID}&installation_id=ghi_other`,
+        ),
+      ).toMatchObject({ body: { repositories: [] } });
+      expect((await call("GET", "/v1/github/repositories")).status).toBe(400);
+      expect((await call("GET", "/v1/github/repositories?workspace_id=ws_other")).status).toBe(404);
+
+      db.deploy.github.app = null;
+      expect(
+        (
+          await call("POST", "/v1/github/manifest", {
+            workspace_id: WORKSPACE_ID,
+            organization: "-bad",
+          })
+        ).status,
+      ).toBe(400);
+      const manifest = await call("POST", "/v1/github/manifest", {
+        workspace_id: WORKSPACE_ID,
+        organization: "acme",
+      });
+      expect(manifest).toMatchObject({
+        status: 200,
+        body: { post_url: expect.stringMatching(/^https:\/\/github\.com\/organizations\/acme\//) },
+      });
+      const { state } = manifest.body as { state: string };
+      expect((await call("GET", "/v1/github/callback")).status).toBe(400);
+      expect((await call("GET", "/v1/github/callback?state=nope&code=x")).status).toBe(400);
+      const created = await call("GET", `/v1/github/callback?state=${state}&code=abc`);
+      expect(created.status).toBe(302);
+      expect(db.deploy.github.app).not.toBeNull();
+      expect(db.audit.at(-1)).toMatchObject({ action: "github.app_created" });
+      db.deploy.github.states.push({
+        state: "ins",
+        workspace_id: WORKSPACE_ID,
+        expires_at: Date.now() + 60_000,
+      });
+      expect((await call("GET", "/v1/github/callback?state=ins")).status).toBe(400);
+      expect(
+        (await call("GET", "/v1/github/callback?state=ins&installation_id=77&setup_action=install"))
+          .status,
+      ).toBe(302);
+      expect(db.audit.at(-1)).toMatchObject({ action: "github.installation_added" });
+
+      as("member");
+      expect((await call("GET", status)).status).toBe(200);
+      expect(
+        (await call("GET", `/v1/github/repositories?workspace_id=${WORKSPACE_ID}`)).status,
+      ).toBe(200);
+      expect((await call("GET", "/v1/github/callback?state=ins&installation_id=78")).status).toBe(
+        403,
+      );
+      as("viewer");
+      expect(
+        (await call("GET", `/v1/github/repositories?workspace_id=${WORKSPACE_ID}`)).status,
+      ).toBe(403);
+      expect(
+        (await call("POST", "/v1/github/manifest", { workspace_id: WORKSPACE_ID })).status,
+      ).toBe(403);
+      as(null);
+      expect((await call("GET", status)).status).toBe(401);
+      expect(
+        (await call("POST", "/v1/github/manifest", { workspace_id: WORKSPACE_ID })).status,
+      ).toBe(401);
+      expect((await call("GET", "/v1/github/callback?state=ins&code=x")).status).toBe(401);
+      expect(
+        (await call("GET", `/v1/github/repositories?workspace_id=${WORKSPACE_ID}`)).status,
+      ).toBe(401);
+    });
+  });
+
+  it("GitHub webhooks: verify the signature, then deploy services tracking the branch", async () => {
+    await fresh(async () => {
+      const payload = JSON.stringify({
+        ref: "refs/heads/main",
+        after: "f".repeat(40),
+        repository: { clone_url: "https://github.com/acme/storefront.git" },
+      });
+      const headers = (signature: string) => ({
+        "x-github-event": "push",
+        "x-github-delivery": "d-1",
+        "x-hub-signature-256": signature,
+      });
+      expect(
+        (
+          await call("POST", "/v1/webhooks/github", undefined, {
+            rawBody: payload,
+            headers: { "x-github-event": "push" },
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await call("POST", "/v1/webhooks/github", undefined, {
+            rawBody: payload,
+            headers: headers(`sha256=${"0".repeat(64)}`),
+          })
+        ).status,
+      ).toBe(401);
+      const signature = `sha256=${await hmac(db.deploy.github.webhookSecret, payload)}`;
+      const before = db.deploy.deployments.length;
+      as(null);
+      expect(
+        (
+          await call("POST", "/v1/webhooks/github", undefined, {
+            rawBody: payload,
+            headers: headers(signature),
+          })
+        ).status,
+      ).toBe(202);
+      expect(db.deploy.deployments.length).toBe(before + 1);
+      expect(db.deploy.deployments.at(-1)).toMatchObject({ trigger: "push", service_id: SEED.web });
+    });
+  });
+
+  it("realtime: refuses plain HTTP, and its socket messages match the schema", async () => {
+    await fresh(async () => {
+      const R = `/v1/projects/${SEED.project}/realtime`;
+      expect(await call("GET", R)).toMatchObject({
+        status: 426,
+        body: { error: { code: "upgrade_required" } },
+      });
+      expect((await call("GET", "/v1/projects/prj_nope/realtime")).status).toBe(404);
+
+      const url = new URL(R, window.location.origin);
+      url.protocol = "ws:";
+      const socket = new WebSocket(url);
+      const received: unknown[] = [];
+      socket.onmessage = (event) => received.push(JSON.parse(String(event.data)));
+      await new Promise((resolve) => socket.addEventListener("open", resolve, { once: true }));
+      socket.send(
+        JSON.stringify({
+          type: "subscribe",
+          topic: { kind: "deployment_logs", deployment_id: SEED.webActive },
+        }),
+      );
+      await expect
+        .poll(() => realtimeSubscriptions(SEED.project))
+        .toEqual([`deployment_logs:${SEED.webActive}`]);
+      await call(
+        "POST",
+        `/v1/services/${SEED.web}/deployments?environment_id=${SEED.production}`,
+        {},
+      );
+      await call("PATCH", `/v1/services/${SEED.web}`, { name: "web-2" });
+      await expect
+        .poll(() => received.map((m) => (m as { type: string }).type))
+        .toEqual(["presence", "deployment.updated", "service.updated"]);
+      socket.close();
+
+      as(null);
+      expect((await call("GET", R)).status).toBe(401);
+      as("viewer");
+      expect((await call("GET", R)).status).toBe(426);
+      for (const message of sentRealtimeMessages) {
+        const result = RealtimeServerMessageSchema.safeParse(message);
+        if (!result.success)
+          failures.push(`realtime ${JSON.stringify(message)}: ${result.error.message}`);
+      }
+      expect(sentRealtimeMessages.length).toBeGreaterThanOrEqual(3);
+    });
+  });
+
   it("produced only responses the API declares", () => {
     expect(failures).toEqual([]);
   });
@@ -523,7 +1200,28 @@ describe("MSW mocks match the API contract", () => {
     expect(schema?.safeParse({ ...makeNode(), provider: "server" }).success).toBe(true);
     expect(schema?.safeParse({ ...makeNode(), provider: null }).success).toBe(false);
   });
+
+  it("catches drift in Phase 1 schemas too", () => {
+    const route = apiRoutes.find((candidate) => candidate.key === "GET /v1/deployments/{}");
+    const schema = route?.config.responses["200"]?.content?.["application/json"]?.schema;
+    const deployment = db.deploy.deployments.find((row) => row.id === SEED.webActive);
+    const valid = { ...deployment, build: null, events: [], placements: [] };
+    expect(schema?.safeParse(valid).success).toBe(true);
+    expect(schema?.safeParse({ ...valid, status: "exploded" }).success).toBe(false);
+  });
 });
+
+async function hmac(secret: string, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+  return [...new Uint8Array(signature)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 interface JoinTokenBody {
   token: string;

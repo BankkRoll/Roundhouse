@@ -1,0 +1,12 @@
+{
+  "path": "{{DIR}}/.roundhouse/config.json",
+  "link": {
+    "url": "{{URL}}",
+    "workspace_id": "ws_acme",
+    "project_id": "prj_0004",
+    "environment_id": "env_0005",
+    "project_name": "Blog",
+    "environment_name": "production"
+  },
+  "gitignore": "skipped"
+}

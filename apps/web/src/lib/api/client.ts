@@ -11,6 +11,7 @@ import type {
   AcceptInviteRequest,
   AcceptInviteResponse,
   ApiErrorBody,
+  ApiErrorDetail,
   AuditLogPage,
   CreateInviteResponse,
   Invite,
@@ -39,11 +40,13 @@ export class ApiError extends Error {
    * @param status - HTTP status, or 0 when the request never got a response.
    * @param code - Machine-readable error code from the API.
    * @param message - Human-readable message, safe to show to the user.
+   * @param details - Per-field problems, when the API reports them.
    */
   constructor(
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly details: readonly ApiErrorDetail[] = [],
   ) {
     super(message);
   }
@@ -127,7 +130,12 @@ async function readError(response: Response): Promise<ApiError> {
     body = undefined;
   }
   if (isEnvelope(body)) {
-    return new ApiError(response.status, body.error.code, body.error.message);
+    return new ApiError(
+      response.status,
+      body.error.code,
+      body.error.message,
+      Array.isArray(body.error.details) ? body.error.details : [],
+    );
   }
   if (isBetterAuthError(body)) {
     return new ApiError(

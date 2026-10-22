@@ -54,12 +54,13 @@ describe("phase 1 contracts", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("does not collide with routes the app already serves", () => {
+  it("is served by the app, policy included, for every route", () => {
     const live = app.getOpenAPI31Document({ openapi: "3.1.0", info: { title: "t", version: "0" } });
     for (const [, route] of routes) {
-      const openapiPath = route.path;
-      const item = live.paths?.[openapiPath] as Record<string, unknown> | undefined;
-      expect(item?.[route.method], `${route.method} ${route.path}`).toBeUndefined();
+      const item = live.paths?.[route.path] as Record<string, Record<string, unknown>> | undefined;
+      const op = item?.[route.method];
+      expect(op, `${route.method} ${route.path}`).toBeDefined();
+      expect(op?.[POLICY_KEY]).toEqual(policyOf(route));
     }
   });
 

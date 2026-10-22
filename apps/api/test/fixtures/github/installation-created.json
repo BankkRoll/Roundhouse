@@ -1,0 +1,47 @@
+{
+  "action": "created",
+  "installation": {
+    "id": 55501234,
+    "client_id": "Iv23liAbCdEfGh123456",
+    "account": {
+      "login": "acme",
+      "id": 9919,
+      "node_id": "O_kgDOAAAmrw",
+      "type": "Organization",
+      "site_admin": false
+    },
+    "repository_selection": "selected",
+    "access_tokens_url": "https://api.github.com/app/installations/55501234/access_tokens",
+    "repositories_url": "https://api.github.com/installation/repositories",
+    "html_url": "https://github.com/organizations/acme/settings/installations/55501234",
+    "app_id": 1012345,
+    "app_slug": "openrail-cp-a1b2c3",
+    "target_id": 9919,
+    "target_type": "Organization",
+    "permissions": {
+      "contents": "read",
+      "metadata": "read",
+      "pull_requests": "write",
+      "statuses": "write"
+    },
+    "events": ["push"],
+    "created_at": "2026-10-22T12:58:03.000Z",
+    "updated_at": "2026-10-22T12:58:03.000Z",
+    "suspended_at": null
+  },
+  "repositories": [
+    {
+      "id": 812345678,
+      "node_id": "R_kgDOMG3Xzg",
+      "name": "api",
+      "full_name": "acme/api",
+      "private": true
+    }
+  ],
+  "requester": null,
+  "sender": {
+    "login": "mara",
+    "id": 4242,
+    "type": "User"
+  }
+}

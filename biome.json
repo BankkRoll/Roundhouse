@@ -6,6 +6,7 @@
       "**",
       "!.agents",
       "!pnpm-lock.yaml",
+      "!**/testdata",
       "!**/routeTree.gen.ts",
       "!**/migrations",
       "!**/worker-configuration.d.ts",

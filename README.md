@@ -34,9 +34,8 @@ Requires Node 22.19+, pnpm 10, Go 1.26.
 
 ```sh
 pnpm install
-cp apps/api/.dev.vars.example apps/api/.dev.vars   # fill in MASTER_KEY
-pnpm --filter @openrail/api db:migrate:local
-pnpm dev                                           # API :8787, dashboard :5173
+pnpm setup:dev                                     # creates MASTER_KEY, migrates the local DB
+pnpm dev                                           # API :8787, dashboard :5173, site :5174
 ```
 
 ```sh
@@ -52,6 +51,7 @@ pnpm --filter @openrail/e2e test:browser           # browser end-to-end
 | ------------------- | -------------------------------------- |
 | `apps/api`          | Control plane Worker                   |
 | `apps/web`          | Dashboard                              |
+| `landing`           | Public site, published to GitHub Pages |
 | `agent`             | Node agent (Go)                        |
 | `install`           | Server install script and systemd unit |
 | `packages/protocol` | Control plane ↔ agent wire protocol    |

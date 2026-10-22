@@ -47,3 +47,15 @@ export function assignableRoles(role: Role | undefined, all: readonly Role[]): R
   if (!role || !can(role, "members:manage")) return [];
   return role === "owner" ? [...all] : all.filter((candidate) => candidate !== "owner");
 }
+
+/**
+ * Whether the caller may change install-wide settings (apps domain, TLS, the GitHub App).
+ * Instances have no roles of their own; the API grants `instance:manage` to anyone who
+ * owns some workspace.
+ *
+ * @param me - `/v1/me`, or `undefined` while loading.
+ * @returns `true` when the caller holds `instance:manage` in any workspace.
+ */
+export function canManageInstance(me: Pick<Me, "workspaces"> | undefined): boolean {
+  return me?.workspaces.some((workspace) => can(workspace.role, "instance:manage")) ?? false;
+}
