@@ -242,6 +242,62 @@ func TestProvisionReadonlyGetsTheContainersPassword(t *testing.T) {
 	}
 }
 
+// setPasswordQuery turns the fixture into a set_password whose sealed
+// credential carries newPassword.
+func setPasswordQuery(t *testing.T, m *protocol.DBQuery, nodeID, mode, newPassword string) *protocol.DBQuery {
+	t.Helper()
+	q := *m
+	q.Mode, q.Op = mode, protocol.DBOp{Type: protocol.DBOpSetPassword, User: "app"}
+	body, _ := json.Marshal(protocol.SealedDBCredential{Username: "root", Password: "admin-secret", NewPassword: newPassword})
+	box, err := protocol.SealBox(sealtest.Key().PublicKey(), body, protocol.BoxPurposeDBCredential, protocol.DBCredentialAAD(nodeID, q.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.CredentialSealed = *box
+	return &q
+}
+
+func TestSetPasswordGetsTheNewPasswordAndAppUser(t *testing.T) {
+	_, nodeID := fixtureQuery(t)
+	r := &fakeRunner{}
+	h, out, m := newHandler(t, nodeID, r)
+	h.opts.Docker = fakeInspector{"ctr_db": {"MYSQL_DATABASE=app", "MYSQL_USER=app", "ROUNDHOUSE_RO_PASSWORD=ro-secret"}}
+	const pw = "Nw-pass_0123456789.abcdefghij~XYZ"
+	q := setPasswordQuery(t, m, nodeID, "write", pw)
+	q.Engine = protocol.EngineMySQL
+	h.RunQuery(q)
+	if res := out.query(t, q.RequestID); !res.OK {
+		t.Fatalf("result %+v", res)
+	}
+	c := r.calls[0]
+	if c.cred.NewPassword != pw || c.cred.Username != "root" || c.cred.ReadonlyPassword != "" {
+		t.Fatalf("credential %+v", c.cred)
+	}
+	if c.target.AppUser != "app" || c.target.Database != "app" {
+		t.Fatalf("target %+v", c.target)
+	}
+	if !h.SetsPasswords() {
+		t.Fatal("a node with a query runner does not advertise set_password")
+	}
+}
+
+func TestSetPasswordAsTheReaderIsRefused(t *testing.T) {
+	_, nodeID := fixtureQuery(t)
+	r := &fakeRunner{}
+	h, out, m := newHandler(t, nodeID, r)
+	q := setPasswordQuery(t, m, nodeID, "read", "Nw-pass_0123456789.abcdefghij~XYZ")
+	h.RunQuery(q)
+	if res := out.query(t, q.RequestID); res.OK || !strings.Contains(res.Error, "admin") {
+		t.Fatalf("result %+v", res)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("runner called: %+v", r.calls)
+	}
+	if New(Options{}).SetsPasswords() {
+		t.Fatal("a node without a query runner advertises set_password")
+	}
+}
+
 func TestBackupFramesWithoutARunnerFail(t *testing.T) {
 	leaktest.Check(t)
 	out := &results{}

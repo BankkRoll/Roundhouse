@@ -27,13 +27,20 @@ const (
 	adminPassword = "admin-Pw_0123456789abcdefghijklmnopqrstuvwxyz"
 	roPassword    = "ro-Pw_0123456789abcdefghijklmnopqrstuvwxyzABC"
 	readyTimeout  = 3 * time.Minute
+
+	// The set_password tests rotate to these.
+	appPassword      = "app-Pw_0123456789abcdefghijklmnopqrstuvwxyz"
+	newAdminPassword = "new.admin~Pw_0123456789abcdefghijklmnopqrstu"
+	newROPassword    = "new.ro~Pw_0123456789abcdefghijklmnopqrstuvwxy"
+	newAppPassword   = "new.app~Pw_0123456789abcdefghijklmnopqrstuvwx"
 )
 
 type engineEnv struct {
-	r      *dbquery.Runner
-	target dbquery.Target
-	admin  dbquery.Credential
-	ro     dbquery.Credential
+	r         *dbquery.Runner
+	container string
+	target    dbquery.Target
+	admin     dbquery.Credential
+	ro        dbquery.Credential
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -55,7 +62,7 @@ func (e *engineEnv) run(t *testing.T, cred dbquery.Credential, mode string, op p
 		t.Fatalf("invalid result %+v: %v", res, err)
 	}
 	b, _ := json.Marshal(res)
-	for _, pw := range []string{adminPassword, roPassword} {
+	for _, pw := range []string{adminPassword, roPassword, appPassword, newAdminPassword, newROPassword, newAppPassword} {
 		if strings.Contains(string(b), pw) {
 			t.Fatalf("result carries a password: %s", b)
 		}
@@ -112,8 +119,9 @@ func start(t *testing.T, c *docker.Client, network, engine string, port int, spe
 	spec.HostConfig.NetworkMode = network
 	id := dockertest.Run(t, c, dockertest.Unique("roundhouse-it-dbq-"+engine+"-"), spec)
 	return &engineEnv{
-		r:      dbquery.New(dbquery.Options{}),
-		target: dbquery.Target{Engine: engine, Host: dockertest.IP(t, c, id, network), Port: port},
+		r:         dbquery.New(dbquery.Options{}),
+		container: id,
+		target:    dbquery.Target{Engine: engine, Host: dockertest.IP(t, c, id, network), Port: port},
 	}
 }
 
@@ -432,4 +440,116 @@ func testMongo(t *testing.T, c *docker.Client, network string) {
 	if rowsJSON(res) != `[[3]]` {
 		t.Fatalf("after writes %s", rowsJSON(res))
 	}
+}
+
+// rotate sets user's password from old to next as the admin, then proves
+// next works and old no longer does. mode is how user connects.
+func (e *engineEnv) rotate(t *testing.T, user, mode, old, next string) {
+	t.Helper()
+	admin := e.admin
+	admin.NewPassword = next
+	res := e.ok(t, admin, "write", protocol.DBOp{Type: protocol.DBOpSetPassword, User: user})
+	if res.Notice != "password set for "+user {
+		t.Fatalf("set_password %s: notice %q", user, res.Notice)
+	}
+	e.ok(t, dbquery.Credential{Username: user, Password: next}, mode, protocol.DBOp{Type: protocol.DBOpListNamespaces})
+	e.fails(t, dbquery.Credential{Username: user, Password: old}, mode, protocol.DBOp{Type: protocol.DBOpListNamespaces}, "authentication failed")
+}
+
+func TestSetPassword(t *testing.T) {
+	c := dockertest.Client(t)
+	network := dockertest.Unique("roundhouse-it-dbq-pw-")
+	dockertest.Network(t, c, network, nil)
+	dockertest.Attach(t, c, network)
+	setPw := func(user string) protocol.DBOp { return protocol.DBOp{Type: protocol.DBOpSetPassword, User: user} }
+
+	t.Run("postgres", func(t *testing.T) {
+		t.Parallel()
+		e := start(t, c, network, dbquery.EnginePostgres, 5432, docker.ContainerCreate{
+			Image: postgresImage,
+			Env:   []string{"POSTGRES_USER=postgres", "POSTGRES_PASSWORD=" + adminPassword, "POSTGRES_DB=app"},
+		})
+		e.target.Database = "app"
+		e.admin = dbquery.Credential{Username: "postgres", Password: adminPassword, ReadonlyPassword: roPassword}
+		e.waitReady(t)
+
+		admin := e.admin
+		admin.NewPassword = newROPassword
+		e.fails(t, admin, "write", setPw(dbquery.ReadonlyUser), "does not exist")
+		e.fails(t, admin, "write", setPw("someone_else"), "changes only")
+		e.ok(t, e.admin, "write", protocol.DBOp{Type: protocol.DBOpProvisionReadonly})
+
+		e.rotate(t, dbquery.ReadonlyUser, "read", roPassword, newROPassword)
+		e.rotate(t, "postgres", "write", adminPassword, newAdminPassword)
+		e.admin.Password = newAdminPassword
+		e.ok(t, e.admin, "write", raw(`CREATE TABLE after_rotation (id int)`))
+	})
+
+	t.Run("mysql", func(t *testing.T) {
+		t.Parallel()
+		e := start(t, c, network, dbquery.EngineMySQL, 3306, docker.ContainerCreate{
+			Image: mysqlImage,
+			Env: []string{"MYSQL_ROOT_PASSWORD=" + adminPassword, "MYSQL_DATABASE=app",
+				"MYSQL_USER=app", "MYSQL_PASSWORD=" + appPassword},
+		})
+		e.target.Database, e.target.AppUser = "app", "app"
+		e.admin = dbquery.Credential{Username: "root", Password: adminPassword, ReadonlyPassword: roPassword}
+		e.waitReady(t)
+		e.ok(t, e.admin, "write", protocol.DBOp{Type: protocol.DBOpProvisionReadonly})
+
+		admin := e.admin
+		admin.NewPassword = newROPassword
+		e.fails(t, admin, "write", setPw("mysql.sys"), "changes only")
+
+		e.rotate(t, dbquery.ReadonlyUser, "read", roPassword, newROPassword)
+		e.rotate(t, "app", "read", appPassword, newAppPassword)
+		e.rotate(t, "root", "write", adminPassword, newAdminPassword)
+		e.admin.Password = newAdminPassword
+
+		// root@'localhost' changed too: the socket login inside the
+		// container takes the new password.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		code, err := c.RunExec(ctx, e.container, docker.ExecRun{
+			Cmd: []string{"mysql", "-uroot", "-e", "SELECT 1"}, Env: []string{"MYSQL_PWD=" + newAdminPassword},
+		})
+		if err != nil || code != 0 {
+			t.Fatalf("root@localhost with the new password: code %d, %v", code, err)
+		}
+	})
+
+	t.Run("redis", func(t *testing.T) {
+		t.Parallel()
+		e := start(t, c, network, dbquery.EngineRedis, 6379, docker.ContainerCreate{
+			Image: valkeyImage,
+			Env:   []string{"REDIS_PASSWORD=" + adminPassword, "ROUNDHOUSE_RO_PASSWORD=" + roPassword},
+			Entrypoint: []string{"sh", "-c", `exec docker-entrypoint.sh valkey-server --requirepass "$REDIS_PASSWORD"` +
+				` --user roundhouse_ro on ">$ROUNDHOUSE_RO_PASSWORD" "~*" "&*" +@read -@dangerous +info +select +ping --appendonly yes`},
+		})
+		e.admin = dbquery.Credential{Username: "default", Password: adminPassword}
+		e.waitReady(t)
+
+		e.rotate(t, dbquery.ReadonlyUser, "read", roPassword, newROPassword)
+		e.rotate(t, "default", "write", adminPassword, newAdminPassword)
+		e.admin.Password = newAdminPassword
+		e.ok(t, e.admin, "write", protocol.DBOp{Type: protocol.DBOpRaw, Argv: []string{"SET", "k", "v"}})
+	})
+
+	t.Run("mongodb", func(t *testing.T) {
+		t.Parallel()
+		e := start(t, c, network, dbquery.EngineMongoDB, 27017, docker.ContainerCreate{
+			Image: mongoImage,
+			Env:   []string{"MONGO_INITDB_ROOT_USERNAME=root", "MONGO_INITDB_ROOT_PASSWORD=" + adminPassword},
+		})
+		e.admin = dbquery.Credential{Username: "root", Password: adminPassword, ReadonlyPassword: roPassword}
+		e.waitReady(t)
+
+		admin := e.admin
+		admin.NewPassword = newROPassword
+		e.fails(t, admin, "write", setPw(dbquery.ReadonlyUser), "does not exist")
+		e.ok(t, e.admin, "write", protocol.DBOp{Type: protocol.DBOpProvisionReadonly})
+
+		e.rotate(t, dbquery.ReadonlyUser, "read", roPassword, newROPassword)
+		e.rotate(t, "root", "write", adminPassword, newAdminPassword)
+	})
 }

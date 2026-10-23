@@ -147,6 +147,11 @@ func (s *mongoSession) run(ctx context.Context) (*resultSet, error) {
 		return set, s.raw(ctx, set)
 	case protocol.DBOpProvisionReadonly:
 		return set, s.provision(ctx)
+	case protocol.DBOpSetPassword:
+		if err := s.setPassword(ctx); err != nil {
+			return nil, err
+		}
+		return passwordSet(s.req), nil
 	}
 	return nil, usageError("unsupported operation")
 }
@@ -601,6 +606,49 @@ func (s *mongoSession) provision(ctx context.Context) error {
 		err = set("updateUser")
 	}
 	return err
+}
+
+// setPassword sets the new password on the user in the database that
+// defines it: admin for the template's users, else the only database that
+// has a user of that name.
+func (s *mongoSession) setPassword(ctx context.Context) error {
+	user := s.req.op.User
+	admin := s.client.Database("admin")
+	db := ""
+	for _, query := range []bson.D{
+		{{Key: "usersInfo", Value: bson.D{{Key: "user", Value: user}, {Key: "db", Value: "admin"}}}},
+		{{Key: "usersInfo", Value: bson.D{{Key: "forAllDBs", Value: true}}}, {Key: "filter", Value: bson.D{{Key: "user", Value: user}}}},
+	} {
+		info, err := admin.RunCommand(ctx, query).Raw()
+		if err != nil {
+			return err
+		}
+		var dbs []string
+		if users, ok := info.Lookup("users").ArrayOK(); ok {
+			vals, _ := users.Values()
+			for _, v := range vals {
+				if doc, ok := v.DocumentOK(); ok {
+					if d, ok := doc.Lookup("db").StringValueOK(); ok {
+						dbs = append(dbs, d)
+					}
+				}
+			}
+		}
+		if len(dbs) > 1 {
+			return usageError(fmt.Sprintf("user %q exists in more than one database", user))
+		}
+		if len(dbs) == 1 {
+			db = dbs[0]
+			break
+		}
+	}
+	if db == "" {
+		return usageError(fmt.Sprintf("user %q does not exist", user))
+	}
+	return s.client.Database(db).RunCommand(ctx, bson.D{
+		{Key: "updateUser", Value: user},
+		{Key: "pwd", Value: s.req.cred.NewPassword},
+	}).Err()
 }
 
 // validMongoDatabase reports whether name can name a database.

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
 	"github.com/BankkRoll/Roundhouse/agent/internal/rhbk"
@@ -243,6 +244,14 @@ func (t *engineTarget) dumpMySQL(ctx context.Context, databases *[]string, w *rh
 	password := t.env["MYSQL_ROOT_PASSWORD"]
 	var dbs []string
 	if databases != nil {
+		// SECURITY: the mysql schema holds the accounts and their password
+		// hashes; restored elsewhere it would replace that server's
+		// credentials, so a dump never carries it, even when asked to.
+		for _, db := range *databases {
+			if slices.Contains(mysqlSystemSchemas, db) {
+				return fmt.Errorf("database %s is a system schema; dump backups do not carry it", db)
+			}
+		}
 		dbs = *databases
 	} else {
 		out, err := t.output(ctx, `exec mysql --defaults-extra-file=/dev/stdin -uroot -N -B -e 'SHOW DATABASES'`,
@@ -301,7 +310,12 @@ func (t *engineTarget) restoreEntry(ctx context.Context, engine protocol.Databas
 	case rhbk.FormatPGGlobals:
 		// NOTE: roles that exist already (the superuser) fail one by one;
 		// psql carries on, as pg_dumpall's documentation expects.
-		return t.run(ctx, pgPrefix+`exec psql -X -q -U "$U" -d postgres -f -`, nil, r, nil)
+		err := t.run(ctx, pgPrefix+`exec psql -X -q -U "$U" -d postgres -f -`, nil, r, nil)
+		// The entry may have run in part even when it failed.
+		if cerr := t.reapplyPostgresCredentials(ctx); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("re-apply credentials: %w", cerr))
+		}
+		return err
 	case rhbk.FormatPGCustom:
 		if !dbNameRE.MatchString(h.Database) {
 			return fmt.Errorf("entry %s: invalid database name", h.Name)
@@ -327,10 +341,144 @@ func (t *engineTarget) restoreEntry(ctx context.Context, engine protocol.Databas
 		if t.env["MONGO_INITDB_ROOT_USERNAME"] == "" || t.env["MONGO_INITDB_ROOT_PASSWORD"] == "" {
 			return t.run(ctx, `exec mongorestore --archive --drop`, nil, r, nil)
 		}
-		return t.run(ctx, `f=$(mktemp) || exit 1; `+
+		// NOTE: the merge runs whatever mongorestore's outcome, so the
+		// temporary collections never outlive the restore.
+		return t.run(ctx, `command -v mongosh >/dev/null || { echo "no mongosh in the image" >&2; exit 127; }; `+
+			`f=$(mktemp) || exit 1; `+
 			`printf 'password: "%s"\n' "$MONGO_INITDB_ROOT_PASSWORD" > "$f" || { rm -f "$f"; exit 1; }; `+
-			`mongorestore --config="$f" --username "$MONGO_INITDB_ROOT_USERNAME" --authenticationDatabase admin --archive --drop; `+
-			`rc=$?; rm -f "$f"; exit $rc`, nil, r, nil)
+			`mongorestore --config="$f" --username "$MONGO_INITDB_ROOT_USERNAME" --authenticationDatabase admin --archive --drop `+
+			`--nsFrom=admin.system.users --nsTo="$2" --nsFrom=admin.system.roles --nsTo="$3"; rc=$?; rm -f "$f"; `+
+			`ok=0; [ $rc -eq 0 ] && ok=1; `+
+			`ROUNDHOUSE_RESTORE_OK=$ok mongosh --nodb --quiet --norc --eval "$1" </dev/null || { [ $rc -eq 0 ] && rc=1; }; exit $rc`,
+			[]string{mongoMergeScript, mongoRestoreUsers, mongoRestoreRoles}, r, nil)
 	}
 	return fmt.Errorf("entry %s: format %q cannot be restored into %s", h.Name, h.Format, engine)
 }
+
+// -----------------------------------------------------------------------------
+// Credentials after a restore
+// -----------------------------------------------------------------------------
+
+// A dump of a whole instance carries its principals' passwords: Postgres's
+// globals entry has `ALTER ROLE … PASSWORD 'SCRAM-SHA-256$…'` for the
+// superuser and roundhouse_ro, and a full mongodump has admin.system.users,
+// which mongorestore --drop puts in place of the target's users. Restored
+// as is into a service whose credentials differ (a new service, or the same
+// one after a rotation), they would reset its passwords to the source's
+// and lock out the control plane and every app. A Postgres restore
+// therefore re-applies the container's own passwords from its environment
+// after the globals entry, and a MongoDB restore keeps the target's own
+// root and roundhouse_ro while taking the dump's other users and roles.
+//
+// MySQL dumps leave out the mysql schema (mysqlSystemSchemas), so they carry
+// no accounts; a Redis RDB holds no ACL users, which the start command
+// declares.
+
+// pgCredentialsScript sets the superuser's and, when it exists,
+// roundhouse_ro's password from the container's environment. psql reads it
+// on stdin and takes the values with \getenv (psql 15+; the template offers
+// 16 to 18), and format quotes them on the server, so no password is in an
+// argument vector or in script text.
+//
+// SECURITY: the session turns statement logging off first, so the server
+// log, which the agent ships as the container's output, cannot record a
+// password even in an error's STATEMENT line.
+const pgCredentialsScript = `\set ON_ERROR_STOP on
+SET log_statement = 'none';
+SET log_min_error_statement = 'panic';
+\getenv rh_user POSTGRES_USER
+\getenv rh_password POSTGRES_PASSWORD
+\getenv rh_ro_password ROUNDHOUSE_RO_PASSWORD
+SELECT format('ALTER ROLE %I WITH PASSWORD %L', :'rh_user', :'rh_password') WHERE :'rh_password' <> '' \gexec
+SELECT format('ALTER ROLE %I WITH PASSWORD %L', 'roundhouse_ro', :'rh_ro_password')
+WHERE :'rh_ro_password' <> '' AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'roundhouse_ro') \gexec
+`
+
+// credentialsTimeout bounds re-applying credentials, which runs even when
+// the restore's own deadline has passed: the passwords must be put back.
+const credentialsTimeout = 2 * time.Minute
+
+// reapplyPostgresCredentials runs pgCredentialsScript in the container.
+func (t *engineTarget) reapplyPostgresCredentials(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), credentialsTimeout)
+	defer cancel()
+	// NOTE: the variables are exported even when empty, because \getenv
+	// leaves a psql variable unset for a missing one and :'…' would then
+	// stay literal text.
+	return t.run(ctx, pgPrefix+
+		`export POSTGRES_USER="$U" POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}" ROUNDHOUSE_RO_PASSWORD="${ROUNDHOUSE_RO_PASSWORD:-}"; `+
+		`exec psql -X -q -U "$U" -d postgres -f -`, nil, strings.NewReader(pgCredentialsScript), nil)
+}
+
+// The temporary collections a MongoDB restore puts the dump's users and
+// roles in.
+const (
+	mongoRestoreUsers = "admin.roundhouse_restore_users"
+	mongoRestoreRoles = "admin.roundhouse_restore_roles"
+)
+
+// mongoMergeScript merges the users and roles a restore set aside into the
+// server's, keeping the target's own root and roundhouse_ro as they are.
+// The shell sets ROUNDHOUSE_RESTORE_OK when mongorestore succeeded; after a
+// failure the script only drops the temporary collections, since merging
+// part of a dump's users would drop the rest.
+//
+// NOTE: mongorestore --drop would replace the target's users with the
+// dump's, root included, and the script could then no longer sign in to
+// put root's password back: the server also signs out sessions whose user
+// was replaced by a different one (a new userId). Restoring the users
+// into ordinary collections instead (--nsFrom/--nsTo) and merging them
+// with _mergeAuthzCollections, as mongorestore itself does, keeps every
+// other user and role of the dump.
+//
+// SECURITY: the password comes from process.env, never from an argument
+// vector, and is cut out of any error message the script prints.
+const mongoMergeScript = `const env = process.env;
+const user = env.MONGO_INITDB_ROOT_USERNAME;
+const password = env.MONGO_INITDB_ROOT_PASSWORD;
+const fail = (what, e) => {
+  const msg = String((e && e.message) || e).split(password).join('[redacted]');
+  process.stderr.write(what + ': ' + msg + '\n');
+  quit(1);
+};
+let admin;
+try {
+  admin = new Mongo('mongodb://' + encodeURIComponent(user) + ':' + encodeURIComponent(password) +
+    '@127.0.0.1:27017/?authSource=admin&directConnection=true').getDB('admin');
+  admin.runCommand({ ping: 1 });
+} catch (e) {
+  fail('connect', e);
+}
+const ns = { users: '` + mongoRestoreUsers + `', roles: '` + mongoRestoreRoles + `' };
+const coll = (n) => admin.getCollection(n.slice('admin.'.length));
+let failed;
+try {
+  if (env.ROUNDHOUSE_RESTORE_OK === '1') {
+    const present = admin.getCollectionNames();
+    const has = (n) => present.includes(n.slice('admin.'.length));
+    const merge = (field, n) => {
+      const res = admin.runCommand({ _mergeAuthzCollections: 1, [field]: n, drop: true, db: '' });
+      if (!res.ok) throw new Error(res.errmsg || 'merge failed');
+    };
+    if (has(ns.roles)) merge('tempRolesCollection', ns.roles);
+    if (has(ns.users)) {
+      const temp = coll(ns.users);
+      for (const name of [user, 'roundhouse_ro']) {
+        temp.deleteMany({ user: name, db: 'admin' });
+        const own = admin.getCollection('system.users').findOne({ user: name, db: 'admin' });
+        if (own) temp.insertOne(own);
+      }
+      merge('tempUsersCollection', ns.users);
+    }
+  }
+} catch (e) {
+  failed = e;
+}
+try {
+  coll(ns.users).drop();
+  coll(ns.roles).drop();
+} catch (e) {
+  failed = failed || e;
+}
+if (failed) fail('merge users and roles', failed);
+`

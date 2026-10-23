@@ -49,6 +49,8 @@ type meta struct {
 	routes        []protocol.WorkloadRoute
 	drainS        int
 	volumes       []string
+	// published are the host ports the container publishes.
+	published []protocol.PortPublish
 	// stopGraceS is -1 for containers created before the label existed.
 	stopGraceS int
 }
@@ -70,6 +72,11 @@ func containerLabels(s *wantSpec) map[string]string {
 	l[LabelRoutes] = string(routes)
 	l[LabelDrainS] = strconv.Itoa(s.DrainS)
 	l[LabelStopGrace] = strconv.Itoa(s.StopGrace())
+	if v := publishedLabel(&s.WorkloadSpec); v != "" {
+		l[LabelPublished] = v
+	} else {
+		delete(l, LabelPublished)
+	}
 	if ids := mountedVolumes(&s.WorkloadSpec); len(ids) > 0 {
 		l[LabelVolumes] = strings.Join(ids, ",")
 	} else {
@@ -112,6 +119,7 @@ func parseMeta(l map[string]string) meta {
 	if v := l[LabelVolumes]; v != "" {
 		m.volumes = strings.Split(v, ",")
 	}
+	m.published = parsePublished(l[LabelPublished])
 	_ = json.Unmarshal([]byte(l[LabelRoutes]), &m.routes)
 	return m
 }

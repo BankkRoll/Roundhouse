@@ -573,10 +573,17 @@ available as a staged op.
   sets `ports[].publish`. That changes the spec hash, so the container is
   recreated: a database restarts once.
 - Docker publishes the port (kernel DNAT), so connections survive agent
-  restarts. The agent's `inet roundhouse` table (0005) holds a forward
-  rule at priority `filter - 1` that drops any source outside
-  `allowed_cidrs`. That drop is final, so the allowlist holds whatever
-  Docker accepts.
+  restarts. The agent keeps a `ROUNDHOUSE-PUBLISH` chain in the filter
+  table of iptables (and ip6tables for ports on `::`), jumped to first
+  from `DOCKER-USER` for DNATed connections and from `INPUT` (`! -i lo`)
+  for docker-proxy. Per port, it `RETURN`s each allowed CIDR, then `DROP`s
+  every other packet whose conntrack original destination port is the
+  host port, in the original direction only. The chain is replaced
+  atomically with `iptables-restore --noflush`. A port's rules are in
+  place before its container is created or started, and stay (drop only)
+  while any container still publishes it. A node that cannot install them
+  does not advertise `capabilities.tcp_proxy` and refuses published
+  ports.
 - `allowed_cidrs` must be non-empty. `0.0.0.0/0` is accepted, but only
   explicitly, and the dashboard then warns that the connection is not
   encrypted end to end unless the client and engine negotiate TLS.

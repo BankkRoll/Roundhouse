@@ -125,6 +125,14 @@ func runRedis(ctx context.Context, req *request) (*resultSet, error) {
 	if op.Type == protocol.DBOpDescribe {
 		return nil, usageError("describe is not supported for redis")
 	}
+	if op.Type == protocol.DBOpSetPassword {
+		c, err := dialRedis(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		defer c.close()
+		return redisSetPassword(c, req)
+	}
 	db := namespaceOr(op.Namespace, namespaceOr(req.target.Database, "0"))
 	if !validRedisDB(db) {
 		return nil, usageError("namespace must be a database index")
@@ -162,6 +170,24 @@ func runRedis(ctx context.Context, req *request) (*resultSet, error) {
 		return set, redisReplyRows(set, strings.ToUpper(argv[0]), v)
 	}
 	return nil, usageError("unsupported operation")
+}
+
+// redisSetPassword replaces an existing ACL user's passwords with the new
+// one. For "default" that replaces the requirepass password until the
+// container restarts with its new REDIS_PASSWORD.
+func redisSetPassword(c *redisConn, req *request) (*resultSet, error) {
+	user := req.op.User
+	v, err := c.do("ACL", "GETUSER", user)
+	if err != nil {
+		return nil, err
+	}
+	if v.null {
+		return nil, usageError(fmt.Sprintf("user %q does not exist", user))
+	}
+	if _, err := c.do("ACL", "SETUSER", user, "resetpass", ">"+req.cred.NewPassword); err != nil {
+		return nil, err
+	}
+	return passwordSet(req), nil
 }
 
 func validRedisDB(s string) bool {
