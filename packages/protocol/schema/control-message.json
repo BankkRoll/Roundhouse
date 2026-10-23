@@ -188,17 +188,41 @@
                   "minLength": 0
                 }
               },
-              "env": {
-                "type": "object",
-                "propertyNames": {
-                  "type": "string",
-                  "maxLength": 256,
-                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-                },
-                "additionalProperties": {
-                  "type": "string",
-                  "minLength": 0
-                }
+              "env_sealed": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "v": {
+                        "type": "number",
+                        "const": 1
+                      },
+                      "kid": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{16}$"
+                      },
+                      "epk": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9+/]{43}=$"
+                      },
+                      "ct": {
+                        "type": "string",
+                        "maxLength": 524288,
+                        "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+                      }
+                    },
+                    "required": [
+                      "v",
+                      "kid",
+                      "epk",
+                      "ct"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "ports": {
                 "maxItems": 32,
@@ -398,7 +422,7 @@
               "deployment_id",
               "replica",
               "image",
-              "env",
+              "env_sealed",
               "ports",
               "routes",
               "healthcheck",
@@ -555,6 +579,14 @@
           "type": "string",
           "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
         },
+        "project_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "service_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
         "source": {
           "type": "object",
           "properties": {
@@ -572,8 +604,7 @@
               "pattern": "^([a-f0-9]{40}|[a-f0-9]{64})$"
             },
             "ref": {
-              "type": "string",
-              "minLength": 1
+              "type": "string"
             },
             "token": {
               "type": "string",
@@ -621,6 +652,35 @@
             "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
           }
         },
+        "build_secrets_sealed": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "number",
+              "const": 1
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "epk": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{43}=$"
+            },
+            "ct": {
+              "type": "string",
+              "maxLength": 524288,
+              "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+            }
+          },
+          "required": [
+            "v",
+            "kid",
+            "epk",
+            "ct"
+          ],
+          "additionalProperties": false
+        },
         "image_repository": {
           "type": "string",
           "maxLength": 512,
@@ -644,6 +704,8 @@
         "exp",
         "build_id",
         "deployment_id",
+        "project_id",
+        "service_id",
         "source",
         "builder",
         "context_dir",

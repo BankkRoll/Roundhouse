@@ -1,0 +1,46 @@
+{
+  "node_id": "node_fixture",
+  "node_private_key_hex": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+  "node_public_key": "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=",
+  "node_kid": "f35e5616160a30bf",
+  "ephemeral_private_key_hex": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+  "x25519_shared_hex": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+  "cases": [
+    {
+      "name": "workload-env",
+      "purpose": "workload-env",
+      "aad": "roundhouse-box:v1:workload-env:node_fixture:wl_01JAAAAAAAAAAAAAAAAAAAAAAA:42",
+      "plaintext": "{\"env\":{\"PORT\":\"3000\",\"GREETING\":\"héllo 🚀\"},\"files\":{\"TLS_KEY\":\"-----BEGIN TEST KEY-----\\nAAAA\\n-----END TEST KEY-----\\n\"}}",
+      "box": {
+        "v": 1,
+        "kid": "f35e5616160a30bf",
+        "epk": "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
+        "ct": "kamafOlNzJhAXACNf2pTfYylRjFZ363QQ2p4relKqaxJmdzb9C8nztoQnXpIIjDQaSNAykmGeXJiwlC6s5A8/y8s8dYfMyDf+koYhtdjBhnh6I8dTwO+4JD9xAKIUQlxq3udMT96lP5eaq9rpw/vQu8/Lzd+JOzEy+iwwyHXkOhKLJI9J8Gxv83DudQHBiI="
+      }
+    },
+    {
+      "name": "build-secrets",
+      "purpose": "build-secrets",
+      "aad": "roundhouse-box:v1:build-secrets:node_fixture:bld_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      "plaintext": "{\"secrets\":{\"NPM_TOKEN\":\"fixture-npm-token\"}}",
+      "box": {
+        "v": 1,
+        "kid": "f35e5616160a30bf",
+        "epk": "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
+        "ct": "aLlAdJW8wKOlOgbK8X0RBXPiPe9xoMaW3VwFX74kclTu7b7H5LryyugPECk8Z2cq0/wJXKwYZFmgOkCp1w=="
+      }
+    },
+    {
+      "name": "empty-env",
+      "purpose": "workload-env",
+      "aad": "roundhouse-box:v1:workload-env:node_fixture:wl_01JBBBBBBBBBBBBBBBBBBBBBBB:0",
+      "plaintext": "{\"env\":{},\"files\":{}}",
+      "box": {
+        "v": 1,
+        "kid": "f35e5616160a30bf",
+        "epk": "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
+        "ct": "kamafOlNzJgfIG25QiQMLJ2vDXwGJnW77kMNR2lssAnMv7X7xg=="
+      }
+    }
+  ]
+}

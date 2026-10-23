@@ -4,9 +4,12 @@
  *
  * - Phase 0: errors, workspaces, members, invites, nodes, audit log.
  * - Phase 1: projects, environments, services and their config versions,
- *   variables, deployments, builds, logs, domains, instance settings, the
- *   GitHub App, and realtime messages. Routes using them are in `./contracts`.
- * - API tokens, project summaries and resolved variables.
+ *   deployments, builds, logs, domains, instance settings, the GitHub App,
+ *   and realtime messages. Routes using them are in `./contracts`.
+ * - ADR 0014, one file per stream under `./schemas/` and re-exported here:
+ *   variables, access (teams, grants, protection), auth (2FA, re-auth),
+ *   instance (admins, workspaces, audit) and keys (rotation).
+ * - API tokens and project summaries.
  *
  * Config part schemas are checked against the `@roundhouse/shared` types they
  * store (`satisfies z.ZodType<…>`), so the API, the database and the
@@ -17,18 +20,15 @@
 import { z } from "@hono/zod-openapi";
 import {
   CapabilitiesSchema,
-  ENV_KEY_RE,
   HOSTNAME_RE,
   IMAGE_REFERENCE_RE,
+  isSafeGitRef,
   isSafeRelativePath,
   LABEL_KEY_RE,
   LOG_STREAMS,
-  MAX_ENV_KEY_BYTES,
-  MAX_ENV_VALUE_BYTES,
   MAX_HOSTNAME_LENGTH,
   TLS_MODES as PROTOCOL_TLS_MODES,
   type TlsMode as ProtocolTlsMode,
-  utf8ByteLength,
   WORKLOAD_STATES,
 } from "@roundhouse/protocol";
 import {
@@ -63,6 +63,13 @@ import {
   TLS_MODES,
   type TlsMode,
 } from "@roundhouse/shared";
+import { VariableKeyField } from "./schemas/variables";
+
+export * from "./schemas/access";
+export * from "./schemas/auth";
+export * from "./schemas/instance";
+export * from "./schemas/keys";
+export * from "./schemas/variables";
 
 /** Error envelope returned by every non-2xx response. */
 export const ErrorSchema = z
@@ -248,21 +255,6 @@ export const SlugField = z
   .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, "expected a lowercase slug")
   .openapi({ example: "api" });
 
-/** Environment variable or build arg name. */
-export const VariableKeyField = z
-  .string()
-  .min(1)
-  .max(MAX_ENV_KEY_BYTES)
-  .regex(ENV_KEY_RE, "expected a name like DATABASE_URL")
-  .openapi({ example: "DATABASE_URL" });
-
-/** Plain-text variable value as written by a user; may contain `${{…}}` references. */
-export const VariableValueField = z
-  .string()
-  .refine((v) => utf8ByteLength(v) <= MAX_ENV_VALUE_BYTES && !v.includes("\0"), {
-    message: `must be at most ${MAX_ENV_VALUE_BYTES} bytes and contain no NUL`,
-  });
-
 /** Lowercase DNS hostname with at least two labels. */
 export const HostnameField = z
   .string()
@@ -354,15 +346,12 @@ export const ImageSourceSchema = z.object({
   image: z.string().max(1024).regex(IMAGE_REFERENCE_RE, "expected an image reference"),
 });
 
-/** Git branch name: no leading `/`, no `..`, not ending in `/` or `.`. */
+/** Git branch name; the same rule agents apply to build refs (`isSafeGitRef`). */
 const BranchField = z
   .string()
   .min(1)
   .max(255)
-  .regex(/^[A-Za-z0-9._/-]+$/, "expected a branch name")
-  .refine((b) => !b.startsWith("/") && !b.includes("..") && !/[/.]$/.test(b), {
-    message: "expected a branch name",
-  });
+  .refine(isSafeGitRef, { message: "expected a branch name" });
 
 /** Build from a git repository. */
 export const GitSourceSchema = z.object({
@@ -535,58 +524,6 @@ export const SERVICE_CONFIG_PARTS = [
   "networking",
   "placement",
 ] as const;
-
-// -----------------------------------------------------------------------------
-// Phase 1: variables
-// -----------------------------------------------------------------------------
-
-/** A variable as listed. Secret values are masked (`null`) until revealed. */
-export const VariableSchema = z
-  .object({
-    key: z.string(),
-    /** `null` when `is_secret`; use the reveal route to read it. */
-    value: z.string().nullable(),
-    is_secret: z.boolean(),
-    version: z.number().int().positive(),
-    updated_at: Millis,
-  })
-  .openapi("Variable");
-
-/** Bulk change to the variables of one scope in one environment. */
-export const VariablesPutSchema = z
-  .object({
-    /** Created or overwritten. Omitting `is_secret` keeps an existing variable's flag. */
-    set: z
-      .array(
-        z.object({
-          key: VariableKeyField,
-          value: VariableValueField,
-          is_secret: z.boolean().optional(),
-        }),
-      )
-      .max(256)
-      .default([]),
-    /** Removed; unknown keys are ignored. */
-    delete: z.array(VariableKeyField).max(256).default([]),
-  })
-  .refine(
-    (b) => {
-      const keys = [...b.set.map((s) => s.key), ...b.delete];
-      return new Set(keys).size === keys.length;
-    },
-    { message: "each key may appear once across set and delete" },
-  )
-  .openapi("VariablesPut");
-
-/** Keys whose plaintext to return. Every reveal is audited. */
-export const VariablesRevealSchema = z
-  .object({ keys: z.array(VariableKeyField).min(1).max(256) })
-  .openapi("VariablesReveal");
-
-/** Revealed plaintext values. */
-export const RevealedVariablesSchema = z
-  .object({ variables: z.array(z.object({ key: z.string(), value: z.string() })) })
-  .openapi("RevealedVariables");
 
 // -----------------------------------------------------------------------------
 // Phase 1: deployments, builds, logs, domains
@@ -821,8 +758,20 @@ export const RealtimeServerMessageSchema = z
     }),
     z.object({ type: z.literal("service.updated"), service: ServiceSchema }),
     z.object({ type: z.literal("presence"), users: z.array(PresenceUserSchema) }),
+    /**
+     * Sent right before the server closes the socket with
+     * {@link REALTIME_ACCESS_REVOKED_CLOSE} because the caller lost access
+     * (ADR 0014): the dashboard should stop reconnecting and re-check.
+     */
+    z.object({
+      type: z.literal("access.revoked"),
+      reason: z.enum(["membership", "project_access", "session"]),
+    }),
   ])
   .openapi("RealtimeServerMessage");
+
+/** WebSocket close code used after `access.revoked`. */
+export const REALTIME_ACCESS_REVOKED_CLOSE = 4403;
 
 /** Server → browser realtime message. */
 export type RealtimeServerMessage = z.infer<typeof RealtimeServerMessageSchema>;
@@ -928,15 +877,3 @@ export const ProjectSummarySchema = ProjectSchema.extend({
   environments: z.array(EnvironmentSchema),
   services: z.array(ServiceSummarySchema),
 }).openapi("ProjectSummary");
-
-// -----------------------------------------------------------------------------
-// Resolved variables
-// -----------------------------------------------------------------------------
-
-/**
- * A service's environment exactly as a deployment would get it: built-ins
- * overlaid by its own variables, every reference substituted. Sorted by key.
- */
-export const ResolvedVariablesSchema = z
-  .object({ variables: z.array(z.object({ key: z.string(), value: z.string() })) })
-  .openapi("ResolvedVariables");

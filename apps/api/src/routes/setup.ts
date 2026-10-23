@@ -92,9 +92,10 @@ export const setupRoutes = createRouter()
         password: input.password,
       });
       createdUserId = userId;
+      await db.update(users).set({ instanceAdmin: true }).where(eq(users.id, userId));
       const workspace = await createWorkspace(db, input.workspace_name, userId);
       createdWorkspaceId = workspace.id;
-      await createSigningKey(db, masterKey);
+      await createSigningKey(db, c.env);
       await recordAudit(db, {
         workspaceId: workspace.id,
         actorType: "user",

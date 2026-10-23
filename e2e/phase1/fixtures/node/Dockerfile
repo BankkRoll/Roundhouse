@@ -1,4 +1,4 @@
-# An Roundhouse node for the Phase 1 end-to-end test: the agent binary plus
+# A Roundhouse node for the Phase 1 end-to-end test: the agent binary plus
 # what install.sh puts on a builder (git, CA certificates, the pinned
 # Railpack CLI). Caddy runs in its own container on the same host network,
 # as it runs as its own systemd service on a real node, so restarting the

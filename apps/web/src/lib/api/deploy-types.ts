@@ -27,7 +27,6 @@ import type {
   RealtimeServerMessage,
   ResponseOf,
   resolveServiceVariables,
-  revealServiceVariables,
   ServiceConfig,
   updateInstanceSettings,
   updateProject,
@@ -67,8 +66,8 @@ export type UpdateServiceBody = BodyOf<typeof updateService>;
 export type UpdatedService = ResponseOf<typeof updateService, 200>;
 /** `PUT …/variables` body. */
 export type VariablesPutBody = BodyOf<typeof putServiceVariables>;
-/** `POST …/variables/reveal` response. */
-export type RevealedVariables = ResponseOf<typeof revealServiceVariables, 200>;
+/** `PUT …/variables` response: the list and the classifier warnings. */
+export type VariablesPutResult = ResponseOf<typeof putServiceVariables, 200>;
 /** `POST /v1/services/{serviceId}/deployments` body. */
 export type CreateDeploymentBody = BodyOf<typeof createDeployment>;
 /** A page of deployments, newest first. */
@@ -94,7 +93,7 @@ export type CancelledDeployment = ResponseOf<typeof cancelDeployment, 200>;
 export type CreateApiTokenBody = BodyOf<typeof createApiToken>;
 /** `POST /v1/workspaces/{workspaceId}/tokens` response: the token and, this once, its secret. */
 export type CreatedApiToken = ResponseOf<typeof createApiToken, 201>;
-/** `POST /v1/services/{serviceId}/variables/resolve` response. */
+/** `GET /v1/services/{serviceId}/variables/resolved` response: plain values and `local_keys`. */
 export type ResolvedVariables = ResponseOf<typeof resolveServiceVariables, 200>;
 /** One service of a project summary: latest config version, first domain, newest deployment. */
 export type ServiceSummary = ProjectSummary["services"][number];

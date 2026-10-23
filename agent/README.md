@@ -77,7 +77,9 @@ go vet ./...
   `roundhouse-<project_id>-<environment_id>` (hashed when too long), and its
   replicas register their private domain there only: a container reaches its
   own environment's services by name and IP, and no other environment's.
-  Networks no longer used are removed, including Phase 1's per-project
+  A service workload naming any other network (another environment's or
+  project's, `host`, `bridge`, `none`, `roundhouse-system`,
+  `roundhouse-build`) is refused. Networks no longer used are removed, including Phase 1's per-project
   network once every replica has moved off it. Unused images are
   garbage-collected when Docker's disk is 85% full, never one a container
   uses or a desired workload names. Env values live only in Docker's

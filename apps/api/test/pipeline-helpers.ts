@@ -1,6 +1,6 @@
 /**
  * Phase 1 test helpers on top of `./helpers`: projects and services, a
- * protocol 2 fake agent that plays its part in rollouts (answers
+ * protocol 4 fake agent that plays its part in rollouts (answers
  * `build_job`, reports workload health), and deployment polling.
  */
 import { SELF } from "cloudflare:test";
@@ -8,7 +8,11 @@ import {
   type ControlMessage,
   type DesiredState,
   type JoinResponse,
+  openBox,
+  SEALED_ENV_PROTOCOL_VERSION,
+  SealedWorkloadEnvSchema,
   verifyEnvelope,
+  workloadEnvAad,
 } from "@roundhouse/protocol";
 import {
   type Client,
@@ -18,6 +22,7 @@ import {
   type Installed,
   install,
   joinNode,
+  NODE_ENCRYPTION_PRIVATE_KEY,
   ORIGIN,
 } from "./helpers";
 
@@ -92,6 +97,8 @@ export interface FakeWorkloadAgent extends FakeAgent {
   behaviour: AgentBehaviour;
   /** Latest desired state received. */
   desired(): DesiredState | undefined;
+  /** Opened environment of a workload, from the latest frame that carried it. */
+  env(workloadId: string): Record<string, string> | undefined;
   /** Resolves with the first control payload matching `predicate`, waiting if needed. */
   waitFor<T extends ControlMessage>(
     predicate: (m: ControlMessage) => m is T,
@@ -109,12 +116,14 @@ export const IMAGE_DIGEST = `sha256:${"a".repeat(64)}`;
 export const isDesired = (m: ControlMessage): m is DesiredState => m.type === "desired_state";
 
 /**
- * Connects a protocol 2 agent that verifies envelopes, answers `build_job`
- * with a `build_result`, and reports a status for each new workload.
+ * Connects a protocol 4 agent that verifies envelopes, opens each workload's
+ * sealed environment with {@link NODE_ENCRYPTION_PRIVATE_KEY} (a box that
+ * fails to open counts as a rejection), answers `build_job` with a
+ * `build_result`, and reports a status for each new workload.
  *
  * @param joined - Join response for the node.
  * @param behaviour - How to answer.
- * @param helloOverrides - Extra `hello` fields (e.g. `protocol_version: 1`).
+ * @param helloOverrides - Extra `hello` fields (e.g. `protocol_version: 3`).
  */
 export async function connectWorkloadAgent(
   joined: JoinResponse,
@@ -135,6 +144,7 @@ export async function connectWorkloadAgent(
   const rawWaiters: ((v: string) => void)[] = [];
   const listeners = new Set<() => void>();
   const known = new Set<string>();
+  const envs = new Map<string, Record<string, string>>();
   const send = (frame: unknown) =>
     ws.send(typeof frame === "string" ? frame : JSON.stringify(frame));
 
@@ -155,6 +165,7 @@ export async function connectWorkloadAgent(
     },
     send,
     desired: () => [...received].reverse().find(isDesired),
+    env: (workloadId) => envs.get(workloadId),
     waitFor<T extends ControlMessage>(predicate: (m: ControlMessage) => m is T, timeoutMs = 8000) {
       return new Promise<T>((resolve, reject) => {
         const check = () => {
@@ -236,15 +247,40 @@ export async function connectWorkloadAgent(
       rejected.push(verified.reason);
       return;
     }
-    received.push(verified.message);
-    onControl(verified.message);
+    const m = verified.message;
+    if (m.type === "desired_state") {
+      for (const w of m.workloads) {
+        try {
+          const pt = await openBox(
+            NODE_ENCRYPTION_PRIVATE_KEY,
+            w.env_sealed!,
+            "workload-env",
+            workloadEnvAad(joined.node_id, w.id, m.generation),
+          );
+          envs.set(
+            w.id,
+            SealedWorkloadEnvSchema.parse(JSON.parse(new TextDecoder().decode(pt))).env,
+          );
+        } catch {
+          rejected.push(`env_sealed:${w.id}`);
+        }
+      }
+    }
+    received.push(m);
+    onControl(m);
     for (const l of [...listeners]) l();
   };
   ws.addEventListener("message", (e) => {
     void onFrame(e.data as string);
   });
 
-  send(hello(joined.node_id, { protocol_version: 2, statuses: [], ...helloOverrides }));
+  send(
+    hello(joined.node_id, {
+      protocol_version: SEALED_ENV_PROTOCOL_VERSION,
+      statuses: [],
+      ...helloOverrides,
+    }),
+  );
   await agent.waitFor(isDesired);
   return agent;
 }

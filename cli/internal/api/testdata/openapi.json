@@ -98,13 +98,16 @@
           "nodes:read",
           "nodes:manage",
           "audit:read",
+          "projects:create",
+          "github:manage",
           "projects:read",
           "projects:manage",
+          "access:manage",
           "services:read",
           "services:manage",
           "deployments:create",
           "variables:read",
-          "variables:reveal",
+          "variables:read_plain",
           "variables:manage"
         ],
         "type": "string"
@@ -1838,27 +1841,22 @@
       },
       "ResolvedVariables": {
         "properties": {
-          "variables": {
+          "local_keys": {
             "items": {
-              "properties": {
-                "key": {
-                  "type": "string"
-                },
-                "value": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "key",
-                "value"
-              ],
-              "type": "object"
+              "type": "string"
             },
             "type": "array"
+          },
+          "variables": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
           }
         },
         "required": [
-          "variables"
+          "variables",
+          "local_keys"
         ],
         "type": "object"
       },
@@ -5847,8 +5845,8 @@
         }
       }
     },
-    "/v1/services/{serviceId}/variables/resolve": {
-      "post": {
+    "/v1/services/{serviceId}/variables/resolved": {
+      "get": {
         "parameters": [
           {
             "in": "path",
@@ -5927,12 +5925,12 @@
             "api_token": []
           }
         ],
-        "summary": "Resolve a service's environment",
+        "summary": "Resolve a service's plain environment",
         "tags": [
           "variables"
         ],
         "x-roundhouse-policy": {
-          "action": "variables:reveal",
+          "action": "variables:read_plain",
           "audit": [
             "variables.resolved"
           ],

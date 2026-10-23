@@ -299,7 +299,7 @@ export const githubRoutes = createRouter()
         if (err instanceof GithubApiError) return settingsRedirect(c, { error: "exchange_failed" });
         throw err;
       }
-      await storeGithubApp(db, masterKey, app);
+      await storeGithubApp(db, c.env, app);
       await recordAudit(db, {
         workspaceId: stored.workspace_id,
         actorType: "user",
@@ -330,7 +330,7 @@ export const githubRoutes = createRouter()
       const installationId = query.installation_id;
       await requireWorkspace(c, workspaceId, policyOf(githubCallback).action!);
       if (query.setup_action === "request") return settingsRedirect(c, { status: "requested" });
-      const app = await loadGithubApp(db, masterKey);
+      const app = await loadGithubApp(db, c.env);
       if (!app) throw new ApiError(400, "github_not_configured", "No GitHub App is configured");
       const reject = (reason: InstallRejection) =>
         rejectInstallation(c, { workspaceId, userId: user.id, installationId, reason });
@@ -380,7 +380,8 @@ export const githubRoutes = createRouter()
     const query = c.req.valid("query");
     await requireWorkspace(c, query.workspace_id, policyOf(listGithubRepositories).action!);
     const db = c.get("db");
-    const app = await loadGithubApp(db, requireMasterKey(c));
+    requireMasterKey(c);
+    const app = await loadGithubApp(db, c.env);
     if (!app) throw new ApiError(400, "github_not_configured", "No GitHub App is configured");
     const installs = await db
       .select()
@@ -428,15 +429,22 @@ export const githubRoutes = createRouter()
       throw new ApiError(413, "payload_too_large", "Webhook payload too large");
     }
     const db = c.get("db");
-    const app = await loadGithubApp(db, requireMasterKey(c));
+    requireMasterKey(c);
+    const app = await loadGithubApp(db, c.env);
     if (!app) throw new ApiError(401, "unauthorized", "No GitHub App is configured");
     // SECURITY: Nothing is parsed or looked up from the body before this.
     if (!(await verifyWebhookSignature(app.webhookSecret, raw, headers["x-hub-signature-256"]))) {
       throw new ApiError(401, "invalid_signature", "Webhook signature does not match");
     }
+    // SECURITY: `X-GitHub-Delivery` isn't covered by the signature, so a
+    // captured body could be replayed under a fresh ID; the unique body hash
+    // stops that.
+    const bodyHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", raw))]
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
     const [fresh] = await db
       .insert(githubDeliveries)
-      .values({ id: headers["x-github-delivery"], event: headers["x-github-event"] })
+      .values({ id: headers["x-github-delivery"], event: headers["x-github-event"], bodyHash })
       .onConflictDoNothing()
       .returning();
     if (!fresh) return c.body(null, 202);

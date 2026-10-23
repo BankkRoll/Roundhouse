@@ -30,15 +30,22 @@
   "durable_objects": {
     "bindings": [
       { "name": "NODE_CONNECTION", "class_name": "NodeConnection" },
-      { "name": "PROJECT_ROOM", "class_name": "ProjectRoom" }
+      { "name": "PROJECT_ROOM", "class_name": "ProjectRoom" },
+      { "name": "AUDIT_CHAIN", "class_name": "AuditChain" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["NodeConnection"] },
-    { "tag": "v2", "new_sqlite_classes": ["ProjectRoom"] }
+    { "tag": "v2", "new_sqlite_classes": ["ProjectRoom"] },
+    { "tag": "v3", "new_sqlite_classes": ["AuditChain"] }
   ],
   "workflows": [
-    { "name": "roundhouse-deploy", "binding": "DEPLOY_WORKFLOW", "class_name": "DeployWorkflow" }
+    { "name": "roundhouse-deploy", "binding": "DEPLOY_WORKFLOW", "class_name": "DeployWorkflow" },
+    {
+      "name": "roundhouse-key-rotation",
+      "binding": "KEY_ROTATION_WORKFLOW",
+      "class_name": "KeyRotationWorkflow"
+    }
   ],
   // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
   // a small number like the docs' "1001" can collide with another project's

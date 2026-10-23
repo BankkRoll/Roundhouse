@@ -5,14 +5,14 @@
  */
 import { createRoute, z } from "@hono/zod-openapi";
 import { type Db, users, workspaceMembers, workspaces } from "@roundhouse/db";
-import type { Role } from "@roundhouse/shared";
-import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { isApiTokenScope, type Role } from "@roundhouse/shared";
+import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
 import {
   actorOf,
   clientIp,
   createRouter,
+  requireInstanceAction,
   requirePrincipal,
-  requireUser,
   requireWorkspace,
 } from "../context";
 import { recordAudit } from "../lib/audit";
@@ -48,6 +48,8 @@ const me = createRoute({
           name: z.string(),
           email: z.string(),
           image: z.string().nullable(),
+          /** Holds the install-wide actions (ADR 0014, F3). */
+          instance_admin: z.boolean(),
         }),
         workspaces: z.array(
           z.object({
@@ -198,44 +200,37 @@ export const workspaceRoutes = createRouter()
         ),
       )
       .orderBy(asc(workspaces.name));
-    if (!token) return c.json({ user, workspaces: rows }, 200);
+    // SECURITY: A token never carries instance actions, so it never reports
+    // its creator as an instance admin either.
+    const [flags] = token
+      ? []
+      : await c
+          .get("db")
+          .select({ instanceAdmin: users.instanceAdmin })
+          .from(users)
+          .where(eq(users.id, user.id))
+          .limit(1);
+    const me = { ...user, instance_admin: flags?.instanceAdmin ?? false };
+    if (!token) return c.json({ user: me, workspaces: rows }, 200);
     return c.json(
       {
-        user,
+        user: me,
         workspaces: rows,
         token: {
           id: token.id,
           name: token.name,
           workspace_id: token.workspaceId,
-          scopes: token.scopes.filter((s) => s !== "instance:manage"),
+          scopes: token.scopes.filter(isApiTokenScope),
         },
       },
       200,
     );
   })
   .openapi(create, async (c) => {
-    const user = await requireUser(c);
-    // SECURITY: Workspaces are created by people already trusted to administer
-    // one. Otherwise any invited viewer could spin up a workspace and use its
-    // invites to pre-register accounts for arbitrary email addresses.
-    const [admin] = await c
-      .get("db")
-      .select({ id: workspaceMembers.id })
-      .from(workspaceMembers)
-      .where(
-        and(
-          eq(workspaceMembers.userId, user.id),
-          inArray(workspaceMembers.role, ["owner", "admin"]),
-        ),
-      )
-      .limit(1);
-    if (!admin) {
-      throw new ApiError(
-        403,
-        "forbidden",
-        "Only workspace owners and admins can create workspaces",
-      );
-    }
+    // SECURITY: Only instance admins create workspaces (ADR 0014, F3).
+    // Otherwise any invited user could spin up a workspace and use its invites
+    // to pre-register accounts for arbitrary email addresses.
+    const user = await requireInstanceAction(c, "workspaces:create");
     const ws = await createWorkspace(c.get("db"), c.req.valid("json").name, user.id);
     await recordAudit(c.get("db"), {
       workspaceId: ws.id,

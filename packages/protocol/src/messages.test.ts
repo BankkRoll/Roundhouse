@@ -11,15 +11,15 @@ import {
   DesiredStateSchema,
   HelloSchema,
   LogsSchema,
-  MAX_ENV_VALUE_BYTES,
-  MAX_ENV_VARS,
   MAX_LOG_FRAME_TEXT_BYTES,
   MAX_LOG_LINE_BYTES,
   MAX_LOG_LINES_PER_FRAME,
   MAX_WORKLOADS_PER_NODE,
   MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  SEALED_ENV_PROTOCOL_VERSION,
   SECRET_BUILD_ARGS_PROTOCOL_VERSION,
+  type SealedBox,
   WORKLOADS_PROTOCOL_VERSION,
   type WorkloadSpec,
   WorkloadSpecSchema,
@@ -27,6 +27,14 @@ import {
 } from "./index";
 
 const HASH = "0".repeat(64);
+
+/** Shape-valid box; these tests never open it. */
+const BOX: SealedBox = {
+  v: 1,
+  kid: "0123456789abcdef",
+  epk: "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
+  ct: "AAAAAAAAAAAAAAAAAAAAAA==",
+};
 
 function workload(overrides: Partial<WorkloadSpec> = {}): WorkloadSpec {
   return {
@@ -38,7 +46,7 @@ function workload(overrides: Partial<WorkloadSpec> = {}): WorkloadSpec {
     deployment_id: "dep_1",
     replica: 0,
     image: "nginx:1.27",
-    env: { PORT: "8080" },
+    env_sealed: BOX,
     ports: [{ container_port: 8080, protocol: "http" }],
     routes: [{ hostname: "web.example.com", container_port: 8080 }],
     healthcheck: null,
@@ -73,6 +81,8 @@ function buildJob(overrides: Record<string, unknown> = {}) {
     ...header,
     build_id: "bld_1",
     deployment_id: "dep_1",
+    project_id: "prj_1",
+    service_id: "svc_1",
     source: {
       type: "git",
       url: "https://github.com/acme/api.git",
@@ -82,33 +92,55 @@ function buildJob(overrides: Record<string, unknown> = {}) {
     context_dir: ".",
     build_args: {},
     image_repository: "127.0.0.1:5000/prj_1/svc_1",
-    cache_key: "svc_1",
+    cache_key: "prj_1.svc_1",
     timeout_s: 600,
     ...overrides,
   };
 }
 
 describe("protocol version", () => {
-  it("keeps accepting every additive version back to 1", () => {
-    expect(PROTOCOL_VERSION).toBe(3);
-    expect(MIN_PROTOCOL_VERSION).toBe(1);
+  it("follows ADR 0013: version 4, accepting exactly N-1", () => {
+    expect(PROTOCOL_VERSION).toBe(4);
+    expect(MIN_PROTOCOL_VERSION).toBe(PROTOCOL_VERSION - 1);
   });
 
-  it("gates every feature at a version the current one includes", () => {
-    for (const v of [
-      WORKLOADS_PROTOCOL_VERSION,
-      BUILD_CANCEL_PROTOCOL_VERSION,
-      SECRET_BUILD_ARGS_PROTOCOL_VERSION,
-    ]) {
-      expect(v).toBeGreaterThan(MIN_PROTOCOL_VERSION);
+  it("keeps the Phase 1 hardening gates inside the accepted range", () => {
+    for (const v of [BUILD_CANCEL_PROTOCOL_VERSION, SECRET_BUILD_ARGS_PROTOCOL_VERSION]) {
+      expect(v).toBe(3);
+      expect(v).toBeGreaterThanOrEqual(MIN_PROTOCOL_VERSION);
       expect(v).toBeLessThanOrEqual(PROTOCOL_VERSION);
     }
+  });
+
+  it("gates sealing at the current version and keeps the Phase 1 gate", () => {
+    expect(SEALED_ENV_PROTOCOL_VERSION).toBe(4);
+    expect(SEALED_ENV_PROTOCOL_VERSION).toBeGreaterThan(MIN_PROTOCOL_VERSION);
+    expect(SEALED_ENV_PROTOCOL_VERSION).toBeLessThanOrEqual(PROTOCOL_VERSION);
+    expect(WORKLOADS_PROTOCOL_VERSION).toBe(2);
   });
 });
 
 describe("WorkloadSpecSchema", () => {
   it("accepts a valid spec", () => {
     expect(WorkloadSpecSchema.safeParse(workload()).success).toBe(true);
+  });
+
+  it.each([
+    ["its environment network", "roundhouse-prj_1-env_1"],
+    ["its own project's legacy network, while it migrates", "roundhouse-prj_1"],
+  ])("lets a service join %s", (_name, network) => {
+    expect(WorkloadSpecSchema.safeParse(workload({ network })).success).toBe(true);
+  });
+
+  it("accepts the hashed environment network of long ids and nothing near it", () => {
+    const project_id = `prj_${"a".repeat(64)}`;
+    const environment_id = `env_${"b".repeat(64)}`;
+    // Pinned by fixtures/network-names.json.
+    const hashed =
+      "roundhouse-env-de76313f46ca78e88fae6164b20495d30a7eb49069316d1fb8c3248492e9fb3b";
+    const spec = (network: string) => workload({ project_id, environment_id, network });
+    expect(WorkloadSpecSchema.safeParse(spec(hashed)).success).toBe(true);
+    expect(WorkloadSpecSchema.safeParse(spec(`${hashed.slice(0, -1)}c`)).success).toBe(false);
   });
 
   it.each<[string, Partial<WorkloadSpec>]>([
@@ -118,21 +150,20 @@ describe("WorkloadSpecSchema", () => {
     ["an image with whitespace", { image: "nginx 1.27" }],
     ["an empty command", { command: [] }],
     ["a NUL in an argument", { command: ["a\0b"] }],
-    ["a bad env name", { env: { "1BAD": "x" } }],
-    ["a NUL in an env value", { env: { A: "a\0" } }],
-    ["an oversized env value", { env: { A: "x".repeat(MAX_ENV_VALUE_BYTES + 1) } }],
-    [
-      "too many env vars",
-      {
-        env: Object.fromEntries(Array.from({ length: MAX_ENV_VARS + 1 }, (_, i) => [`V${i}`, ""])),
-      },
-    ],
-    [
-      "env over the total byte budget",
-      {
-        env: Object.fromEntries(Array.from({ length: 3 }, (_, i) => [`V${i}`, "x".repeat(30_000)])),
-      },
-    ],
+    ["a service without env_sealed", { env_sealed: null }],
+    ["a box with a bad kid", { env_sealed: { ...BOX, kid: "nope" } }],
+    ["a box with a short epk", { env_sealed: { ...BOX, epk: "AAAA" } }],
+    ["a box of another version", { env_sealed: { ...BOX, v: 2 as 1 } }],
+    ["another environment's network", { network: "roundhouse-prj_1-env_2" }],
+    ["another project's network", { network: "roundhouse-prj_2-env_1" }],
+    ["another project's legacy network", { network: "roundhouse-prj_2" }],
+    ["the host network", { network: "host" }],
+    ["the bridge network", { network: "bridge" }],
+    ["no network", { network: "none" }],
+    ["the system network", { network: "roundhouse-system" }],
+    ["the build network", { network: "roundhouse-build" }],
+    ["a local image of another service", { image: `127.0.0.1:5000/prj_1/svc_2@sha256:${HASH}` }],
+    ["a local image by tag", { image: "127.0.0.1:5000/prj_1/svc_1:latest" }],
     ["port 0", { ports: [{ container_port: 0, protocol: "http" }], routes: [] }],
     ["port 65536", { ports: [{ container_port: 65536, protocol: "tcp" }], routes: [] }],
     [
@@ -215,7 +246,7 @@ describe("WorkloadSpecSchema", () => {
     "library/nginx:1.27-alpine",
     "ghcr.io/acme/api:v1.2.3",
     "registry.example.com:5000/a/b/c",
-    `127.0.0.1:5000/prj_01jab/svc_01jab@sha256:${"f".repeat(64)}`,
+    `127.0.0.1:5000/prj_1/svc_1@sha256:${"f".repeat(64)}`,
     `ghcr.io/acme/api:v1@sha256:${"0".repeat(64)}`,
   ])("accepts image %s", (image) => {
     expect(WorkloadSpecSchema.safeParse(workload({ image })).success).toBe(true);
@@ -229,6 +260,7 @@ describe("WorkloadSpecSchema", () => {
       environment_id: null,
       service_id: null,
       deployment_id: null,
+      env_sealed: null,
       routes: [],
     });
     expect(WorkloadSpecSchema.safeParse(spec).success).toBe(true);
@@ -248,6 +280,7 @@ describe("DesiredStateSchema", () => {
       environment_id: null,
       service_id: null,
       deployment_id: null,
+      env_sealed: null,
       routes: [],
     });
     expect(DesiredStateSchema.safeParse(desired({ workloads: [sys] })).success).toBe(false);
@@ -272,8 +305,12 @@ describe("DesiredStateSchema", () => {
     expect(
       DesiredStateSchema.safeParse(desired({ ...withAuth, exp: header.exp + 1 })).success,
     ).toBe(false);
-    // Without credentials, a longer lifetime is fine.
-    expect(DesiredStateSchema.safeParse(desired({ exp: header.exp + 60_000 })).success).toBe(true);
+    // Every service workload carries a sealed env, so it counts as a credential.
+    expect(DesiredStateSchema.safeParse(desired({ exp: header.exp + 1 })).success).toBe(false);
+    // Without workloads or credentials, a longer lifetime is fine.
+    expect(
+      DesiredStateSchema.safeParse(desired({ workloads: [], exp: header.exp + 60_000 })).success,
+    ).toBe(true);
 
     const s3 = {
       listen: "127.0.0.1:5000",
@@ -324,6 +361,32 @@ describe("BuildJobSchema", () => {
       { build_args: { NPM_TOKEN: "x" }, secret_build_args: ["NPM_TOKEN", "NPM_TOKEN"] },
     ],
     ["a bad secret build arg name", { build_args: { "a-b": "1" }, secret_build_args: ["a-b"] }],
+    ["another service's repository", { image_repository: "127.0.0.1:5000/prj_1/svc_2" }],
+    ["another project's cache", { cache_key: "prj_2.svc_1" }],
+    ["a missing project id", { project_id: undefined }],
+    [
+      "a ref that reads as an option",
+      {
+        source: {
+          type: "git",
+          url: "https://github.com/a/b",
+          commit_sha: "a".repeat(40),
+          ref: "--upload-pack=touch /tmp/x",
+        },
+      },
+    ],
+    [
+      "a ref with ..",
+      {
+        source: {
+          type: "git",
+          url: "https://github.com/a/b",
+          commit_sha: "a".repeat(40),
+          ref: "a..b",
+        },
+      },
+    ],
+    ["a malformed secrets box", { build_secrets_sealed: { ...BOX, ct: "not base64!" } }],
   ])("rejects %s", (_name, overrides) => {
     expect(BuildJobSchema.safeParse(buildJob(overrides)).success).toBe(false);
   });
@@ -346,6 +409,24 @@ describe("BuildJobSchema", () => {
     };
     expect(BuildJobSchema.safeParse(buildJob({ source })).success).toBe(true);
     expect(BuildJobSchema.safeParse(buildJob({ source, exp: header.exp + 1 })).success).toBe(false);
+  });
+
+  it("caps the lifetime of jobs carrying sealed secrets", () => {
+    const job = { build_secrets_sealed: BOX };
+    expect(BuildJobSchema.safeParse(buildJob(job)).success).toBe(true);
+    expect(BuildJobSchema.safeParse(buildJob({ ...job, exp: header.exp + 1 })).success).toBe(false);
+  });
+
+  it("accepts safe refs", () => {
+    for (const ref of ["main", "refs/heads/feature/login", "release-1.2", "v1.0.0"]) {
+      const source = {
+        type: "git",
+        url: "https://github.com/a/b",
+        commit_sha: "a".repeat(40),
+        ref,
+      };
+      expect(BuildJobSchema.safeParse(buildJob({ source })).success, ref).toBe(true);
+    }
   });
 });
 
@@ -385,6 +466,16 @@ describe("carriesCredentials", () => {
     ).toBe(true);
     expect(carriesCredentials({ type: "build_job", source: {} })).toBe(false);
     expect(carriesCredentials({ type: "build_job", source: { token: "t" } })).toBe(true);
+    expect(
+      carriesCredentials({
+        type: "desired_state",
+        workloads: [{ env_sealed: BOX }],
+        registry: null,
+      }),
+    ).toBe(true);
+    expect(carriesCredentials({ type: "build_job", source: {}, build_secrets_sealed: BOX })).toBe(
+      true,
+    );
   });
 });
 

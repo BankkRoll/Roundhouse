@@ -52,14 +52,37 @@ export async function deriveKey(masterKey: string, purpose: KeyPurpose): Promise
   );
 }
 
-/** Ciphertext as stored in the database. */
-export interface Sealed {
+/** Ciphertext as stored in the database, format 1 (ADR 0003): one key, short AADs. */
+export interface SealedV1 {
   /** Format version, so the scheme can change without ambiguity. */
   v: 1;
   /** 96-bit AES-GCM nonce, base64. Random per seal. */
   iv: string;
   /** Ciphertext with the GCM tag appended, base64. */
   ct: string;
+}
+
+/**
+ * Format 2 (ADR 0014): `kid` names the sealing key (a KEK id from the
+ * master keyring, or a project DEK id), and AADs are the long v2 forms.
+ */
+export interface SealedV2 {
+  v: 2;
+  /** 8 lowercase hex characters. */
+  kid: string;
+  /** 96-bit AES-GCM nonce, base64. Random per seal. */
+  iv: string;
+  /** Ciphertext with the GCM tag appended, base64. */
+  ct: string;
+}
+
+/** Any stored ciphertext. New writes are v2 once the keyring lands (stream api-secrets-crypto). */
+export type Sealed = SealedV1 | SealedV2;
+
+// TODO(api-secrets-crypto): replace with the keyring (ADR 0014 "Crypto"); until
+// then only format 1 exists in the database.
+function assertV1(sealed: Sealed): asserts sealed is SealedV1 {
+  if (sealed.v !== 1) throw new Error("Sealed format 2 needs the master keyring (ADR 0014)");
 }
 
 async function kek(masterKey: string): Promise<CryptoKey> {
@@ -78,7 +101,7 @@ async function kek(masterKey: string): Promise<CryptoKey> {
  *   a value can't be swapped into another row undetected.
  * @returns Sealed value safe to persist.
  */
-export async function seal(masterKey: string, plaintext: string, aad: string): Promise<Sealed> {
+export async function seal(masterKey: string, plaintext: string, aad: string): Promise<SealedV1> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: encoder.encode(aad) },
@@ -98,6 +121,7 @@ export async function seal(masterKey: string, plaintext: string, aad: string): P
  * @throws When the key, AAD, or ciphertext doesn't match.
  */
 export async function unseal(masterKey: string, sealed: Sealed, aad: string): Promise<string> {
+  assertV1(sealed);
   const pt = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: fromBase64(sealed.iv), additionalData: encoder.encode(aad) },
     await kek(masterKey),
@@ -198,7 +222,7 @@ export async function deriveProjectKey(
  * @param aad - Context the ciphertext is bound to.
  * @returns Sealed value safe to persist.
  */
-export async function sealWith(key: CryptoKey, plaintext: string, aad: string): Promise<Sealed> {
+export async function sealWith(key: CryptoKey, plaintext: string, aad: string): Promise<SealedV1> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: encoder.encode(aad) },
@@ -218,6 +242,7 @@ export async function sealWith(key: CryptoKey, plaintext: string, aad: string): 
  * @throws When the key, AAD, or ciphertext doesn't match.
  */
 export async function unsealWith(key: CryptoKey, sealed: Sealed, aad: string): Promise<string> {
+  assertV1(sealed);
   const pt = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: fromBase64(sealed.iv), additionalData: encoder.encode(aad) },
     key,

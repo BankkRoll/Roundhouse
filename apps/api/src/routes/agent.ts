@@ -10,7 +10,7 @@
  */
 import { createRoute } from "@hono/zod-openapi";
 import { nodeJoinTokens, nodes } from "@roundhouse/db";
-import { JoinRequestSchema, JoinResponseSchema } from "@roundhouse/protocol";
+import { JoinRequestSchema, JoinResponseSchema, nodeEncryptionKeyId } from "@roundhouse/protocol";
 import { newId, PINNED_AGENT_VERSION } from "@roundhouse/shared";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import installScript from "../../../../install/install.sh";
@@ -34,13 +34,13 @@ const join = createRoute({
 /** Agent-facing routes. */
 export const agentRoutes = createRouter()
   .openapi(join, async (c) => {
-    const masterKey = requireMasterKey(c);
+    requireMasterKey(c);
     const db = c.get("db");
     const input = c.req.valid("json");
     if (!(await isSetupComplete(db))) {
       throw new ApiError(503, "setup_incomplete", "Control plane setup is not complete");
     }
-    const signing = await loadSigningKey(db, masterKey);
+    const signing = await loadSigningKey(db, c.env);
 
     // SECURITY: Consume the token in the same statement that checks it, so a
     // token can't be used twice even by concurrent joins.
@@ -70,6 +70,13 @@ export const agentRoutes = createRouter()
         // The address Cloudflare observed beats a self-reported one.
         publicIp: clientIp(c) ?? input.public_ip ?? null,
         identityPublicKey: input.public_key,
+        ...(input.encryption_public_key
+          ? {
+              encryptionPublicKey: input.encryption_public_key,
+              encryptionKeyId: await nodeEncryptionKeyId(input.encryption_public_key),
+              encryptionKeyRegisteredAt: new Date(),
+            }
+          : {}),
         credentialHash: await hashToken(credential),
         os: input.os,
         arch: input.arch,

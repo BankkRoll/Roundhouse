@@ -35,6 +35,15 @@ export const ID_PREFIXES = {
   logChunk: "log",
   /** A replica on a node; also the container's identity in desired_state. */
   workload: "wl",
+  /** Better Auth's two-factor model; the key must match its model name. */
+  twoFactor: "tfa",
+  team: "team",
+  teamMember: "tmm",
+  projectAccessGrant: "pag",
+  /** Single-use state of a GitHub installation claim. */
+  githubClaim: "ghc",
+  /** One run of the master key rotation workflow. */
+  keyRotation: "krot",
 } as const;
 
 /** An entity kind that has an ID prefix. */

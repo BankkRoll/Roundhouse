@@ -10,12 +10,14 @@
  * - `limits` — size limits and string formats, mirrored in Go.
  * - `signing` — Ed25519 envelopes that authenticate control → agent frames.
  * - `join` — the HTTP handshake a node performs before opening its socket.
+ * - `box` — X25519 sealed boxes carrying variables and build secrets to one node.
  *
  * See {@link PROTOCOL_VERSION} for when to bump the version; the control
  * plane must keep accepting {@link MIN_PROTOCOL_VERSION}.
  *
  * @module
  */
+export * from "./box";
 export * from "./join";
 export * from "./limits";
 export * from "./messages";

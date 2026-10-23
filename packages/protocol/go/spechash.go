@@ -14,9 +14,11 @@ import (
 
 // SpecHashExcludedFields are the WorkloadSpec fields left out of the spec
 // hash: they apply without recreating the container (routes via Caddy, drain
-// on the next switch) or rotate often (registry credentials). Mirrors
-// SPEC_HASH_EXCLUDED_FIELDS in TypeScript.
-var SpecHashExcludedFields = []string{"spec_hash", "routes", "registry_auth", "drain_s"}
+// on the next switch) or rotate often (registry credentials, and env_sealed,
+// re-sealed for every frame over an environment fixed per workload ID).
+// Env and SecretFiles never reach the JSON, so they are not hashed either.
+// Mirrors SPEC_HASH_EXCLUDED_FIELDS in TypeScript.
+var SpecHashExcludedFields = []string{"spec_hash", "routes", "registry_auth", "drain_s", "env_sealed"}
 
 // ComputeSpecHash returns w's spec hash: lowercase hex SHA-256 of the
 // canonical JSON of w without [SpecHashExcludedFields]. It matches the
@@ -36,9 +38,6 @@ func SpecHashInput(w WorkloadSpec) (string, error) {
 	// NOTE: encoding/json writes nil maps and slices as null, which canonical
 	// form drops, while TypeScript always has {} or []. Normalise the
 	// required collections so both sides hash the same members.
-	if w.Env == nil {
-		w.Env = map[string]string{}
-	}
 	if w.Labels == nil {
 		w.Labels = map[string]string{}
 	}

@@ -34,6 +34,11 @@ from formatting in `biome.json`:
   `spec_hash`. Both sides must reproduce both exactly.
 - `network-names.json`: `environmentNetworkName` cases, readable and hashed.
   Both sides must produce the same names.
+- `sealed-box.json`: X25519 sealed boxes (RFC 7748 keys) that both sides
+  open and re-seal to identical bytes; `encryption-key.json`: a node's
+  encryption key signed by its identity key (ADR 0014).
+- `redaction.json`: the strings `redactionNeedles` (in `@roundhouse/shared`)
+  and Go's `RedactionNeedles` must produce for a set of secrets.
 
 ### Go decoding rules
 
@@ -53,26 +58,31 @@ constraints (ranges, formats, sizes) live in each type's `Validate()`.
 
 ### Versions
 
-The control plane accepts `MIN_PROTOCOL_VERSION` through `PROTOCOL_VERSION`:
-at least N-1 and N, and older versions for as long as every change since
-them is additive (today 1 through 3). Bump `PROTOCOL_VERSION`, in both
-`src/messages.ts` and `go/messages.go`, when:
+The control plane accepts `MIN_PROTOCOL_VERSION` through `PROTOCOL_VERSION`
+(N-1 and N; today 3 and 4, per ADR 0013's one-version-per-phase plan). A
+`hello` below the minimum is closed with code 4002 (`agent_outdated`). Bump
+`PROTOCOL_VERSION`, in both `src/messages.ts` and `go/messages.go`, when:
 - a change is breaking; or
 - the control plane must know whether an agent understands something new
   before sending it. Version 2 gates `build_job` and workload placement.
   Version 3 gates `build_cancel`, which a version 2 agent would drop, and
   `build_job.secret_build_args`, which it would ignore and then bake the
-  secret values into the image.
+  secret values into the image. Version 4 replaces `WorkloadSpec.env` with
+  the sealed `env_sealed` and seals build secrets (ADR 0014), so workloads
+  and builds go only to agents at `SEALED_ENV_PROTOCOL_VERSION` that
+  registered an encryption key.
 
 Give each gated feature its own constant (`WORKLOADS_PROTOCOL_VERSION`,
-`BUILD_CANCEL_PROTOCOL_VERSION`, `SECRET_BUILD_ARGS_PROTOCOL_VERSION`) and
-check it where the control plane sends the frame or field. Purely additive
-optional fields that an older agent may safely ignore need no bump. Changes
-to the envelope or signing scheme need an ADR.
+`BUILD_CANCEL_PROTOCOL_VERSION`, `SECRET_BUILD_ARGS_PROTOCOL_VERSION`,
+`SEALED_ENV_PROTOCOL_VERSION`) and check it where the control plane sends
+the frame or field. Purely additive optional fields that an older agent may
+safely ignore need no bump. Changes to the envelope or signing scheme need an
+ADR.
 
 ### Credentials on the wire
 
 A control frame carrying a credential (git token, registry password, object
-storage keys) must have `exp - iat <= CREDENTIAL_FRAME_TTL_MS` (60 s). The
+storage keys, or a sealed box: every workload's `env_sealed` and a build
+job's `build_secrets_sealed`) must have `exp - iat <= CREDENTIAL_FRAME_TTL_MS` (60 s). The
 schemas reject longer-lived ones; `carriesCredentials` tells the sender which
 TTL applies.

@@ -78,6 +78,22 @@ export const MAX_BUILD_ARGS = 64;
 /** Longest single build arg value, in bytes. */
 export const MAX_BUILD_ARG_VALUE_BYTES = 4096;
 
+/** Most BuildKit secrets per build job. */
+export const MAX_BUILD_SECRETS = 64;
+
+/** Longest single build secret value, in bytes. */
+export const MAX_BUILD_SECRET_VALUE_BYTES = 32 * 1024;
+
+/**
+ * Longest base64 ciphertext of one sealed box, in characters. Generous next
+ * to {@link MAX_ENV_TOTAL_BYTES} because JSON escaping can multiply control
+ * characters six-fold; the frame limit still bounds the total.
+ */
+export const MAX_SEALED_BOX_CT_CHARS = 512 * 1024;
+
+/** Longest git ref a build job may name, in bytes. */
+export const MAX_GIT_REF_BYTES = 255;
+
 // -----------------------------------------------------------------------------
 // Logs
 // -----------------------------------------------------------------------------
@@ -138,6 +154,19 @@ export const COMMIT_SHA_RE = /^([a-f0-9]{40}|[a-f0-9]{64})$/;
 
 /** Build cache scope key. */
 export const CACHE_KEY_RE = /^[A-Za-z0-9._-]{1,128}$/;
+
+/** Key ID of a node encryption key; see `nodeEncryptionKeyId`. */
+export const NODE_ENCRYPTION_KEY_ID_RE = /^[a-f0-9]{16}$/;
+
+/** Characters allowed in a git ref; see {@link isSafeGitRef}. */
+export const GIT_REF_RE = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * Private hostname alias a replica may carry in the `roundhouse.private_domain`
+ * label: `<service>.<environment>.internal`, lowercase.
+ */
+export const PRIVATE_DOMAIN_RE =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.internal$/;
 
 const PATH_COMPONENT = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
 const DOMAIN = "(?:[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?::[0-9]{1,5})?/)?";
@@ -231,6 +260,30 @@ export function isSafeRelativePath(path: string): boolean {
   if (!RELATIVE_PATH_RE.test(path) || path.startsWith("/")) return false;
   return !path.split("/").includes("..");
 }
+
+/**
+ * Whether a git ref is safe to pass to `git fetch`: it can't be read as an
+ * option, and it follows `git check-ref-format` (no `..`, no `//`, no
+ * component starting with `.`, no trailing `/`, `.` or `.lock`). Agents
+ * still pass `--end-of-options` before it.
+ *
+ * @param ref - Branch or tag name, with or without `refs/heads/`.
+ * @returns `true` when the ref is safe.
+ * @example
+ * isSafeGitRef("feature/login"); // true
+ * isSafeGitRef("--upload-pack=sh"); // false
+ */
+export function isSafeGitRef(ref: string): boolean {
+  if (utf8ByteLength(ref) > MAX_GIT_REF_BYTES || !GIT_REF_RE.test(ref)) return false;
+  if (ref.startsWith("-") || ref.startsWith("/") || ref.endsWith("/") || ref.endsWith(".")) {
+    return false;
+  }
+  if (ref.endsWith(".lock") || ref.includes("..") || ref.includes("//")) return false;
+  return !ref.split("/").some((c) => c.startsWith(".") || c.endsWith(".lock"));
+}
+
+/** Git ref; see {@link isSafeGitRef}. */
+export const GitRefString = z.string().refine(isSafeGitRef, { message: "expected a safe git ref" });
 
 /** Repository-relative path; see {@link isSafeRelativePath}. */
 export const RelativePath = z

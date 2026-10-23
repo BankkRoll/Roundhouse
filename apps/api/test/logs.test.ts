@@ -71,11 +71,17 @@ describe("runtime logs", () => {
     const s = await stage();
     await s.owner.json(`/v1/services/${s.serviceId}/variables?environment_id=${s.envId}`, {
       method: "PUT",
-      json: { set: [{ key: "DB_PASSWORD", value: "correct-horse-42", is_secret: true }] },
+      json: {
+        set: [{ key: "DB_PASSWORD", value: "correct-horse-42", tier: "secret" }],
+        confirm_write_only: true,
+      },
     });
     await s.owner.json(`/v1/projects/${s.project.id}/variables?environment_id=${s.envId}`, {
       method: "PUT",
-      json: { set: [{ key: "SHARED_TOKEN", value: "tok-shared-777", is_secret: true }] },
+      json: {
+        set: [{ key: "SHARED_TOKEN", value: "tok-shared-777", tier: "secret" }],
+        confirm_write_only: true,
+      },
     });
     const { id, workloadId } = await activeDeployment(s);
     const ts = Date.UTC(2026, 9, 22, 13, 5, 0);

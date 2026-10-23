@@ -9,7 +9,14 @@
  *
  * @module
  */
-import { ACTIONS, type Action, can, type Role } from "./rbac";
+import {
+  ACTIONS,
+  type Action,
+  can,
+  type InstanceAction,
+  isInstanceAction,
+  type Role,
+} from "./rbac";
 
 /** Prefix of every API token secret; also how the API tells tokens from other bearers. */
 export const API_TOKEN_PREFIX = "tok_";
@@ -21,12 +28,12 @@ export const API_TOKEN_DISPLAY_PREFIX_LENGTH = API_TOKEN_PREFIX.length + 4;
 export const MAX_API_TOKEN_TTL_DAYS = 366;
 
 /**
- * Scopes a token may carry: every workspace action. `instance:manage` is
- * excluded because install-wide settings are only changed from a browser
- * session by an owner.
+ * Scopes a token may carry: every workspace and project action. Instance
+ * actions (`instance:manage`, `workspaces:create`) are excluded because they
+ * belong to the instance-admin flag, which tokens never carry (ADR 0014).
  */
 export const API_TOKEN_SCOPES = ACTIONS.filter(
-  (a): a is Exclude<Action, "instance:manage"> => a !== "instance:manage",
+  (a): a is Exclude<Action, InstanceAction> => !isInstanceAction(a),
 );
 
 /** A scope an API token can carry; see {@link API_TOKEN_SCOPES}. */

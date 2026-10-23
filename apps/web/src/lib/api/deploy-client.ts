@@ -33,7 +33,6 @@ import type {
   ProjectDetail,
   ProjectSummary,
   ResolvedVariables,
-  RevealedVariables,
   Service,
   ServiceConfig,
   UpdatedService,
@@ -41,6 +40,7 @@ import type {
   UpdateServiceBody,
   Variable,
   VariablesPutBody,
+  VariablesPutResult,
 } from "./deploy-types";
 
 const seg = encodeURIComponent;
@@ -243,34 +243,25 @@ export const deployApi = {
    * @returns The full masked list afterwards.
    */
   putServiceVariables: (serviceId: string, environmentId: string, body: VariablesPutBody) =>
-    request<{ variables: Variable[] }>("PUT", `/v1/services/${seg(serviceId)}/variables`, {
+    request<VariablesPutResult>("PUT", `/v1/services/${seg(serviceId)}/variables`, {
       query: { environment_id: environmentId },
       body,
     }),
   /**
-   * Returns plaintext for secret keys. The API audits every call.
+   * Resolves a service's plain environment as a deployment would get it (built-ins
+   * included). Secret values never leave the API: every secret, and every plain variable
+   * whose resolution reaches one, is listed in `local_keys` instead. Needs
+   * `variables:read_plain`; the API audits every call with the key names.
    *
    * @param serviceId - Service id.
    * @param environmentId - Environment id.
-   * @param keys - Keys to reveal.
-   * @returns The revealed values.
+   * @param signal - Abort signal.
+   * @returns Resolved plain values and the keys that must be supplied locally.
    */
-  revealServiceVariables: (serviceId: string, environmentId: string, keys: string[]) =>
-    request<RevealedVariables>("POST", `/v1/services/${seg(serviceId)}/variables/reveal`, {
+  resolveServiceVariables: (serviceId: string, environmentId: string, signal?: AbortSignal) =>
+    request<ResolvedVariables>("GET", `/v1/services/${seg(serviceId)}/variables/resolved`, {
       query: { environment_id: environmentId },
-      body: { keys },
-    }),
-  /**
-   * Resolves a service's environment exactly as a deployment would get it, secrets in
-   * plaintext. Needs `variables:reveal`; the API audits every call.
-   *
-   * @param serviceId - Service id.
-   * @param environmentId - Environment id.
-   * @returns Every variable with references substituted, sorted by key.
-   */
-  resolveServiceVariables: (serviceId: string, environmentId: string) =>
-    request<ResolvedVariables>("POST", `/v1/services/${seg(serviceId)}/variables/resolve`, {
-      query: { environment_id: environmentId },
+      signal,
     }),
   /**
    * Lists a project environment's shared variables, secrets masked.

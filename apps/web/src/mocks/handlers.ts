@@ -220,6 +220,7 @@ const phase0Handlers = [
       name: name ?? "",
       email: (email ?? "").toLowerCase(),
       image: null,
+      instance_admin: true,
       password: password ?? "",
     });
     const workspace = createWorkspaceFor(userId, workspace_name ?? "");
@@ -268,7 +269,13 @@ const phase0Handlers = [
     const user = currentUser();
     if (!user) return unauthorized();
     const me: Me = {
-      user: { id: user.id, name: user.name, email: user.email, image: user.image },
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        image: user.image,
+        instance_admin: user.instance_admin ?? false,
+      },
       workspaces: db.memberships
         .filter((row) => row.user_id === user.id)
         .flatMap((row) => {
@@ -298,13 +305,9 @@ const phase0Handlers = [
     if (!parsed.ok) return parsed.response;
     const user = currentUser();
     if (!user) return unauthorized();
-    // SECURITY: Mirrors the API: only people who already own or administer a workspace
-    // may create one.
-    const isAdmin = db.memberships.some(
-      (row) => row.user_id === user.id && (row.role === "owner" || row.role === "admin"),
-    );
-    if (!isAdmin) {
-      return apiError(403, "forbidden", "Only workspace owners and admins can create workspaces");
+    // SECURITY: Mirrors the API: `workspaces:create` is an instance action (ADR 0014).
+    if (!user.instance_admin) {
+      return apiError(403, "forbidden", "Only instance admins can perform workspaces:create");
     }
     const workspace = createWorkspaceFor(user.id, parsed.values.name ?? "");
     recordAudit({

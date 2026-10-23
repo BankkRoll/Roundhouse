@@ -1,13 +1,21 @@
 /**
- * Phase 1 API contract: every route of the deploy pipeline as a `createRoute`
- * definition (path, method, params, body, responses, errors, security), plus
- * the RBAC action and audit actions each one implies. No handlers live here.
+ * API contract: every route of the deploy pipeline (Phase 1) and of the
+ * security hardening (ADR 0014) as a `createRoute` definition (path, method,
+ * params, body, responses, errors, security), plus the action, audit actions
+ * and freshness requirement each one implies. No handlers live here.
  *
  * Register a handler with `router.openapi(route, handler)`, read the policy
- * with {@link policyOf}, and check it with `requireWorkspace(c, workspaceId,
- * policyOf(route).action)` once the owning workspace is known. Routes under a
- * project, service, deployment or build resolve that workspace from the row;
- * callers who aren't members get 404, like workspace routes.
+ * with {@link policyOf}, and check it once the owning workspace (and project
+ * and environment, for project actions) is known. Routes under a project,
+ * service, deployment or build resolve that workspace from the row; callers
+ * who can't see the project get 404, like workspace routes.
+ *
+ * Files per stream, re-exported here so imports don't change:
+ * - `./contracts/policy`: `defineRoute`, `RoutePolicy`, `policyOf`;
+ * - `./contracts/params`: shared path params and queries;
+ * - `./contracts/variables`, `./contracts/keys` (api-secrets-crypto);
+ * - `./contracts/access`, `./contracts/instance` (api-authz-rbac-github);
+ * - `./contracts/auth` (api-auth).
  *
  * NOTE: routes without handlers are not registered yet, so they are absent
  * from `/v1/openapi.json`. A route appears in the document once its handler
@@ -19,8 +27,22 @@
  *
  * @module
  */
-import { createRoute, type RouteConfig, z } from "@hono/zod-openapi";
-import { type Action, type AuditAction, SERVICE_KINDS } from "@roundhouse/shared";
+import { type RouteConfig, z } from "@hono/zod-openapi";
+import { SERVICE_KINDS } from "@roundhouse/shared";
+import { ACCESS_ROUTES } from "./contracts/access";
+import { AUTH_ROUTES } from "./contracts/auth";
+import { INSTANCE_ROUTES } from "./contracts/instance";
+import { KEY_ROUTES } from "./contracts/keys";
+import {
+  BuildParams,
+  DeploymentParams,
+  EnvironmentQuery,
+  LogQuery,
+  ProjectParams,
+  ServiceParams,
+} from "./contracts/params";
+import { defineRoute, session, sessionOnly } from "./contracts/policy";
+import { VARIABLE_ROUTES } from "./contracts/variables";
 import {
   ApiTokenSchema,
   body,
@@ -43,8 +65,6 @@ import {
   ProjectDetailSchema,
   ProjectSchema,
   ProjectSummarySchema,
-  ResolvedVariablesSchema,
-  RevealedVariablesSchema,
   SERVICE_CONFIG_PARTS,
   ServiceConfigPatchSchema,
   ServiceConfigSchema,
@@ -54,105 +74,17 @@ import {
   SlugField,
   sessionAuth,
   sessionOnlyAuth,
-  VariableSchema,
-  VariablesPutSchema,
-  VariablesRevealSchema,
+  type VariableSchema,
   WorkspaceParams,
 } from "./schemas";
 
-// -----------------------------------------------------------------------------
-// Policies
-// -----------------------------------------------------------------------------
-
-/** OpenAPI extension key carrying a route's {@link RoutePolicy}. */
-export const POLICY_KEY = "x-roundhouse-policy";
-
-/** How a route authenticates its caller. */
-export type RouteAuth =
-  /**
-   * Better Auth session cookie or an API token (`Authorization: Bearer
-   * tok_…`); RBAC applies, and a token is further limited to its workspace
-   * and scopes.
-   */
-  | "session"
-  /** Better Auth session cookie only; API tokens are refused with 403. */
-  | "session_only"
-  /** `X-Hub-Signature-256` over the raw body with the App's webhook secret. */
-  | "github_signature";
-
-/** Who may call a route and what it records. */
-export interface RoutePolicy {
-  auth: RouteAuth;
-  /**
-   * Checked with `can(role, action)` against the caller's role in the owning
-   * workspace. `instance:manage` routes have no owning workspace: the caller
-   * must hold the action in at least one workspace. `null` for routes that
-   * authenticate by signature.
-   */
-  action: Action | null;
-  /** Audit actions the handler records when it succeeds (some only in certain cases). */
-  audit: readonly AuditAction[];
-}
-
-/**
- * `createRoute` plus a policy, stored under {@link POLICY_KEY} so it also
- * appears in the OpenAPI document.
- */
-function defineRoute<P extends string, R extends Omit<RouteConfig, "path"> & { path: P }>(
-  policy: RoutePolicy,
-  config: R,
-) {
-  return createRoute({ ...config, [POLICY_KEY]: policy } as R & { [POLICY_KEY]: RoutePolicy });
-}
-
-/**
- * Reads the policy of a contract route.
- *
- * @param route - A route exported from this module.
- * @returns Its auth mode, RBAC action and audit actions.
- * @example
- * await requireWorkspace(c, project.workspaceId, policyOf(getProject).action!);
- */
-export function policyOf(route: { [POLICY_KEY]: RoutePolicy }): RoutePolicy {
-  return route[POLICY_KEY];
-}
-
-const session = (action: Action, audit: readonly AuditAction[] = []): RoutePolicy => ({
-  auth: "session",
-  action,
-  audit,
-});
-
-const sessionOnly = (action: Action, audit: readonly AuditAction[] = []): RoutePolicy => ({
-  auth: "session_only",
-  action,
-  audit,
-});
-
-// -----------------------------------------------------------------------------
-// Params and query
-// -----------------------------------------------------------------------------
-
-/** `{projectId}` path param. */
-export const ProjectParams = z.object({ projectId: z.string() });
-
-/** `{serviceId}` path param. */
-export const ServiceParams = z.object({ serviceId: z.string() });
-
-/** `{deploymentId}` path param. */
-export const DeploymentParams = z.object({ deploymentId: z.string() });
-
-/** `{buildId}` path param. */
-export const BuildParams = z.object({ buildId: z.string() });
-
-/** Selects the environment a per-environment resource belongs to. */
-export const EnvironmentQuery = z.object({ environment_id: z.string() });
-
-/** Log page size; larger than other lists because lines are small. */
-const LogLimitField = z.coerce.number().int().min(1).max(1000).default(200);
-
-/** Cursor pagination for log pages; see `LogPageSchema`. */
-export const LogQuery = z.object({ cursor: CursorField, limit: LogLimitField });
+export * from "./contracts/access";
+export * from "./contracts/auth";
+export * from "./contracts/instance";
+export * from "./contracts/keys";
+export * from "./contracts/params";
+export * from "./contracts/policy";
+export * from "./contracts/variables";
 
 // -----------------------------------------------------------------------------
 // Projects
@@ -202,7 +134,7 @@ export const listProjects = defineRoute(session("projects:read"), {
  * Creates a project with a `production` environment. A taken slug, requested
  * or derived, is suffixed with -2, -3, … rather than refused.
  */
-export const createProject = defineRoute(session("projects:manage", ["project.created"]), {
+export const createProject = defineRoute(session("projects:create", ["project.created"]), {
   method: "post",
   path: "/v1/workspaces/{workspaceId}/projects",
   tags: ["projects"],
@@ -479,113 +411,6 @@ export const getServiceConfig = defineRoute(session("services:read"), {
 });
 
 // -----------------------------------------------------------------------------
-// Variables
-// -----------------------------------------------------------------------------
-
-/** A scope's variables, secrets masked. */
-export const VariableListSchema = z
-  .object({ variables: z.array(VariableSchema) })
-  .openapi("VariableList");
-
-/** A service's variables in an environment. */
-export const listServiceVariables = defineRoute(session("variables:read"), {
-  method: "get",
-  path: "/v1/services/{serviceId}/variables",
-  tags: ["variables"],
-  summary: "List a service's variables",
-  security: sessionAuth,
-  request: { params: ServiceParams, query: EnvironmentQuery },
-  responses: { 200: json(VariableListSchema), ...errors(400, 401, 403, 404) },
-});
-
-/**
- * Upserts and deletes a service's variables in one transaction, then returns
- * the full masked list. Reference syntax is checked here; unknown references
- * and cycles are reported at deploy time.
- */
-export const putServiceVariables = defineRoute(session("variables:manage", ["variables.updated"]), {
-  method: "put",
-  path: "/v1/services/{serviceId}/variables",
-  tags: ["variables"],
-  summary: "Set and delete a service's variables",
-  security: sessionAuth,
-  request: { params: ServiceParams, query: EnvironmentQuery, ...body(VariablesPutSchema) },
-  responses: { 200: json(VariableListSchema), ...errors(400, 401, 403, 404) },
-});
-
-/** Returns plaintext for the given keys. Audited with the keys, never the values. */
-export const revealServiceVariables = defineRoute(
-  session("variables:reveal", ["variables.revealed"]),
-  {
-    method: "post",
-    path: "/v1/services/{serviceId}/variables/reveal",
-    tags: ["variables"],
-    summary: "Reveal a service's secret values",
-    security: sessionAuth,
-    request: { params: ServiceParams, query: EnvironmentQuery, ...body(VariablesRevealSchema) },
-    responses: { 200: json(RevealedVariablesSchema), ...errors(400, 401, 403, 404) },
-  },
-);
-
-/**
- * Resolves a service's environment the way a deployment does: built-ins,
- * then its own variables with every `${{…}}` substituted, through the same
- * `resolveVariables`. Deployment built-ins (`ROUNDHOUSE_DEPLOYMENT_ID`,
- * `ROUNDHOUSE_GIT_COMMIT_SHA`) come from the service's live deployment, and are
- * absent without one. Plaintext, secrets included, so it needs
- * `variables:reveal` and is audited with the keys. Unknown references and
- * cycles are a 400 `invalid_reference` with one detail per problem.
- */
-export const resolveServiceVariables = defineRoute(
-  session("variables:reveal", ["variables.resolved"]),
-  {
-    method: "post",
-    path: "/v1/services/{serviceId}/variables/resolve",
-    tags: ["variables"],
-    summary: "Resolve a service's environment",
-    security: sessionAuth,
-    request: { params: ServiceParams, query: EnvironmentQuery },
-    responses: { 200: json(ResolvedVariablesSchema), ...errors(400, 401, 403, 404) },
-  },
-);
-
-/** A project environment's shared variables. */
-export const listSharedVariables = defineRoute(session("variables:read"), {
-  method: "get",
-  path: "/v1/projects/{projectId}/variables",
-  tags: ["variables"],
-  summary: "List shared variables",
-  security: sessionAuth,
-  request: { params: ProjectParams, query: EnvironmentQuery },
-  responses: { 200: json(VariableListSchema), ...errors(400, 401, 403, 404) },
-});
-
-/** Upserts and deletes shared variables; same semantics as {@link putServiceVariables}. */
-export const putSharedVariables = defineRoute(session("variables:manage", ["variables.updated"]), {
-  method: "put",
-  path: "/v1/projects/{projectId}/variables",
-  tags: ["variables"],
-  summary: "Set and delete shared variables",
-  security: sessionAuth,
-  request: { params: ProjectParams, query: EnvironmentQuery, ...body(VariablesPutSchema) },
-  responses: { 200: json(VariableListSchema), ...errors(400, 401, 403, 404) },
-});
-
-/** Returns plaintext for the given shared keys. Audited. */
-export const revealSharedVariables = defineRoute(
-  session("variables:reveal", ["variables.revealed"]),
-  {
-    method: "post",
-    path: "/v1/projects/{projectId}/variables/reveal",
-    tags: ["variables"],
-    summary: "Reveal shared secret values",
-    security: sessionAuth,
-    request: { params: ProjectParams, query: EnvironmentQuery, ...body(VariablesRevealSchema) },
-    responses: { 200: json(RevealedVariablesSchema), ...errors(400, 401, 403, 404) },
-  },
-);
-
-// -----------------------------------------------------------------------------
 // Deployments and logs
 // -----------------------------------------------------------------------------
 
@@ -725,7 +550,7 @@ export const listDomains = defineRoute(session("services:read"), {
 // Instance settings
 // -----------------------------------------------------------------------------
 
-/** Install-wide ingress settings. Owners only. */
+/** Install-wide settings. Instance admins only, from a browser session. */
 export const getInstanceSettings = defineRoute(sessionOnly("instance:manage"), {
   method: "get",
   path: "/v1/instance/settings",
@@ -741,12 +566,12 @@ export const getInstanceSettings = defineRoute(sessionOnly("instance:manage"), {
  * their hostnames when `apps_domain` changes, new ones use the new domain.
  * `log_retention_days` applies from the next hourly retention run.
  *
- * Instances have no audit log of their own, so the change is recorded as
- * `instance.settings_updated` in every workspace the caller owns: everyone
- * who can see that workspace's log sees who changed the install under it.
+ * The change is recorded as an instance-level `instance.settings_updated`
+ * entry (no workspace), visible to instance admins only. Needs a fresh
+ * session.
  */
 export const updateInstanceSettings = defineRoute(
-  sessionOnly("instance:manage", ["instance.settings_updated"]),
+  sessionOnly("instance:manage", ["instance.settings_updated"], { reauth: true }),
   {
     method: "patch",
     path: "/v1/instance/settings",
@@ -805,8 +630,8 @@ export const GithubCallbackQuery = z.object({
   setup_action: z.enum(["install", "update", "request"]).optional(),
 });
 
-/** Whether a GitHub App exists and which installations the workspace can use. */
-export const getGithubStatus = defineRoute(session("projects:read"), {
+/** Whether a GitHub App exists and which installations the workspace has claimed. */
+export const getGithubStatus = defineRoute(session("workspace:read"), {
   method: "get",
   path: "/v1/github/status",
   tags: ["github"],
@@ -816,16 +641,25 @@ export const getGithubStatus = defineRoute(session("projects:read"), {
   responses: { 200: json(GithubStatusSchema), ...errors(400, 401, 403, 404) },
 });
 
-/** Starts creating the instance's GitHub App. 409 when one already exists. */
-export const createGithubManifest = defineRoute(sessionOnly("instance:manage"), {
-  method: "post",
-  path: "/v1/github/manifest",
-  tags: ["github"],
-  summary: "Start creating the GitHub App",
-  security: sessionOnlyAuth,
-  request: body(GithubManifestBody),
-  responses: { 200: json(GithubManifestSchema), ...errors(400, 401, 403, 409) },
-});
+/**
+ * Starts creating the instance's GitHub App. 409 when one already exists.
+ * The manifest sets `request_oauth_on_install`, so installing the App also
+ * returns a user-to-server `code` that proves who installed it.
+ */
+export const createGithubManifest = defineRoute(
+  sessionOnly("instance:manage", [], {
+    reauth: true,
+  }),
+  {
+    method: "post",
+    path: "/v1/github/manifest",
+    tags: ["github"],
+    summary: "Start creating the GitHub App",
+    security: sessionOnlyAuth,
+    request: body(GithubManifestBody),
+    responses: { 200: json(GithubManifestSchema), ...errors(400, 401, 403, 409) },
+  },
+);
 
 /**
  * GitHub redirects the browser here.
@@ -833,7 +667,7 @@ export const createGithubManifest = defineRoute(sessionOnly("instance:manage"), 
  * - With `code` alone: exchanges it for the App's credentials and stores them
  *   sealed (needs `instance:manage`).
  * - With `installation_id`: records the installation for the workspace bound
- *   to `state` (needs `projects:manage` there). The installation ID comes
+ *   to `state` (needs `github:manage` there). The installation ID comes
  *   from the browser, so the handler requires proof that this user can
  *   access it: it exchanges `code` for a user-to-server token, checks that
  *   `GET /user/installations` lists the installation, and revokes the token.
@@ -843,7 +677,7 @@ export const createGithubManifest = defineRoute(sessionOnly("instance:manage"), 
  * Redirects to the dashboard.
  */
 export const githubCallback = defineRoute(
-  sessionOnly("projects:manage", [
+  sessionOnly("github:manage", [
     "github.app_created",
     "github.installation_added",
     "github.installation_rejected",
@@ -862,7 +696,11 @@ export const githubCallback = defineRoute(
   },
 );
 
-/** Repositories the workspace's installations can read, for picking a service source. */
+/**
+ * Repositories the workspace's installations can read, for picking a service
+ * source. With `project_id`, needs `services:manage` on that project;
+ * without, `github:manage`.
+ */
 export const listGithubRepositories = defineRoute(session("services:manage"), {
   method: "get",
   path: "/v1/github/repositories",
@@ -873,6 +711,8 @@ export const listGithubRepositories = defineRoute(session("services:manage"), {
     query: GithubWorkspaceQuery.extend({
       /** Limit to one installation (`ghi_…`). */
       installation_id: z.string().optional(),
+      /** Project the repository is for; decides which access check applies. */
+      project_id: z.string().optional(),
     }),
   },
   responses: {
@@ -880,6 +720,46 @@ export const listGithubRepositories = defineRoute(session("services:manage"), {
     ...errors(400, 401, 403, 404),
   },
 });
+
+/** Body of `POST /v1/github/claims`. */
+export const StartGithubClaimBody = z
+  .object({ workspace_id: z.string() })
+  .openapi("StartGithubClaim");
+
+/**
+ * Starts claiming an installation for a workspace: creates a single-use
+ * `github_claim_states` row (10 minutes) and returns the App's install URL
+ * with a signed `state` (purpose `github-claim`) naming it. 409 without an App.
+ */
+export const startGithubClaim = defineRoute(session("github:manage"), {
+  method: "post",
+  path: "/v1/github/claims",
+  tags: ["github"],
+  summary: "Start installing the GitHub App for a workspace",
+  security: sessionAuth,
+  request: body(StartGithubClaimBody),
+  responses: {
+    200: json(z.object({ install_url: z.string() }).openapi("GithubClaimStarted")),
+    ...errors(400, 401, 403, 404, 409),
+  },
+});
+
+/**
+ * Releases an installation from the workspace. Services that use it keep
+ * their config but can't mint tokens until it's claimed again.
+ */
+export const releaseGithubInstallation = defineRoute(
+  session("github:manage", ["github.installation_released"], { reauth: true }),
+  {
+    method: "delete",
+    path: "/v1/github/installations/{installationId}",
+    tags: ["github"],
+    summary: "Release a GitHub installation",
+    security: sessionAuth,
+    request: { params: z.object({ installationId: z.string() }), query: GithubWorkspaceQuery },
+    responses: { 204: { description: "Released" }, ...errors(401, 403, 404) },
+  },
+);
 
 /** Headers GitHub sends with every webhook delivery. */
 export const GithubWebhookHeaders = z.object({
@@ -891,7 +771,9 @@ export const GithubWebhookHeaders = z.object({
 /**
  * Receives GitHub webhooks. The body is deliberately not declared: the
  * handler must verify `X-Hub-Signature-256` over the raw bytes, in constant
- * time, before parsing anything. Handles `installation` (records it) and
+ * time, before parsing anything, then dedupe on both `X-GitHub-Delivery` and
+ * the SHA-256 of the body (`github_deliveries.body_hash`), since the
+ * delivery header isn't covered by the signature. Handles `installation` (records it) and
  * `push` (deploys services tracking the branch). Called without a browser
  * Origin, so the same-origin guard lets it through.
  */
@@ -1004,7 +886,10 @@ export const revokeApiToken = defineRoute(session("tokens:manage", ["token.revok
 // Index and derived types
 // -----------------------------------------------------------------------------
 
-/** Every Phase 1 route, by name. */
+/**
+ * Every Phase 1 route, by name, as the API serves it. The reveal routes are
+ * gone (ADR 0014): secret values are write-only.
+ */
 export const PHASE1_ROUTES = {
   listProjects,
   createProject,
@@ -1021,13 +906,7 @@ export const PHASE1_ROUTES = {
   updateService,
   deleteService,
   getServiceConfig,
-  listServiceVariables,
-  putServiceVariables,
-  revealServiceVariables,
-  resolveServiceVariables,
-  listSharedVariables,
-  putSharedVariables,
-  revealSharedVariables,
+  ...VARIABLE_ROUTES,
   listDeployments,
   createDeployment,
   getDeployment,
@@ -1047,6 +926,20 @@ export const PHASE1_ROUTES = {
   listApiTokens,
   createApiToken,
   revokeApiToken,
+} as const;
+
+/**
+ * ADR 0014 routes, by name. Each security stream registers handlers for its
+ * own and then moves them into the served set checked by
+ * `test/contracts.test.ts`.
+ */
+export const SECURITY_ROUTES = {
+  ...ACCESS_ROUTES,
+  ...AUTH_ROUTES,
+  ...INSTANCE_ROUTES,
+  ...KEY_ROUTES,
+  startGithubClaim,
+  releaseGithubInstallation,
 } as const;
 
 type JsonSchemaOf<T> = T extends { content: { "application/json": { schema: infer S } } }
@@ -1090,7 +983,7 @@ export type Environment = z.infer<typeof EnvironmentSchema>;
 export type Service = z.infer<typeof ServiceSchema>;
 /** One config version of a service. */
 export type ServiceConfig = z.infer<typeof ServiceConfigSchema>;
-/** A variable as listed (secrets masked). */
+/** A variable as listed: metadata always, plain values only when readable, secrets never. */
 export type Variable = z.infer<typeof VariableSchema>;
 /** A deployment. */
 export type Deployment = z.infer<typeof DeploymentSchema>;

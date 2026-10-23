@@ -1,6 +1,7 @@
 /**
- * Variables: envelope encryption at rest, masking, audited reveal,
- * reference-syntax errors with positions, shared scope, and RBAC.
+ * Variables: envelope encryption at rest, tiers (secrets are write-only, ADR
+ * 0014), the write-only confirmation, public-prefix checks, reference-syntax
+ * errors with positions, shared scope, and RBAC.
  */
 import { env } from "cloudflare:test";
 import { createDb } from "@roundhouse/db";
@@ -11,7 +12,19 @@ import { addMember, install } from "./helpers";
 import { createProject, createService } from "./pipeline-helpers";
 
 interface Listed {
-  variables: { key: string; value: string | null; is_secret: boolean; version: number }[];
+  variables: {
+    key: string;
+    value: string | null;
+    tier: "plain" | "secret";
+    locked: boolean;
+    version: number;
+    updated_by: string | null;
+  }[];
+  warnings?: { key: string; code: string }[];
+}
+
+interface ErrorBody {
+  error: { code: string; message: string; details?: { field: string; code: string }[] };
 }
 
 async function setup() {
@@ -25,27 +38,28 @@ async function setup() {
     serviceId: svc.service.id,
     envId,
     path: `/v1/services/${svc.service.id}/variables?environment_id=${envId}`,
-    revealPath: `/v1/services/${svc.service.id}/variables/reveal?environment_id=${envId}`,
   };
 }
 
 describe("service variables", () => {
-  it("encrypts values at rest and masks secrets on read", async () => {
+  it("encrypts values at rest and never returns a secret", async () => {
     const s = await setup();
     const res = await s.owner.json<Listed>(s.path, {
       method: "PUT",
       json: {
         set: [
           { key: "LOG_LEVEL", value: "debug" },
-          { key: "API_KEY", value: "sk_live_abcdef", is_secret: true },
+          { key: "API_KEY", value: "sk_live_abcdef" },
         ],
+        confirm_write_only: true,
       },
     });
     expect(res.status).toBe(200);
     expect(res.body.variables).toEqual([
-      expect.objectContaining({ key: "API_KEY", value: null, is_secret: true, version: 1 }),
-      expect.objectContaining({ key: "LOG_LEVEL", value: "debug", is_secret: false, version: 1 }),
+      expect.objectContaining({ key: "API_KEY", value: null, tier: "secret", version: 1 }),
+      expect.objectContaining({ key: "LOG_LEVEL", value: "debug", tier: "plain", version: 1 }),
     ]);
+    expect(res.body.variables[0]!.updated_by).toBe(s.userId);
 
     const rows = await env.DB.prepare("SELECT key, value_sealed FROM variables ORDER BY key").all<{
       key: string;
@@ -73,15 +87,45 @@ describe("service variables", () => {
     ).rejects.toThrow();
   });
 
-  it("updates, keeps the secret flag when omitted, and deletes", async () => {
+  it("needs confirm_write_only before anything becomes secret", async () => {
+    const s = await setup();
+    const refused = await s.owner.json<ErrorBody>(s.path, {
+      method: "PUT",
+      json: {
+        set: [
+          { key: "DB_PASSWORD", value: "pw-123456" },
+          { key: "A", value: "1" },
+        ],
+      },
+    });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error.code).toBe("confirmation_required");
+    expect(refused.body.error.details?.map((d) => d.field)).toEqual(["DB_PASSWORD"]);
+    expect((await s.owner.json<Listed>(s.path)).body.variables).toEqual([]);
+
+    // Plain to secret later needs it too, and no value.
+    await s.owner.json(s.path, { method: "PUT", json: { set: [{ key: "A", value: "1" }] } });
+    const upgrade = { set: [{ key: "A", tier: "secret" }] };
+    expect((await s.owner.json(s.path, { method: "PUT", json: upgrade })).status).toBe(400);
+    const ok = await s.owner.json<Listed>(s.path, {
+      method: "PUT",
+      json: { ...upgrade, confirm_write_only: true },
+    });
+    expect(ok.body.variables).toEqual([
+      expect.objectContaining({ key: "A", tier: "secret", value: null }),
+    ]);
+  });
+
+  it("keeps a secret secret when updated, needs a value to make it plain, and deletes", async () => {
     const s = await setup();
     await s.owner.json(s.path, {
       method: "PUT",
       json: {
         set: [
-          { key: "TOKEN", value: "one-1234", is_secret: true },
+          { key: "TOKEN", value: "one-1234", tier: "secret" },
           { key: "OLD", value: "x" },
         ],
+        confirm_write_only: true,
       },
     });
     const res = await s.owner.json<Listed>(s.path, {
@@ -89,24 +133,66 @@ describe("service variables", () => {
       json: { set: [{ key: "TOKEN", value: "two-5678" }], delete: ["OLD", "MISSING"] },
     });
     expect(res.body.variables).toEqual([
-      expect.objectContaining({ key: "TOKEN", value: null, is_secret: true, version: 2 }),
+      expect.objectContaining({ key: "TOKEN", value: null, tier: "secret", version: 2 }),
     ]);
-    const revealed = await s.owner.json<{ variables: { key: string; value: string }[] }>(
-      s.revealPath,
-      { method: "POST", json: { keys: ["TOKEN", "NOPE"] } },
-    );
-    expect(revealed.body.variables).toEqual([{ key: "TOKEN", value: "two-5678" }]);
+    const noValue = await s.owner.json<ErrorBody>(s.path, {
+      method: "PUT",
+      json: { set: [{ key: "TOKEN", tier: "plain" }] },
+    });
+    expect(noValue.body.error.code).toBe("value_required");
+    const plain = await s.owner.json<Listed>(s.path, {
+      method: "PUT",
+      json: { set: [{ key: "TOKEN", value: "now-public", tier: "plain" }] },
+    });
+    expect(plain.body.variables).toEqual([
+      expect.objectContaining({ key: "TOKEN", value: "now-public", tier: "plain", version: 3 }),
+    ]);
     const audit = await env.DB.prepare(
-      "SELECT action, metadata FROM audit_logs WHERE action LIKE 'variables.%' ORDER BY id",
+      "SELECT action, metadata FROM audit_logs WHERE action LIKE 'variables.%' ORDER BY seq",
     ).all<{ action: string; metadata: string }>();
     expect(audit.results.map((a) => a.action)).toEqual([
       "variables.updated",
       "variables.updated",
-      "variables.revealed",
+      "variables.updated",
     ]);
-    const reveal = JSON.parse(audit.results[2]!.metadata);
-    expect(reveal.keys).toEqual(["TOKEN"]);
-    expect(audit.results[2]!.metadata).not.toContain("two-5678");
+    for (const a of audit.results) expect(a.metadata).not.toContain("two-5678");
+  });
+
+  it("locks recognised credentials and public prefixes", async () => {
+    const s = await setup();
+    const pat = ["ghp", "_", "a1B2c3D4e5F6g7H8i9J0".repeat(2)].join("");
+    const locked = await s.owner.json<ErrorBody>(s.path, {
+      method: "PUT",
+      json: { set: [{ key: "CONFIG", value: pat, tier: "plain" }] },
+    });
+    expect(locked.body.error.code).toBe("tier_locked");
+    const stored = await s.owner.json<Listed>(s.path, {
+      method: "PUT",
+      json: { set: [{ key: "CONFIG", value: pat }], confirm_write_only: true },
+    });
+    expect(stored.body.variables).toEqual([
+      expect.objectContaining({ key: "CONFIG", tier: "secret", locked: true, value: null }),
+    ]);
+
+    const leak = { set: [{ key: "VITE_GITHUB", value: pat }] };
+    const refused = await s.owner.json<ErrorBody>(s.path, { method: "PUT", json: leak });
+    expect(refused.body.error.code).toBe("public_prefix_secret_value");
+    const acked = await s.owner.json<Listed>(s.path, {
+      method: "PUT",
+      json: { ...leak, acknowledge_public: ["VITE_GITHUB"] },
+    });
+    expect(acked.body.variables.find((v) => v.key === "VITE_GITHUB")).toMatchObject({
+      tier: "plain",
+      locked: true,
+    });
+    expect(acked.body.warnings).toEqual([
+      expect.objectContaining({ key: "VITE_GITHUB", code: "public_prefix_secret_value" }),
+    ]);
+    const asSecret = await s.owner.json<ErrorBody>(s.path, {
+      method: "PUT",
+      json: { set: [{ key: "VITE_URL", value: "x", tier: "secret" }], confirm_write_only: true },
+    });
+    expect(asSecret.body.error.code).toBe("tier_locked");
   });
 
   it("rejects malformed references with every position", async () => {
@@ -160,22 +246,28 @@ describe("service variables", () => {
     expect((await s.owner.json(`/v1/services/${s.serviceId}/variables`)).status).toBe(400);
   });
 
-  it("lets viewers read masked values but only admins reveal", async () => {
+  it("hides plain values from viewers and secrets from everyone", async () => {
     const s = await setup();
     await s.owner.json(s.path, {
       method: "PUT",
-      json: { set: [{ key: "SECRET", value: "hush-hush", is_secret: true }] },
+      json: {
+        set: [
+          { key: "SECRET", value: "hush-hush", tier: "secret" },
+          { key: "PLAIN", value: "visible" },
+        ],
+        confirm_write_only: true,
+      },
     });
     const viewer = await addMember(s.owner, s.workspaceId, "v@example.com", "viewer");
     const member = await addMember(s.owner, s.workspaceId, "m@example.com", "member");
     const admin = await addMember(s.owner, s.workspaceId, "a@example.com", "admin");
-    const read = await viewer.json<Listed>(s.path);
-    expect(read.status).toBe(200);
-    expect(read.body.variables[0]!.value).toBeNull();
-    const reveal = { method: "POST", json: { keys: ["SECRET"] } };
-    expect((await viewer.json(s.revealPath, reveal)).status).toBe(403);
-    expect((await member.json(s.revealPath, reveal)).status).toBe(403);
-    expect((await admin.json(s.revealPath, reveal)).status).toBe(200);
+    const values = async (c: typeof viewer) =>
+      Object.fromEntries(
+        (await c.json<Listed>(s.path)).body.variables.map((v) => [v.key, v.value]),
+      );
+    expect(await values(viewer)).toEqual({ PLAIN: null, SECRET: null });
+    expect(await values(member)).toEqual({ PLAIN: "visible", SECRET: null });
+    expect(await values(admin)).toEqual({ PLAIN: "visible", SECRET: null });
     const write = { method: "PUT", json: { set: [{ key: "X", value: "1" }] } };
     expect((await viewer.json(s.path, write)).status).toBe(403);
     expect((await member.json(s.path, write)).status).toBe(200);
@@ -183,7 +275,7 @@ describe("service variables", () => {
 });
 
 describe("shared variables", () => {
-  it("keeps shared values per environment, masked and revealable", async () => {
+  it("keeps shared values per environment, secrets write-only", async () => {
     const s = await setup();
     const path = `/v1/projects/${s.project.id}/variables?environment_id=${s.envId}`;
     const res = await s.owner.json<Listed>(path, {
@@ -191,19 +283,15 @@ describe("shared variables", () => {
       json: {
         set: [
           { key: "REGION", value: "eu-west" },
-          { key: "DB_PASSWORD", value: "pw-123456", is_secret: true },
+          { key: "DB_PASSWORD", value: "pw-123456" },
         ],
+        confirm_write_only: true,
       },
     });
-    expect(res.body.variables.map((v) => [v.key, v.value])).toEqual([
-      ["DB_PASSWORD", null],
-      ["REGION", "eu-west"],
+    expect(res.body.variables.map((v) => [v.key, v.tier, v.value])).toEqual([
+      ["DB_PASSWORD", "secret", null],
+      ["REGION", "plain", "eu-west"],
     ]);
-    const revealed = await s.owner.json<{ variables: { value: string }[] }>(
-      `/v1/projects/${s.project.id}/variables/reveal?environment_id=${s.envId}`,
-      { method: "POST", json: { keys: ["DB_PASSWORD"] } },
-    );
-    expect(revealed.body.variables[0]!.value).toBe("pw-123456");
     // Service scope doesn't see shared keys.
     const svc = await s.owner.json<Listed>(s.path);
     expect(svc.body.variables).toEqual([]);
@@ -223,16 +311,8 @@ describe("shared variables", () => {
     const outsider = await addMember(s.owner, ws2.body.id, "o@example.com", "admin");
     const path = `/v1/projects/${s.project.id}/variables?environment_id=${s.envId}`;
     expect((await outsider.json(path)).status).toBe(404);
-    expect(
-      (
-        await outsider.json(
-          `/v1/projects/${s.project.id}/variables/reveal?environment_id=${s.envId}`,
-          { method: "POST", json: { keys: ["A"] } },
-        )
-      ).status,
-    ).toBe(404);
-    expect(
-      (await outsider.json(s.revealPath, { method: "POST", json: { keys: ["A"] } })).status,
-    ).toBe(404);
+    const write = { method: "PUT", json: { set: [{ key: "A", value: "1" }] } };
+    expect((await outsider.json(path, write)).status).toBe(404);
+    expect((await outsider.json(s.path, write)).status).toBe(404);
   });
 });

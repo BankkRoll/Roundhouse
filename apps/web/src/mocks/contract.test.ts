@@ -281,11 +281,13 @@ describe("MSW mocks match the API contract", () => {
       expect((await call("POST", "/v1/workspaces", { name: "Lab" })).body).toMatchObject({
         slug: "lab-2",
       });
-      as("member");
-      expect(await call("POST", "/v1/workspaces", { name: "Lab" })).toMatchObject({
-        status: 403,
-        body: { error: { code: "forbidden" } },
-      });
+      for (const role of ["admin", "member"] as const) {
+        as(role);
+        expect(await call("POST", "/v1/workspaces", { name: "Lab" })).toMatchObject({
+          status: 403,
+          body: { error: { code: "forbidden" } },
+        });
+      }
 
       as("viewer");
       expect((await call("GET", WS)).status).toBe(200);
@@ -805,16 +807,18 @@ describe("MSW mocks match the API contract", () => {
   it.each([
     ["service", `/v1/services/${SEED.web}/variables`],
     ["shared", `/v1/projects/${SEED.project}/variables`],
-  ])("%s variables: masked list, put with reference checks, audited reveal", async (_, V) => {
+  ])("%s variables: masked list, put with reference checks, secrets write-only", async (_, V) => {
     await fresh(async () => {
       const env = `?environment_id=${SEED.production}`;
       expect((await call("GET", V)).status).toBe(400);
       expect((await call("GET", `${V}?environment_id=env_nope`)).status).toBe(404);
       const list = await call("GET", `${V}${env}`);
       expect(list.status).toBe(200);
-      const variables = (list.body as { variables: { is_secret: boolean; value: string | null }[] })
+      const variables = (list.body as { variables: { tier: string; value: string | null }[] })
         .variables;
-      expect(variables.filter((v) => v.is_secret).every((v) => v.value === null)).toBe(true);
+      expect(variables.filter((v) => v.tier === "secret").every((v) => v.value === null)).toBe(
+        true,
+      );
 
       expect((await call("PUT", `${V}${env}`, { set: [{ key: "1BAD", value: "x" }] })).status).toBe(
         400,
@@ -842,43 +846,34 @@ describe("MSW mocks match the API contract", () => {
       });
       const put = await call("PUT", `${V}${env}`, {
         set: [
-          { key: "TOKEN", value: "t0p", is_secret: true },
+          { key: "TOKEN", value: "t0p", tier: "secret" },
           { key: "PLAIN", value: `\${{shared.REGION}}` },
         ],
         delete: ["NODE_ENV"],
+        confirm_write_only: true,
       });
       expect(put.status).toBe(200);
       expect(
         (put.body as { variables: { key: string; value: string | null }[] }).variables,
       ).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ key: "TOKEN", value: null, is_secret: true }),
+          expect.objectContaining({ key: "TOKEN", value: null, tier: "secret" }),
           expect.objectContaining({ key: "PLAIN", value: `\${{shared.REGION}}` }),
         ]),
       );
-      expect((await call("POST", `${V}/reveal${env}`, { keys: [] })).status).toBe(400);
-      expect(await call("POST", `${V}/reveal${env}`, { keys: ["TOKEN"] })).toMatchObject({
-        status: 200,
-        body: { variables: [{ key: "TOKEN", value: "t0p" }] },
-      });
-      expect(db.audit.at(-1)).toMatchObject({
-        action: "variables.revealed",
-        metadata: { keys: ["TOKEN"] },
-      });
+      // ADR 0014: secrets are write-only; there is no reveal route to call.
       expect(JSON.stringify(db.audit.at(-1))).not.toContain("t0p");
 
       as("member");
       expect((await call("PUT", `${V}${env}`, { set: [{ key: "M", value: "1" }] })).status).toBe(
         200,
       );
-      expect((await call("POST", `${V}/reveal${env}`, { keys: ["TOKEN"] })).status).toBe(403);
       as("viewer");
       expect((await call("GET", `${V}${env}`)).status).toBe(200);
       expect((await call("PUT", `${V}${env}`, { set: [] })).status).toBe(403);
       as(null);
       expect((await call("GET", `${V}${env}`)).status).toBe(401);
       expect((await call("PUT", `${V}${env}`, { set: [] })).status).toBe(401);
-      expect((await call("POST", `${V}/reveal${env}`, { keys: ["TOKEN"] })).status).toBe(401);
     });
   });
 
@@ -1331,25 +1326,27 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
-  it("resolve: a service's environment as a deployment gets it, audited by key", async () => {
+  it("resolved: plain values as a deployment gets them, secrets only as local keys", async () => {
     await fresh(async () => {
-      const R = `/v1/services/${SEED.web}/variables/resolve`;
+      const R = `/v1/services/${SEED.web}/variables/resolved`;
       const env = `?environment_id=${SEED.production}`;
-      expect((await call("POST", R)).status).toBe(400);
-      expect((await call("POST", `${R}?environment_id=env_nope`)).status).toBe(404);
-      const resolved = await call("POST", `${R}${env}`);
+      expect((await call("GET", R)).status).toBe(400);
+      expect((await call("GET", `${R}?environment_id=env_nope`)).status).toBe(404);
+      await call("PUT", `/v1/services/${SEED.web}/variables${env}`, {
+        set: [{ key: "SESSION_URL", value: `https://x:\${{SESSION_SECRET}}@sessions` }],
+      });
+      const resolved = await call("GET", `${R}${env}`);
       expect(resolved.status).toBe(200);
-      const variables = (resolved.body as { variables: { key: string; value: string }[] })
-        .variables;
-      const value = (key: string) => variables.find((entry) => entry.key === key)?.value;
-      expect(variables.map((entry) => entry.key)).toEqual(
-        [...variables.map((entry) => entry.key)].sort(),
-      );
-      expect(value("API_URL")).toBe("http://api.production.internal:8080");
-      expect(value("REGION")).toBe("hel1");
-      expect(value("DATABASE_URL")).toContain("hunter2");
-      expect(value("ROUNDHOUSE_DEPLOYMENT_ID")).toBe(SEED.webActive);
-      expect(value("PORT")).toBe("3000");
+      const body = resolved.body as { variables: Record<string, string>; local_keys: string[] };
+      expect(Object.keys(body.variables)).toEqual(Object.keys(body.variables).sort());
+      expect(body.variables.API_URL).toBe("http://api.production.internal:8080");
+      expect(body.variables.REGION).toBe("hel1");
+      expect(body.variables.ROUNDHOUSE_DEPLOYMENT_ID).toBe(SEED.webActive);
+      expect(body.variables.PORT).toBe("3000");
+      expect(body.local_keys).toEqual(["DATABASE_URL", "SESSION_SECRET", "SESSION_URL"]);
+      for (const key of body.local_keys) expect(body.variables).not.toHaveProperty(key);
+      expect(JSON.stringify(body)).not.toContain("hunter2");
+      expect(JSON.stringify(body)).not.toContain("s3cr3t");
       expect(db.audit.at(-1)).toMatchObject({
         action: "variables.resolved",
         metadata: { keys: expect.arrayContaining(["API_URL"]) },
@@ -1359,15 +1356,15 @@ describe("MSW mocks match the API contract", () => {
       await call("PUT", `/v1/services/${SEED.web}/variables${env}`, {
         set: [{ key: "BROKEN", value: `\${{nowhere.X}}` }],
       });
-      expect(await call("POST", `${R}${env}`)).toMatchObject({
+      expect(await call("GET", `${R}${env}`)).toMatchObject({
         status: 400,
         body: { error: { code: "invalid_reference", details: [{ field: "web.BROKEN" }] } },
       });
 
-      as("member");
-      expect((await call("POST", `${R}${env}`)).status).toBe(403);
+      as("viewer");
+      expect((await call("GET", `${R}${env}`)).status).toBe(403);
       as(null);
-      expect((await call("POST", `${R}${env}`)).status).toBe(401);
+      expect((await call("GET", `${R}${env}`)).status).toBe(401);
     });
   });
 

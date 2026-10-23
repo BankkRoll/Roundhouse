@@ -119,13 +119,19 @@ describe("rate limiting", () => {
 });
 
 describe("account squatting via invites", () => {
-  it("does not let viewers or members create workspaces", async () => {
-    const { owner, workspaceId } = await install();
-    for (const role of ["viewer", "member"] as const) {
+  it("does not let anyone but an instance admin create workspaces", async () => {
+    const { owner, workspaceId, userId } = await install();
+    for (const role of ["viewer", "member", "admin"] as const) {
       const c = await addMember(owner, workspaceId, `${role}@example.com`, role);
       const res = await c.json("/v1/workspaces", { method: "POST", json: { name: "Mine" } });
-      expect(res.status).toBe(403);
+      expect(res.status, role).toBe(403);
     }
+    const ok = await owner.json("/v1/workspaces", { method: "POST", json: { name: "Mine" } });
+    expect(ok.status).toBe(201);
+    // Owning a workspace no longer grants it (ADR 0014, F3).
+    await env.DB.prepare("UPDATE users SET instance_admin = 0 WHERE id = ?").bind(userId).run();
+    const owned = await owner.json("/v1/workspaces", { method: "POST", json: { name: "More" } });
+    expect(owned.status).toBe(403);
   });
 
   it("leaves invite-created accounts unverified", async () => {

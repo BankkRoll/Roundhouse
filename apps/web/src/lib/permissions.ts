@@ -23,17 +23,14 @@ export function usePermissions(workspaceId: string): Permissions {
 }
 
 /**
- * Whether the caller may create workspaces. The API only lets people who already own or
- * administer a workspace do so.
+ * Whether the caller may create workspaces. `workspaces:create` is an instance action
+ * (ADR 0014): only instance admins hold it, whatever their workspace roles.
  *
  * @param me - `/v1/me`, or `undefined` while loading.
- * @returns `true` when the caller is an owner or admin somewhere.
+ * @returns `true` when the caller is an instance admin.
  */
-export function canCreateWorkspace(me: Pick<Me, "workspaces"> | undefined): boolean {
-  return (
-    me?.workspaces.some((workspace) => workspace.role === "owner" || workspace.role === "admin") ??
-    false
-  );
+export function canCreateWorkspace(me: Pick<Me, "user"> | undefined): boolean {
+  return me?.user.instance_admin ?? false;
 }
 
 /**
@@ -50,12 +47,11 @@ export function assignableRoles(role: Role | undefined, all: readonly Role[]): R
 
 /**
  * Whether the caller may change install-wide settings (apps domain, TLS, the GitHub App).
- * Instances have no roles of their own; the API grants `instance:manage` to anyone who
- * owns some workspace.
+ * Only instance admins may (ADR 0014); owning a workspace isn't enough.
  *
  * @param me - `/v1/me`, or `undefined` while loading.
- * @returns `true` when the caller holds `instance:manage` in any workspace.
+ * @returns `true` when the caller is an instance admin.
  */
-export function canManageInstance(me: Pick<Me, "workspaces"> | undefined): boolean {
-  return me?.workspaces.some((workspace) => can(workspace.role, "instance:manage")) ?? false;
+export function canManageInstance(me: Pick<Me, "user"> | undefined): boolean {
+  return me?.user.instance_admin ?? false;
 }

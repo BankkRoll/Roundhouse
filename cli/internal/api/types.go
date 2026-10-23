@@ -295,16 +295,16 @@ type JoinToken struct {
 	InstallCommand string `json:"install_command"`
 }
 
-// ResolvedVariable is one entry of a service's resolved environment.
-type ResolvedVariable struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
-}
-
-// ResolvedVariables is the response of POST
-// /v1/services/{serviceId}/variables/resolve, sorted by key.
+// ResolvedVariables is the response of GET
+// /v1/services/{serviceId}/variables/resolved: a service's plain environment
+// as a deployment would get it. Secret values never leave the control plane.
 type ResolvedVariables struct {
-	Variables []ResolvedVariable `json:"variables"`
+	// Variables maps each plain key, built-ins included, to its resolved
+	// value.
+	Variables map[string]string `json:"variables"`
+	// LocalKeys are the secret and secret-derived keys left out of
+	// Variables, sorted; a local .env file supplies them.
+	LocalKeys []string `json:"local_keys"`
 }
 
 // APITokenCreator is the member who created an API token.
@@ -362,14 +362,15 @@ type CreatedAPIToken struct {
 const MaxAPITokenDays = 366
 
 // APITokenScopes are the scopes a token may carry, from API_TOKEN_SCOPES in
-// packages/shared/src/tokens.ts (every RBAC action but instance:manage).
+// packages/shared/src/tokens.ts (every RBAC action but the instance ones).
 var APITokenScopes = []string{
 	"workspace:read", "workspace:update", "workspace:delete",
 	"members:read", "members:manage", "tokens:manage",
 	"nodes:read", "nodes:manage", "audit:read",
-	"projects:read", "projects:manage",
+	"projects:create", "github:manage",
+	"projects:read", "projects:manage", "access:manage",
 	"services:read", "services:manage", "deployments:create",
-	"variables:read", "variables:reveal", "variables:manage",
+	"variables:read", "variables:read_plain", "variables:manage",
 }
 
 // APITokenPresets are the named scope sets of API_TOKEN_PRESETS.

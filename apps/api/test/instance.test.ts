@@ -74,7 +74,7 @@ describe("instance settings", () => {
     const audit = await env.DB.prepare(
       "SELECT workspace_id, metadata FROM audit_logs WHERE action = 'instance.settings_updated'",
     ).first<{ workspace_id: string | null; metadata: string }>();
-    expect(audit?.workspace_id).toBe(workspaceId);
+    expect(audit?.workspace_id).toBeNull();
     expect(JSON.parse(audit!.metadata)).toEqual({
       changed: ["apps_domain", "tls_mode"],
       before: { apps_domain: null, tls_mode: "acme" },
@@ -93,44 +93,25 @@ describe("instance settings", () => {
 });
 
 describe("instance settings audit", () => {
-  it("records a change in every workspace the caller owns, visible in each audit log", async () => {
+  it("records one instance-level entry, in no workspace's audit log", async () => {
     const { owner, workspaceId } = await install();
-    const second = await owner.json<{ id: string }>("/v1/workspaces", {
-      method: "POST",
-      json: { name: "Second" },
-    });
-    const third = await owner.json<{ id: string }>("/v1/workspaces", {
-      method: "POST",
-      json: { name: "Third" },
-    });
-    // Admin elsewhere: owners only, so this workspace gets no record.
-    const other = await addMember(owner, third.body.id, "o@example.com", "admin");
-    const otherOwned = await other.json("/v1/workspaces", {
-      method: "POST",
-      json: { name: "Other's" },
-    });
-    expect(otherOwned.status).toBe(201);
-
     const res = await owner.json("/v1/instance/settings", {
       method: "PATCH",
       json: { log_retention_days: 30 },
     });
     expect(res.status).toBe(200);
     const rows = await env.DB.prepare(
-      "SELECT workspace_id FROM audit_logs WHERE action = 'instance.settings_updated' ORDER BY workspace_id",
-    ).all<{ workspace_id: string }>();
-    expect(rows.results.map((r) => r.workspace_id)).toEqual(
-      [workspaceId, second.body.id, third.body.id].sort(),
+      "SELECT workspace_id, metadata FROM audit_logs WHERE action = 'instance.settings_updated'",
+    ).all<{ workspace_id: string | null; metadata: string }>();
+    expect(rows.results.map((r) => r.workspace_id)).toEqual([null]);
+    expect(JSON.parse(rows.results[0]!.metadata)).toMatchObject({
+      changed: ["log_retention_days"],
+      after: { log_retention_days: 30 },
+    });
+    const log = await owner.json<{ items: { action: string }[] }>(
+      `/v1/workspaces/${workspaceId}/audit-logs`,
     );
-    for (const id of [workspaceId, second.body.id]) {
-      const log = await owner.json<{ items: { action: string; metadata: unknown }[] }>(
-        `/v1/workspaces/${id}/audit-logs`,
-      );
-      expect(log.body.items[0]).toMatchObject({
-        action: "instance.settings_updated",
-        metadata: { changed: ["log_retention_days"], after: { log_retention_days: 30 } },
-      });
-    }
+    expect(log.body.items.map((i) => i.action)).not.toContain("instance.settings_updated");
   });
 
   it("records nothing and pushes nothing when nothing changed", async () => {

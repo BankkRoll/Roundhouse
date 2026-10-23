@@ -47,11 +47,12 @@ import {
   services,
 } from "@roundhouse/db";
 import {
+  buildCacheKey,
   EnvSchema,
   localImageRepository,
   MAX_WORKLOADS_PER_NODE,
   REGISTRY_LISTEN,
-  WORKLOADS_PROTOCOL_VERSION,
+  SEALED_ENV_PROTOCOL_VERSION,
 } from "@roundhouse/protocol";
 import {
   BUILD_TIMEOUT_S,
@@ -75,7 +76,12 @@ import {
   retireDeployments,
   transitionDeployment,
 } from "../lib/deployments";
-import { LIVE_DEPLOYMENT_STATUSES, refreshNodes, restartSpec } from "../lib/desired-state";
+import {
+  LIVE_DEPLOYMENT_STATUSES,
+  refreshNodes,
+  restartSpec,
+  runsSealedWorkloads,
+} from "../lib/desired-state";
 import { resolveBranch } from "../lib/git";
 import {
   type CommitState,
@@ -555,11 +561,11 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         effectiveStatus(n) === "online" &&
         n.capabilities?.builder &&
         n.capabilities.docker &&
-        n.protocolVersion >= WORKLOADS_PROTOCOL_VERSION,
+        runsSealedWorkloads(n),
     );
     if (!candidates.length) {
       return fail(
-        `No online builder node: one needs the builder capability and agent protocol ${WORKLOADS_PROTOCOL_VERSION} or later`,
+        `No online builder node: one needs the builder capability, agent protocol ${SEALED_ENV_PROTOCOL_VERSION} or later and a registered encryption key`,
       );
     }
     // Reusing the last builder keeps BuildKit's layer cache warm.
@@ -658,6 +664,8 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     const result = await stub.sendBuildJob({
       build_id: buildId,
       deployment_id: plan.deploymentId,
+      project_id: plan.projectId,
+      service_id: plan.serviceId,
       source: {
         type: "git",
         url: git.repoUrl,
@@ -673,7 +681,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       build_args: buildArgs,
       ...(secretArgs.length ? { secret_build_args: secretArgs } : {}),
       image_repository: localImageRepository(plan.projectId, plan.serviceId),
-      cache_key: plan.serviceId,
+      cache_key: buildCacheKey(plan.projectId, plan.serviceId),
       timeout_s: BUILD_TIMEOUT_S,
     });
     disposeRpc(result);
@@ -785,7 +793,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         .select()
         .from(nodes)
         .where(and(eq(nodes.workspaceId, plan.workspaceId), isNull(nodes.deletedAt)))
-    ).filter((n) => n.protocolVersion >= WORKLOADS_PROTOCOL_VERSION);
+    ).filter(runsSealedWorkloads);
     const allocations = await db
       .select({
         nodeId: placements.nodeId,
@@ -844,7 +852,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     if (!result.ok) {
       const reason =
         result.reason === "no_nodes"
-          ? `No nodes run agent protocol ${WORKLOADS_PROTOCOL_VERSION} or later`
+          ? `No nodes run agent protocol ${SEALED_ENV_PROTOCOL_VERSION} or later with a registered encryption key`
           : `Could not place replica ${result.replica}: ${result.reason.replace(/_/g, " ")}`;
       await addDeploymentEvent(ctx, plan.projectId, plan.deploymentId, "schedule_failed", reason, {
         reason: result.reason,
@@ -1075,7 +1083,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     permissions: Record<string, string>,
   ): Promise<string | null> {
     if (!installationRef) return Promise.resolve(null);
-    return mintRepoToken(db, this.masterKey(), {
+    return mintRepoToken(db, this.env, {
       workspaceId,
       installationRef,
       repoUrl,

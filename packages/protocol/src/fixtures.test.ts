@@ -28,6 +28,7 @@ describe("shared fixtures", () => {
     ["hello.json", AgentMessageSchema],
     ["heartbeat.json", AgentMessageSchema],
     ["hello-statuses.json", AgentMessageSchema],
+    ["hello-encryption-key.json", AgentMessageSchema],
     ["workload-status.json", AgentMessageSchema],
     ["logs-runtime.json", AgentMessageSchema],
     ["logs-build.json", AgentMessageSchema],

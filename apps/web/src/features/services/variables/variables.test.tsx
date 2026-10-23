@@ -31,19 +31,9 @@ describe("variables editor", () => {
     expect(within(secret).getByText("value hidden")).toHaveClass("sr-only");
   });
 
-  it("reveals a secret through the audited reveal route, then hides it", async () => {
-    const { user, rowOf } = await openVariables();
-    await user.click(
-      within(rowOf("DATABASE_URL")).getByRole("button", { name: "Reveal DATABASE_URL" }),
-    );
-    await waitFor(() => expect(rowOf("DATABASE_URL")).toHaveTextContent("hunter2"));
-    expect(db.audit.at(-1)).toMatchObject({
-      action: "variables.revealed",
-      metadata: { keys: ["DATABASE_URL"] },
-    });
-    await user.click(
-      within(rowOf("DATABASE_URL")).getByRole("button", { name: "Hide DATABASE_URL" }),
-    );
+  it("never offers to reveal a secret (ADR 0014: write-only)", async () => {
+    const { rowOf } = await openVariables();
+    expect(within(rowOf("DATABASE_URL")).queryByRole("button", { name: /Reveal/ })).toBeNull();
     expect(rowOf("DATABASE_URL")).not.toHaveTextContent("hunter2");
   });
 

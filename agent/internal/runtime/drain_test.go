@@ -22,7 +22,9 @@ func TestMinDrainHoldsReplacedContainer(t *testing.T) {
 	old := h.running("wl_a")
 
 	w2 := w
-	w2.Env = map[string]string{"GREETING": "bonjour"}
+	// The environment is fixed per workload ID (ADR 0014), so a changed
+	// command stands in for any hashed change.
+	w2.Command = []string{"nginx", "-g", "daemon off;"}
 	w2 = rehash(w2)
 	h.rt.Apply(desired(2, w2))
 	var switched time.Time

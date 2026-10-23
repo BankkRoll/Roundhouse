@@ -6,24 +6,38 @@
  * - {@link currentPrincipal} resolves `Authorization: Bearer tok_…` when
  *   present (never falling back to cookies), else the Better Auth session,
  *   forwarding any refreshed session cookie onto the response.
- * - {@link requireWorkspace} checks an action in a workspace: a token must
- *   belong to that workspace, carry the action as a scope, and its creator's
- *   current role must grant it.
+ * - {@link requireWorkspace} checks an action in a workspace with
+ *   `resolveAccess`: a token must belong to that workspace, carry the action
+ *   as a scope, and its creator's current access must grant it.
+ * - {@link requireInstanceAction} checks install-wide actions against the
+ *   instance-admin flag; tokens never pass.
  *
  * @module
  */
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { createDb, type Db, workspaceMembers, workspaces } from "@roundhouse/db";
-import { type Action, type AuditActorType, can, type Role } from "@roundhouse/shared";
+import { createDb, type Db, users, workspaceMembers, workspaces } from "@roundhouse/db";
+import {
+  type AccessDenial,
+  type AccessScope,
+  type Action,
+  type AuditActorType,
+  type InstanceAction,
+  isInstanceAction,
+  type ProjectRole,
+  type Role,
+  resolveAccess,
+} from "@roundhouse/shared";
 import { APIError } from "better-auth/api";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { type AuthOptions, createAuth } from "./auth";
 import type { Env } from "./env";
+import { loadAccessContext } from "./lib/access";
 import { bearerSecret, resolveApiToken } from "./lib/api-tokens";
 import { isValidMasterKey } from "./lib/crypto";
 import { ApiError, errorBody } from "./lib/errors";
+import { publicOrigin } from "./lib/origin";
 
 /** The signed-in user as exposed to handlers. */
 export interface SessionUser {
@@ -63,6 +77,8 @@ export interface Membership {
   workspaceId: string;
   memberId: string;
   role: Role;
+  /** The caller's role on the project in scope, when the check named one. */
+  projectRole: ProjectRole | null;
 }
 
 /** Hono environment for every route in the API. */
@@ -75,6 +91,7 @@ export interface AppEnv {
   };
 }
 
+/** Context type for handlers and helpers. */
 export type AppContext = Context<AppEnv>;
 
 /**
@@ -101,13 +118,13 @@ export const withDb = createMiddleware<AppEnv>(async (c, next) => {
 });
 
 /**
- * The control plane's public origin, derived from the request.
+ * The control plane's public origin; see `publicOrigin` (ADR 0014: never the request's `Host`).
  *
  * @param c - Request context.
  * @returns E.g. `https://cp.example.com`.
  */
 export function originOf(c: AppContext): string {
-  return new URL(c.req.url).origin;
+  return publicOrigin(c);
 }
 
 /**
@@ -287,31 +304,84 @@ export async function requireUser(c: AppContext): Promise<SessionUser> {
   return principal.user;
 }
 
+/** Message of the 404 a non-member gets, which nested scopes reword per resource. */
+export const WORKSPACE_NOT_FOUND = "Workspace not found";
+
+// Stands in for "any project" when a project action is checked workspace-wide.
+const WORKSPACE_WIDE = "*";
+
+/** The caller of a workspace-scoped route, as {@link requireWorkspace} resolved them. */
+export interface Caller extends Membership {
+  user: SessionUser;
+  principal: Principal;
+  actor: AuditActor;
+  /**
+   * Checks another action with the same scope, e.g. whether a reader may
+   * also see plain values. Instance actions are never allowed here.
+   */
+  allows(action: Exclude<Action, InstanceAction>): boolean;
+}
+
+function denied(role: Role, action: Action, reason: AccessDenial | null): ApiError {
+  switch (reason) {
+    case "token_scope":
+      return new ApiError(403, "forbidden", `This API token lacks the ${action} scope`);
+    case "environment_protected":
+      return new ApiError(
+        403,
+        "forbidden",
+        `This environment is protected; your project role cannot perform ${action} here`,
+      );
+    case "no_project_access":
+      return new ApiError(403, "forbidden", `You have no access to this project (${action})`);
+    case "unknown_environment":
+    case "environment_mismatch":
+      return new ApiError(404, "not_found", "Environment not found");
+    default:
+      return new ApiError(403, "forbidden", `Your role (${role}) cannot perform ${action}`);
+  }
+}
+
 /**
  * Loads the caller's membership in `workspaceId` and checks `action`.
  *
  * Non-members get 404, not 403, so workspace IDs can't be probed; a token
- * gets 404 for every workspace but its own. A token also needs `action` among
- * its scopes, on top of its creator's role granting it.
+ * gets 404 for every workspace but its own.
+ *
+ * The decision is `resolveAccess` with the caller as subject: a token acts
+ * as its creator with `tokenScopes` set, so it needs `action` among its
+ * scopes on top of its creator's access, and never passes an instance
+ * action. With a `scope`, project actions use the caller's project role
+ * there (grants and teams included) and environment actions also the
+ * environment's protection. A project action checked without a scope (a
+ * workspace-wide list) uses the role the workspace role implies.
  *
  * @param c - Request context.
  * @param workspaceId - Workspace from the route.
  * @param action - Action being attempted.
+ * @param scope - Project and/or environment the action targets.
  * @returns The caller's membership, identity and audit actor.
+ * @throws {ApiError} 404 for non-members; 403 when access is denied.
  */
 export async function requireWorkspace(
   c: AppContext,
   workspaceId: string,
   action: Action,
-): Promise<Membership & { user: SessionUser; principal: Principal; actor: AuditActor }> {
+  scope: AccessScope = {},
+): Promise<Caller> {
   const principal = await requirePrincipal(c);
   if (principal.token && principal.token.workspaceId !== workspaceId) {
-    throw new ApiError(404, "not_found", "Workspace not found");
+    throw new ApiError(404, "not_found", WORKSPACE_NOT_FOUND);
   }
   const { user } = principal;
-  const [row] = await c
-    .get("db")
-    .select({ memberId: workspaceMembers.id, role: workspaceMembers.role })
+  const db = c.get("db");
+  const [row] = await db
+    .select({
+      memberId: workspaceMembers.id,
+      role: workspaceMembers.role,
+      memberDefaultProjectRole: workspaces.memberDefaultProjectRole,
+      viewerDefaultProjectRole: workspaces.viewerDefaultProjectRole,
+    })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
     .where(
@@ -322,20 +392,50 @@ export async function requireWorkspace(
       ),
     )
     .limit(1);
-  if (!row) throw new ApiError(404, "not_found", "Workspace not found");
-  if (!can(row.role, action)) {
-    throw new ApiError(403, "forbidden", `Your role (${row.role}) cannot perform ${action}`);
-  }
-  if (principal.token && !principal.token.scopes.includes(action)) {
-    throw new ApiError(403, "forbidden", `This API token lacks the ${action} scope`);
-  }
-  return {
+  if (!row) throw new ApiError(404, "not_found", WORKSPACE_NOT_FOUND);
+  const base = {
     workspaceId,
     memberId: row.memberId,
     role: row.role,
     user,
     principal,
     actor: actorOf(principal),
+  };
+  if (isInstanceAction(action)) {
+    if (principal.token) throw denied(row.role, action, "token_scope");
+    await requireInstanceAction(c, action);
+    return { ...base, projectRole: null, allows: () => false };
+  }
+  const settings = {
+    memberDefaultProjectRole: row.memberDefaultProjectRole,
+    viewerDefaultProjectRole: row.viewerDefaultProjectRole,
+  };
+  const loaded = await loadAccessContext(db, { workspaceId, settings, userId: user.id, scope });
+  const access = resolveAccess(
+    {
+      userId: user.id,
+      workspaceRole: row.role,
+      instanceAdmin: false,
+      teamIds: loaded.teamIds,
+      tokenScopes: principal.token?.scopes ?? null,
+    },
+    loaded.context,
+  );
+  // A project action checked without a project (a workspace-wide list) gets
+  // what every project of the workspace grants by default; with no grants
+  // loaded, any project ID yields exactly the role the workspace role implies.
+  const decide = (a: Action) => {
+    const d = access.check(a, scope);
+    return d.reason === "scope_required"
+      ? { ...access.check(a, { projectId: WORKSPACE_WIDE }), projectRole: null }
+      : d;
+  };
+  const decision = decide(action);
+  if (!decision.allowed) throw denied(row.role, action, decision.reason);
+  return {
+    ...base,
+    projectRole: decision.projectRole,
+    allows: (other: Exclude<Action, InstanceAction>) => decide(other).allowed,
   };
 }
 
@@ -350,30 +450,31 @@ export function clientIp(c: AppContext): string | null {
 }
 
 /**
- * Checks an install-wide action, which has no owning workspace: the caller
- * must hold it in at least one live workspace (in practice, be an owner).
- * API tokens are workspace-scoped and never pass.
+ * Checks an install-wide action against the caller's `users.instance_admin`
+ * flag (ADR 0014, F3: owning a workspace no longer grants it). API tokens
+ * never pass: they are workspace-scoped and never carry instance actions.
+ *
+ * TODO(api-authz-rbac-github): also enforce the policy's `reauth`.
  *
  * @param c - Request context.
- * @param action - Usually `instance:manage`.
- * @returns The signed-in user and the IDs of the workspaces granting `action`.
- * @throws {ApiError} 401 when signed out, 403 for a token or when no
- *   membership grants `action`.
+ * @param action - An instance action, e.g. `instance:manage`.
+ * @returns The signed-in user.
+ * @throws {ApiError} 401 when signed out, 403 for a token or when not an
+ *   instance admin.
  */
 export async function requireInstanceAction(
   c: AppContext,
-  action: Action,
-): Promise<SessionUser & { workspaceIds: string[] }> {
+  action: InstanceAction,
+): Promise<SessionUser> {
   const user = await requireUser(c);
-  const rows = await c
+  const [row] = await c
     .get("db")
-    .select({ role: workspaceMembers.role, workspaceId: workspaceMembers.workspaceId })
-    .from(workspaceMembers)
-    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
-    .where(and(eq(workspaceMembers.userId, user.id), isNull(workspaces.deletedAt)));
-  const granting = rows.filter((r) => can(r.role, action)).map((r) => r.workspaceId);
-  if (!granting.length) {
-    throw new ApiError(403, "forbidden", `Only workspace owners can perform ${action}`);
+    .select({ instanceAdmin: users.instanceAdmin })
+    .from(users)
+    .where(eq(users.id, user.id))
+    .limit(1);
+  if (!row?.instanceAdmin) {
+    throw new ApiError(403, "forbidden", `Only instance admins can perform ${action}`);
   }
-  return { ...user, workspaceIds: granting.sort() };
+  return user;
 }

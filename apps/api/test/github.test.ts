@@ -95,7 +95,7 @@ async function testKeys() {
 
 async function seedApp() {
   const k = await testKeys();
-  await storeGithubApp(createDb(env.DB), env.MASTER_KEY!, {
+  await storeGithubApp(createDb(env.DB), env, {
     id: APP_ID,
     slug: "roundhouse-cp-a1b2c3",
     name: "Roundhouse cp a1b2c3",
@@ -997,7 +997,7 @@ describe("minting installation tokens", () => {
     const ghi = await claimInstallation(workspaceId);
     const db = createDb(env.DB);
     const mint = (over: Partial<Parameters<typeof mintRepoToken>[2]> = {}) =>
-      mintRepoToken(db, env.MASTER_KEY!, {
+      mintRepoToken(db, env, {
         workspaceId,
         installationRef: ghi,
         repoUrl: "https://github.com/acme/api.git",

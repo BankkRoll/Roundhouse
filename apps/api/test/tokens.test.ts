@@ -116,7 +116,13 @@ describe("issuing tokens", () => {
     const admin = await addMember(owner, workspaceId, "a@example.com", "admin");
     const beyond = await createToken(admin, workspaceId, ["projects:read", "workspace:delete"]);
     expect(beyond.status).toBe(403);
-    for (const scopes of [[], ["instance:manage"], ["root"], ["projects:read", "projects:read"]]) {
+    for (const scopes of [
+      [],
+      ["instance:manage"],
+      ["workspaces:create"],
+      ["root"],
+      ["projects:read", "projects:read"],
+    ]) {
       expect((await createToken(owner, workspaceId, scopes)).status, JSON.stringify(scopes)).toBe(
         400,
       );
@@ -139,7 +145,7 @@ describe("bearer authentication", () => {
     const { owner, workspaceId, userId } = await install();
     const { token, secret } = await mint(owner, workspaceId, [
       "projects:read",
-      "projects:manage",
+      "projects:create",
       "audit:read",
     ]);
     const list = await as<{ projects: unknown[] }>(
@@ -176,7 +182,7 @@ describe("bearer authentication", () => {
       id: token.id,
       name: "ci",
       workspace_id: workspaceId,
-      scopes: ["projects:read", "projects:manage", "audit:read"],
+      scopes: ["projects:read", "projects:create", "audit:read"],
     });
     const browserMe = await owner.json<Record<string, unknown>>("/v1/me");
     expect(browserMe.body).not.toHaveProperty("token");
@@ -204,7 +210,7 @@ describe("bearer authentication", () => {
       { method: "POST", json: { name: "Nope" } },
     );
     expect(denied.status).toBe(403);
-    expect(denied.body.error.message).toContain("projects:manage");
+    expect(denied.body.error.message).toContain("projects:create");
     expect((await as(secret, `/v1/workspaces/${other.body.id}/projects`)).status).toBe(404);
     expect((await as(secret, `/v1/workspaces/${other.body.id}`)).status).toBe(404);
   });
@@ -212,7 +218,7 @@ describe("bearer authentication", () => {
   it("is bounded by the creator's current role and membership", async () => {
     const { owner, workspaceId } = await install();
     const admin = await addMember(owner, workspaceId, "a@example.com", "admin");
-    const { secret } = await mint(admin, workspaceId, ["projects:read", "projects:manage"]);
+    const { secret } = await mint(admin, workspaceId, ["projects:read", "projects:create"]);
     const create = () =>
       as(secret, `/v1/workspaces/${workspaceId}/projects`, {
         method: "POST",
@@ -246,6 +252,21 @@ describe("bearer authentication", () => {
       json: {},
     });
     expect(accept.status).toBe(403);
+  });
+
+  it("never performs an instance action, even with one stored among its scopes", async () => {
+    const { owner, workspaceId } = await install();
+    const { token, secret } = await mint(owner, workspaceId, ["workspace:read"]);
+    await env.DB.prepare("UPDATE api_tokens SET scopes = ? WHERE id = ?")
+      .bind(JSON.stringify(["workspace:read", "instance:manage", "workspaces:create"]), token.id)
+      .run();
+    expect((await as(secret, "/v1/instance/settings")).status).toBe(403);
+    const me = await as<{ user: { instance_admin: boolean }; token: { scopes: string[] } }>(
+      secret,
+      "/v1/me",
+    );
+    expect(me.body.token.scopes).toEqual(["workspace:read"]);
+    expect(me.body.user.instance_admin).toBe(false);
   });
 });
 
@@ -413,7 +434,7 @@ describe("abuse", () => {
 
   it("exempts bearer requests from the same-origin guard, not cookie ones", async () => {
     const { owner, workspaceId } = await install();
-    const { secret } = await mint(owner, workspaceId, ["projects:read", "projects:manage"]);
+    const { secret } = await mint(owner, workspaceId, ["projects:read", "projects:create"]);
     const evil = { origin: "https://evil.test", "sec-fetch-site": "cross-site" };
     const bearer = await call(`/v1/workspaces/${workspaceId}/projects`, {
       method: "POST",

@@ -208,7 +208,10 @@ describe("environments", () => {
     });
     await owner.json(`/v1/services/${svc.service.id}/variables?environment_id=${prodId}`, {
       method: "PUT",
-      json: { set: [{ key: "TOKEN", value: "s3cr3t-value", is_secret: true }] },
+      json: {
+        set: [{ key: "TOKEN", value: "s3cr3t-value", tier: "secret" }],
+        confirm_write_only: true,
+      },
     });
     await owner.json(`/v1/projects/${p.id}/variables?environment_id=${prodId}`, {
       method: "PUT",
@@ -223,11 +226,13 @@ describe("environments", () => {
       `/v1/services/${svc.service.id}/config?environment_id=${staging.body.id}`,
     );
     expect(cfg.body.deploy.replicas).toBe(4);
-    const revealed = await owner.json<{ variables: { key: string; value: string }[] }>(
-      `/v1/services/${svc.service.id}/variables/reveal?environment_id=${staging.body.id}`,
-      { method: "POST", json: { keys: ["TOKEN"] } },
-    );
-    expect(revealed.body.variables).toEqual([{ key: "TOKEN", value: "s3cr3t-value" }]);
+    // Secrets can't be read back (ADR 0014); the copy keeps its tier and stays masked.
+    const copied = await owner.json<{
+      variables: { key: string; tier: string; value: string | null }[];
+    }>(`/v1/services/${svc.service.id}/variables?environment_id=${staging.body.id}`);
+    expect(copied.body.variables).toEqual([
+      expect.objectContaining({ key: "TOKEN", tier: "secret", value: null }),
+    ]);
     const shared = await owner.json<{ variables: { key: string; value: string }[] }>(
       `/v1/projects/${p.id}/variables?environment_id=${staging.body.id}`,
     );

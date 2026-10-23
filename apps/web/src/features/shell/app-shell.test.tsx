@@ -253,7 +253,7 @@ describe("app shell", () => {
     );
   });
 
-  it("only offers New workspace to owners and admins, as the API requires", async () => {
+  it("only offers New workspace to instance admins, as the API requires", async () => {
     signInAs(USERS.member.id);
     const { user } = renderApp(BASE);
     await findPageHeading("Home");

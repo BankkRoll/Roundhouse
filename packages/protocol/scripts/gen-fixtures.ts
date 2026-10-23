@@ -4,9 +4,11 @@
  * - `signed-envelope.json`: a minimal `desired_state` that never expires;
  * - `signed-desired-state.json`: a builder node's `desired_state` with a full
  *   workload, registry credentials and S3 registry storage;
- * - `signed-build-job.json`: a `build_job` carrying a git token and a secret
- *   build arg;
+ * - `signed-build-job.json`: a `build_job` carrying a git token, a secret
+ *   build arg and sealed build secrets;
  * - `signed-build-cancel.json`: a `build_cancel`;
+ * - `sealed-box.json` and `encryption-key.json`: cross-language vectors for
+ *   sealed boxes and a node's signed encryption key;
  * - `spec-hash.json`: workload specs with their canonical text and hash;
  * - `network-names.json`: environment network names, readable and hashed.
  *
@@ -20,19 +22,30 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+// The protocol package does not depend on shared; only this generator reads it.
+import { redact, redactionNeedles } from "../../shared/src/redaction";
 import {
+  type BoxPurpose,
+  buildCacheKey,
+  buildSecretsAad,
   type ControlMessage,
   ControlMessageSchema,
   CREDENTIAL_FRAME_TTL_MS,
   computeSpecHash,
+  encryptionKeySignaturePayload,
   environmentNetworkName,
   importSigningKey,
   localImageRepository,
+  nodeEncryptionKeyId,
+  type SealedBox,
+  sealBox,
   signEnvelope,
   specHashInput,
   toBase64,
   type WorkloadSpec,
   WorkloadSpecSchema,
+  workloadEnvAad,
+  x25519PublicKey,
 } from "../src/index";
 
 // NOTE: PKCS#8 wrapping for a raw Ed25519 seed is a fixed 16-byte DER prefix.
@@ -76,6 +89,38 @@ const SERVICE = "svc_01JAAAAAAAAAAAAAAAAAAAAAAA";
 const ENVIRONMENT = "env_01JAAAAAAAAAAAAAAAAAAAAAAA";
 const NETWORK = await environmentNetworkName(PROJECT, ENVIRONMENT);
 
+// RFC 7748 section 6.1 keys: public and test-only. Bob plays the node,
+// Alice the sender's ephemeral key, so the X25519 output is the RFC's.
+const NODE_PRIVATE_KEY_HEX = "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb";
+const EPHEMERAL_PRIVATE_KEY_HEX =
+  "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
+const RFC7748_SHARED_HEX = "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742";
+const hexBytes = (h: string) => Uint8Array.from(Buffer.from(h, "hex"));
+const nodePublicKey = await x25519PublicKey(hexBytes(NODE_PRIVATE_KEY_HEX));
+
+function seal(plaintext: string, purpose: BoxPurpose, aad: string): Promise<SealedBox> {
+  return sealBox(nodePublicKey, plaintext, purpose, aad, {
+    ephemeralPrivateKey: hexBytes(EPHEMERAL_PRIVATE_KEY_HEX),
+  });
+}
+
+/** A workload's sealed env for a frame of `generation` to {@link NODE_ID}. */
+function envBox(
+  workloadId: string,
+  generation: number,
+  env: Record<string, string>,
+  files: Record<string, string> = {},
+): Promise<SealedBox> {
+  return seal(
+    JSON.stringify({ env, files }),
+    "workload-env",
+    workloadEnvAad(NODE_ID, workloadId, generation),
+  );
+}
+
+const DESIRED_GENERATION = 8;
+const BUILD_ID = "bld_01JAAAAAAAAAAAAAAAAAAAAAAA";
+
 const fullWorkload = await withHash({
   id: "wl_01JAAAAAAAAAAAAAAAAAAAAAAA",
   kind: "service",
@@ -88,7 +133,12 @@ const fullWorkload = await withHash({
   registry_auth: { server: "127.0.0.1:5000", username: "roundhouse", password: "registry-secret" },
   command: ["node", "server.js"],
   entrypoint: ["/sbin/tini", "--"],
-  env: { PORT: "3000", DATABASE_URL: "postgres://db:5432/app", GREETING: "héllo 🚀" },
+  env_sealed: await envBox(
+    "wl_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    DESIRED_GENERATION,
+    { PORT: "3000", DATABASE_URL: "postgres://db:5432/app", GREETING: "héllo 🚀" },
+    { STRIPE_KEY: "fixture-stripe-key" },
+  ),
   ports: [
     { container_port: 3000, protocol: "http" },
     { container_port: 9229, protocol: "tcp" },
@@ -122,7 +172,7 @@ const minimalWorkload = await withHash({
   deployment_id: "dep_01JBBBBBBBBBBBBBBBBBBBBBBB",
   replica: 2,
   image: "nginx:1.27",
-  env: {},
+  env_sealed: await envBox("wl_01JBBBBBBBBBBBBBBBBBBBBBBB", DESIRED_GENERATION, {}),
   ports: [],
   routes: [],
   healthcheck: null,
@@ -136,7 +186,7 @@ const minimalWorkload = await withHash({
 const escapingWorkload = await withHash({
   ...minimalWorkload,
   id: "wl_01JCCCCCCCCCCCCCCCCCCCCCCC",
-  env: {
+  labels: {
     QUOTES: 'say "hi" \\ bye',
     CONTROL: "tab\there\nnew\u0001line\u001f",
     HTML: "<script>&amp;</script>",
@@ -145,8 +195,9 @@ const escapingWorkload = await withHash({
     DEL: "\u007f",
     a_lower: "sorted after uppercase",
     Z_UPPER: "sorted before lowercase",
+    "x.unicode": "café",
+    "a.empty": "",
   },
-  labels: { "x.unicode": "café", "a.empty": "" },
   healthcheck: {
     type: "tcp",
     port: 5432,
@@ -166,7 +217,7 @@ const systemWorkload = await withHash({
   deployment_id: null,
   replica: 0,
   image: "registry:3",
-  env: { REGISTRY_HTTP_ADDR: "0.0.0.0:5000" },
+  env_sealed: null,
   ports: [{ container_port: 5000, protocol: "tcp" }],
   routes: [],
   healthcheck: {
@@ -226,8 +277,10 @@ await writeSigned("signed-build-job.json", {
   node_id: NODE_ID,
   iat: IAT,
   exp: IAT + CREDENTIAL_FRAME_TTL_MS,
-  build_id: "bld_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  build_id: BUILD_ID,
   deployment_id: "dep_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  project_id: PROJECT,
+  service_id: SERVICE,
   source: {
     type: "git",
     url: "https://github.com/acme/api.git",
@@ -240,8 +293,13 @@ await writeSigned("signed-build-job.json", {
   context_dir: ".",
   build_args: { NODE_ENV: "production", NPM_TOKEN: "npm_fixtureSecretValue" },
   secret_build_args: ["NPM_TOKEN"],
+  build_secrets_sealed: await seal(
+    JSON.stringify({ secrets: { NPM_TOKEN: "fixture-npm-token" } }),
+    "build-secrets",
+    buildSecretsAad(NODE_ID, BUILD_ID),
+  ),
   image_repository: localImageRepository(PROJECT, SERVICE),
-  cache_key: "svc_01JAAAAAAAAAAAAAAAAAAAAAAA.production",
+  cache_key: buildCacheKey(PROJECT, SERVICE),
   timeout_s: 1800,
 });
 
@@ -252,6 +310,63 @@ await writeSigned("signed-build-cancel.json", {
   iat: IAT,
   exp: FAR_FUTURE,
   build_id: "bld_01JAAAAAAAAAAAAAAAAAAAAAAA",
+});
+
+// Cross-language vectors for the sealed box: both suites open each box with
+// the node key, and re-seal with the fixed ephemeral key to the same bytes.
+const boxCases = [
+  {
+    name: "workload-env",
+    purpose: "workload-env" as const,
+    aad: workloadEnvAad(NODE_ID, "wl_01JAAAAAAAAAAAAAAAAAAAAAAA", 42),
+    plaintext: JSON.stringify({
+      env: { PORT: "3000", GREETING: "héllo 🚀" },
+      files: { TLS_KEY: "-----BEGIN TEST KEY-----\nAAAA\n-----END TEST KEY-----\n" },
+    }),
+  },
+  {
+    name: "build-secrets",
+    purpose: "build-secrets" as const,
+    aad: buildSecretsAad(NODE_ID, BUILD_ID),
+    plaintext: JSON.stringify({ secrets: { NPM_TOKEN: "fixture-npm-token" } }),
+  },
+  {
+    name: "empty-env",
+    purpose: "workload-env" as const,
+    aad: workloadEnvAad(NODE_ID, "wl_01JBBBBBBBBBBBBBBBBBBBBBBB", 0),
+    plaintext: JSON.stringify({ env: {}, files: {} }),
+  },
+];
+write("sealed-box.json", {
+  node_id: NODE_ID,
+  node_private_key_hex: NODE_PRIVATE_KEY_HEX,
+  node_public_key: nodePublicKey,
+  node_kid: await nodeEncryptionKeyId(nodePublicKey),
+  ephemeral_private_key_hex: EPHEMERAL_PRIVATE_KEY_HEX,
+  x25519_shared_hex: RFC7748_SHARED_HEX,
+  cases: await Promise.all(
+    boxCases.map(async (c) => ({ ...c, box: await seal(c.plaintext, c.purpose, c.aad) })),
+  ),
+});
+
+// A node's encryption key signed by its identity key (the RFC 8032 key above).
+const identity = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, [
+  "sign",
+]);
+write("encryption-key.json", {
+  node_id: NODE_ID,
+  identity_public_key: publicKey,
+  encryption_key: {
+    public_key: nodePublicKey,
+    kid: await nodeEncryptionKeyId(nodePublicKey),
+    sig: toBase64(
+      await crypto.subtle.sign(
+        "Ed25519",
+        identity,
+        encryptionKeySignaturePayload(NODE_ID, nodePublicKey) as Uint8Array<ArrayBuffer>,
+      ),
+    ),
+  },
 });
 
 // Readable names, the longest readable one, and IDs too long for it.
@@ -284,4 +399,19 @@ write("spec-hash.json", {
     canonical: specHashInput(spec as WorkloadSpec),
     spec_hash: (spec as WorkloadSpec).spec_hash,
   })),
+});
+
+// Redaction parity: the agent (Go) and the control plane (TS) must redact the
+// same strings for the same secrets.
+const redactionCases = [
+  { secrets: ["hunter22"], line: "pw=hunter22 b64=aHVudGVyMjI= hex=68756e7465723232" },
+  { secrets: ['p@ss/w+rd "é"\n\b'], line: 'json="p@ss/w+rd \\"é\\"\\n\\b"' },
+  { secrets: ["~~~~~~~~", "short", "🚀🚀🚀🚀🚀🚀"], line: "fn5-fn5-fn4 and 🚀🚀🚀🚀🚀🚀" },
+  { secrets: ["<script>&amp; x"], line: "<script>&amp; x" },
+];
+write("redaction.json", {
+  cases: redactionCases.map((c) => {
+    const needles = redactionNeedles(c.secrets);
+    return { ...c, needles, redacted: redact(c.line, needles) };
+  }),
 });

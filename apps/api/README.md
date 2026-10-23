@@ -39,6 +39,8 @@ The first deploy creates the D1 database, so `wrangler.jsonc` has no
 | `DEPLOY_WORKFLOW`                 | Workflow       | `DeployWorkflow`, one instance per deployment               |
 | `NODE_CONNECTION`                 | Durable Object | One per node: the agent's socket                            |
 | `PROJECT_ROOM`                    | Durable Object | One per project: the dashboard's realtime socket            |
+| `AUDIT_CHAIN`                     | Durable Object | One per install: hash-chains audit entries in `seq` order   |
+| `KEY_ROTATION_WORKFLOW`           | Workflow       | `KeyRotationWorkflow`, re-seals stored secrets              |
 | `AUTH_LIMITER`, `WEBHOOK_LIMITER` | Rate limit     | Secret-accepting endpoints; GitHub webhooks                 |
 
 No secrets beyond `MASTER_KEY`: project data keys, GitHub App credentials and

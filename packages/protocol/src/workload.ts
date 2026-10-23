@@ -9,6 +9,7 @@
  * @module
  */
 import { z } from "zod";
+import { SealedBoxSchema } from "./box";
 import {
   boundedString,
   ENV_KEY_RE,
@@ -33,6 +34,7 @@ import {
   SPEC_HASH_RE,
   utf8ByteLength,
 } from "./limits";
+import { sha256Hex } from "./sha256";
 
 // -----------------------------------------------------------------------------
 // Enums
@@ -143,6 +145,75 @@ export async function environmentNetworkName(
   return `${HASHED_NETWORK_PREFIX}${hex}`;
 }
 
+/**
+ * Networks a service workload may never join, whatever the control plane
+ * says: Docker's built-ins and the agent's own.
+ */
+export const RESERVED_NETWORKS = [
+  "host",
+  "bridge",
+  "none",
+  "roundhouse-system",
+  "roundhouse-build",
+] as const;
+
+/**
+ * Whether a service workload of `projectId`/`environmentId` may join
+ * `network` (ADR 0014, H1): only its own environment network, or, while
+ * Phase 1 replicas migrate, its own project's legacy
+ * {@link projectNetworkName}. Never a reserved network or another project's.
+ * Go's `ServiceNetworkAllowed` applies the same rule on the agent.
+ *
+ * @param network - The workload's `network`.
+ * @param projectId - The workload's `project_id`.
+ * @param environmentId - The workload's `environment_id`.
+ * @returns `true` when the agent may attach the workload to `network`.
+ * @example
+ * isServiceNetworkAllowed("roundhouse-prj_1-env_2", "prj_1", "env_2"); // true
+ * isServiceNetworkAllowed("roundhouse-prj_9-env_2", "prj_1", "env_2"); // false
+ */
+export function isServiceNetworkAllowed(
+  network: string,
+  projectId: string,
+  environmentId: string,
+): boolean {
+  if ((RESERVED_NETWORKS as readonly string[]).includes(network)) return false;
+  if (network === projectNetworkName(projectId)) return true;
+  return network === environmentNetworkNameSync(projectId, environmentId);
+}
+
+// NOTE: zod refinements can't await WebCrypto, so validation recomputes
+// `environmentNetworkName` with a synchronous SHA-256. The fixtures pin both.
+function environmentNetworkNameSync(projectId: string, environmentId: string): string {
+  const readable = `roundhouse-${projectId}-${environmentId}`;
+  if (readable.length <= MAX_NETWORK_NAME_LENGTH) return readable;
+  return `${HASHED_NETWORK_PREFIX}${sha256Hex(`${projectId}/${environmentId}`)}`;
+}
+
+/**
+ * DNS alias every replica of a service answers to on its environment
+ * network, derived from the service ID so it can't collide with or spoof
+ * another service. Agents register it whatever the labels say.
+ *
+ * @param serviceId - Service ID.
+ * @returns E.g. `svc-01jab….roundhouse.internal`.
+ */
+export function privateServiceAlias(serviceId: string): string {
+  return `${serviceId.toLowerCase().replace(/_/g, "-")}.roundhouse.internal`;
+}
+
+/**
+ * BuildKit cache scope of a service's builds. Agents also isolate BuildKit
+ * per project, so the key only separates services within one project.
+ *
+ * @param projectId - Project ID.
+ * @param serviceId - Service ID.
+ * @returns `<project_id>.<service_id>`.
+ */
+export function buildCacheKey(projectId: string, serviceId: string): string {
+  return `${projectId}.${serviceId}`;
+}
+
 // -----------------------------------------------------------------------------
 // Parts
 // -----------------------------------------------------------------------------
@@ -155,7 +226,10 @@ const ArgsSchema = z
   .min(1)
   .max(MAX_ARGS);
 
-/** Environment variables passed to the container. Values are already resolved. */
+/**
+ * Environment variables of a container, resolved. Never sent in clear: the
+ * control plane seals them into `WorkloadSpec.env_sealed` (see ./box).
+ */
 export const EnvSchema = z
   .record(
     z.string().max(MAX_ENV_KEY_BYTES).regex(ENV_KEY_RE, "expected an environment variable name"),
@@ -299,7 +373,13 @@ export const WorkloadSpecSchema = z
     command: ArgsSchema.optional(),
     /** Overrides the image's `ENTRYPOINT`. */
     entrypoint: ArgsSchema.optional(),
-    env: EnvSchema,
+    /**
+     * The resolved environment and secret files, sealed to the node; see
+     * `SealedWorkloadEnvSchema` and `workloadEnvAad`. Set exactly for
+     * `service` workloads. Excluded from the spec hash: a workload ID's
+     * environment never changes (a new deployment mints new workload IDs).
+     */
+    env_sealed: SealedBoxSchema.nullable(),
     ports: z.array(WorkloadPortSchema).max(MAX_PORTS),
     routes: z.array(WorkloadRouteSchema).max(MAX_ROUTES),
     /** `null` behaves like a `none` probe. */
@@ -310,7 +390,7 @@ export const WorkloadSpecSchema = z
      * Docker network to attach to: `environmentNetworkName(project_id,
      * environment_id)` for service workloads, so environments are isolated.
      * Part of the spec hash, so moving a replica to another network
-     * recreates its container.
+     * recreates its container. See {@link isServiceNetworkAllowed}.
      */
     network: z.string().regex(NETWORK_RE, "expected a docker network name"),
     labels: LabelsSchema,
@@ -326,6 +406,33 @@ export const WorkloadSpecSchema = z
     }
     if (w.kind === "system" && owned.some((v) => v !== null)) {
       ctx.addIssue({ code: "custom", message: "system workloads have no ownership ids" });
+    }
+    if ((w.kind === "service") !== (w.env_sealed !== null)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "env_sealed is required for service workloads and forbidden for system ones",
+        path: ["env_sealed"],
+      });
+    }
+    if (w.kind === "service" && w.project_id && w.environment_id && w.service_id) {
+      if (!isServiceNetworkAllowed(w.network, w.project_id, w.environment_id)) {
+        ctx.addIssue({
+          code: "custom",
+          message: "service workloads must join their own environment network",
+          path: ["network"],
+        });
+      }
+      if (w.image.startsWith(`${REGISTRY_LISTEN}/`)) {
+        const repo = localImageRepository(w.project_id, w.service_id);
+        const digest = w.image.startsWith(`${repo}@sha256:`) ? w.image.slice(repo.length + 8) : "";
+        if (!/^[a-f0-9]{64}$/.test(digest)) {
+          ctx.addIssue({
+            code: "custom",
+            message: `local registry images must be ${repo}@sha256:…`,
+            path: ["image"],
+          });
+        }
+      }
     }
     const ports = new Set<number>();
     for (const p of w.ports) {

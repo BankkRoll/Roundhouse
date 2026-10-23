@@ -22,13 +22,15 @@ import type { WorkloadSpec } from "./workload";
 /**
  * Fields left out of the hash: they are applied without recreating the
  * container (routes via Caddy, drain on the next switch), or rotate often
- * (short-lived registry credentials).
+ * (short-lived registry credentials, and `env_sealed`, which is re-sealed
+ * for every frame; the environment it carries is fixed per workload ID).
  */
 export const SPEC_HASH_EXCLUDED_FIELDS = [
   "spec_hash",
   "routes",
   "registry_auth",
   "drain_s",
+  "env_sealed",
 ] as const;
 
 const encoder = new TextEncoder();

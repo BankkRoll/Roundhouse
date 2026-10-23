@@ -61,6 +61,19 @@ export const deployments = sqliteTable(
      * variable edits never change (and restart) a running deployment.
      */
     envSealed: json<SealedValue>("env_sealed"),
+    /**
+     * Keys of `env_sealed` whose values are secret or derived from a secret,
+     * frozen with it. Their values, plus their encodings, are the redaction
+     * set for this deployment's logs. Key names only; never values.
+     */
+    secretKeys: json<string[]>("secret_keys"),
+    /**
+     * The build's inputs as JSON `{ args, secrets }`, sealed under the project
+     * DEK with AAD `deployment-build:v2:<workspace>:<project>:<deployment>`.
+     * `args` become build args; `secrets` become BuildKit secrets and are
+     * redacted from build logs.
+     */
+    buildEnvSealed: json<SealedValue>("build_env_sealed"),
     /** Cloudflare Workflow instance driving the pipeline. */
     workflowInstanceId: text("workflow_instance_id"),
     failureReason: text("failure_reason"),

@@ -9,6 +9,11 @@ import (
 
 func strPtr(s string) *string { return &s }
 
+// testBox is shape-valid; these tests never open it.
+func testBox() *SealedBox {
+	return &SealedBox{V: 1, KID: "0123456789abcdef", EPK: "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=", CT: "AAAAAAAAAAAAAAAAAAAAAA=="}
+}
+
 func validSpec() WorkloadSpec {
 	return WorkloadSpec{
 		ID:            "wl_1",
@@ -18,7 +23,7 @@ func validSpec() WorkloadSpec {
 		ServiceID:     strPtr("svc_1"),
 		DeploymentID:  strPtr("dep_1"),
 		Image:         "nginx:1.27",
-		Env:           map[string]string{"PORT": "8080"},
+		EnvSealed:     testBox(),
 		Ports:         []WorkloadPort{{ContainerPort: 8080, Protocol: PortHTTP}},
 		Routes:        []WorkloadRoute{{Hostname: "web.example.com", ContainerPort: 8080}},
 		Resources:     Resources{CPUMillis: 250, MemoryMB: 256, PIDs: 128},
@@ -47,6 +52,8 @@ func validBuildJob() *BuildJob {
 		ControlHeader: ControlHeader{ID: "m1", NodeID: "node_a", IssuedAt: 1000, ExpiresAt: 1000 + CredentialFrameTTLMS},
 		BuildID:       "bld_1",
 		DeploymentID:  "dep_1",
+		ProjectID:     "prj_1",
+		ServiceID:     "svc_1",
 		Source: GitBuildSource{
 			Type:      "git",
 			URL:       "https://github.com/acme/api.git",
@@ -56,7 +63,7 @@ func validBuildJob() *BuildJob {
 		ContextDir:      ".",
 		BuildArgs:       map[string]string{},
 		ImageRepository: "127.0.0.1:5000/prj_1/svc_1",
-		CacheKey:        "svc_1",
+		CacheKey:        "prj_1.svc_1",
 		TimeoutS:        600,
 	}
 }
@@ -107,12 +114,25 @@ func TestWorkloadSpecValidate(t *testing.T) {
 	}
 	cases := map[string]func(*WorkloadSpec){
 		"service without ids":   func(w *WorkloadSpec) { w.ProjectID = nil },
-		"system with ids":       func(w *WorkloadSpec) { w.Kind = WorkloadSystem },
+		"system with ids":       func(w *WorkloadSpec) { w.Kind = WorkloadSystem; w.EnvSealed = nil },
+		"service without box":   func(w *WorkloadSpec) { w.EnvSealed = nil },
+		"box with bad kid":      func(w *WorkloadSpec) { w.EnvSealed.KID = "nope" },
+		"box of v2":             func(w *WorkloadSpec) { w.EnvSealed.V = 2 },
+		"other env network":     func(w *WorkloadSpec) { w.Network = "roundhouse-prj_1-env_2" },
+		"other project network": func(w *WorkloadSpec) { w.Network = "roundhouse-prj_2-env_1" },
+		"other project legacy":  func(w *WorkloadSpec) { w.Network = "roundhouse-prj_2" },
+		"host network":          func(w *WorkloadSpec) { w.Network = "host" },
+		"bridge network":        func(w *WorkloadSpec) { w.Network = "bridge" },
+		"none network":          func(w *WorkloadSpec) { w.Network = "none" },
+		"system network":        func(w *WorkloadSpec) { w.Network = "roundhouse-system" },
+		"build network":         func(w *WorkloadSpec) { w.Network = "roundhouse-build" },
+		"foreign local image":   func(w *WorkloadSpec) { w.Image = "127.0.0.1:5000/prj_1/svc_2@sha256:" + strings.Repeat("a", 64) },
+		"tagged local image":    func(w *WorkloadSpec) { w.Image = "127.0.0.1:5000/prj_1/svc_1:latest" },
 		"unknown kind":          func(w *WorkloadSpec) { w.Kind = "job" },
 		"uppercase image":       func(w *WorkloadSpec) { w.Image = "Nginx" },
 		"empty command":         func(w *WorkloadSpec) { w.Command = []string{} },
 		"nul in argument":       func(w *WorkloadSpec) { w.Entrypoint = []string{"a\x00"} },
-		"bad env name":          func(w *WorkloadSpec) { w.Env = map[string]string{"1X": ""} },
+		"bad opened env name":   func(w *WorkloadSpec) { w.Env = map[string]string{"1X": ""} },
 		"oversized env value":   func(w *WorkloadSpec) { w.Env = map[string]string{"A": strings.Repeat("x", MaxEnvValueBytes+1)} },
 		"port zero":             func(w *WorkloadSpec) { w.Ports = []WorkloadPort{{ContainerPort: 0, Protocol: PortTCP}}; w.Routes = nil },
 		"duplicate port":        func(w *WorkloadSpec) { w.Ports = append(w.Ports, WorkloadPort{ContainerPort: 8080, Protocol: PortTCP}) },
@@ -190,8 +210,17 @@ func TestDesiredStateValidate(t *testing.T) {
 		})
 	}
 
+	t.Run("long-lived with a sealed env", func(t *testing.T) {
+		m := validDesired()
+		m.ExpiresAt += 1
+		if err := m.Validate(); err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+
 	t.Run("long-lived without credentials", func(t *testing.T) {
 		m := validDesired()
+		m.Workloads = nil
 		m.ExpiresAt += 60_000
 		if err := m.Validate(); err != nil {
 			t.Fatal(err)
@@ -214,11 +243,21 @@ func TestBuildJobValidate(t *testing.T) {
 			j.Builder = BuilderDockerfile
 			j.DockerfilePath = "a/../../b"
 		},
-		"foreign repository": func(j *BuildJob) { j.ImageRepository = "ghcr.io/acme/api" },
-		"tagged repository":  func(j *BuildJob) { j.ImageRepository = "127.0.0.1:5000/a/b:latest" },
-		"bad build arg":      func(j *BuildJob) { j.BuildArgs = map[string]string{"a-b": ""} },
-		"short timeout":      func(j *BuildJob) { j.TimeoutS = 5 },
-		"unknown builder":    func(j *BuildJob) { j.Builder = "nixpacks" },
+		"foreign repository":  func(j *BuildJob) { j.ImageRepository = "ghcr.io/acme/api" },
+		"tagged repository":   func(j *BuildJob) { j.ImageRepository = "127.0.0.1:5000/a/b:latest" },
+		"bad build arg":       func(j *BuildJob) { j.BuildArgs = map[string]string{"a-b": ""} },
+		"short timeout":       func(j *BuildJob) { j.TimeoutS = 5 },
+		"other service repo":  func(j *BuildJob) { j.ImageRepository = "127.0.0.1:5000/prj_1/svc_2" },
+		"other project cache": func(j *BuildJob) { j.CacheKey = "prj_2.svc_1" },
+		"missing project":     func(j *BuildJob) { j.ProjectID = "" },
+		"option-like ref":     func(j *BuildJob) { j.Source.Ref = "--upload-pack=sh" },
+		"dotdot ref":          func(j *BuildJob) { j.Source.Ref = "a..b" },
+		"bad secrets box":     func(j *BuildJob) { j.BuildSecretsSealed = &SealedBox{V: 1, KID: "x"} },
+		"long-lived secrets": func(j *BuildJob) {
+			j.BuildSecretsSealed = testBox()
+			j.ExpiresAt++
+		},
+		"unknown builder": func(j *BuildJob) { j.Builder = "nixpacks" },
 		"long-lived token": func(j *BuildJob) {
 			j.Source.Token = "ghs_x"
 			j.ExpiresAt++
@@ -392,7 +431,14 @@ func TestComputeSpecHashExclusions(t *testing.T) {
 		"routes":        func(w *WorkloadSpec) { w.Routes = nil },
 		"registry_auth": func(w *WorkloadSpec) { w.RegistryAuth = &RegistryAuth{Server: "a", Username: "b", Password: "c"} },
 		"drain_s":       func(w *WorkloadSpec) { w.DrainS = 600 },
-		"nil maps":      func(w *WorkloadSpec) { w.Labels = nil },
+		"env_sealed": func(w *WorkloadSpec) {
+			w.EnvSealed = &SealedBox{V: 1, KID: "fedcba9876543210", EPK: testBox().EPK, CT: "BBBB"}
+		},
+		"opened env": func(w *WorkloadSpec) {
+			w.Env = map[string]string{"PORT": "8081"}
+			w.SecretFiles = map[string]string{"K": "v"}
+		},
+		"nil maps": func(w *WorkloadSpec) { w.Labels = nil },
 	}
 	for name, mutate := range unchanged {
 		w := validSpec()
@@ -403,7 +449,7 @@ func TestComputeSpecHashExclusions(t *testing.T) {
 	}
 	changed := map[string]func(*WorkloadSpec){
 		"image":   func(w *WorkloadSpec) { w.Image = "nginx:1.28" },
-		"env":     func(w *WorkloadSpec) { w.Env = map[string]string{"PORT": "8081"} },
+		"network": func(w *WorkloadSpec) { w.Network = "roundhouse-prj_1-env_2" },
 		"command": func(w *WorkloadSpec) { w.Command = []string{"sh"} },
 		"replica": func(w *WorkloadSpec) { w.Replica = 1 },
 	}
@@ -484,9 +530,62 @@ func TestEnvironmentNetworkName(t *testing.T) {
 	}
 }
 
+func TestServiceNetworkAllowed(t *testing.T) {
+	for network, want := range map[string]bool{
+		"roundhouse-prj_1-env_1":  true,
+		"roundhouse-prj_1":        true,
+		"roundhouse-prj_1-env_2":  false,
+		"roundhouse-prj_2-env_1":  false,
+		"roundhouse-prj_2":        false,
+		"host":                    false,
+		"bridge":                  false,
+		"none":                    false,
+		"roundhouse-system":       false,
+		"roundhouse-build":        false,
+		"roundhouse-env-deadbeef": false,
+	} {
+		if got := ServiceNetworkAllowed(network, "prj_1", "env_1"); got != want {
+			t.Errorf("ServiceNetworkAllowed(%q) = %v, want %v", network, got, want)
+		}
+	}
+}
+
+func TestWorkloadSpecAcceptsLegacyAndHashedNetworks(t *testing.T) {
+	legacy := validSpec()
+	legacy.Network = ProjectNetworkName(*legacy.ProjectID)
+	if err := legacy.Validate(); err != nil {
+		t.Errorf("legacy project network: %v", err)
+	}
+	hashed := validSpec()
+	project, env := "prj_"+strings.Repeat("a", 64), "env_"+strings.Repeat("b", 64)
+	hashed.ProjectID, hashed.EnvironmentID = &project, &env
+	hashed.Network = EnvironmentNetworkName(project, env)
+	if err := hashed.Validate(); err != nil {
+		t.Errorf("hashed network: %v", err)
+	}
+	hashed.Network = HashedNetworkPrefix + strings.Repeat("0", 64)
+	if hashed.Validate() == nil {
+		t.Error("accepted a hashed network of other ids")
+	}
+}
+
 func TestLocalImageRepository(t *testing.T) {
 	repo := LocalImageRepository("prj_01JABC", "svc_01JXYZ")
 	if repo != "127.0.0.1:5000/prj_01jabc/svc_01jxyz" || !imageRepositoryRE.MatchString(repo) {
 		t.Errorf("got %q", repo)
+	}
+}
+
+// TestProtocolVersions pins the ADR 0013 plan; messages.test.ts pins the
+// TypeScript constants to the same values.
+func TestProtocolVersions(t *testing.T) {
+	if ProtocolVersion != 4 || MinProtocolVersion != ProtocolVersion-1 {
+		t.Errorf("versions %d..%d, want 3..4", MinProtocolVersion, ProtocolVersion)
+	}
+	if SealedEnvProtocolVersion != 4 || WorkloadsProtocolVersion != 2 {
+		t.Errorf("gates sealed=%d workloads=%d", SealedEnvProtocolVersion, WorkloadsProtocolVersion)
+	}
+	if BuildCancelProtocolVersion != 3 || SecretBuildArgsProtocolVersion != 3 {
+		t.Errorf("gates cancel=%d secret_build_args=%d", BuildCancelProtocolVersion, SecretBuildArgsProtocolVersion)
 	}
 }

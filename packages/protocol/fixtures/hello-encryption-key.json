@@ -1,0 +1,18 @@
+{
+  "type": "hello",
+  "protocol_version": 4,
+  "node_id": "node_fixture",
+  "agent_version": "0.3.0",
+  "os": "ubuntu 24.04",
+  "arch": "amd64",
+  "kernel": "6.8.0-45-generic",
+  "docker_version": "27.3.1",
+  "hardware": { "cpu_cores": 4, "mem_bytes": 8589934592, "disk_bytes": 85899345920 },
+  "capabilities": { "docker": true, "gvisor": false, "builder": true },
+  "observed_generation": 0,
+  "encryption_key": {
+    "public_key": "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=",
+    "kid": "f35e5616160a30bf",
+    "sig": "YYP4nuTJ74fGf1DHd8Wq7TEj+0AwP1Nw9NtcUYJZWVR6V+OLg+imJ+RkL7+YlHmPorMge7oi+kCfVTc58UdHAQ=="
+  }
+}

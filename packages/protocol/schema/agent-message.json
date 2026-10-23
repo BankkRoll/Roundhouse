@@ -166,6 +166,29 @@
             ],
             "additionalProperties": false
           }
+        },
+        "encryption_key": {
+          "type": "object",
+          "properties": {
+            "public_key": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{43}=$"
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "sig": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{86}==$"
+            }
+          },
+          "required": [
+            "public_key",
+            "kid",
+            "sig"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

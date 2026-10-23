@@ -125,26 +125,17 @@ describe("createQueryClient", () => {
 });
 
 describe("canCreateWorkspace", () => {
-  const workspace = (role: (typeof ROLES)[number]) => ({
-    id: "ws",
-    name: "W",
-    slug: "w",
-    role,
-    member_id: "mem_1",
+  const user = (instance_admin?: boolean) => ({
+    user: { id: "usr_1", name: "U", email: "u@example.com", image: null, instance_admin },
   });
 
-  it("allows owners and admins of any workspace", () => {
-    expect(canCreateWorkspace({ workspaces: [workspace("viewer"), workspace("admin")] })).toBe(
-      true,
-    );
-    expect(canCreateWorkspace({ workspaces: [workspace("owner")] })).toBe(true);
+  it("allows instance admins only", () => {
+    expect(canCreateWorkspace(user(true))).toBe(true);
   });
 
-  it("refuses members, viewers, people without workspaces, and unknown sessions", () => {
-    expect(canCreateWorkspace({ workspaces: [workspace("member"), workspace("viewer")] })).toBe(
-      false,
-    );
-    expect(canCreateWorkspace({ workspaces: [] })).toBe(false);
+  it("refuses everyone else, workspace owners included, and unknown sessions", () => {
+    expect(canCreateWorkspace(user(false))).toBe(false);
+    expect(canCreateWorkspace(user())).toBe(false);
     expect(canCreateWorkspace(undefined)).toBe(false);
   });
 });

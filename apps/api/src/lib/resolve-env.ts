@@ -1,6 +1,6 @@
 /**
  * Resolves one service's runtime environment outside a deployment, for
- * `POST /v1/services/{serviceId}/variables/resolve` (`roundhouse run`).
+ * `GET /v1/services/{serviceId}/variables/resolved` (`roundhouse run`).
  *
  * It builds the same inputs the deploy workflow's `resolveEnv` step builds
  * (every live service's variables and built-ins, the environment's shared
@@ -30,7 +30,7 @@ import {
 } from "@roundhouse/shared";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { LIVE_DEPLOYMENT_STATUSES, privateDomain } from "./desired-state";
-import { loadEnvironmentVariables } from "./variables";
+import { type EnvironmentVariables, loadEnvironmentVariables } from "./variables";
 
 /** Which service to resolve, and where. */
 export interface ResolveTarget {
@@ -53,6 +53,11 @@ export interface ResolveOptions {
    * reference variables). Their keys must not collide with real variables.
    */
   extra?: Record<string, string>;
+  /**
+   * The environment's variables, when the caller already loaded them (to
+   * check taint against the same values); loaded here otherwise.
+   */
+  variables?: EnvironmentVariables;
 }
 
 /**
@@ -72,7 +77,7 @@ export async function resolveServiceEnvironment(
 ): Promise<ResolveVariablesResult> {
   const { projectId, serviceId, environment } = target;
   const [vars, live, configs, hosts, [current]] = await Promise.all([
-    loadEnvironmentVariables(db, key, projectId, environment.id),
+    options.variables ?? loadEnvironmentVariables(db, key, projectId, environment.id),
     db
       .select({ id: services.id, slug: services.slug, name: services.name })
       .from(services)

@@ -534,7 +534,7 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteServiceVars:     {"variables:read", f.listVars},
 		api.RoutePutServiceVars:  {"variables:manage", f.putVars},
 		api.RouteRevealService:   {"variables:reveal", f.revealVars},
-		api.RouteResolveVars:     {"variables:reveal", f.resolveVars},
+		api.RouteResolveVars:     {"variables:read_plain", f.resolveVars},
 		api.RouteSharedVars:      {"variables:read", f.listVars},
 		api.RoutePutSharedVars:   {"variables:manage", f.putVars},
 		api.RouteRevealShared:    {"variables:reveal", f.revealVars},
@@ -984,9 +984,10 @@ func (f *Fake) revealVars(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"variables": out})
 }
 
-// resolveVars mirrors the resolve route in apps/api/src/routes/variables.ts:
+// resolveVars mirrors the resolved route in apps/api/src/routes/variables.ts:
 // every service's raw variables, the shared ones and the built-ins go
-// through the resolver, and reference errors become one detail each.
+// through the resolver, reference errors become one detail each, and secret
+// and secret-derived keys are named in local_keys instead of answered.
 func (f *Fake) resolveVars(w http.ResponseWriter, r *http.Request) {
 	p, s := f.service(w, r.PathValue("serviceId"))
 	if s == nil {
@@ -996,19 +997,24 @@ func (f *Fake) resolveVars(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	raw := func(scopeID string) map[string]string {
+	secrets := map[string]bool{}
+	raw := func(scopeID, ns string) map[string]string {
 		out := map[string]string{}
 		for k, v := range f.vars[varKey(scopeID, envID)] {
 			out[k] = v.value
+			if v.secret {
+				secrets[ns+"."+k] = true
+			}
 		}
 		return out
 	}
-	in := resolveInput{service: s.Slug, services: map[string]map[string]string{}, shared: raw(p.ID), builtins: map[string]map[string]string{}}
+	in := resolveInput{service: s.Slug, services: map[string]map[string]string{}, shared: raw(p.ID, sharedNamespace),
+		builtins: map[string]map[string]string{}, secrets: secrets}
 	for _, svc := range p.Services {
-		in.services[svc.Slug] = raw(svc.ID)
+		in.services[svc.Slug] = raw(svc.ID, svc.Slug)
 		in.builtins[svc.Slug] = f.builtins(p, svc, envID)
 	}
-	env, errs := resolveEnv(in)
+	env, local, errs := resolveEnv(in)
 	if len(errs) > 0 {
 		details := make([]api.ErrorDetail, len(errs))
 		for i, e := range errs {
@@ -1017,11 +1023,10 @@ func (f *Fake) resolveVars(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "invalid_reference", errs[0].variable+": "+errs[0].message, details...)
 		return
 	}
-	out := []api.ResolvedVariable{}
-	for _, k := range slices.Sorted(mapKeys(env)) {
-		out = append(out, api.ResolvedVariable{Key: k, Value: env[k]})
+	if local == nil {
+		local = []string{}
 	}
-	writeJSON(w, http.StatusOK, api.ResolvedVariables{Variables: out})
+	writeJSON(w, http.StatusOK, api.ResolvedVariables{Variables: env, LocalKeys: local})
 }
 
 // builtins computes a service's built-in variables in an environment as the

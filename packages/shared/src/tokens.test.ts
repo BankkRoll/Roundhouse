@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { ACTIONS, can } from "./rbac";
+import { ACTIONS, can, INSTANCE_ACTIONS } from "./rbac";
 import { API_TOKEN_PRESETS, API_TOKEN_SCOPES, isApiTokenScope, scopesBeyondRole } from "./tokens";
 
 describe("API token scopes", () => {
-  it("covers every action except instance:manage", () => {
-    expect(API_TOKEN_SCOPES).toEqual(ACTIONS.filter((a) => a !== "instance:manage"));
+  it("covers every action except the instance ones", () => {
+    expect(API_TOKEN_SCOPES).toEqual(
+      ACTIONS.filter((a) => !(INSTANCE_ACTIONS as readonly string[]).includes(a)),
+    );
     expect(isApiTokenScope("instance:manage")).toBe(false);
+    expect(isApiTokenScope("workspaces:create")).toBe(false);
     expect(isApiTokenScope("tokens:manage")).toBe(true);
     expect(isApiTokenScope(42)).toBe(false);
   });

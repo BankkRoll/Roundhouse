@@ -4,6 +4,7 @@
  *
  * @module
  */
+export * from "./access";
 export * from "./auth";
 export * from "./deployments";
 export * from "./github";

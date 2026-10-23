@@ -14,7 +14,7 @@ type Validator interface {
 }
 
 // CarriesCredentials reports whether msg carries a git token, a registry
-// password or object-storage keys. Such frames must expire within
+// password, object-storage keys or a sealed box. Such frames must expire within
 // [CredentialFrameTTLMS] of issue. Mirrors carriesCredentials in TypeScript.
 func CarriesCredentials(msg ControlMessage) bool {
 	switch m := msg.(type) {
@@ -23,12 +23,12 @@ func CarriesCredentials(msg ControlMessage) bool {
 			return true
 		}
 		for i := range m.Workloads {
-			if m.Workloads[i].RegistryAuth != nil {
+			if m.Workloads[i].RegistryAuth != nil || m.Workloads[i].EnvSealed != nil {
 				return true
 			}
 		}
 	case *BuildJob:
-		return m.Source.Token != ""
+		return m.Source.Token != "" || m.BuildSecretsSealed != nil
 	}
 	return false
 }
@@ -105,13 +105,22 @@ func (m *BuildJob) Validate() error {
 	if err := m.ControlHeader.validate(); err != nil {
 		return err
 	}
-	if !idRE.MatchString(m.BuildID) || !idRE.MatchString(m.DeploymentID) {
-		return errors.New("build_id and deployment_id must be ids")
+	if !idRE.MatchString(m.BuildID) || !idRE.MatchString(m.DeploymentID) || !idRE.MatchString(m.ProjectID) ||
+		!idRE.MatchString(m.ServiceID) {
+		return errors.New("build_id, deployment_id, project_id and service_id must be ids")
 	}
 	s := m.Source
 	if s.Type != "git" || len(s.URL) > 2048 || !gitURLRE.MatchString(s.URL) || !commitSHARE.MatchString(s.CommitSHA) ||
-		len(s.Ref) > 256 || len(s.Token) > 4096 {
+		len(s.Token) > 4096 {
 		return errors.New("source: invalid git source")
+	}
+	if s.Ref != "" && !IsSafeGitRef(s.Ref) {
+		return fmt.Errorf("source.ref: unsafe ref %q", s.Ref)
+	}
+	if m.BuildSecretsSealed != nil {
+		if err := m.BuildSecretsSealed.validate(); err != nil {
+			return fmt.Errorf("build_secrets_sealed: %w", err)
+		}
 	}
 	switch m.Builder {
 	case BuilderRailpack:
@@ -150,8 +159,11 @@ func (m *BuildJob) Validate() error {
 		!strings.HasPrefix(m.ImageRepository, RegistryListen+"/") {
 		return fmt.Errorf("image_repository: must be in the local registry, got %q", m.ImageRepository)
 	}
-	if !cacheKeyRE.MatchString(m.CacheKey) {
-		return fmt.Errorf("cache_key: invalid %q", m.CacheKey)
+	if m.ImageRepository != LocalImageRepository(m.ProjectID, m.ServiceID) {
+		return errors.New("image_repository: must be the service's local repository")
+	}
+	if !cacheKeyRE.MatchString(m.CacheKey) || m.CacheKey != BuildCacheKey(m.ProjectID, m.ServiceID) {
+		return fmt.Errorf("cache_key: must be %s", BuildCacheKey(m.ProjectID, m.ServiceID))
 	}
 	if m.TimeoutS < 60 || m.TimeoutS > 7200 {
 		return errors.New("timeout_s: out of range")
@@ -182,6 +194,9 @@ func (m *Hello) Validate() error {
 		if err := m.Statuses[i].Validate(); err != nil {
 			return fmt.Errorf("statuses[%d]: %w", i, err)
 		}
+	}
+	if m.EncryptionKey != nil {
+		return m.EncryptionKey.validate()
 	}
 	return nil
 }

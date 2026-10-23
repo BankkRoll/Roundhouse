@@ -4,12 +4,33 @@ import "slices"
 
 // ProtocolVersion is the wire protocol version agents send in [Hello].
 // Version 2 adds workloads, builds, statuses and logs; version 3 adds
-// [BuildCancel], [BuildJob].SecretBuildArgs and [BuildResult].Cancelled.
-// See PROTOCOL_VERSION in messages.ts for why additive changes bump it.
-const ProtocolVersion = 3
+// [BuildCancel], [BuildJob].SecretBuildArgs and [BuildResult].Cancelled;
+// version 4 seals workload environments and build secrets to the node
+// (ADR 0014). Versions follow ADR 0013. See PROTOCOL_VERSION in messages.ts.
+const ProtocolVersion = 4
 
-// MinProtocolVersion is the oldest version the control plane accepts.
-const MinProtocolVersion = 1
+// MinProtocolVersion is the oldest version the control plane accepts (N-1).
+const MinProtocolVersion = 3
+
+// WorkloadsProtocolVersion is the first version that receives workloads and
+// builds. Every accepted agent is past it; [SealedEnvProtocolVersion] is the
+// placement gate now. Mirrors WORKLOADS_PROTOCOL_VERSION in TypeScript.
+const WorkloadsProtocolVersion = 2
+
+// BuildCancelProtocolVersion is the first version that understands
+// [BuildCancel]. Mirrors BUILD_CANCEL_PROTOCOL_VERSION in TypeScript.
+const BuildCancelProtocolVersion = 3
+
+// SecretBuildArgsProtocolVersion is the first version that honours
+// [BuildJob].SecretBuildArgs; a build with secret args never goes to an
+// older agent. Mirrors SECRET_BUILD_ARGS_PROTOCOL_VERSION in TypeScript.
+const SecretBuildArgsProtocolVersion = 3
+
+// SealedEnvProtocolVersion is the first version that opens sealed boxes
+// (env_sealed, build_secrets_sealed, hello.encryption_key and the join
+// request's encryption key); no workload or build goes to an older agent.
+// Mirrors SEALED_ENV_PROTOCOL_VERSION in TypeScript.
+const SealedEnvProtocolVersion = 4
 
 // Message type discriminators carried in every frame's "type" field.
 const (
@@ -95,6 +116,9 @@ type Hello struct {
 	// Statuses reports every workload the agent manages, so the control
 	// plane can resynchronise after a reconnect. Version 1 agents omit it.
 	Statuses []WorkloadStatusReport `json:"statuses,omitempty"`
+	// EncryptionKey registers the agent's X25519 key for nodes that joined
+	// without one. The control plane stores it only when the node has none.
+	EncryptionKey *NodeEncryptionKey `json:"encryption_key,omitempty"`
 }
 
 func (*Hello) agentMessage() {}
@@ -306,7 +330,9 @@ type GitBuildSource struct {
 	// URL is an https clone URL without credentials.
 	URL       string `json:"url"`
 	CommitSHA string `json:"commit_sha"`
-	Ref       string `json:"ref,omitempty"`
+	// Ref is display-only and must pass [IsSafeGitRef]; fetch by CommitSHA,
+	// with --end-of-options before any ref argument.
+	Ref string `json:"ref,omitempty"`
 	// Token is a short-lived installation token for private repositories.
 	// Its presence caps the frame's lifetime at [CredentialFrameTTLMS].
 	Token string `json:"token,omitempty"`
@@ -326,24 +352,31 @@ const (
 type BuildJob struct {
 	Type string `json:"type"`
 	ControlHeader
-	BuildID      string         `json:"build_id"`
-	DeploymentID string         `json:"deployment_id"`
-	Source       GitBuildSource `json:"source"`
-	Builder      Builder        `json:"builder"`
+	BuildID      string `json:"build_id"`
+	DeploymentID string `json:"deployment_id"`
+	// ProjectID selects the project's isolated BuildKit instance.
+	ProjectID string         `json:"project_id"`
+	ServiceID string         `json:"service_id"`
+	Source    GitBuildSource `json:"source"`
+	Builder   Builder        `json:"builder"`
 	// DockerfilePath is relative to ContextDir and defaults to "Dockerfile".
 	// Only set with [BuilderDockerfile].
 	DockerfilePath string `json:"dockerfile_path,omitempty"`
 	// ContextDir is the build context inside the repository; "." for the root.
-	ContextDir string            `json:"context_dir"`
-	BuildArgs  map[string]string `json:"build_args"`
+	ContextDir string `json:"context_dir"`
+	// BuildArgs are --build-arg values, except those named in
+	// SecretBuildArgs.
+	BuildArgs map[string]string `json:"build_args"`
 	// SecretBuildArgs names the BuildArgs whose values are secret: they are
 	// passed as BuildKit secrets, never as build args, and redacted from
 	// build output.
 	SecretBuildArgs []string `json:"secret_build_args,omitempty"`
-	// ImageRepository is the local-registry repository to push to; see
-	// [LocalImageRepository].
+	// BuildSecretsSealed carries BuildKit secrets sealed to this node; open
+	// it with [OpenBuildSecrets]. Nil when the build uses none.
+	BuildSecretsSealed *SealedBox `json:"build_secrets_sealed,omitempty"`
+	// ImageRepository is exactly [LocalImageRepository](ProjectID, ServiceID).
 	ImageRepository string `json:"image_repository"`
-	// CacheKey scopes the BuildKit cache; builds sharing a key share layers.
+	// CacheKey is exactly [BuildCacheKey](ProjectID, ServiceID).
 	CacheKey string `json:"cache_key"`
 	// TimeoutS is when the builder cancels and fails the build.
 	TimeoutS int `json:"timeout_s"`

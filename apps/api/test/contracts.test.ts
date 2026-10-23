@@ -13,6 +13,7 @@ import {
   POLICY_KEY,
   policyOf,
   type RoutePolicy,
+  SECURITY_ROUTES,
   UpdateServiceBody,
 } from "../src/contracts";
 import { app } from "../src/index";
@@ -91,22 +92,80 @@ describe("phase 1 contracts", () => {
     }
   });
 
-  it("only lets mutations write audit entries", () => {
+  it("only lets mutations, and reads that hand out plain values, write audit entries", () => {
+    const auditedReads = ["githubCallback", "resolveServiceVariables"];
     for (const [name, route] of routes) {
-      if (route.method === "get" && name !== "githubCallback") {
+      if (route.method === "get" && !auditedReads.includes(name)) {
         expect(policyOf(route).audit, name).toEqual([]);
       }
     }
   });
 
   it("covers every Phase 1 audit action", () => {
-    const used = new Set(routes.flatMap(([, r]) => policyOf(r).audit));
+    const used = new Set(
+      [...routes, ...Object.values(SECURITY_ROUTES).map((r) => ["", r] as const)].flatMap(
+        ([, r]) => policyOf(r as (typeof routes)[number][1]).audit,
+      ),
+    );
     // Recorded by the deploy workflow when a rollout ends, not by a route.
     const fromWorkflow = ["deployment.succeeded", "deployment.failed"];
-    const phase1 = AUDIT_ACTIONS.slice(AUDIT_ACTIONS.indexOf("project.created"));
+    const phase1 = AUDIT_ACTIONS.slice(
+      AUDIT_ACTIONS.indexOf("project.created"),
+      AUDIT_ACTIONS.indexOf("instance.settings_updated") + 1,
+    );
+    // Reveal is gone (ADR 0014); the action stays only to label old entries.
+    const retired = ["variables.revealed"];
     for (const action of phase1) {
-      if (!fromWorkflow.includes(action)) expect(used, action).toContain(action);
+      if (!fromWorkflow.includes(action) && !retired.includes(action)) {
+        expect(used, action).toContain(action);
+      }
     }
+  });
+});
+
+describe("ADR 0014 contracts", () => {
+  const security = Object.entries(SECURITY_ROUTES) as [
+    string,
+    RouteConfig & { [POLICY_KEY]: RoutePolicy },
+  ][];
+
+  it("builds an OpenAPI operation for every route", () => {
+    const router = new OpenAPIHono();
+    for (const [, route] of security) router.openapi(route, (c) => c.body(null, 204) as never);
+    const doc = router.getOpenAPI31Document({
+      openapi: "3.1.0",
+      info: { title: "t", version: "0" },
+    });
+    const operations = Object.values(doc.paths ?? {}).flatMap((item) =>
+      Object.values(item as Record<string, unknown>),
+    );
+    expect(operations).toHaveLength(security.length);
+  });
+
+  it("collides with no Phase 1 route and declares every path param", () => {
+    const taken = new Set(routes.map(([, r]) => `${r.method} ${r.path}`));
+    for (const [name, route] of security) {
+      expect(taken.has(`${route.method} ${route.path}`), name).toBe(false);
+      const placeholders = [...route.path.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
+      const params = route.request && "params" in route.request ? route.request.params : undefined;
+      const declared = params ? Object.keys((params as { shape: object }).shape) : [];
+      expect(declared.sort(), name).toEqual(placeholders.sort());
+    }
+  });
+
+  it("gives every route a valid policy, and fresh sessions to every access change", () => {
+    for (const [name, route] of security) {
+      const policy = policyOf(route);
+      if (policy.action !== null) expect(ACTIONS, name).toContain(policy.action);
+      for (const audit of policy.audit) expect(AUDIT_ACTIONS, name).toContain(audit);
+      const changesAccess = policy.action === "access:manage" && route.method !== "get";
+      if (changesAccess) expect(policy.reauth, name).toBe(true);
+    }
+  });
+
+  it("has no reveal route anywhere", () => {
+    const all = [...routes, ...security];
+    expect(all.filter(([, r]) => r.path.includes("reveal"))).toEqual([]);
   });
 });
 

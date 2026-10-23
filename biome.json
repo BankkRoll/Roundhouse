@@ -12,7 +12,10 @@
       "!**/worker-configuration.d.ts",
       "!packages/protocol/schema",
       "!packages/protocol/fixtures/signed-*.json",
-      "!packages/protocol/fixtures/spec-hash.json"
+      "!packages/protocol/fixtures/spec-hash.json",
+      "!packages/protocol/fixtures/sealed-box.json",
+      "!packages/protocol/fixtures/encryption-key.json",
+      "!packages/protocol/fixtures/redaction.json"
     ]
   },
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },

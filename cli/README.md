@@ -82,11 +82,14 @@ roundhouse run -- npm run dev
 References (`${{service.VAR}}`, `${{shared.VAR}}`, `${{VAR}}`) are stored as
 written. Secrets stay masked unless you pass `--reveal`, and every reveal is
 recorded in the audit log. `run` asks the control plane for the service's
-environment exactly as a deployment gets it (references resolved, built-ins
-such as `PORT` added, secrets in plaintext); that needs the
-`variables:reveal` permission and is audited too. The values go to the
-child process alone; nothing is written to disk. A control plane too old to
-resolve variables makes `run` exit 10.
+plain environment as a deployment gets it (references resolved, built-ins
+such as `PORT` added); that needs the `variables:read_plain` permission and
+is audited too. Secret values never leave the control plane: secrets, and
+variables whose value references one, come from a local env file instead
+(`--env-file`, default `.env`, which may be absent), and a warning names any
+it does not set. The values go to the child process alone; nothing is
+written to disk. A control plane too old to resolve variables makes `run`
+exit 10.
 
 ## API tokens
 
@@ -107,7 +110,7 @@ roundhouse tokens revoke ci                                     # asks; --yes in
 Presets: `read` is `workspace:read`, `projects:read`, `services:read`,
 `variables:read` and `nodes:read`; `deploy` adds `services:manage`,
 `deployments:create` and `variables:manage`. `--scope` may be repeated and
-combined with a preset. `run` also needs `variables:reveal`.
+combined with a preset. `run` also needs `variables:read_plain`.
 
 `create` prints the secret, alone, to stdout (or as `secret` with `--json`);
 it is shown once and cannot be retrieved later. The workspace is the linked

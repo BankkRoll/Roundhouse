@@ -1,8 +1,11 @@
 /**
- * Phase 1 hardening on the control-plane side: per-environment networks in
- * desired state, `build_cancel` on cancel, supersede and failure (gated by
- * protocol version), cancelled build results, secret build args end to end,
- * and log flushes that never write for deleted deployments.
+ * Hardening on the control-plane side.
+ *
+ * - Phase 1: per-environment networks in desired state, `build_cancel` on
+ *   cancel, supersede and failure, cancelled build results, secret build args
+ *   end to end, and log flushes that never write for deleted deployments.
+ * - ADR 0014: regression tests for the findings already closed, one
+ *   `describe` per finding.
  */
 import {
   env,
@@ -15,10 +18,12 @@ import {
   type BuildJob,
   type ControlMessage,
   environmentNetworkName,
+  MIN_PROTOCOL_VERSION,
 } from "@roundhouse/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { NodeConnection } from "../src/durable/node-connection";
 import { secretBuildArgNames } from "../src/workflows/deploy";
+import { addMember, call, install } from "./helpers";
 import {
   COMMIT_SHA,
   connectWorkloadAgent,
@@ -41,7 +46,7 @@ afterEach(async () => {
 
 const isCancel = (m: ControlMessage): m is BuildCancel => m.type === "build_cancel";
 const isJob = (m: ControlMessage): m is BuildJob => m.type === "build_job";
-const V3 = { protocol_version: 3 };
+const OLDEST = { protocol_version: MIN_PROTOCOL_VERSION };
 
 const nodeStub = (nodeId: string) =>
   env.NODE_CONNECTION.get(env.NODE_CONNECTION.idFromName(nodeId));
@@ -74,50 +79,39 @@ describe("environment networks", () => {
 });
 
 describe("build cancel", () => {
-  it("stops the build on a version 3 builder when the deployment is cancelled", async () => {
+  it("stops the build on the builder when the deployment is cancelled", async () => {
     const s = await stage(GIT_SERVICE, { build: "silent" });
-    const v3 = await connectWorkloadAgent(s.joined, { build: "silent" }, V3);
+    const builder = await connectWorkloadAgent(s.joined, { build: "silent" });
     const d = await deploy(s.owner, s.serviceId, s.envId, { commit_sha: COMMIT_SHA });
     await waitForStatus(s.owner, d.id, ["building"]);
-    const job = await v3.waitFor(isJob);
+    const job = await builder.waitFor(isJob);
     const res = await s.owner.json<DeploymentBody>(`/v1/deployments/${d.id}/cancel`, {
       method: "POST",
     });
     expect(res.body.status).toBe("cancelled");
-    const cancel = await v3.waitFor(isCancel);
+    const cancel = await builder.waitFor(isCancel);
     expect(cancel.build_id).toBe(job.build_id);
     expect(cancel.node_id).toBe(s.joined.node_id);
   });
 
   it("stops the build of a deployment superseded while building", async () => {
     const s = await stage(GIT_SERVICE, { build: "silent" });
-    const v3 = await connectWorkloadAgent(s.joined, { build: "silent" }, V3);
+    const builder = await connectWorkloadAgent(s.joined, { build: "silent" });
     const first = await deploy(s.owner, s.serviceId, s.envId, { commit_sha: COMMIT_SHA });
     await waitForStatus(s.owner, first.id, ["building"]);
-    const job = await v3.waitFor(isJob);
+    const job = await builder.waitFor(isJob);
     const second = await deploy(s.owner, s.serviceId, s.envId, { commit_sha: "f".repeat(40) });
     await waitForStatus(s.owner, first.id, ["cancelled"]);
-    expect((await v3.waitFor(isCancel)).build_id).toBe(job.build_id);
+    expect((await builder.waitFor(isCancel)).build_id).toBe(job.build_id);
     await waitForStatus(s.owner, second.id, ["building"]);
-  });
-
-  it("never sends build_cancel to a version 2 builder", async () => {
-    const s = await stage(GIT_SERVICE, { build: "silent" });
-    const d = await deploy(s.owner, s.serviceId, s.envId, { commit_sha: COMMIT_SHA });
-    await waitForStatus(s.owner, d.id, ["building"]);
-    const job = await s.agent.waitFor(isJob);
-    await s.owner.json(`/v1/deployments/${d.id}/cancel`, { method: "POST" });
-    const result = await nodeStub(s.joined.node_id).sendBuildCancel(job.build_id);
-    expect(result).toEqual({ sent: false, reason: "protocol_too_old" });
-    expect(s.agent.received.some(isCancel)).toBe(false);
   });
 
   it("records a build the builder reports as cancelled as cancelled", async () => {
     const s = await stage(GIT_SERVICE, { build: "silent" });
-    const v3 = await connectWorkloadAgent(s.joined, { build: "silent" }, V3);
+    const builder = await connectWorkloadAgent(s.joined, { build: "silent" });
     const d = await deploy(s.owner, s.serviceId, s.envId, { commit_sha: COMMIT_SHA });
-    const job = await v3.waitFor(isJob);
-    v3.send({
+    const job = await builder.waitFor(isJob);
+    builder.send({
       type: "build_result",
       build_id: job.build_id,
       ok: false,
@@ -159,22 +153,14 @@ describe("secret build args", () => {
     expect(config.build.secret_build_args).toEqual(["NPM_TOKEN"]);
   });
 
-  it("marks them in the build job sent to a version 3 builder", async () => {
+  it("marks them in the build job sent to the builder", async () => {
     const s = await stage(SECRET_SERVICE);
-    const v3 = await connectWorkloadAgent(s.joined, {}, V3);
+    const builder = s.agent;
     const d = await deploy(s.owner, s.serviceId, s.envId, { commit_sha: COMMIT_SHA });
-    const job = await v3.waitFor(isJob);
+    const job = await builder.waitFor(isJob);
     expect(job.build_args).toEqual({ NPM_TOKEN: "npm_secret_value", NODE_ENV: "production" });
     expect(job.secret_build_args).toEqual(["NPM_TOKEN"]);
     await waitForStatus(s.owner, d.id, ["active"]);
-  });
-
-  it("refuses to send them to a builder that would bake them into the image", async () => {
-    const s = await stage(SECRET_SERVICE);
-    const d = await deploy(s.owner, s.serviceId, s.envId, { commit_sha: COMMIT_SHA });
-    const failed = await waitForStatus(s.owner, d.id, ["failed"]);
-    expect(failed.failure_reason).toMatch(/too old for secret build args/);
-    expect(s.agent.received.some(isJob)).toBe(false);
   });
 
   it("keeps only names of args the config has", () => {
@@ -262,10 +248,74 @@ describe("log flushes", () => {
 });
 
 describe("desired state frames", () => {
-  it("are still valid for version 3 agents", async () => {
+  it("are still valid for the oldest accepted agents", async () => {
     const s = await stage();
-    const v3 = await connectWorkloadAgent(s.joined, {}, V3);
-    expect(v3.rejected).toEqual([]);
-    expect(v3.received.some(isDesired)).toBe(true);
+    const oldest = await connectWorkloadAgent(s.joined, {}, OLDEST);
+    expect(oldest.rejected).toEqual([]);
+    expect(oldest.received.some(isDesired)).toBe(true);
+  });
+});
+
+describe("cache: API and auth responses are never stored", () => {
+  it.each(["/v1/setup", "/v1/me", "/v1/does-not-exist", "/api/auth/get-session"])(
+    "sets no-store, private and varies on Cookie for %s",
+    async (path) => {
+      const res = await call(path);
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
+      expect(res.headers.get("vary")?.toLowerCase()).toContain("cookie");
+    },
+  );
+});
+
+describe("F3: instance:manage comes from the instance-admin flag only", () => {
+  it("makes the setup user an instance admin", async () => {
+    const { userId } = await install();
+    const row = await env.DB.prepare("SELECT instance_admin FROM users WHERE id = ?")
+      .bind(userId)
+      .first<{ instance_admin: number }>();
+    expect(row?.instance_admin).toBe(1);
+  });
+
+  it("refuses instance settings to a workspace owner who isn't an instance admin", async () => {
+    const { owner, userId } = await install();
+    await env.DB.prepare("UPDATE users SET instance_admin = 0 WHERE id = ?").bind(userId).run();
+    expect((await owner.request("/v1/instance/settings")).status).toBe(403);
+  });
+});
+
+describe("access: checks go through resolveAccess with the project in scope", () => {
+  it("applies a protected environment's rules to variable writes", async () => {
+    const s = await stage();
+    const member = await addMember(s.owner, s.workspaceId, "dev@example.com", "member");
+    const path = `/v1/services/${s.serviceId}/variables?environment_id=${s.envId}`;
+    const put = (c: typeof member) =>
+      c.json(path, { method: "PUT", json: { set: [{ key: "MODE", value: "fast" }] } });
+    expect((await put(member)).status).toBe(200);
+    await env.DB.prepare("UPDATE environments SET protected = 1 WHERE id = ?").bind(s.envId).run();
+    expect((await put(member)).status).toBe(403);
+    expect((await put(s.owner)).status).toBe(200);
+    // Reads aren't environment actions, so protection leaves them alone.
+    expect((await member.json(path)).status).toBe(200);
+  });
+
+  it("uses project grants and the workspace's default project role", async () => {
+    const s = await stage();
+    const member = await addMember(s.owner, s.workspaceId, "m@example.com", "member");
+    const project = `/v1/projects/${s.project.id}`;
+    await env.DB.prepare("UPDATE workspaces SET member_default_project_role = 'none' WHERE id = ?")
+      .bind(s.workspaceId)
+      .run();
+    expect((await member.json(project)).status).toBe(403);
+    const userId = await env.DB.prepare("SELECT id FROM users WHERE email = ?")
+      .bind("m@example.com")
+      .first<{ id: string }>();
+    await env.DB.prepare(
+      "INSERT INTO project_access_grants (id, project_id, principal_type, user_id, role, created_at, updated_at) VALUES ('pag_1', ?, 'user', ?, 'viewer', 0, 0)",
+    )
+      .bind(s.project.id, userId!.id)
+      .run();
+    expect((await member.json(project)).status).toBe(200);
+    const patch = await member.json(project, { method: "PATCH", json: { name: "Renamed" } });
+    expect(patch.status).toBe(403);
   });
 });

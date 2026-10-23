@@ -50,6 +50,14 @@ const (
 	MaxBuildArgs = 64
 	// MaxBuildArgValueBytes is the longest single build arg value.
 	MaxBuildArgValueBytes = 4096
+	// MaxBuildSecrets is the most BuildKit secrets per build job.
+	MaxBuildSecrets = 64
+	// MaxBuildSecretValueBytes is the longest single build secret value.
+	MaxBuildSecretValueBytes = 32 * 1024
+	// MaxSealedBoxCTChars is the longest base64 ciphertext of one sealed box.
+	MaxSealedBoxCTChars = 512 * 1024
+	// MaxGitRefBytes is the longest git ref a build job may name.
+	MaxGitRefBytes = 255
 	// MaxHostnameLength is the longest hostname, in characters.
 	MaxHostnameLength = 253
 
@@ -87,6 +95,11 @@ var (
 	bucketRE          = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 	regionRE          = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 	gitURLRE          = regexp.MustCompile(`^https://[^\s/@?#]+/[^\s?#]+$`)
+	gitRefRE          = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+	nodeKeyIDRE       = regexp.MustCompile(`^[a-f0-9]{16}$`)
+	base64Key32RE     = regexp.MustCompile(`^[A-Za-z0-9+/]{43}=$`)
+	base64RE          = regexp.MustCompile(`^[A-Za-z0-9+/]+={0,2}$`)
+	privateDomainRE   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.internal$`)
 	imageRepositoryRE = regexp.MustCompile(`^` + repositoryPattern + `$`)
 	imageReferenceRE  = regexp.MustCompile(`^` + repositoryPattern + `(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$`)
 )
@@ -110,6 +123,33 @@ func IsSafeRelativePath(path string) bool {
 	}
 	return true
 }
+
+// IsSafeGitRef reports whether ref is safe to pass to git fetch: it can't be
+// read as an option and follows git check-ref-format (no "..", no "//", no
+// component starting with "." or ending in ".lock", no trailing "/" or ".").
+// Agents still pass --end-of-options before it. Mirrors isSafeGitRef in
+// TypeScript.
+func IsSafeGitRef(ref string) bool {
+	if len(ref) > MaxGitRefBytes || !gitRefRE.MatchString(ref) {
+		return false
+	}
+	if strings.HasPrefix(ref, "-") || strings.HasPrefix(ref, "/") || strings.HasSuffix(ref, "/") ||
+		strings.HasSuffix(ref, ".") || strings.HasSuffix(ref, ".lock") ||
+		strings.Contains(ref, "..") || strings.Contains(ref, "//") {
+		return false
+	}
+	for _, c := range strings.Split(ref, "/") {
+		if strings.HasPrefix(c, ".") || strings.HasSuffix(c, ".lock") {
+			return false
+		}
+	}
+	return true
+}
+
+// IsPrivateDomain reports whether s is a private alias of the form
+// <service>.<environment>.internal, as the roundhouse.private_domain label
+// carries. Agents ignore labels that fail it.
+func IsPrivateDomain(s string) bool { return privateDomainRE.MatchString(s) }
 
 // IsHostname reports whether s is a lowercase DNS hostname with at least two
 // labels, as routes and apps_domain require.

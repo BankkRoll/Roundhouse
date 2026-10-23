@@ -23,7 +23,6 @@ import {
   type ApiTokenScope,
   type BuiltinVariable,
   CANCELLABLE_DEPLOYMENT_STATUSES,
-  can,
   type DeploymentStatus,
   defaultServiceConfig,
   freeSlug,
@@ -34,6 +33,7 @@ import {
   ROLLBACK_SOURCE_STATUSES,
   resolveVariables,
   scopesBeyondRole,
+  secretDerivedVariables,
   slugify,
 } from "@roundhouse/shared";
 import { HttpResponse, http, ws } from "msw";
@@ -276,7 +276,18 @@ function latestConfig(serviceId: string, environmentId: string): ServiceConfig |
 }
 
 function toVariable({ key, value, is_secret, version, updated_at }: DbVariable): Variable {
-  return { key, value: is_secret ? null : value, is_secret, version, updated_at };
+  return {
+    key,
+    tier: is_secret ? "secret" : "plain",
+    locked: false,
+    value: is_secret ? null : value,
+    fingerprint: null,
+    available_at_build: false,
+    mount_as_file: false,
+    version,
+    updated_at,
+    updated_by: null,
+  };
 }
 
 function variablesOf(scope: DbVariable["scope"], ownerId: string, environmentId: string) {
@@ -393,6 +404,37 @@ function resolveEnvironment(service: Service, environment: Environment) {
     shared: values("shared", service.project_id),
     builtins,
   });
+}
+
+/**
+ * Mirrors the API's `local_keys`: the service's secrets plus every plain variable of it
+ * whose resolution reaches a secret (`secretDerivedVariables`), sorted.
+ */
+function localKeys(service: Service, environment: Environment): string[] {
+  const live = db.deploy.services.filter(
+    (row) => row.project_id === service.project_id && !row.deleted,
+  );
+  const raw = (rows: DbVariable[]) => Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const secretKeys = (rows: DbVariable[]) =>
+    rows.filter((row) => row.is_secret).map((row) => row.key);
+  const services: Record<string, Record<string, string>> = {};
+  const secretServiceKeys: Record<string, string[]> = {};
+  for (const entry of live) {
+    const rows = variablesOf("service", entry.id, environment.id);
+    services[entry.slug] = raw(rows);
+    secretServiceKeys[entry.slug] = secretKeys(rows);
+  }
+  const shared = variablesOf("shared", service.project_id, environment.id);
+  const derived = secretDerivedVariables({
+    services,
+    shared: raw(shared),
+    secretServiceKeys,
+    secretSharedKeys: secretKeys(shared),
+  });
+  return [
+    ...(secretServiceKeys[service.slug] ?? []),
+    ...(derived.services[service.slug] ?? []),
+  ].sort();
 }
 
 function toApiToken({ workspace_id: _w, secret: _s, ...token }: DbApiToken): ApiToken {
@@ -635,15 +677,12 @@ function logPage(key: string, query: Record<string, unknown>) {
   };
 }
 
-function ownerOfAnyWorkspace(): Response | null {
+function requireInstanceAdmin(): Response | null {
   const user = currentUser();
   if (!user) return unauthorized();
-  const owner = db.memberships.some(
-    (row) => row.user_id === user.id && can(row.role, actionOf("getInstanceSettings")),
-  );
-  return owner
+  return user.instance_admin
     ? null
-    : apiError(403, "forbidden", "Only workspace owners can manage this instance");
+    : apiError(403, "forbidden", "Only instance admins can perform instance:manage");
 }
 
 async function hmacHex(secret: string, body: string): Promise<string> {
@@ -1150,8 +1189,8 @@ export const deployHandlers = [
   ...(["service", "shared"] as const).flatMap((scope) => {
     const names =
       scope === "service"
-        ? (["listServiceVariables", "putServiceVariables", "revealServiceVariables"] as const)
-        : (["listSharedVariables", "putSharedVariables", "revealSharedVariables"] as const);
+        ? (["listServiceVariables", "putServiceVariables"] as const)
+        : (["listSharedVariables", "putSharedVariables"] as const);
     const resolve = (id: string, action: Action) => {
       if (scope === "service") {
         const found = serviceAccess(id, action);
@@ -1189,11 +1228,11 @@ export const deployHandlers = [
         if (!found.ok) return found.response;
         const environment = environmentOf(found.projectId, input.query.environment_id);
         if (!environment) return notFound("Environment");
-        const set = input.body.set as { key: string; value: string; is_secret?: boolean }[];
+        const set = input.body.set as { key: string; value?: string; tier?: "plain" | "secret" }[];
         const remove = input.body.delete as string[];
         // Mirrors the API's assertValidReferences: every malformed reference, by key.
         const details = set.flatMap(({ key, value }) =>
-          parseReferences(value).errors.map((e) => ({
+          parseReferences(value ?? "").errors.map((e) => ({
             field: key,
             code: e.code,
             message: e.message,
@@ -1216,8 +1255,8 @@ export const deployHandlers = [
             (row) => row.key === entry.key,
           );
           if (existing) {
-            existing.value = entry.value;
-            existing.is_secret = entry.is_secret ?? existing.is_secret;
+            existing.value = entry.value ?? existing.value;
+            existing.is_secret = entry.tier ? entry.tier === "secret" : existing.is_secret;
             existing.version += 1;
             existing.updated_at = now;
           } else {
@@ -1226,8 +1265,8 @@ export const deployHandlers = [
               owner_id: ownerId,
               environment_id: environment.id,
               key: entry.key,
-              value: entry.value,
-              is_secret: entry.is_secret ?? false,
+              value: entry.value ?? "",
+              is_secret: entry.tier === "secret",
               version: 1,
               updated_at: now,
             });
@@ -1255,37 +1294,15 @@ export const deployHandlers = [
             deleted: remove,
           },
         });
-        return HttpResponse.json(listVariables(scope, ownerId, environment.id));
-      }),
-
-      http.post(mswPath(names[2]), async ({ request, params }) => {
-        const input = await validate(names[2], request, params);
-        if (!input.ok) return input.response;
-        const ownerId = input.params[ownerParam] ?? "";
-        const found = resolve(ownerId, actionOf(names[2]));
-        if (!found.ok) return found.response;
-        const environment = environmentOf(found.projectId, input.query.environment_id);
-        if (!environment) return notFound("Environment");
-        const keys = input.body.keys as string[];
-        const variables = variablesOf(scope, ownerId, environment.id)
-          .filter((row) => keys.includes(row.key))
-          .map((row) => ({ key: row.key, value: row.value }));
-        // SECURITY: Audited with the keys only, never the values, like the API.
-        recordAudit({
-          workspaceId: found.workspaceId,
-          actorType: "user",
-          actorId: found.guard.user.id,
-          action: "variables.revealed",
-          targetType: scope === "service" ? "service" : "project",
-          targetId: ownerId,
-          metadata: { environment_id: environment.id, keys: variables.map((entry) => entry.key) },
+        return HttpResponse.json({
+          ...listVariables(scope, ownerId, environment.id),
+          warnings: [],
         });
-        return HttpResponse.json({ variables });
       }),
     ];
   }),
 
-  http.post(mswPath("resolveServiceVariables"), async ({ request, params }) => {
+  http.get(mswPath("resolveServiceVariables"), async ({ request, params }) => {
     const input = await validate("resolveServiceVariables", request, params);
     if (!input.ok) return input.response;
     const found = serviceAccess(input.params.serviceId ?? "", actionOf("resolveServiceVariables"));
@@ -1303,10 +1320,13 @@ export const deployHandlers = [
       const first = details[0];
       return apiError(400, "invalid_reference", `${first?.field}: ${first?.message}`, details);
     }
-    const variables = Object.entries(result.env)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([key, value]) => ({ key, value }));
-    // SECURITY: Audited with the keys only, never the values, like the API.
+    // SECURITY: Like the API, no secret value and no value derived from one leaves here.
+    const local = localKeys(found.row, environment);
+    const variables = Object.fromEntries(
+      Object.entries(result.env)
+        .filter(([key]) => !local.includes(key))
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+    );
     recordAudit({
       workspaceId: liveProject(found.row.project_id)?.workspace_id ?? "",
       actorType: "user",
@@ -1314,9 +1334,9 @@ export const deployHandlers = [
       action: "variables.resolved",
       targetType: "service",
       targetId: found.row.id,
-      metadata: { environment_id: environment.id, keys: variables.map((v) => v.key) },
+      metadata: { environment_id: environment.id, keys: Object.keys(variables), local_keys: local },
     });
-    return HttpResponse.json({ variables });
+    return HttpResponse.json({ variables, local_keys: local });
   }),
 
   // ---------------------------------------------------------------------------
@@ -1493,7 +1513,7 @@ export const deployHandlers = [
   // Instance settings
   // ---------------------------------------------------------------------------
   http.get(mswPath("getInstanceSettings"), () => {
-    const denied = ownerOfAnyWorkspace();
+    const denied = requireInstanceAdmin();
     if (denied) return denied;
     return HttpResponse.json(db.deploy.instance);
   }),
@@ -1501,7 +1521,7 @@ export const deployHandlers = [
   http.patch(mswPath("updateInstanceSettings"), async ({ request, params }) => {
     const input = await validate("updateInstanceSettings", request, params);
     if (!input.ok) return input.response;
-    const denied = ownerOfAnyWorkspace();
+    const denied = requireInstanceAdmin();
     if (denied) return denied;
     const user = currentUser();
     if (input.body.apps_domain !== undefined)
@@ -1547,7 +1567,7 @@ export const deployHandlers = [
   http.post(mswPath("createGithubManifest"), async ({ request, params }) => {
     const input = await validate("createGithubManifest", request, params);
     if (!input.ok) return input.response;
-    const denied = ownerOfAnyWorkspace();
+    const denied = requireInstanceAdmin();
     if (denied) return denied;
     if (db.deploy.github.app) return conflict("This instance already has a GitHub App");
     const workspaceId = String(input.body.workspace_id);
@@ -1601,7 +1621,7 @@ export const deployHandlers = [
     const back = (params: Record<string, string>) =>
       redirect(`/settings/github?${new URLSearchParams(params)}`);
     if (installationId === undefined && code) {
-      const denied = ownerOfAnyWorkspace();
+      const denied = requireInstanceAdmin();
       if (denied) return denied;
       db.deploy.github.states = db.deploy.github.states.filter((row) => row !== pending);
       db.deploy.github.app = {

@@ -73,12 +73,14 @@ func buildJob(id string, exp time.Time) *protocol.BuildJob {
 		ControlHeader:   header("m_"+id, exp),
 		BuildID:         id,
 		DeploymentID:    "dep_1",
+		ProjectID:       "prj_1",
+		ServiceID:       "svc_1",
 		Source:          protocol.GitBuildSource{Type: "git", URL: "https://github.com/acme/app", CommitSHA: strings.Repeat("a", 40)},
 		Builder:         protocol.BuilderRailpack,
 		ContextDir:      ".",
 		BuildArgs:       map[string]string{},
 		ImageRepository: protocol.LocalImageRepository("prj_1", "svc_1"),
-		CacheKey:        "svc_1",
+		CacheKey:        protocol.BuildCacheKey("prj_1", "svc_1"),
 		TimeoutS:        600,
 	}
 }
@@ -214,3 +216,63 @@ func TestFitHello(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// serviceOn is a shape-valid service workload of prj_1/env_1 on network.
+func serviceOn(network string) protocol.WorkloadSpec {
+	id := func(s string) *string { return &s }
+	return protocol.WorkloadSpec{
+		ID:            "wl_1",
+		Kind:          protocol.WorkloadService,
+		ProjectID:     id("prj_1"),
+		EnvironmentID: id("env_1"),
+		ServiceID:     id("svc_1"),
+		DeploymentID:  id("dep_1"),
+		Image:         "nginx:1.27",
+		EnvSealed:     &protocol.SealedBox{V: 1, KID: "0123456789abcdef", EPK: "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=", CT: "AAAAAAAAAAAAAAAAAAAAAA=="},
+		Ports:         []protocol.WorkloadPort{},
+		Routes:        []protocol.WorkloadRoute{},
+		Resources:     protocol.Resources{CPUMillis: 250, MemoryMB: 256, PIDs: 128},
+		Restart:       protocol.Restart{Policy: protocol.RestartAlways},
+		Network:       network,
+		Labels:        map[string]string{},
+		DrainS:        10,
+		SpecHash:      strings.Repeat("0", 64),
+	}
+}
+
+// TestDropsDesiredStateOnAForeignNetwork checks the agent end of ADR 0014's
+// H1: a signed desired_state that puts a service on any network other than
+// its own environment's (or its project's legacy one) is never applied.
+func TestDropsDesiredStateOnAForeignNetwork(t *testing.T) {
+	leaktest.Check(t)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	cp := newFakeControlPlane(t)
+	h := &fakeHandler{}
+	c := newTestClient(t, cp.url(), pub, nil, &syncBuffer{})
+	c.Handler = h
+	stop := startClient(t, c)
+	cp.next(t)
+
+	future := time.Now().Add(time.Minute)
+	gen := int64(1)
+	for _, network := range []string{"roundhouse-prj_2-env_1", "roundhouse-prj_2", "roundhouse-prj_1-env_2", "host", "bridge", "none", "roundhouse-system", "roundhouse-build"} {
+		bad := desired("m_bad_"+network, gen, future)
+		bad.Workloads = []protocol.WorkloadSpec{serviceOn(network)}
+		cp.push(t, priv, bad)
+		gen++
+	}
+	legacy := desired("m_legacy", gen, future)
+	legacy.Workloads = []protocol.WorkloadSpec{serviceOn(protocol.ProjectNetworkName("prj_1"))}
+	cp.push(t, priv, legacy)
+	good := desired("m_good", gen+1, future)
+	good.Workloads = []protocol.WorkloadSpec{serviceOn(protocol.EnvironmentNetworkName("prj_1", "env_1"))}
+	cp.push(t, priv, good)
+
+	waitFor(t, "the allowed generations", func() bool { a, _ := h.snapshot(); return len(a) == 2 })
+	if applied, _ := h.snapshot(); applied[0] != gen || applied[1] != gen+1 {
+		t.Fatalf("applied %v, want only %d and %d", applied, gen, gen+1)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+}

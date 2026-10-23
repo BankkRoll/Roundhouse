@@ -9,8 +9,10 @@ import (
 
 // This file mirrors parseReferences and resolveVariables in
 // packages/shared/src/variables.ts closely enough for the fake to validate
-// `${{…}}` syntax on writes and to answer the resolve route. The CLI itself
-// never resolves references: the control plane does.
+// `${{…}}` syntax on writes and to answer the resolved route, and
+// secretDerivedVariables in packages/shared/src/variable-taint.ts to keep
+// secrets out of its answer. The CLI itself never resolves references: the
+// control plane does.
 
 const sharedNamespace = "shared"
 
@@ -93,6 +95,8 @@ type resolveInput struct {
 	services map[string]map[string]string
 	shared   map[string]string
 	builtins map[string]map[string]string
+	// secrets holds every secret variable as "ns.NAME".
+	secrets map[string]bool
 }
 
 // resolveError is a resolution problem in the value of variable ("ns.NAME").
@@ -103,10 +107,12 @@ type resolveError struct {
 }
 
 // resolveEnv builds a service's environment: its built-ins overlaid by its
-// own variables with every reference substituted.
-func resolveEnv(in resolveInput) (map[string]string, []resolveError) {
-	r := &resolver{in: in, memo: map[string]*string{}}
-	env := map[string]string{}
+// own variables with every reference substituted. Variables that are secret
+// or reference a secret, directly or through other variables, are left out
+// and returned, sorted, in local instead.
+func resolveEnv(in resolveInput) (env map[string]string, local []string, errs []resolveError) {
+	r := &resolver{in: in, memo: map[string]*string{}, tainted: map[string]bool{}}
+	env = map[string]string{}
 	for k, v := range in.builtins[in.service] {
 		env[k] = v
 	}
@@ -116,14 +122,19 @@ func resolveEnv(in resolveInput) (map[string]string, []resolveError) {
 	}
 	slices.Sort(keys)
 	for _, k := range keys {
-		if v := r.resolve(in.service, k); v != nil {
+		v := r.resolve(in.service, k)
+		switch {
+		case r.tainted[in.service+"."+k]:
+			delete(env, k)
+			local = append(local, k)
+		case v != nil:
 			env[k] = *v
 		}
 	}
 	if len(r.errs) > 0 {
-		return nil, r.errs
+		return nil, nil, r.errs
 	}
-	return env, nil
+	return env, local, nil
 }
 
 type resolver struct {
@@ -131,6 +142,9 @@ type resolver struct {
 	memo  map[string]*string
 	stack []string
 	errs  []resolveError
+	// tainted marks resolved variables ("ns.NAME") that are secret or
+	// derive from one.
+	tainted map[string]bool
 }
 
 func (r *resolver) known(ns string) bool {
@@ -166,6 +180,9 @@ func (r *resolver) resolve(ns, name string) *string {
 		r.memo[key] = &raw
 		return &raw
 	}
+	if r.in.secrets[key] {
+		r.tainted[key] = true
+	}
 	r.stack = append(r.stack, key)
 	defer func() { r.stack = r.stack[:len(r.stack)-1] }()
 
@@ -198,7 +215,11 @@ func (r *resolver) resolve(ns, name string) *string {
 			r.errs = append(r.errs, resolveError{code: "cycle", message: "Variables reference each other in a loop: " + strings.Join(cycle, " → "), variable: key})
 			failed = true
 		default:
-			if v := r.resolve(target, s.ref.name); v == nil {
+			v := r.resolve(target, s.ref.name)
+			if r.tainted[targetKey] {
+				r.tainted[key] = true
+			}
+			if v == nil {
 				failed = true
 			} else {
 				out.WriteString(*v)

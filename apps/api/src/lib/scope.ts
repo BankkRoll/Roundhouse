@@ -1,6 +1,7 @@
 /**
  * Resolves the workspace that owns a project, service, deployment or build
- * and checks the caller's role there, so every nested route gets the same
+ * and checks the caller's access there (with the project, and the
+ * environment when known, in scope), so every nested route gets the same
  * RBAC and the same 404 for rows in workspaces the caller can't see.
  *
  * @module
@@ -8,7 +9,7 @@
 import { builds, deployments, environments, projects, services, workspaces } from "@roundhouse/db";
 import type { Action } from "@roundhouse/shared";
 import { and, eq, isNull } from "drizzle-orm";
-import { type AppContext, requireWorkspace } from "../context";
+import { type AppContext, requireWorkspace, WORKSPACE_NOT_FOUND } from "../context";
 import { ApiError, notFound } from "./errors";
 
 type EnvironmentRow = typeof environments.$inferSelect;
@@ -25,11 +26,14 @@ async function authorize(
   workspaceId: string,
   action: Action,
   what: string,
+  scope: { projectId: string; environmentId?: string },
 ): Promise<Caller> {
   try {
-    return await requireWorkspace(c, workspaceId, action);
+    return await requireWorkspace(c, workspaceId, action, scope);
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) throw notFound(what);
+    if (err instanceof ApiError && err.status === 404 && err.message === WORKSPACE_NOT_FOUND) {
+      throw notFound(what);
+    }
     throw err;
   }
 }
@@ -40,10 +44,16 @@ async function authorize(
  * @param c - Request context.
  * @param projectId - From the route.
  * @param action - RBAC action of the route.
+ * @param environmentId - Environment the action targets, so its protection applies.
  * @returns The project and the caller's membership.
  * @throws {ApiError} 404 when missing, deleted, or in a workspace the caller isn't in.
  */
-export async function projectScope(c: AppContext, projectId: string, action: Action) {
+export async function projectScope(
+  c: AppContext,
+  projectId: string,
+  action: Action,
+  environmentId?: string,
+) {
   const [row] = await c
     .get("db")
     .select({ project: projects })
@@ -54,7 +64,10 @@ export async function projectScope(c: AppContext, projectId: string, action: Act
     )
     .limit(1);
   if (!row) throw notFound("Project");
-  const caller = await authorize(c, row.project.workspaceId, action, "Project");
+  const caller = await authorize(c, row.project.workspaceId, action, "Project", {
+    projectId,
+    ...(environmentId !== undefined ? { environmentId } : {}),
+  });
   return { project: row.project, caller };
 }
 
@@ -64,9 +77,15 @@ export async function projectScope(c: AppContext, projectId: string, action: Act
  * @param c - Request context.
  * @param serviceId - From the route.
  * @param action - RBAC action of the route.
+ * @param environmentId - Environment the action targets, so its protection applies.
  * @returns The service, its project, and the caller's membership.
  */
-export async function serviceScope(c: AppContext, serviceId: string, action: Action) {
+export async function serviceScope(
+  c: AppContext,
+  serviceId: string,
+  action: Action,
+  environmentId?: string,
+) {
   const [row] = await c
     .get("db")
     .select({ service: services, project: projects })
@@ -83,7 +102,10 @@ export async function serviceScope(c: AppContext, serviceId: string, action: Act
     )
     .limit(1);
   if (!row) throw notFound("Service");
-  const caller = await authorize(c, row.project.workspaceId, action, "Service");
+  const caller = await authorize(c, row.project.workspaceId, action, "Service", {
+    projectId: row.project.id,
+    ...(environmentId !== undefined ? { environmentId } : {}),
+  });
   return { service: row.service, project: row.project, caller };
 }
 
@@ -113,7 +135,10 @@ export async function deploymentScope(c: AppContext, deploymentId: string, actio
     )
     .limit(1);
   if (!row) throw notFound("Deployment");
-  const caller = await authorize(c, row.project.workspaceId, action, "Deployment");
+  const caller = await authorize(c, row.project.workspaceId, action, "Deployment", {
+    projectId: row.project.id,
+    environmentId: row.deployment.environmentId,
+  });
   return { deployment: row.deployment, service: row.service, project: row.project, caller };
 }
 
@@ -143,7 +168,9 @@ export async function buildScope(c: AppContext, buildId: string, action: Action)
     )
     .limit(1);
   if (!row) throw notFound("Build");
-  const caller = await authorize(c, row.project.workspaceId, action, "Build");
+  const caller = await authorize(c, row.project.workspaceId, action, "Build", {
+    projectId: row.project.id,
+  });
   return { build: row.build, service: row.service, project: row.project, caller };
 }
 

@@ -138,10 +138,19 @@ type WorkloadSpec struct {
 	// Command overrides the image's CMD when non-empty.
 	Command []string `json:"command,omitempty"`
 	// Entrypoint overrides the image's ENTRYPOINT when non-empty.
-	Entrypoint []string          `json:"entrypoint,omitempty"`
-	Env        map[string]string `json:"env"`
-	Ports      []WorkloadPort    `json:"ports"`
-	Routes     []WorkloadRoute   `json:"routes"`
+	Entrypoint []string `json:"entrypoint,omitempty"`
+	// EnvSealed is the environment and secret files sealed to this node; open
+	// it with [OpenWorkloadEnv]. Nil exactly for system workloads. Excluded
+	// from the spec hash: a workload ID's environment never changes.
+	EnvSealed *SealedBox `json:"env_sealed"`
+	// Env is the opened environment. Never on the wire: [OpenWorkloadEnv]
+	// fills it for service workloads; the agent sets it for system ones.
+	Env map[string]string `json:"-"`
+	// SecretFiles are values to mount at /run/secrets/<KEY> instead of the
+	// environment. Never on the wire; filled by [OpenWorkloadEnv].
+	SecretFiles map[string]string `json:"-"`
+	Ports       []WorkloadPort    `json:"ports"`
+	Routes      []WorkloadRoute   `json:"routes"`
 	// Healthcheck nil behaves like a [HealthcheckNone] probe.
 	Healthcheck *Healthcheck      `json:"healthcheck"`
 	Resources   Resources         `json:"resources"`
@@ -216,6 +225,36 @@ func EnvironmentNetworkName(projectID, environmentID string) string {
 	return HashedNetworkPrefix + hex.EncodeToString(sum[:])
 }
 
+// ReservedNetworks are networks a service workload may never join: Docker's
+// built-ins and the agent's own.
+var ReservedNetworks = []string{"host", "bridge", "none", "roundhouse-system", "roundhouse-build"}
+
+// ServiceNetworkAllowed reports whether a service workload of projectID and
+// environmentID may join network (ADR 0014, H1): only its own environment
+// network or, while Phase 1 replicas migrate, its own project's legacy
+// [ProjectNetworkName]. Never a [ReservedNetworks] entry or another
+// project's network. Mirrors isServiceNetworkAllowed in TypeScript.
+func ServiceNetworkAllowed(network, projectID, environmentID string) bool {
+	for _, r := range ReservedNetworks {
+		if network == r {
+			return false
+		}
+	}
+	return network == ProjectNetworkName(projectID) || network == EnvironmentNetworkName(projectID, environmentID)
+}
+
+// PrivateServiceAlias returns the DNS alias every replica of a service
+// answers to on its environment network, derived from the service ID so it
+// can't collide with another service. Mirrors privateServiceAlias in
+// TypeScript.
+func PrivateServiceAlias(serviceID string) string {
+	return strings.ReplaceAll(strings.ToLower(serviceID), "_", "-") + ".roundhouse.internal"
+}
+
+// BuildCacheKey returns the BuildKit cache scope of a service's builds.
+// Mirrors buildCacheKey in TypeScript.
+func BuildCacheKey(projectID, serviceID string) string { return projectID + "." + serviceID }
+
 // Validate checks w against the constraints of the zod WorkloadSpecSchema.
 func (w *WorkloadSpec) Validate() error {
 	if !idRE.MatchString(w.ID) {
@@ -229,11 +268,30 @@ func (w *WorkloadSpec) Validate() error {
 				return errors.New("service workloads need every ownership id")
 			}
 		}
+		if w.EnvSealed == nil {
+			return errors.New("env_sealed: required for service workloads")
+		}
+		if err := w.EnvSealed.validate(); err != nil {
+			return fmt.Errorf("env_sealed: %w", err)
+		}
+		if !ServiceNetworkAllowed(w.Network, *w.ProjectID, *w.EnvironmentID) {
+			return fmt.Errorf("network: service workloads must join %s", EnvironmentNetworkName(*w.ProjectID, *w.EnvironmentID))
+		}
+		if strings.HasPrefix(w.Image, RegistryListen+"/") {
+			repo := LocalImageRepository(*w.ProjectID, *w.ServiceID)
+			digest, ok := strings.CutPrefix(w.Image, repo+"@sha256:")
+			if !ok || !specHashRE.MatchString(digest) {
+				return fmt.Errorf("image: local registry images must be %s@sha256:…", repo)
+			}
+		}
 	case WorkloadSystem:
 		for _, id := range owned {
 			if id != nil {
 				return errors.New("system workloads have no ownership ids")
 			}
+		}
+		if w.EnvSealed != nil {
+			return errors.New("env_sealed: forbidden for system workloads")
 		}
 	default:
 		return fmt.Errorf("kind: invalid %q", w.Kind)

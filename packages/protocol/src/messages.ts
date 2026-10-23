@@ -9,6 +9,7 @@
  * @module
  */
 import { z } from "zod";
+import { EncryptionPublicKeyString, SealedBoxSchema } from "./box";
 import {
   boundedString,
   CACHE_KEY_RE,
@@ -16,6 +17,7 @@ import {
   CREDENTIAL_FRAME_TTL_MS,
   DIGEST_RE,
   ENV_KEY_RE,
+  GitRefString,
   HostnameString,
   IdString,
   IMAGE_REPOSITORY_RE,
@@ -27,11 +29,19 @@ import {
   MAX_MESSAGE_BYTES,
   MAX_STATUSES_PER_HELLO,
   MAX_WORKLOADS_PER_NODE,
+  NODE_ENCRYPTION_KEY_ID_RE,
   RelativePath,
   UnixMillis,
   utf8ByteLength,
 } from "./limits";
-import { REGISTRY_LISTEN, RegistryConfigSchema, TLS_MODES, WorkloadSpecSchema } from "./workload";
+import {
+  buildCacheKey,
+  localImageRepository,
+  REGISTRY_LISTEN,
+  RegistryConfigSchema,
+  TLS_MODES,
+  WorkloadSpecSchema,
+} from "./workload";
 
 /**
  * Current wire protocol version, sent by agents in `hello`.
@@ -48,17 +58,29 @@ import { REGISTRY_LISTEN, RegistryConfigSchema, TLS_MODES, WorkloadSpecSchema } 
  *   worse, ignore the second and bake secret build args into the image, so
  *   the control plane sends neither below {@link BUILD_CANCEL_PROTOCOL_VERSION}
  *   and {@link SECRET_BUILD_ARGS_PROTOCOL_VERSION}.
+ * - Version 4 (ADR 0014) replaces `WorkloadSpec.env` with `env_sealed`, adds
+ *   `build_job.build_secrets_sealed`, `project_id` and `service_id`, and
+ *   `hello.encryption_key`. An older agent can't decode a sealed workload, so
+ *   the control plane places workloads and builds only on agents at
+ *   {@link SEALED_ENV_PROTOCOL_VERSION} that have registered an encryption
+ *   key.
+ *
+ * Version numbers follow ADR 0013: one per phase, each accepting N−1.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /**
- * Oldest `hello.protocol_version` the control plane accepts. Every version
- * since 1 has been additive, so version 1 agents are still accepted; they
- * just get no workloads and no builds.
+ * Oldest `hello.protocol_version` the control plane accepts (N−1, ADR 0013).
+ * An older agent's `hello` is answered with close code 4002
+ * (`agent_outdated`).
  */
-export const MIN_PROTOCOL_VERSION = 1;
+export const MIN_PROTOCOL_VERSION = 3;
 
-/** First protocol version whose agents run workloads and builds. */
+/**
+ * First protocol version whose agents run workloads and builds. Every
+ * accepted agent is past it; {@link SEALED_ENV_PROTOCOL_VERSION} is the gate
+ * that matters for placement now.
+ */
 export const WORKLOADS_PROTOCOL_VERSION = 2;
 
 /** First protocol version whose agents understand `build_cancel`. */
@@ -69,6 +91,13 @@ export const BUILD_CANCEL_PROTOCOL_VERSION = 3;
  * A build with secret args is never sent to an older agent.
  */
 export const SECRET_BUILD_ARGS_PROTOCOL_VERSION = 3;
+/**
+ * First protocol version whose agents open sealed boxes: `env_sealed`,
+ * `build_job.build_secrets_sealed`, `hello.encryption_key` and the join
+ * request's `encryption_public_key`. No workload or build goes to an older
+ * agent.
+ */
+export const SEALED_ENV_PROTOCOL_VERSION = 4;
 
 // -----------------------------------------------------------------------------
 // Shared shapes
@@ -170,6 +199,25 @@ export const WorkloadStatusReportSchema = z.object({
 /** One workload's current status. */
 export type WorkloadStatusReport = z.infer<typeof WorkloadStatusReportSchema>;
 
+/**
+ * A node's encryption key, signed by its Ed25519 identity key so a stolen
+ * node credential alone can't swap in an attacker's key.
+ */
+export const NodeEncryptionKeySchema = z.object({
+  /** X25519 public key, base64 (raw 32 bytes). */
+  public_key: EncryptionPublicKeyString,
+  /** `nodeEncryptionKeyId(public_key)`. */
+  kid: z.string().regex(NODE_ENCRYPTION_KEY_ID_RE, "expected a key id"),
+  /**
+   * Ed25519 signature by the node's identity key over
+   * `encryptionKeySignaturePayload(node_id, public_key)`, base64.
+   */
+  sig: z.string().regex(/^[A-Za-z0-9+/]{86}==$/, "expected a base64 Ed25519 signature"),
+});
+
+/** A node's signed encryption key. */
+export type NodeEncryptionKey = z.infer<typeof NodeEncryptionKeySchema>;
+
 /** First frame on every connection. Re-sent after each reconnect. */
 export const HelloSchema = z.object({
   type: z.literal("hello"),
@@ -190,6 +238,13 @@ export const HelloSchema = z.object({
    * from version 1 agents.
    */
   statuses: z.array(WorkloadStatusReportSchema).max(MAX_STATUSES_PER_HELLO).optional(),
+  /**
+   * The agent's X25519 encryption key, for nodes that joined before
+   * protocol 4 or lost theirs. Sent from {@link SEALED_ENV_PROTOCOL_VERSION}.
+   * The control plane stores it only when the node has none yet; replacing a
+   * key needs a re-join.
+   */
+  encryption_key: NodeEncryptionKeySchema.optional(),
 });
 
 /** First frame on every connection. */
@@ -417,8 +472,11 @@ export const GitBuildSourceSchema = z.object({
     .max(2048)
     .regex(/^https:\/\/[^\s/@?#]+\/[^\s?#]+$/, "expected an https clone URL without credentials"),
   commit_sha: z.string().regex(COMMIT_SHA_RE, "expected a full commit sha"),
-  /** Ref the commit was resolved from, for display and shallow fetch. */
-  ref: boundedString(256, 1).optional(),
+  /**
+   * Ref the commit was resolved from, for display and shallow fetch. Agents
+   * pass it after `--end-of-options` and fetch by `commit_sha` regardless.
+   */
+  ref: GitRefString.optional(),
   /** GitHub installation token for private repositories. Forces a short `exp`. */
   token: boundedString(4096, 1).optional(),
 });
@@ -439,12 +497,16 @@ export const BuildJobSchema = z
     ...ControlHeader,
     build_id: IdString,
     deployment_id: IdString,
+    /** Owning project; selects the project's isolated BuildKit instance. */
+    project_id: IdString,
+    service_id: IdString,
     source: GitBuildSourceSchema,
     builder: z.enum(BUILDERS),
     /** Relative to `context_dir`; defaults to `Dockerfile`. Only for the `dockerfile` builder. */
     dockerfile_path: RelativePath.optional(),
     /** Build context inside the repository; `.` for the root. */
     context_dir: RelativePath,
+    /** Plain values passed as `--build-arg` (Dockerfile `ARG`). Never secrets. */
     build_args: z
       .record(
         z.string().max(256).regex(ENV_KEY_RE, "expected a build arg name"),
@@ -463,7 +525,13 @@ export const BuildJobSchema = z
       .array(z.string().max(256).regex(ENV_KEY_RE, "expected a build arg name"))
       .max(MAX_BUILD_ARGS)
       .optional(),
-    /** Repository to push to, in the local registry; see `localImageRepository`. */
+    /**
+     * BuildKit secrets (`RUN --mount=type=secret,id=KEY`), sealed to the
+     * builder node; see `SealedBuildSecretsSchema` and `buildSecretsAad`.
+     * Absent when the build uses none.
+     */
+    build_secrets_sealed: SealedBoxSchema.optional(),
+    /** Exactly `localImageRepository(project_id, service_id)`. */
     image_repository: z
       .string()
       .max(512)
@@ -471,7 +539,7 @@ export const BuildJobSchema = z
       .refine((r) => r.startsWith(`${REGISTRY_LISTEN}/`), {
         message: `must be in the local registry at ${REGISTRY_LISTEN}`,
       }),
-    /** BuildKit cache scope; builds sharing a key share layers. */
+    /** Exactly `buildCacheKey(project_id, service_id)`. */
     cache_key: z.string().regex(CACHE_KEY_RE, "expected a cache key"),
     /** The builder cancels and fails the build after this many seconds. */
     timeout_s: z.number().int().min(60).max(7200),
@@ -490,6 +558,14 @@ export const BuildJobSchema = z
       path: ["secret_build_args"],
     },
   )
+  .refine((j) => j.image_repository === localImageRepository(j.project_id, j.service_id), {
+    message: "image_repository must be the service's local repository",
+    path: ["image_repository"],
+  })
+  .refine((j) => j.cache_key === buildCacheKey(j.project_id, j.service_id), {
+    message: "cache_key must be buildCacheKey(project_id, service_id)",
+    path: ["cache_key"],
+  })
   .refine((j) => !carriesCredentials(j) || shortLived(j), SHORT_LIVED_ISSUE);
 
 /** Build an image and push it to the node's local registry. */
@@ -526,7 +602,7 @@ export type ControlMessage = z.infer<typeof ControlMessageSchema>;
 
 /**
  * Whether a control payload carries a credential (a git token, a registry
- * password, or object-storage keys). Such frames must expire within
+ * password, object-storage keys, or a sealed box). Such frames must expire within
  * {@link CREDENTIAL_FRAME_TTL_MS} of `iat`; the schemas reject longer ones.
  *
  * @param message - A control payload, before or after signing.
@@ -536,20 +612,21 @@ export function carriesCredentials(
   message:
     | {
         type: "desired_state";
-        workloads: readonly { registry_auth?: unknown }[];
+        workloads: readonly { registry_auth?: unknown; env_sealed?: unknown }[];
         registry: { storage: { type: string } } | null;
       }
-    | { type: "build_job"; source: { token?: string } }
+    | { type: "build_job"; source: { token?: string }; build_secrets_sealed?: unknown }
     | { type: "welcome" }
     | { type: "build_cancel" },
 ): boolean {
   switch (message.type) {
     case "desired_state":
       return (
-        message.registry?.storage.type === "s3" || message.workloads.some((w) => !!w.registry_auth)
+        message.registry?.storage.type === "s3" ||
+        message.workloads.some((w) => !!w.registry_auth || !!w.env_sealed)
       );
     case "build_job":
-      return message.source.token !== undefined;
+      return message.source.token !== undefined || !!message.build_secrets_sealed;
     default:
       return false;
   }

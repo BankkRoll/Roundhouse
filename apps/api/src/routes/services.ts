@@ -69,7 +69,8 @@ async function liveSlugs(db: Db, projectId: string): Promise<string[]> {
 /** {@link assertSourceInstallation}, unsealing the App only for sources that name an installation. */
 async function checkSource(c: AppContext, workspaceId: string, source: ServiceSource) {
   if (source.type !== "git" || !source.github_installation_id) return;
-  await assertSourceInstallation(c.get("db"), requireMasterKey(c), workspaceId, source);
+  requireMasterKey(c);
+  await assertSourceInstallation(c.get("db"), c.env, workspaceId, source);
 }
 
 /** Service, config and domain routes. */

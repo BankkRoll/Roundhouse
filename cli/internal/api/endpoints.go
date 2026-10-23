@@ -23,7 +23,7 @@ var (
 	RouteServiceVars     = Route{http.MethodGet, "/v1/services/{serviceId}/variables"}
 	RoutePutServiceVars  = Route{http.MethodPut, "/v1/services/{serviceId}/variables"}
 	RouteRevealService   = Route{http.MethodPost, "/v1/services/{serviceId}/variables/reveal"}
-	RouteResolveVars     = Route{http.MethodPost, "/v1/services/{serviceId}/variables/resolve"}
+	RouteResolveVars     = Route{http.MethodGet, "/v1/services/{serviceId}/variables/resolved"}
 	RouteSharedVars      = Route{http.MethodGet, "/v1/projects/{projectId}/variables"}
 	RoutePutSharedVars   = Route{http.MethodPut, "/v1/projects/{projectId}/variables"}
 	RouteRevealShared    = Route{http.MethodPost, "/v1/projects/{projectId}/variables/reveal"}
@@ -284,15 +284,12 @@ func (c *Client) RevealVariables(ctx context.Context, scope VariableScope, envir
 	return out.Variables, nil
 }
 
-// ResolveVariables returns a service's environment exactly as a deployment
-// in environmentID would get it, secrets in plaintext, resolved by the
-// control plane's own resolver. The control plane audits every call.
-func (c *Client) ResolveVariables(ctx context.Context, serviceID, environmentID string) ([]ResolvedVariable, error) {
-	out, err := fetch[ResolvedVariables](ctx, c, RouteResolveVars, envQuery(environmentID), nil, serviceID)
-	if err != nil {
-		return nil, err
-	}
-	return out.Variables, nil
+// ResolveVariables returns a service's plain environment as a deployment in
+// environmentID would get it, resolved by the control plane's own resolver,
+// and the secret and secret-derived keys it leaves out. The control plane
+// audits every call.
+func (c *Client) ResolveVariables(ctx context.Context, serviceID, environmentID string) (*ResolvedVariables, error) {
+	return fetch[ResolvedVariables](ctx, c, RouteResolveVars, envQuery(environmentID), nil, serviceID)
 }
 
 // -----------------------------------------------------------------------------

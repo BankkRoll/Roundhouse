@@ -2,10 +2,16 @@
  * Writes to the append-only audit log, either on its own or as one statement
  * of a larger `db.batch` so an action and its audit record commit together.
  *
+ * Each insert takes the next `seq` in the same statement, which D1 runs
+ * serially, so numbers never collide. `prev_hash`/`hash` are filled in
+ * later, in `seq` order, by the `AuditChain` Durable Object (ADR 0014
+ * "Audit log").
+ *
  * @module
  */
 import { auditLogs, type Db } from "@roundhouse/db";
 import { type AuditAction, type AuditActorType, newId } from "@roundhouse/shared";
+import { sql } from "drizzle-orm";
 
 /** One audited action. */
 export interface AuditEntry {
@@ -31,6 +37,7 @@ export interface AuditEntry {
 export function auditInsert(db: Db, entry: AuditEntry) {
   return db.insert(auditLogs).values({
     id: newId("auditLog"),
+    seq: sql`(SELECT COALESCE(MAX(${auditLogs.seq}), 0) + 1 FROM ${auditLogs})`,
     workspaceId: entry.workspaceId,
     actorType: entry.actorType,
     actorId: entry.actorId,

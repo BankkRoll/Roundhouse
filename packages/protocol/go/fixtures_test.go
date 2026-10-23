@@ -31,6 +31,7 @@ func TestFixturesRoundTrip(t *testing.T) {
 		{"hello.json", &Hello{}},
 		{"heartbeat.json", &Heartbeat{}},
 		{"hello-statuses.json", &Hello{}},
+		{"hello-encryption-key.json", &Hello{}},
 		{"workload-status.json", &WorkloadStatus{}},
 		{"logs-runtime.json", &Logs{}},
 		{"logs-build.json", &Logs{}},
@@ -70,6 +71,7 @@ func TestDecodeAgentMessageFixtures(t *testing.T) {
 	cases := map[string]AgentMessage{
 		"hello.json":                  &Hello{},
 		"hello-statuses.json":         &Hello{},
+		"hello-encryption-key.json":   &Hello{},
 		"heartbeat.json":              &Heartbeat{},
 		"workload-status.json":        &WorkloadStatus{},
 		"logs-runtime.json":           &Logs{},
@@ -195,6 +197,9 @@ func verifyFixture(t *testing.T, name string) (ControlMessage, string) {
 	if err != nil {
 		t.Fatalf("verify %s: %v", name, err)
 	}
+	if !CarriesCredentials(msg) {
+		return msg, env.Payload
+	}
 	if _, err := VerifyEnvelope(env, pub, f.NodeID, fixtureIAT.Add(CredentialFrameTTLMS*time.Millisecond+time.Millisecond)); err == nil {
 		t.Errorf("%s: credential-bearing fixture should expire within %d ms", name, CredentialFrameTTLMS)
 	}
@@ -268,26 +273,14 @@ func TestVerifySignedBuildJobFixture(t *testing.T) {
 	if job.IsSecretArg("NODE_ENV") {
 		t.Error("NODE_ENV is not secret")
 	}
+	if job.BuildSecretsSealed == nil {
+		t.Error("fixture should carry sealed build secrets")
+	}
 	assertRoundTrip(t, job, payload)
 }
 
 func TestVerifySignedBuildCancelFixture(t *testing.T) {
-	var f signedFixture
-	if err := json.Unmarshal(readFixture(t, "signed-build-cancel.json"), &f); err != nil {
-		t.Fatal(err)
-	}
-	env, err := ParseEnvelope(f.Envelope)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pub, err := ParsePublicKey(f.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	msg, err := VerifyEnvelope(env, pub, f.NodeID, fixtureIAT)
-	if err != nil {
-		t.Fatal(err)
-	}
+	msg, payload := verifyFixture(t, "signed-build-cancel.json")
 	c, ok := msg.(*BuildCancel)
 	if !ok {
 		t.Fatalf("got %T, want *BuildCancel", msg)
@@ -295,7 +288,7 @@ func TestVerifySignedBuildCancelFixture(t *testing.T) {
 	if c.BuildID != "bld_01JAAAAAAAAAAAAAAAAAAAAAAA" || CarriesCredentials(c) {
 		t.Errorf("unexpected cancel %+v", c)
 	}
-	assertRoundTrip(t, c, env.Payload)
+	assertRoundTrip(t, c, payload)
 }
 
 // TestNetworkNamesFixture is the Go half of the network-name agreement
