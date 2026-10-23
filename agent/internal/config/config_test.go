@@ -107,3 +107,14 @@ func TestSecrets(t *testing.T) {
 		t.Fatal("expected empty secret to be rejected")
 	}
 }
+
+func TestControlKeysPath(t *testing.T) {
+	dir := t.TempDir()
+	if got, want := (Config{}).WithDataDir(dir, "r2").ControlKeysPath(), filepath.Join(dir, "control-keys-r2.json"); got != want {
+		t.Fatalf("new registration: %q, want %q", got, want)
+	}
+	legacy := Config{StateFile: filepath.Join(dir, "state-r1.json")}
+	if got, want := legacy.ControlKeysPath(), filepath.Join(dir, "state-r1.control-keys.json"); got != want {
+		t.Fatalf("config from before rollover: %q, want %q", got, want)
+	}
+}

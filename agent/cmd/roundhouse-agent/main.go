@@ -187,6 +187,10 @@ func cmdRun(args []string, logger *slog.Logger, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	controlKeys, err := conn.OpenKeyStore(cfg.ControlKeysPath(), controlKey, cfg.ControlKeyID)
+	if err != nil {
+		return fmt.Errorf("control keys: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -210,6 +214,7 @@ func cmdRun(args []string, logger *slog.Logger, stderr io.Writer) error {
 		NodeID:       cfg.NodeID,
 		ControlKey:   controlKey,
 		ControlKeyID: cfg.ControlKeyID,
+		Keys:         controlKeys,
 		OnControlKeyID: func(kid string) error {
 			return pinKeyID(*cfgPath, kid)
 		},
