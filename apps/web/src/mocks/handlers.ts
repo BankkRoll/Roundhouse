@@ -25,6 +25,8 @@ import {
 } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
 import type { AuditLogPage, Invite, Me, Member, Node, Workspace } from "../lib/api/types";
+import { accessHandlers } from "./access-handlers";
+import { forgetMember } from "./access-resolve";
 import { accountSecurityHandlers } from "./account-security-handlers";
 import { changeHandlers } from "./changes-handlers";
 import {
@@ -437,6 +439,7 @@ const phase0Handlers = [
     if (target.role === "owner" && ownerCount(workspaceId) <= 1) return lastOwner();
     const removed = toMember(target);
     db.memberships = db.memberships.filter((row) => row !== target);
+    forgetMember(workspaceId, target.user_id);
     recordAudit({
       workspaceId,
       actorType: "user",
@@ -755,4 +758,5 @@ export const handlers = [
   ...signingKeyHandlers,
   ...securityHandlers,
   ...accountSecurityHandlers,
+  ...accessHandlers,
 ];

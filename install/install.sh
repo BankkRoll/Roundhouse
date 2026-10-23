@@ -63,13 +63,13 @@ PINNED_AGENT_VERSION="__AGENT_VERSION__"
 # IMPORTANT: release-signing public keys, one PEM block each, verbatim as
 # `openssl pkey -pubout` prints them. SHA256SUMS is accepted if any of them
 # verifies it, which lets a rotation ship the next key before it is used (see
-# infra/release-signing.md). PLACEHOLDER_KEY_DER_B64 is the discarded
-# placeholder key; while it is pinned, downloads are refused and only
-# --binary works.
+# infra/release-signing.md). The block below is a PLACEHOLDER whose private
+# half was discarded; replace it before the first release. While it is
+# present, downloads are refused and only --binary works.
 RELEASE_PUBLIC_KEYS_PEM="$(
 	cat <<'PEM'
 -----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAL/QmFCAOLoDncNOA7WnG9SahMbrXfSz2O1PWiqXw8Qc=
+MCowBQYDK2VwAyEAkHLBdd+mLYOoixvDbr8za3PLXSGyGu4wFPf5jmAiK88=
 -----END PUBLIC KEY-----
 PEM
 )"

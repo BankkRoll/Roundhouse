@@ -10,8 +10,7 @@ import {
   toast,
 } from "@roundhouse/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeftIcon } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useId, useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
 import { SettingsField } from "../../components/settings-field";
@@ -19,6 +18,7 @@ import { errorMessage } from "../../lib/api/client";
 import type { ProjectDetail } from "../../lib/api/deploy-types";
 import { usePermissions } from "../../lib/permissions";
 import { forgetProject, useDeleteProject, useUpdateProject } from "../../queries/projects";
+import { ProjectSettingsFrame } from "./project-settings-frame";
 import { useProjectEnvironment } from "./use-project-environment";
 
 function GeneralForm({ workspaceId, project }: { workspaceId: string; project: ProjectDetail }) {
@@ -153,8 +153,8 @@ function DeleteProjectSection({
 }
 
 /**
- * Project settings: name and description, the project's identifiers, and deletion with
- * a typed confirmation.
+ * Project settings, General view: name and description, the project's identifiers, and
+ * deletion with a typed confirmation.
  *
  * @param props - Workspace and project ids.
  * @returns The page.
@@ -166,26 +166,16 @@ export function ProjectSettingsPage({
   workspaceId: string;
   projectId: string;
 }) {
-  const { project, envParam } = useProjectEnvironment(projectId);
+  const { project } = useProjectEnvironment(projectId);
   const { can } = usePermissions(workspaceId);
   if (!project.data) return null;
   return (
-    <div className="max-w-[50rem]">
-      <Link
-        to="/w/$workspaceId/p/$projectId"
-        params={{ workspaceId, projectId }}
-        search={{ env: envParam }}
-        className="mb-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
-      >
-        <ArrowLeftIcon className="size-3.5" aria-hidden="true" />
-        {project.data.name}
-      </Link>
-      <div className="mb-8">
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">Project settings</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Applies to every environment of {project.data.name}.
-        </p>
-      </div>
+    <ProjectSettingsFrame
+      workspaceId={workspaceId}
+      projectId={projectId}
+      title="Project settings"
+      description={`Applies to every environment of ${project.data.name}.`}
+    >
       <SettingsStack>
         <GeneralForm workspaceId={workspaceId} project={project.data} />
         <SettingsSection title="Identifiers" description="Use these when talking to the API.">
@@ -200,6 +190,6 @@ export function ProjectSettingsPage({
           <DeleteProjectSection workspaceId={workspaceId} project={project.data} />
         ) : null}
       </SettingsStack>
-    </div>
+    </ProjectSettingsFrame>
   );
 }

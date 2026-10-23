@@ -23,7 +23,9 @@ import {
   type ApiTokenScope,
   type BuiltinVariable,
   CANCELLABLE_DEPLOYMENT_STATUSES,
+  classifyVariable,
   type DeploymentStatus,
+  decideVariableTier,
   defaultServiceConfig,
   freeSlug,
   generatedHostname,
@@ -52,6 +54,7 @@ import type {
   ServiceConfig,
   Variable,
 } from "../lib/api/deploy-types";
+import { protectionRefusal } from "./access-resolve";
 import {
   apiError,
   currentUser,
@@ -91,7 +94,8 @@ interface RouteRequest {
 
 type RouteName = keyof typeof PHASE1_ROUTES;
 
-type Validated =
+/** A request parsed by {@link validateRoute}, or the 400 it earned. */
+export type Validated =
   | {
       ok: true;
       params: Record<string, string>;
@@ -111,12 +115,29 @@ function issueResponse(issues: ZodIssue[]): Response {
  * Validates a request against a contract route the way `@hono/zod-openapi` does:
  * params, query, headers, then the JSON body.
  */
-async function validate(
+function validate(
   name: RouteName,
   request: Request,
   params: Record<string, string | readonly string[] | undefined>,
 ): Promise<Validated> {
-  const spec = (PHASE1_ROUTES[name] as { request?: RouteRequest }).request ?? {};
+  return validateRoute(PHASE1_ROUTES[name], request, params);
+}
+
+/**
+ * Validates a request against any contract route definition (params, query, headers,
+ * then the JSON body), answering 400 in the API's wording on the first issue.
+ *
+ * @param route - The route definition from `apps/api/src/contracts`.
+ * @param request - The intercepted request.
+ * @param params - MSW path params.
+ * @returns The parsed parts, or the 400 response.
+ */
+export async function validateRoute(
+  route: unknown,
+  request: Request,
+  params: Record<string, string | readonly string[] | undefined>,
+): Promise<Validated> {
+  const spec = (route as { request?: RouteRequest }).request ?? {};
   const url = new URL(request.url);
   const parts: [Schema | undefined, unknown][] = [
     [spec.params, params],
@@ -319,6 +340,94 @@ function listVariables(scope: DbVariable["scope"], ownerId: string, environmentI
       .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
       .map(toVariable),
   };
+}
+
+/**
+ * Mirrors the API's `putVariables` tier rules: the shared classifier decides each
+ * tier, a locked tier can't be overridden, a public variable that looks like a
+ * credential needs `acknowledge_public`, and a value that becomes secret needs
+ * `confirm_write_only`, in that order.
+ */
+function decideTiers(
+  set: { key: string; value?: string; tier?: DbVariable["tier"] }[],
+  existing: DbVariable[],
+  acknowledged: readonly string[],
+  confirmed: boolean,
+):
+  | { ok: true; tiers: Map<string, { tier: DbVariable["tier"]; locked: boolean }> }
+  | { ok: false; response: Response } {
+  const tiers = new Map<string, { tier: DbVariable["tier"]; locked: boolean }>();
+  const problems: { field: string; code: string; message: string }[] = [];
+  const needAck: string[] = [];
+  const needConfirm: string[] = [];
+  for (const entry of set) {
+    const prior = existing.find((row) => row.key === entry.key);
+    if (entry.value === undefined && !prior) {
+      problems.push({
+        field: entry.key,
+        code: "value_required",
+        message: "A new variable needs a value",
+      });
+      continue;
+    }
+    const classification = classifyVariable(entry.key, entry.value ?? prior?.value ?? "");
+    const decision = decideVariableTier({
+      classification,
+      ...(entry.tier ? { requested: entry.tier } : {}),
+      ...(prior ? { previous: prior.tier } : {}),
+      valueProvided: entry.value !== undefined,
+    });
+    if (!decision.ok) {
+      problems.push({ field: entry.key, code: decision.code, message: decision.message });
+      continue;
+    }
+    if (
+      classification.warnings.some((w) => w.code === "public_prefix_secret_value") &&
+      !acknowledged.includes(entry.key)
+    ) {
+      needAck.push(entry.key);
+    }
+    if (decision.tier === "secret" && prior?.tier !== "secret") needConfirm.push(entry.key);
+    tiers.set(entry.key, { tier: decision.tier, locked: decision.locked });
+  }
+  const problem = problems[0];
+  if (problem) {
+    return {
+      ok: false,
+      response: apiError(400, problem.code, `${problem.field}: ${problem.message}`, problems),
+    };
+  }
+  if (needAck.length) {
+    return {
+      ok: false,
+      response: apiError(
+        400,
+        "public_prefix_secret_value",
+        `${needAck.join(", ")} will ship to every browser but ${needAck.length === 1 ? "looks" : "look"} like a credential; add ${needAck.length === 1 ? "it" : "them"} to acknowledge_public to store anyway`,
+        needAck.map((key) => ({
+          field: key,
+          code: "public_prefix_secret_value",
+          message: "Looks like a credential",
+        })),
+      ),
+    };
+  }
+  if (needConfirm.length && !confirmed) {
+    return {
+      ok: false,
+      response: apiError(
+        400,
+        "confirmation_required",
+        `${needConfirm.join(", ")} will be write-only: nobody can read ${needConfirm.length === 1 ? "it" : "them"} back. Resend with confirm_write_only to continue`,
+        needConfirm.map((key) => ({
+          field: key,
+          code: "confirmation_required",
+          message: "Becomes write-only",
+        })),
+      ),
+    };
+  }
+  return { ok: true, tiers };
 }
 
 function byNewest(a: { created_at: number; id: string }, b: { created_at: number; id: string }) {
@@ -1289,6 +1398,13 @@ export const deployHandlers = [
         if (!found.ok) return found.response;
         const environment = environmentOf(found.projectId, input.query.environment_id);
         if (!environment) return notFound("Environment");
+        const protectedRefusal = protectionRefusal(
+          found.workspaceId,
+          found.guard.user.id,
+          environment.id,
+          "variables:manage",
+        );
+        if (protectedRefusal) return protectedRefusal;
         const set = input.body.set as {
           key: string;
           value?: string;
@@ -1316,6 +1432,13 @@ export const deployHandlers = [
             details,
           );
         }
+        const decided = decideTiers(
+          set,
+          variablesOf(scope, ownerId, environment.id),
+          input.body.acknowledge_public as string[],
+          input.body.confirm_write_only === true,
+        );
+        if (!decided.ok) return decided.response;
         const now = Date.now();
         for (const entry of set) {
           const existing = variablesOf(scope, ownerId, environment.id).find(
@@ -1323,7 +1446,8 @@ export const deployHandlers = [
           );
           if (existing) {
             existing.value = entry.value ?? existing.value;
-            existing.tier = entry.tier ?? existing.tier;
+            existing.tier = decided.tiers.get(entry.key)?.tier ?? existing.tier;
+            existing.locked = decided.tiers.get(entry.key)?.locked ?? existing.locked;
             existing.available_at_build = entry.available_at_build ?? existing.available_at_build;
             existing.mount_as_file = entry.mount_as_file ?? existing.mount_as_file;
             existing.version += 1;
@@ -1336,8 +1460,8 @@ export const deployHandlers = [
               environment_id: environment.id,
               key: entry.key,
               value: entry.value ?? "",
-              tier: entry.tier ?? "plain",
-              locked: false,
+              tier: decided.tiers.get(entry.key)?.tier ?? "plain",
+              locked: decided.tiers.get(entry.key)?.locked ?? false,
               available_at_build: entry.available_at_build ?? false,
               mount_as_file: entry.mount_as_file ?? false,
               version: 1,
@@ -1443,6 +1567,13 @@ export const deployHandlers = [
     if (!found.ok) return found.response;
     const environment = environmentOf(found.row.project_id, input.query.environment_id);
     if (!environment) return notFound("Environment");
+    const refused = protectionRefusal(
+      liveProject(found.row.project_id)?.workspace_id ?? "",
+      found.guard.user.id,
+      environment.id,
+      "deployments:create",
+    );
+    if (refused) return refused;
     const config = latestConfig(found.row.id, environment.id);
     if (!config) return conflict("This environment has no config for the service");
     if (config.deploy.replicas === 0)
@@ -1482,6 +1613,13 @@ export const deployHandlers = [
     const found = deploymentAccess(input.params.deploymentId ?? "", actionOf("rollbackDeployment"));
     if (!found.ok) return found.response;
     const source = found.row;
+    const refused = protectionRefusal(
+      found.guard.membership.workspace_id,
+      found.guard.user.id,
+      source.environment_id,
+      "deployments:create",
+    );
+    if (refused) return refused;
     if (!ROLLBACK_SOURCE_STATUSES.includes(source.status)) {
       return conflict(`Can't roll back to a ${source.status} deployment`);
     }
