@@ -6,6 +6,7 @@
  */
 import type {
   BuildConfig,
+  CronConfig,
   DeployConfig,
   EnvironmentKind,
   HealthcheckConfig,
@@ -157,6 +158,8 @@ export const serviceConfigs = sqliteTable(
     healthcheck: json<HealthcheckConfig | null>("healthcheck"),
     networking: json<NetworkingConfig>("networking").notNull(),
     placement: json<PlacementConfig>("placement").notNull(),
+    /** The `cron` part (ADR 0010); `null` for every service kind but `cron`. */
+    cron: json<CronConfig>("cron"),
     ...timestamps,
   },
   (t) => [

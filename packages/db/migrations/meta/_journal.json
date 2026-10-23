@@ -106,6 +106,13 @@
       "when": 1792820000000,
       "tag": "0015_signing_key_rollover",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1792830000000,
+      "tag": "0016_cron_jobs",
+      "breakpoints": true
     }
   ]
 }
