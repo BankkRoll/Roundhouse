@@ -49,3 +49,32 @@ export const SessionSchema = z
     expires_at: Millis,
   })
   .openapi("Session");
+
+/** `GET /v1/auth/sessions`: the caller's live sessions, newest first. Never carries tokens. */
+export const SessionListSchema = z
+  .object({ sessions: z.array(SessionSchema) })
+  .openapi("SessionList");
+
+/** Path of `DELETE /v1/auth/sessions/{sessionId}`. */
+export const SessionParams = z.object({ sessionId: z.string().min(1).max(100) });
+
+/** Response of `DELETE /v1/auth/sessions` (every session but the current one). */
+export const SessionsRevokedSchema = z
+  .object({ revoked: z.number().int().nonnegative() })
+  .openapi("SessionsRevoked");
+
+/** Body of `POST /v1/instance/sign-in-lockouts/clear`. */
+export const ClearLockoutBody = z
+  .object({ email: z.string().trim().min(3).max(254) })
+  .openapi("ClearSignInLockout");
+
+/** Response of `POST /v1/instance/sign-in-lockouts/clear`. */
+export const ClearLockoutResultSchema = z
+  .object({
+    /** Whether the address had failures or a lock to clear. Unknown addresses can have one. */
+    cleared: z.boolean(),
+  })
+  .openapi("ClearSignInLockoutResult");
+
+/** Path of `DELETE /v1/instance/users/{userId}/two-factor`. */
+export const UserParams = z.object({ userId: z.string().min(1).max(100) });

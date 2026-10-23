@@ -103,6 +103,12 @@ export const twoFactors = sqliteTable(
     verified: integer("verified", { mode: "boolean" }).notNull().default(true),
     failedVerificationCount: integer("failed_verification_count").notNull().default(0),
     lockedUntil: timestamp("locked_until"),
+    /**
+     * Last TOTP time step accepted for this user; a code from this step or
+     * an earlier one is refused, so a code can't be replayed. Not a Better
+     * Auth field.
+     */
+    lastTotpStep: integer("last_totp_step"),
     ...timestamps,
   },
   (t) => [

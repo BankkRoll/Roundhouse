@@ -71,6 +71,13 @@
       "when": 1792780000000,
       "tag": "0010_change_sets",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1792820000000,
+      "tag": "0014_auth_hardening",
+      "breakpoints": true
     }
   ]
 }

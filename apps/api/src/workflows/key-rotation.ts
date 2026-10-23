@@ -12,6 +12,8 @@
  *    current KEK with the v2 AAD; `kek_kid` and `dek_id` set.
  * 2. `rewrap-instance-<n>`: the instance secrets in `instance_settings`
  *    ({@link INSTANCE_SECRET_FIELDS}), then `provider_credentials` tokens.
+ *    `rewrap-two-factor-<n>`: TOTP secrets and backup codes, which Better
+ *    Auth encrypts with the auth secret of the key current at enrollment.
  * 3. `reseal-variables-<n>`: variables in format 1 or without a fingerprint:
  *    re-sealed with `variableAadV2` at the same `version`, fingerprinted.
  * 4. `reseal-deployments-<n>`: `env_sealed` and `build_env_sealed` in format 1.
@@ -35,12 +37,14 @@ import {
   projects,
   providerCredentials,
   services,
+  twoFactors,
   variables,
 } from "@roundhouse/db";
 import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { Env } from "../env";
 import { auditInsert } from "../lib/audit";
+import { authSecretVersion } from "../lib/auth-secrets";
 import { type Sealed, sealDataKey, unsealDataKey } from "../lib/crypto";
 import {
   openDeploymentBuild,
@@ -51,6 +55,7 @@ import {
 import { sealInstanceSecret, unsealInstanceSecret } from "../lib/instance-secrets";
 import { type KeyEnv, keyringOf } from "../lib/keyring";
 import { getSetting, putSetting, SettingKey } from "../lib/settings";
+import { rewrapTwoFactorBatch, staleTwoFactorCondition } from "../lib/two-factor";
 import { openVariable, projectKey, sealVariable } from "../lib/variables";
 
 /** Parameters of one rotation run. */
@@ -365,37 +370,43 @@ const count = sql<number>`count(*)`;
 export async function keyStatus(db: Db, keys: KeyEnv): Promise<KeyStatus> {
   const ring = await keyringOf(keys);
   const current = ring.current.kid;
-  const [[dek], [v1Vars], [noFp], [v1Deps], [creds], settings, rotation] = await Promise.all([
-    db
-      .select({ n: count })
-      .from(projectKeys)
-      .where(or(isNull(projectKeys.kekKid), ne(projectKeys.kekKid, current))),
-    db
-      .select({ n: count })
-      .from(variables)
-      .where(sql`${formatOf(variables.valueSealed)} = 1`),
-    db.select({ n: count }).from(variables).where(isNull(variables.fingerprint)),
-    db
-      .select({ n: count })
-      .from(deployments)
-      .where(
-        or(
-          sql`${formatOf(deployments.envSealed)} = 1`,
-          sql`${formatOf(deployments.buildEnvSealed)} = 1`,
+  const [[dek], [v1Vars], [noFp], [v1Deps], [creds], [tfa], settings, rotation] = await Promise.all(
+    [
+      db
+        .select({ n: count })
+        .from(projectKeys)
+        .where(or(isNull(projectKeys.kekKid), ne(projectKeys.kekKid, current))),
+      db
+        .select({ n: count })
+        .from(variables)
+        .where(sql`${formatOf(variables.valueSealed)} = 1`),
+      db.select({ n: count }).from(variables).where(isNull(variables.fingerprint)),
+      db
+        .select({ n: count })
+        .from(deployments)
+        .where(
+          or(
+            sql`${formatOf(deployments.envSealed)} = 1`,
+            sql`${formatOf(deployments.buildEnvSealed)} = 1`,
+          ),
         ),
-      ),
-    db
-      .select({ n: count })
-      .from(providerCredentials)
-      .where(notUnder(providerCredentials.tokenSealed, current)),
-    db
-      .select({ key: instanceSettings.key, value: instanceSettings.value })
-      .from(instanceSettings)
-      .where(
-        inArray(instanceSettings.key, [...new Set(INSTANCE_SECRET_FIELDS.map((f) => f.setting))]),
-      ),
-    getSetting<KeyRotationState>(db, KEY_ROTATION_SETTING),
-  ]);
+      db
+        .select({ n: count })
+        .from(providerCredentials)
+        .where(notUnder(providerCredentials.tokenSealed, current)),
+      db
+        .select({ n: count })
+        .from(twoFactors)
+        .where(staleTwoFactorCondition(authSecretVersion(current))),
+      db
+        .select({ key: instanceSettings.key, value: instanceSettings.value })
+        .from(instanceSettings)
+        .where(
+          inArray(instanceSettings.key, [...new Set(INSTANCE_SECRET_FIELDS.map((f) => f.setting))]),
+        ),
+      getSetting<KeyRotationState>(db, KEY_ROTATION_SETTING),
+    ],
+  );
   let staleSettings = 0;
   for (const row of settings) {
     const value = row.value as Record<string, Sealed | undefined>;
@@ -406,7 +417,7 @@ export async function keyStatus(db: Db, keys: KeyEnv): Promise<KeyStatus> {
   }
   const remaining = {
     project_keys: Number(dek?.n ?? 0),
-    instance_secrets: staleSettings + Number(creds?.n ?? 0),
+    instance_secrets: staleSettings + Number(creds?.n ?? 0) + Number(tfa?.n ?? 0),
     v1_variables: Number(v1Vars?.n ?? 0),
     v1_deployments: Number(v1Deps?.n ?? 0),
     missing_fingerprints: Number(noFp?.n ?? 0),
@@ -451,7 +462,9 @@ export class KeyRotationWorkflow extends WorkflowEntrypoint<Env, KeyRotationPara
     try {
       const counts = {
         project_keys: await batches("rewrap-dek", rewrapDekBatch),
-        instance_secrets: await batches("rewrap-instance", rewrapInstanceBatch),
+        instance_secrets:
+          (await batches("rewrap-instance", rewrapInstanceBatch)) +
+          (await batches("rewrap-two-factor", rewrapTwoFactorBatch)),
         variables: await batches("reseal-variables", resealVariablesBatch),
         deployments: await batches("reseal-deployments", resealDeploymentsBatch),
       };

@@ -9,12 +9,13 @@ import { env, introspectWorkflow } from "cloudflare:test";
 import { createDb } from "@roundhouse/db";
 import { fromBase64, toBase64 } from "@roundhouse/protocol";
 import { afterEach, describe, expect, it } from "vitest";
+import { authSecretVersion } from "../src/lib/auth-secrets";
 import { deriveKey, unsealDataKey } from "../src/lib/crypto";
 import { openDeploymentEnv } from "../src/lib/desired-state";
 import { unsealInstanceSecret } from "../src/lib/instance-secrets";
 import { masterKeyId } from "../src/lib/keyring";
 import { projectKey } from "../src/lib/variables";
-import { call, client, install } from "./helpers";
+import { call, install, signInAs } from "./helpers";
 import { createProject, createService } from "./pipeline-helpers";
 
 const OLD = env.MASTER_KEY!;
@@ -54,18 +55,8 @@ async function sealDekV1(rawDek: string, plaintext: string, aad: string) {
   return gcmV1(key, plaintext, aad);
 }
 
-async function signIn() {
-  const res = await call("/api/auth/sign-in/email", {
-    method: "POST",
-    json: { email: "mara@example.com", password: "correct horse battery" },
-  });
-  expect(res.status).toBe(200);
-  return client(
-    res.headers
-      .getSetCookie()
-      .map((c) => c.split(";")[0])
-      .join("; "),
-  );
+function signIn() {
+  return signInAs("mara@example.com", "correct horse battery");
 }
 
 interface KeyStatusBody {
@@ -186,7 +177,8 @@ describe("key rotation", () => {
       previous_kids: [await masterKeyId(OLD)],
       remaining: {
         project_keys: 1,
-        instance_secrets: 2,
+        // The signing key, the provider token, and the admin's two-factor secret.
+        instance_secrets: 3,
         v1_variables: 1,
         v1_deployments: 1,
         missing_fingerprints: 1,
@@ -288,6 +280,19 @@ describe("key rotation", () => {
       expect(a.metadata).not.toContain("hetzner-token");
       expect(a.metadata).not.toContain(NEW);
     }
+
+    // Two-factor material is now under the new key: signing in with only
+    // that key still passes the second factor.
+    const tfa = (await env.DB.prepare("SELECT secret, backup_codes FROM two_factors").first<{
+      secret: string;
+      backup_codes: string;
+    }>())!;
+    const envelope = `$ba$${authSecretVersion(newKid)}$`;
+    expect(tfa.secret.startsWith(envelope)).toBe(true);
+    expect(tfa.backup_codes.startsWith(envelope)).toBe(true);
+    env.MASTER_KEYS_PREVIOUS = "";
+    expect((await (await signIn()).json("/v1/auth/security")).status).toBe(200);
+    env.MASTER_KEYS_PREVIOUS = OLD;
 
     // A second run finds nothing to do.
     const again = await owner.json<{ rotation_id: string }>("/v1/instance/keys/rotate", {

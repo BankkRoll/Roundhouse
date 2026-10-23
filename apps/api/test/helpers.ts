@@ -1,5 +1,8 @@
 import { env, SELF } from "cloudflare:test";
 import { type JoinResponse, MIN_PROTOCOL_VERSION } from "@roundhouse/protocol";
+import { symmetricEncrypt } from "better-auth/crypto";
+import { authSecretsFor } from "../src/lib/auth-secrets";
+import { hotp, totpStep } from "../src/lib/totp";
 
 /** Base URL for requests through the Worker under test. */
 export const ORIGIN = "https://cp.test";
@@ -64,12 +67,89 @@ export interface Installed {
   workspaceId: string;
 }
 
+/** TOTP secret of every user {@link markTwoFactorEnrolled} enrolls; test-only. */
+export const TEST_TOTP_SECRET = "roundhouse-test-totp-secret-0001";
+
+/**
+ * Enrolls a user in two-factor authentication without the enrollment flow,
+ * with {@link TEST_TOTP_SECRET} and no backup codes, so suites about other
+ * features aren't stopped by the two-factor gate.
+ * `test/auth-two-factor.test.ts` enrolls through the real endpoints.
+ *
+ * @param where - The user's ID or email.
+ */
+export async function markTwoFactorEnrolled(where: { id: string } | { email: string }) {
+  const user =
+    "id" in where
+      ? { id: where.id }
+      : await env.DB.prepare("SELECT id FROM users WHERE email = ?")
+          .bind(where.email)
+          .first<{ id: string }>();
+  if (!user) throw new Error("no such user");
+  const { config } = await authSecretsFor(env);
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE users SET two_factor_enabled = 1 WHERE id = ?").bind(user.id),
+    env.DB.prepare(
+      "INSERT INTO two_factors (id, secret, backup_codes, user_id, verified, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+    ).bind(
+      `tfa_${user.id}`,
+      await symmetricEncrypt({ key: config, data: TEST_TOTP_SECRET }),
+      await symmetricEncrypt({ key: config, data: "[]" }),
+      user.id,
+      now,
+      now,
+    ),
+  ]);
+}
+
+/**
+ * A TOTP code for {@link TEST_TOTP_SECRET} that the user hasn't used yet:
+ * the step after the last one the control plane accepted, inside the
+ * accepted window, since a step is refused twice.
+ *
+ * @param email - The user's email.
+ * @returns A 6-digit code.
+ */
+export async function nextTotpCode(email: string): Promise<string> {
+  const row = await env.DB.prepare(
+    "SELECT t.last_totp_step AS last FROM two_factors t JOIN users u ON u.id = t.user_id WHERE u.email = ?",
+  )
+    .bind(email)
+    .first<{ last: number | null }>();
+  const current = totpStep(Date.now());
+  const step = Math.max(current - 1, (row?.last ?? current - 2) + 1);
+  if (step > current + 1) throw new Error("no unused TOTP step left in the window");
+  return hotp(TEST_TOTP_SECRET, step);
+}
+
+/**
+ * Signs in with a password, completing the second factor with
+ * {@link nextTotpCode} when the account has one.
+ *
+ * @returns A client carrying the new session.
+ */
+export async function signInAs(email: string, password: string): Promise<Client> {
+  const res = await call("/api/auth/sign-in/email", { method: "POST", json: { email, password } });
+  if (res.status !== 200) throw new Error(`sign-in failed: ${res.status} ${await res.text()}`);
+  const body = (await res.json()) as { twoFactorRedirect?: boolean };
+  if (!body.twoFactorRedirect) return client(cookieFrom(res));
+  const verify = await call(
+    "/api/auth/two-factor/verify-totp",
+    { method: "POST", json: { code: await nextTotpCode(email) } },
+    cookieFrom(res),
+  );
+  if (verify.status !== 200) throw new Error(`2FA failed: ${verify.status} ${await verify.text()}`);
+  return client(cookieFrom(verify));
+}
+
 /**
  * Runs the setup wizard. Storage is isolated per test, so every test that
- * needs an installed control plane calls this.
+ * needs an installed control plane calls this. The admin counts as enrolled
+ * in two-factor unless `twoFactor: false`.
  */
 export async function install(
-  overrides: Partial<{ email: string; password: string }> = {},
+  overrides: Partial<{ email: string; password: string; twoFactor: boolean }> = {},
 ): Promise<Installed> {
   const res = await call("/v1/setup", {
     method: "POST",
@@ -83,6 +163,7 @@ export async function install(
   });
   if (res.status !== 201) throw new Error(`setup failed: ${res.status} ${await res.text()}`);
   const body = (await res.json()) as { user_id: string; workspace_id: string };
+  if (overrides.twoFactor !== false) await markTwoFactorEnrolled({ id: body.user_id });
   return { owner: client(cookieFrom(res)), userId: body.user_id, workspaceId: body.workspace_id };
 }
 
@@ -132,6 +213,7 @@ export async function addMember(
     },
   });
   if (res.status !== 200) throw new Error(`accept failed: ${res.status} ${await res.text()}`);
+  if (role === "admin") await markTwoFactorEnrolled({ email });
   return client(cookieFrom(res));
 }
 

@@ -27,7 +27,15 @@ pnpm typecheck
 ```sh
 pnpm run deploy                    # builds the dashboard, deploys, applies D1 migrations
 npx wrangler secret put MASTER_KEY
+npx wrangler secret put PUBLIC_ORIGIN   # https://cp.example.com, no path
 ```
+
+| Variable               | What                                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------------------- |
+| `MASTER_KEY`           | Root secret; every other key is derived from it                                          |
+| `MASTER_KEYS_PREVIOUS` | Earlier master keys during a rotation, comma-separated, newest first                     |
+| `PUBLIC_ORIGIN`        | The only source of absolute URLs and the same-origin check; 503 `public_origin_missing` without it |
+| `ROUNDHOUSE_DEV`       | `1` in local development only: falls back to the request origin, allows `ws://` agents   |
 
 The first deploy creates the D1 database, so `wrangler.jsonc` has no
 `database_id`. Migrations run after the deploy for that reason.
@@ -78,8 +86,15 @@ OpenAPI: `GET /v1/openapi.json`.
 ## Notes
 
 - `MASTER_KEY` is the only secret. The auth secret and encryption key are
-  derived from it, so rotating it signs everyone out and makes stored secrets
-  unreadable.
+  derived from it (key format 2). Rotating it signs everyone out; data sealed
+  under the old key, two-factor secrets included, stays readable while the old
+  key is in `MASTER_KEYS_PREVIOUS`, until `KeyRotationWorkflow` moves it.
+- Absolute URLs come from `PUBLIC_ORIGIN` only (`src/lib/origin.ts`), never
+  from `Host`.
+- Instance admins and workspace owners/admins must turn on two-factor
+  authentication before any change (`src/lib/two-factor-gate.ts`). Sign-in
+  lockout, sign-in audit and two-factor hardening wrap Better Auth's
+  endpoints in `src/lib/auth-hooks.ts`.
 - Setup requires the master key, so nobody else can claim a fresh deploy.
 - Public sign-up is off. Accounts come from setup or invites.
 

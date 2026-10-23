@@ -19,10 +19,22 @@ Roundhouse is a source-available, self-hosted platform for deploying application
    pnpm run deploy
    ```
 
-2. Open the Worker URL. The setup wizard asks for the master key and creates
-   the admin account.
+2. Tell the control plane its public URL, the one people and servers will
+   use (the `workers.dev` URL the deploy printed, or your custom domain):
 
-3. In **Servers → Add server**, copy the command and run it on a Linux host
+   ```sh
+   npx wrangler secret put PUBLIC_ORIGIN    # e.g. https://cp.example.com
+   ```
+
+   Every link, cookie, OAuth address and same-origin check is built from it,
+   never from the request's `Host` header. Until it is set, the API answers
+   `503 public_origin_missing`. Use an `https://` origin with no path.
+
+3. Open that URL. The setup wizard asks for the master key and creates
+   the admin account, then asks the admin to turn on two-factor
+   authentication.
+
+4. In **Servers → Add server**, copy the command and run it on a Linux host
    (Ubuntu 22.04/24.04, Debian 12):
 
    ```sh
@@ -30,6 +42,26 @@ Roundhouse is a source-available, self-hosted platform for deploying application
    ```
 
    Tokens are single-use and expire after 15 minutes.
+
+## Account security
+
+- **Two-factor authentication** (an authenticator app, plus ten single-use
+  backup codes) is required for instance admins and workspace owners and
+  admins: until they turn it on, they can look around but not change
+  anything. Anyone can turn it on under **Preferences → Security**, which
+  also lists your sessions and signs other devices out. An instance admin
+  can reset the second factor of someone who lost their device.
+- **Sign-in lockout**: after 5 failed attempts in 24 hours an account is
+  locked for 30 seconds, doubling with each further failure up to an hour.
+  Wrong passwords and wrong codes count alike, and unknown addresses lock
+  the same way. An instance admin can lift a lock early
+  (`POST /v1/instance/sign-in-lockouts/clear`).
+- **Audit**: sign-ins, failed sign-ins, lockouts, sign-outs, two-factor
+  changes and session revocations are recorded in the instance audit log.
+  Entries carry a hash of the email address, never a password or a code.
+- **Rotating `MASTER_KEY`** signs everyone out. Keep the old key in
+  `MASTER_KEYS_PREVIOUS` until the key rotation has finished; two-factor
+  secrets are re-encrypted under the new key with everything else.
 
 ## Templates
 

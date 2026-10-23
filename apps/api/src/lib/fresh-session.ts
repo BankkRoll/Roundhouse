@@ -12,7 +12,7 @@
 import { sessions } from "@roundhouse/db";
 import { isFreshSession, REAUTH_WINDOW_MS } from "@roundhouse/shared";
 import { eq } from "drizzle-orm";
-import { type AppContext, authFor } from "../context";
+import { type AppContext, currentPrincipal } from "../context";
 import { ApiError } from "./errors";
 
 /**
@@ -22,14 +22,13 @@ import { ApiError } from "./errors";
  * @returns Unix ms, or `null` without a browser session (API tokens are never fresh).
  */
 export async function freshUntil(c: AppContext): Promise<number | null> {
-  const auth = await authFor(c);
-  const current = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!current) return null;
+  const principal = await currentPrincipal(c);
+  if (!principal?.session || principal.token) return null;
   const [row] = await c
     .get("db")
     .select({ createdAt: sessions.createdAt, reauthenticatedAt: sessions.reauthenticatedAt })
     .from(sessions)
-    .where(eq(sessions.id, current.session.id))
+    .where(eq(sessions.id, principal.session.id))
     .limit(1);
   if (!row) return null;
   const at = Math.max(+row.createdAt, row.reauthenticatedAt ? +row.reauthenticatedAt : 0);

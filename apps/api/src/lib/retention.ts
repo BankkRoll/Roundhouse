@@ -7,6 +7,7 @@
  * - GitHub delivery IDs past the redelivery window.
  * - Expired node join tokens, sessions, invites, Better Auth verifications,
  *   and redeemed single-use nonces.
+ * - Sign-in failure counters past their window and no longer locked.
  *
  * Every deletion runs in bounded batches with a per-run cap, so one run
  * stays well inside a Worker's limits however much has piled up; whatever is
@@ -21,11 +22,13 @@ import {
   githubDeliveries,
   invites,
   logChunks,
+  loginAttempts,
   nodeJoinTokens,
   sessions,
   verifications,
 } from "@roundhouse/db";
-import { inArray, lt, type SQL } from "drizzle-orm";
+import { LOGIN_FAILURE_WINDOW_MS } from "@roundhouse/shared";
+import { and, inArray, isNull, lt, or, type SQL } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Env } from "../env";
 import { getLogRetentionDays } from "./settings";
@@ -78,6 +81,7 @@ export interface RetentionReport {
   invites: number;
   verifications: number;
   nonces: number;
+  loginAttempts: number;
 }
 
 function chunks<T>(items: readonly T[], size: number): T[][] {
@@ -178,5 +182,13 @@ export async function runRetention(
     invites: await prune(invites, invites.id, lt(invites.expiresAt, at(EXPIRED_GRACE_MS))),
     verifications: await prune(verifications, verifications.id, lt(verifications.expiresAt, at(0))),
     nonces: await prune(consumedNonces, consumedNonces.id, lt(consumedNonces.expiresAt, at(0))),
+    loginAttempts: await prune(
+      loginAttempts,
+      loginAttempts.id,
+      and(
+        lt(loginAttempts.lastFailureAt, at(LOGIN_FAILURE_WINDOW_MS)),
+        or(isNull(loginAttempts.lockedUntil), lt(loginAttempts.lockedUntil, at(0))),
+      )!,
+    ),
   };
 }

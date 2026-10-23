@@ -75,6 +75,11 @@ export const AUDIT_ACTIONS = [
   "auth.two_factor_disabled",
   "auth.backup_codes_regenerated",
   "auth.two_factor_failed",
+  "auth.backup_code_used",
+  "auth.two_factor_reset",
+  "auth.account_unlocked",
+  "auth.signed_out",
+  "auth.session_revoked",
   "provider.connected",
   "provider.disconnected",
   "node.provision_requested",
@@ -126,6 +131,11 @@ export const INSTANCE_AUDIT_ACTIONS = [
   "auth.two_factor_disabled",
   "auth.backup_codes_regenerated",
   "auth.two_factor_failed",
+  "auth.backup_code_used",
+  "auth.two_factor_reset",
+  "auth.account_unlocked",
+  "auth.signed_out",
+  "auth.session_revoked",
   /** Recorded in the invite's workspace instead when the token matches an expired or used invite. */
   "invite.rejected_token",
 ] as const satisfies readonly AuditAction[];

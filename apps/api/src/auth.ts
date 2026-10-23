@@ -2,15 +2,45 @@
  * Better Auth configuration. Constructed per request because bindings
  * (D1, secrets) are only available on the request's `env`.
  *
+ * - Secrets come from the master keyring with key format 2
+ *   (`lib/auth-secrets.ts`): the current key signs, every key decrypts.
+ * - Two-factor (TOTP and backup codes) is Better Auth's `twoFactor` plugin;
+ *   `lib/auth-hooks.ts` adds lockout, sign-in audit, replay protection and
+ *   hashed backup codes around it (ADR 0014 "Auth").
+ *
  * @module
  */
-import { accounts, type Db, sessions, users, verifications } from "@roundhouse/db";
-import { toBase64 } from "@roundhouse/protocol";
-import { isIdKind, newId } from "@roundhouse/shared";
+import { accounts, type Db, sessions, twoFactors, users, verifications } from "@roundhouse/db";
+import { isIdKind, newId, PRODUCT_NAME } from "@roundhouse/shared";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
-import { deriveKey } from "./lib/crypto";
+import { twoFactor } from "better-auth/plugins/two-factor";
+import { securityHooks } from "./lib/auth-hooks";
+import { authSecretsFor } from "./lib/auth-secrets";
+import type { KeyEnv } from "./lib/keyring";
+import { TOTP_DIGITS, TOTP_PERIOD_S } from "./lib/totp";
+import { BACKUP_CODE_COUNT, backupCodeStorage } from "./lib/two-factor";
+
+/**
+ * Better Auth endpoints the control plane turns off.
+ *
+ * - Sessions are listed and revoked through `/v1/auth/sessions`, which
+ *   never hands session tokens to page scripts (the cookie is `HttpOnly`)
+ *   and audits revocations.
+ * - Reading the TOTP URI back would let anyone holding a session and the
+ *   password copy the secret and pass the second factor forever.
+ * - Email/SMS one-time codes aren't configured.
+ */
+export const DISABLED_AUTH_PATHS = [
+  "/list-sessions",
+  "/revoke-session",
+  "/revoke-sessions",
+  "/revoke-other-sessions",
+  "/two-factor/get-totp-uri",
+  "/two-factor/send-otp",
+  "/two-factor/verify-otp",
+];
 
 /** Options that vary per call site. */
 export interface AuthOptions {
@@ -62,27 +92,41 @@ function httpsUrl(value: unknown): string {
  * Creates a Better Auth instance bound to this request.
  *
  * @param db - Database client.
- * @param masterKey - Base64 master key; the auth secret is derived from it.
+ * @param keys - The keyring bindings; the auth secrets are derived from them.
  * @param origin - Public origin of the control plane (e.g. `https://cp.example.com`).
  * @param options - Per-call options.
  * @returns A configured Better Auth instance.
  */
-export async function createAuth(
-  db: Db,
-  masterKey: string,
-  origin: string,
-  options: AuthOptions = {},
-) {
-  const secret = toBase64(await deriveKey(masterKey, "auth-secret"));
+export async function createAuth(db: Db, keys: KeyEnv, origin: string, options: AuthOptions = {}) {
+  const { secrets, config } = await authSecretsFor(keys);
   return betterAuth({
-    secret,
+    appName: PRODUCT_NAME,
+    secrets,
     baseURL: origin,
     basePath: "/api/auth",
     trustedOrigins: [origin],
+    disabledPaths: DISABLED_AUTH_PATHS,
     database: drizzleAdapter(db, {
       provider: "sqlite",
-      schema: { user: users, session: sessions, account: accounts, verification: verifications },
+      schema: {
+        user: users,
+        session: sessions,
+        account: accounts,
+        verification: verifications,
+        twoFactor: twoFactors,
+      },
     }),
+    plugins: [
+      twoFactor({
+        issuer: PRODUCT_NAME,
+        totpOptions: { digits: TOTP_DIGITS, period: TOTP_PERIOD_S },
+        backupCodeOptions: {
+          amount: BACKUP_CODE_COUNT,
+          storeBackupCodes: backupCodeStorage(config),
+        },
+      }),
+      securityHooks({ db, keys }),
+    ],
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 12,

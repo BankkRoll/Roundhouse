@@ -162,7 +162,8 @@ export function requireMasterKey(c: AppContext): string {
  * @throws {ApiError} 503 `master_key_missing` when `MASTER_KEY` isn't configured.
  */
 export function authFor(c: AppContext, options?: AuthOptions) {
-  return createAuth(c.get("db"), requireMasterKey(c), originOf(c), options);
+  requireMasterKey(c);
+  return createAuth(c.get("db"), c.env, originOf(c), options);
 }
 
 /** Profile and credentials for an account created on the caller's behalf. */
