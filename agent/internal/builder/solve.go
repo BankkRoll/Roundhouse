@@ -39,21 +39,34 @@ type solveSpec struct {
 
 // dockerfileSolve builds paths.dockerfile* with the Dockerfile frontend
 // built into BuildKit.
+//
+// SECURITY: a build arg ends up in the image's history (every RUN after its
+// ARG records "|N NAME=value"), so args the job marks secret are passed only
+// as BuildKit secrets, with their name as the ID, which a Dockerfile reads
+// with RUN --mount=type=secret,id=NAME[,env=NAME] and which leave no trace
+// in the image.
 func dockerfileSolve(job *protocol.BuildJob, paths buildPaths) solveSpec {
 	attrs := map[string]string{"filename": paths.dockerfileName}
+	secrets := map[string][]byte{}
 	for k, v := range job.BuildArgs {
+		if job.IsSecretArg(k) {
+			secrets[k] = []byte(v)
+			continue
+		}
 		attrs["build-arg:"+k] = v
 	}
 	return solveSpec{
 		frontend: "dockerfile.v0",
 		attrs:    attrs,
 		mounts:   map[string]string{"context": paths.context, "dockerfile": paths.dockerfileDir},
+		secrets:  secrets,
 	}
 }
 
 // railpackSolve builds a plan prepared by `railpack prepare` with the pinned
-// Railpack frontend. Build args reach the build as secrets, which Railpack
-// exposes to build steps without baking them into the image.
+// Railpack frontend. Every build arg, secret or not, reaches the build as a
+// BuildKit secret, which Railpack exposes to build steps without baking it
+// into the image.
 func railpackSolve(job *protocol.BuildJob, paths buildPaths, planDir, frontendImage string) solveSpec {
 	secrets := make(map[string][]byte, len(job.BuildArgs))
 	for k, v := range job.BuildArgs {

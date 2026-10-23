@@ -147,6 +147,10 @@ func (a *App) logTarget(ctx context.Context, f targetFlags, o logsOptions) (*log
 	} else {
 		lt.source = api.LogSource{DeploymentID: d.ID}
 	}
+	if lt.projectID == "" {
+		lt.projectID = d.ProjectID
+	}
+	// NOTE: a control plane older than Deployment.project_id leaves it empty.
 	if lt.projectID == "" && o.follow {
 		svc, err := lt.client.GetService(ctx, d.ServiceID)
 		if err != nil {
@@ -224,8 +228,7 @@ func (a *App) followLogs(ctx context.Context, lt *logTarget, o logsOptions, p *l
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			var apiErr *api.Error
-			if errors.As(err, &apiErr) && apiErr.Status < 500 && apiErr.Status != http.StatusTooManyRequests {
+			if !retryableRealtime(err) {
 				return err
 			}
 			a.IO.Warn("realtime connection failed: %v; retrying in %s", err, delay)
@@ -235,7 +238,7 @@ func (a *App) followLogs(ctx context.Context, lt *logTarget, o logsOptions, p *l
 			delay = min(delay*2, maxReconnectDelay)
 			continue
 		}
-		delay = time.Second
+		connected := time.Now()
 
 		hist := o
 		if !first {
@@ -257,11 +260,37 @@ func (a *App) followLogs(ctx context.Context, lt *logTarget, o logsOptions, p *l
 		if done || ctx.Err() != nil {
 			return ctx.Err()
 		}
-		a.IO.Warn("realtime connection lost (%v); reconnecting", err)
+		if !retryableRealtime(err) {
+			return err
+		}
+		// A socket that stayed up a while starts the backoff over; one closed
+		// right after opening keeps backing off, so a server that accepts and
+		// drops every socket is not hammered.
+		if time.Since(connected) > maxReconnectDelay {
+			delay = time.Second
+		}
+		a.IO.Warn("realtime connection lost (%v); reconnecting in %s", err, delay)
 		if !sleepCtx(ctx, delay) {
 			return ctx.Err()
 		}
+		delay = min(delay*2, maxReconnectDelay)
 	}
+}
+
+// retryableRealtime reports whether reconnecting could help after err: not
+// for a close code that means the socket will keep being refused (lost
+// session or access, unknown project, protocol error), nor for an upgrade an
+// older control plane refused with a 4xx other than 429.
+func retryableRealtime(err error) bool {
+	var closed *api.RealtimeClosedError
+	if errors.As(err, &closed) {
+		return closed.Retryable()
+	}
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.Status >= 500 || apiErr.Status == http.StatusTooManyRequests
+	}
+	return true
 }
 
 // streamLogs prints live lines until the source ends (done) or the socket

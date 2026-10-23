@@ -118,7 +118,12 @@ func TestInitCreatesAndLinks(t *testing.T) {
 	if l.ProjectName != "Blog" || l.ServiceID != "" || l.EnvironmentName != "production" {
 		t.Errorf("link = %+v", l)
 	}
-	h.expect(exitcode.Conflict, "", "init", "--name", "Blog", "--gitignore=false")
+	// A taken slug is suffixed by the API; the CLI reports the one it got.
+	r = h.ok("", "init", "--name", "Blog", "--gitignore=false")
+	contains(t, r.stdout, "Created project Blog (slug blog-2)")
+	if l := readLink(t, h.dir); l.ProjectName != "Blog" || l.ProjectID == "" {
+		t.Errorf("link = %+v", l)
+	}
 	// Non-interactive init defaults the name to the directory's.
 	r = h.ok("", "init", "--gitignore=false")
 	contains(t, r.stdout, "Created project "+filepath.Base(h.dir))
@@ -193,4 +198,41 @@ func TestDomain(t *testing.T) {
 	h.golden("domain.json", r.stdout)
 	r = h.ok("", "domain", "--all")
 	contains(t, r.stdout, "https://api-staging-q9p1.apps.example.com      staging")
+}
+
+func TestProjectLookupBySlug(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.ok("", "projects", "create", "Shop Admin", "--slug", "admin")
+	lists := func() (filtered, full int) {
+		for _, req := range h.fake.Requests() {
+			if req.Pattern == "GET /v1/workspaces/{workspaceId}/projects" {
+				if req.Query == "slug=shop" {
+					filtered++
+				} else if req.Query == "" {
+					full++
+				}
+			}
+		}
+		return filtered, full
+	}
+
+	h.ok("", "link", "--project", "shop", "--gitignore=false")
+	if filtered, full := lists(); filtered != 1 || full != 0 {
+		t.Errorf("--project shop: %d slug lookups, %d full listings; want 1 and 0", filtered, full)
+	}
+	if l := readLink(t, h.dir); l.ProjectID != apitest.ProjectID {
+		t.Errorf("link = %+v", l)
+	}
+
+	// A name is not a slug, so it falls back to listing the workspace.
+	h.ok("", "link", "--project", "Shop Admin", "--gitignore=false")
+	if _, full := lists(); full != 1 {
+		t.Errorf("--project 'Shop Admin': %d full listings, want 1", full)
+	}
+	if l := readLink(t, h.dir); l.ProjectName != "Shop Admin" {
+		t.Errorf("link = %+v", l)
+	}
+	r := h.expect(exitcode.NotFound, "", "status", "--project", "nope")
+	contains(t, r.stderr, `no project "nope"`)
 }

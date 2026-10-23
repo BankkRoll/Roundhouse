@@ -7,19 +7,29 @@
  *   pulls its replicas from nodes; the slug is free again at once.
  * - Creating an environment gives every service config version 1 there,
  *   copied from another environment when asked (variables included).
+ * - Summaries return every service's state in one environment in a fixed
+ *   number of queries.
+ * - A taken slug on create is suffixed (-2, -3, …), never refused.
  *
  * @module
  */
 import { environments, projectKeys, projects, services, variables } from "@openrail/db";
-import { DEFAULT_ENVIRONMENT, defaultServiceConfig, newId } from "@openrail/shared";
-import { and, asc, eq, isNull, like, sql } from "drizzle-orm";
+import {
+  DEFAULT_ENVIRONMENT,
+  defaultServiceConfig,
+  newId,
+  type ServiceConfigSpec,
+} from "@openrail/shared";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { clientIp, createRouter, requireMasterKey, requireWorkspace } from "../context";
 import {
   createEnvironment,
   createProject,
   deleteProject,
   getProject,
+  getProjectSummary,
   listEnvironments,
+  listProjectSummaries,
   listProjects,
   policyOf,
   updateProject,
@@ -28,7 +38,7 @@ import { recordAudit } from "../lib/audit";
 import { conflict, isUniqueViolation, notFound } from "../lib/errors";
 import {
   configInsert,
-  freeSlug,
+  insertWithFreeSlug,
   latestConfig,
   liveServices,
   slugFor,
@@ -39,6 +49,7 @@ import {
 import { environmentOf, projectScope } from "../lib/scope";
 import { toApiEnvironment, toApiProject, toApiService } from "../lib/serialize";
 import { getIngressSettings } from "../lib/settings";
+import { projectSummaries } from "../lib/summaries";
 import { copiedVariableRows, newProjectKeyRow, projectKey } from "../lib/variables";
 
 const productionFirst = sql`CASE WHEN ${environments.kind} = 'production' THEN 0 ELSE 1 END`;
@@ -47,14 +58,53 @@ const productionFirst = sql`CASE WHEN ${environments.kind} = 'production' THEN 0
 export const projectRoutes = createRouter()
   .openapi(listProjects, async (c) => {
     const { workspaceId } = c.req.valid("param");
+    const { slug } = c.req.valid("query");
     await requireWorkspace(c, workspaceId, policyOf(listProjects).action!);
     const rows = await c
       .get("db")
       .select()
       .from(projects)
-      .where(and(eq(projects.workspaceId, workspaceId), isNull(projects.deletedAt)))
+      .where(
+        and(
+          eq(projects.workspaceId, workspaceId),
+          isNull(projects.deletedAt),
+          slug !== undefined ? eq(projects.slug, slug) : undefined,
+        ),
+      )
       .orderBy(asc(projects.name), asc(projects.id));
     return c.json({ projects: rows.map(toApiProject) }, 200);
+  })
+  .openapi(listProjectSummaries, async (c) => {
+    const { workspaceId } = c.req.valid("param");
+    await requireWorkspace(c, workspaceId, policyOf(listProjectSummaries).action!);
+    const db = c.get("db");
+    const { tlsMode } = await getIngressSettings(db);
+    return c.json(
+      { projects: await projectSummaries(db, { kind: "workspace", workspaceId }, tlsMode) },
+      200,
+    );
+  })
+  .openapi(getProjectSummary, async (c) => {
+    const { projectId } = c.req.valid("param");
+    const query = c.req.valid("query");
+    await projectScope(c, projectId, policyOf(getProjectSummary).action!);
+    const db = c.get("db");
+    const [environment] = query.environment_id
+      ? [await environmentOf(c, projectId, query.environment_id)]
+      : await db
+          .select()
+          .from(environments)
+          .where(and(eq(environments.projectId, projectId), eq(environments.kind, "production")))
+          .limit(1);
+    if (!environment) throw notFound("Environment");
+    const { tlsMode } = await getIngressSettings(db);
+    const [summary] = await projectSummaries(
+      db,
+      { kind: "project", projectId, environmentId: environment.id },
+      tlsMode,
+    );
+    if (!summary) throw notFound("Project");
+    return c.json(summary, 200);
   })
   .openapi(createProject, async (c) => {
     const { workspaceId } = c.req.valid("param");
@@ -63,49 +113,41 @@ export const projectRoutes = createRouter()
     const body = c.req.valid("json");
     const db = c.get("db");
 
-    let slug = body.slug;
-    if (!slug) {
-      const base = slugFor(body.name, "project");
-      const taken = await db
-        .select({ slug: projects.slug })
-        .from(projects)
-        .where(
-          and(
-            eq(projects.workspaceId, workspaceId),
-            isNull(projects.deletedAt),
-            like(projects.slug, `${base}%`),
-          ),
-        );
-      slug = freeSlug(new Set(taken.map((t) => t.slug)), base);
-    }
     const id = newId("project");
     const envId = newId("environment");
-    try {
-      await db.batch([
-        db.insert(projects).values({
-          id,
-          workspaceId,
-          name: body.name,
-          slug,
-          description: body.description || null,
-        }),
-        db.insert(environments).values({
-          id: envId,
-          projectId: id,
-          name: DEFAULT_ENVIRONMENT.name,
-          slug: DEFAULT_ENVIRONMENT.slug,
-          kind: "production",
-        }),
-        db.insert(projectKeys).values(await newProjectKeyRow(masterKey, id)),
-      ]);
-    } catch (err) {
-      if (isUniqueViolation(err, "projects")) throw conflict(`A project with slug ${slug} exists`);
-      throw err;
-    }
+    const keyRow = await newProjectKeyRow(masterKey, id);
+    const { slug } = await insertWithFreeSlug({
+      base: body.slug ?? slugFor(body.name, "project"),
+      uniqueOn: "projects",
+      taken: async () =>
+        (
+          await db
+            .select({ slug: projects.slug })
+            .from(projects)
+            .where(and(eq(projects.workspaceId, workspaceId), isNull(projects.deletedAt)))
+        ).map((t) => t.slug),
+      insert: (slug) =>
+        db.batch([
+          db.insert(projects).values({
+            id,
+            workspaceId,
+            name: body.name,
+            slug,
+            description: body.description || null,
+          }),
+          db.insert(environments).values({
+            id: envId,
+            projectId: id,
+            name: DEFAULT_ENVIRONMENT.name,
+            slug: DEFAULT_ENVIRONMENT.slug,
+            kind: "production",
+          }),
+          db.insert(projectKeys).values(keyRow),
+        ]),
+    });
     await recordAudit(db, {
       workspaceId,
-      actorType: "user",
-      actorId: m.user.id,
+      ...m.actor,
       action: "project.created",
       targetType: "project",
       targetId: id,
@@ -165,8 +207,7 @@ export const projectRoutes = createRouter()
     if (!row) throw notFound("Project");
     await recordAudit(c.get("db"), {
       workspaceId: row.workspaceId,
-      actorType: "user",
-      actorId: caller.user.id,
+      ...caller.actor,
       action: "project.updated",
       targetType: "project",
       targetId: projectId,
@@ -199,8 +240,7 @@ export const projectRoutes = createRouter()
     ]);
     await recordAudit(db, {
       workspaceId: project.workspaceId,
-      actorType: "user",
-      actorId: caller.user.id,
+      ...caller.actor,
       action: "project.deleted",
       targetType: "project",
       targetId: projectId,
@@ -238,19 +278,9 @@ export const projectRoutes = createRouter()
       .where(and(eq(environments.projectId, projectId), eq(environments.kind, "production")))
       .limit(1);
 
-    let slug = body.slug;
-    if (!slug) {
-      const base = slugFor(body.name, "env");
-      const taken = await db
-        .select({ slug: environments.slug })
-        .from(environments)
-        .where(and(eq(environments.projectId, projectId), like(environments.slug, `${base}%`)));
-      slug = freeSlug(new Set(taken.map((t) => t.slug)), base);
-    }
-
     const envId = newId("environment");
     const live = await liveServices(db, projectId);
-    const configs = [];
+    const configs: { service: (typeof live)[number]; spec: ServiceConfigSpec }[] = [];
     for (const s of live) {
       const copied = from ? await latestConfig(db, s.id, from.id) : undefined;
       const fallback =
@@ -270,34 +300,39 @@ export const projectRoutes = createRouter()
           envId,
         )
       : [];
-    try {
-      await db.batch([
-        db.insert(environments).values({
-          id: envId,
-          projectId,
-          name: body.name,
-          slug,
-          kind: body.kind,
-          prNumber: body.pr_number ?? null,
-          sourceBranch: body.source_branch ?? null,
-        }),
-        ...configs.map((cfg) =>
-          configInsert(db, {
-            serviceId: cfg.service.id,
-            environmentId: envId,
-            version: 1,
-            createdBy: caller.user.id,
-            spec: cfg.spec,
+    const { slug } = await insertWithFreeSlug({
+      base: body.slug ?? slugFor(body.name, "env"),
+      uniqueOn: "environments",
+      taken: async () =>
+        (
+          await db
+            .select({ slug: environments.slug })
+            .from(environments)
+            .where(eq(environments.projectId, projectId))
+        ).map((t) => t.slug),
+      insert: (slug) =>
+        db.batch([
+          db.insert(environments).values({
+            id: envId,
+            projectId,
+            name: body.name,
+            slug,
+            kind: body.kind,
+            prNumber: body.pr_number ?? null,
+            sourceBranch: body.source_branch ?? null,
           }),
-        ),
-        ...(variableRows.length ? [db.insert(variables).values(variableRows)] : []),
-      ]);
-    } catch (err) {
-      if (isUniqueViolation(err, "environments")) {
-        throw conflict(`An environment with slug ${slug} exists`);
-      }
-      throw err;
-    }
+          ...configs.map((cfg) =>
+            configInsert(db, {
+              serviceId: cfg.service.id,
+              environmentId: envId,
+              version: 1,
+              createdBy: caller.user.id,
+              spec: cfg.spec,
+            }),
+          ),
+          ...(variableRows.length ? [db.insert(variables).values(variableRows)] : []),
+        ]),
+    });
     const ingress = await getIngressSettings(db);
     for (const cfg of configs) {
       await syncGeneratedDomain(
@@ -314,8 +349,7 @@ export const projectRoutes = createRouter()
     }
     await recordAudit(db, {
       workspaceId: project.workspaceId,
-      actorType: "user",
-      actorId: caller.user.id,
+      ...caller.actor,
       action: "project.updated",
       targetType: "project",
       targetId: projectId,

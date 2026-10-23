@@ -84,9 +84,7 @@ export function RepoPicker({ repositories, loading, selectedId, onSelect }: Repo
                 {repo.private ? (
                   <LockIcon className="size-3 text-subtle-foreground" aria-label="Private" />
                 ) : null}
-                <span className="font-mono text-[10px] text-subtle-foreground">
-                  {repo.default_branch}
-                </span>
+                <span className="text-xs text-muted-foreground">{repo.default_branch}</span>
               </label>
             );
           })

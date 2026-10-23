@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { RealtimeServerMessage } from "../lib/api/deploy-types";
 import { appendDeploymentEvent, upsertDeployment } from "./deployments";
 import { queryKeys } from "./keys";
+import { invalidateProjectSummaries } from "./projects";
 import { patchProjectService } from "./services";
 
 /** Timeline events after which a deployment's placements have changed. */
@@ -14,7 +15,8 @@ const PLACEMENT_EVENTS = new Set([
 
 /**
  * Applies a realtime message to the TanStack Query caches, so every open view of a
- * deployment or service updates without refetching. Presence and log lines are not
+ * deployment or service (lists, details and project summaries) updates without
+ * refetching. Presence and log lines are not
  * cached; their subscribers handle them.
  *
  * @param queryClient - Shared query client.
@@ -49,6 +51,7 @@ export function applyRealtimeMessage(
         queryKey: queryKeys.project(message.service.project_id),
         exact: true,
       });
+      invalidateProjectSummaries(queryClient, message.service.project_id);
       return;
     default:
       return;

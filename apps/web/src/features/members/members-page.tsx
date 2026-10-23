@@ -1,11 +1,10 @@
-import { Button, EmptyState, Skeleton } from "@openrail/ui";
+import { Button, EmptyState, SettingsSection, SettingsStack, Skeleton } from "@openrail/ui";
 import { LockIcon, UserPlusIcon } from "lucide-react";
 import { ErrorState } from "../../components/error-state";
-import { PageHeader } from "../../components/page-header";
 import { errorMessage } from "../../lib/api/client";
 import { usePermissions } from "../../lib/permissions";
 import { useMembers } from "../../queries/members";
-import { SettingsTabs } from "../settings/settings-tabs";
+import { SettingsFrame } from "../settings/settings-frame";
 import { useShellActions } from "../shell/shell-actions";
 import { MembersTable } from "./members-table";
 import { PendingInvites } from "./pending-invites";
@@ -25,20 +24,23 @@ export function MembersPage({ workspaceId }: { workspaceId: string }) {
   const { openInviteMember } = useShellActions();
 
   return (
-    <>
-      <PageHeader
-        title="Settings"
-        subline={members.data ? `${members.data.length} members` : undefined}
-        actions={
-          canManage ? (
-            <Button variant="primary" onClick={openInviteMember}>
-              <UserPlusIcon />
-              Invite member
-            </Button>
-          ) : null
-        }
-      />
-      <SettingsTabs workspaceId={workspaceId} />
+    <SettingsFrame
+      workspaceId={workspaceId}
+      title="Members"
+      description={
+        members.data
+          ? `${members.data.length} ${members.data.length === 1 ? "member" : "members"} with access to this workspace.`
+          : "People with access to this workspace."
+      }
+      actions={
+        canManage ? (
+          <Button variant="primary" onClick={openInviteMember}>
+            <UserPlusIcon />
+            Invite member
+          </Button>
+        ) : null
+      }
+    >
       {!canRead ? (
         <EmptyState
           icon={<LockIcon />}
@@ -50,11 +52,16 @@ export function MembersPage({ workspaceId }: { workspaceId: string }) {
       ) : members.isError ? (
         <ErrorState message={errorMessage(members.error)} onRetry={() => void members.refetch()} />
       ) : (
-        <div className="rounded-lg border border-border bg-surface">
-          <MembersTable workspaceId={workspaceId} members={members.data} />
-        </div>
+        <SettingsStack>
+          <SettingsSection
+            title="People"
+            description="Owners and admins manage members; members deploy; viewers only look."
+          >
+            <MembersTable workspaceId={workspaceId} members={members.data} />
+          </SettingsSection>
+          {canManage ? <PendingInvites workspaceId={workspaceId} /> : null}
+        </SettingsStack>
       )}
-      {canManage ? <PendingInvites workspaceId={workspaceId} /> : null}
-    </>
+    </SettingsFrame>
   );
 }

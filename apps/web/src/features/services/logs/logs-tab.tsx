@@ -180,7 +180,7 @@ export function LogsTab({
               type="button"
               aria-pressed={streams.has(name)}
               onClick={() => toggleStream(name)}
-              className="h-7 rounded-md border border-border-strong px-2 font-mono text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-accent-text aria-pressed:bg-accent-subtle aria-pressed:text-foreground"
+              className="h-7 rounded-md border border-border-strong px-2 font-mono text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-accent-text aria-pressed:bg-accent-subtle aria-pressed:text-foreground"
             >
               {name}
             </button>
@@ -227,7 +227,7 @@ export function LogsTab({
       </div>
 
       <div className="overflow-hidden rounded-lg border border-border">
-        <div className="flex items-center justify-between gap-2 border-b border-border bg-surface px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <div className="flex items-center justify-between gap-2 border-b border-border bg-surface px-3 py-1.5 text-xs text-muted-foreground">
           <span className="flex items-center gap-2">
             {stream.buffer.olderCursor ? (
               <Button

@@ -455,6 +455,7 @@ describe("App setup", () => {
       hook_attributes: { url: "https://cp.test/v1/webhooks/github", active: true },
       redirect_url: "https://cp.test/v1/github/callback",
       setup_url: "https://cp.test/v1/github/callback",
+      request_oauth_on_install: true,
       public: false,
       default_permissions: GITHUB_APP_PERMISSIONS,
       default_events: ["push"],
@@ -531,34 +532,102 @@ describe("App setup", () => {
     expect(status.body.configured).toBe(true);
     expect(status.body.app.slug).toBe("openrail-cp-a1b2c3");
   });
+});
 
-  it("binds an installation to the workspace whose install link was used", async () => {
+describe("installation claims", () => {
+  const CLIENT_ID = "Iv23liAbCdEfGh123456";
+  const USER_TOKEN = "ghu_usertoken0123456789";
+
+  /** GitHub as seen by a user who can access `accessible` installations. */
+  function stubInstallFlow(accessible: number[] = [INSTALLATION_ID]) {
     stubGithub([
       [
-        new RegExp(`^GET https://api\\.github\\.com/app/installations/${INSTALLATION_ID}$`),
+        /^POST https:\/\/github\.com\/login\/oauth\/access_token$/,
+        (_req, body) =>
+          (body as { code?: string }).code === "good-code"
+            ? Response.json({ access_token: USER_TOKEN, token_type: "bearer" })
+            : // GitHub answers a bad code with 200 and an error field.
+              Response.json({ error: "bad_verification_code" }),
+      ],
+      [
+        /^GET https:\/\/api\.github\.com\/user\/installations\?per_page=100&page=1$/,
         () =>
-          Response.json({ id: INSTALLATION_ID, account: { login: "acme", type: "Organization" } }),
+          Response.json({
+            total_count: accessible.length,
+            installations: accessible.map((id) => ({ id, account: { login: "acme" } })),
+          }),
+      ],
+      [
+        new RegExp(`^DELETE https://api\\.github\\.com/applications/${CLIENT_ID}/token$`),
+        () => new Response(null, { status: 204 }),
+      ],
+      [
+        /^GET https:\/\/api\.github\.com\/app\/installations\/\d+$/,
+        (req) =>
+          Response.json({
+            id: Number(new URL(req.url).pathname.split("/").pop()),
+            account: { login: "acme", type: "Organization" },
+          }),
       ],
     ]);
-    const { owner, workspaceId } = await install();
-    await seedApp();
-    const status = await owner.json<{ app: { install_url: string }; installations: unknown[] }>(
+  }
+
+  async function installState(owner: Client, workspaceId: string): Promise<string> {
+    const status = await owner.json<{ app: { install_url: string } }>(
       `/v1/github/status?workspace_id=${workspaceId}`,
     );
-    expect(status.body.installations).toEqual([]);
-    const state = new URL(status.body.app.install_url).searchParams.get("state")!;
+    return new URL(status.body.app.install_url).searchParams.get("state")!;
+  }
+
+  function callback(c: Client, params: Record<string, string | number>) {
+    const query = new URLSearchParams(
+      Object.entries({ setup_action: "install", ...params }).map(([k, v]) => [k, String(v)]),
+    );
+    return c.request(`/v1/github/callback?${query}`, { redirect: "manual" });
+  }
+
+  async function rejections() {
+    const rows = await env.DB.prepare(
+      "SELECT workspace_id, actor_id, metadata FROM audit_logs WHERE action = 'github.installation_rejected' ORDER BY id",
+    ).all<{ workspace_id: string; actor_id: string; metadata: string }>();
+    return rows.results.map((r) => ({ ...r, metadata: JSON.parse(r.metadata) }));
+  }
+
+  async function installationCount() {
+    const n = await env.DB.prepare("SELECT count(*) AS n FROM github_installations").first<{
+      n: number;
+    }>();
+    return n!.n;
+  }
+
+  it("asks GitHub for user authorization during installation", async () => {
+    const { owner, workspaceId } = await install();
+    const res = await owner.json<{ manifest: Record<string, unknown> }>("/v1/github/manifest", {
+      method: "POST",
+      json: { workspace_id: workspaceId },
+    });
+    expect(res.body.manifest.request_oauth_on_install).toBe(true);
+  });
+
+  it("binds an installation the signed-in GitHub user can access, then revokes their token", async () => {
+    stubInstallFlow();
+    const { owner, workspaceId, userId } = await install();
+    await seedApp();
+    const state = await installState(owner, workspaceId);
 
     const member = await addMember(owner, workspaceId, "m@example.com", "member");
-    const stolen = await member.request(
-      `/v1/github/callback?installation_id=${INSTALLATION_ID}&setup_action=install&state=${encodeURIComponent(state)}`,
-      { redirect: "manual" },
-    );
+    const stolen = await callback(member, {
+      installation_id: INSTALLATION_ID,
+      state,
+      code: "good-code",
+    });
     expect(stolen.status).toBe(403);
 
-    const res = await owner.request(
-      `/v1/github/callback?installation_id=${INSTALLATION_ID}&setup_action=install&state=${encodeURIComponent(state)}`,
-      { redirect: "manual" },
-    );
+    const res = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state,
+      code: "good-code",
+    });
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("https://cp.test/settings/github?status=installed");
     const after = await owner.json<{
@@ -567,15 +636,157 @@ describe("App setup", () => {
     expect(after.body.installations).toEqual([
       expect.objectContaining({ installation_id: INSTALLATION_ID, workspace_id: workspaceId }),
     ]);
-    expect(recorded[0]!.authorization).toMatch(/^Bearer ey/);
 
-    const forged = await owner.request(
-      `/v1/github/callback?installation_id=${INSTALLATION_ID}&state=forged.state`,
-      { redirect: "manual" },
-    );
-    expect(forged.status).toBe(400);
+    const exchange = recorded.find((r) => r.url === "https://github.com/login/oauth/access_token");
+    expect(exchange?.body).toEqual({
+      client_id: CLIENT_ID,
+      client_secret: "client-secret",
+      code: "good-code",
+    });
+    const listed = recorded.find((r) => r.url.includes("/user/installations"));
+    expect(listed?.authorization).toBe(`Bearer ${USER_TOKEN}`);
+    const revoked = recorded.find((r) => r.method === "DELETE");
+    expect(revoked?.body).toEqual({ access_token: USER_TOKEN });
+    expect(revoked?.authorization).toBe(`Basic ${btoa(`${CLIENT_ID}:client-secret`)}`);
+    const appCall = recorded.find((r) => r.url.endsWith(`/app/installations/${INSTALLATION_ID}`));
+    expect(appCall?.authorization).toMatch(/^Bearer ey/);
+    // The user token is gone before the redirect; nothing stores it.
+    const settings = await env.DB.prepare("SELECT value FROM instance_settings").all<{
+      value: string;
+    }>();
+    expect(JSON.stringify(settings.results)).not.toContain(USER_TOKEN);
+
+    const added = await env.DB.prepare(
+      "SELECT actor_id FROM audit_logs WHERE action = 'github.installation_added'",
+    ).first<{ actor_id: string }>();
+    expect(added?.actor_id).toBe(userId);
+    expect(await rejections()).toEqual([]);
   });
 
+  it("rejects and audits a forged installation_id the user can't access", async () => {
+    stubInstallFlow([111, 222]);
+    const { owner, workspaceId, userId } = await install();
+    await seedApp();
+    const state = await installState(owner, workspaceId);
+    const res = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state,
+      code: "good-code",
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(
+      "https://cp.test/settings/github?error=installation_not_accessible",
+    );
+    expect(await installationCount()).toBe(0);
+    // Never asked GitHub about the installation with the App's own credentials.
+    expect(recorded.some((r) => r.url.includes("/app/installations/"))).toBe(false);
+    // The user token is revoked even when the check fails.
+    expect(recorded.some((r) => r.method === "DELETE")).toBe(true);
+    expect(await rejections()).toEqual([
+      {
+        workspace_id: workspaceId,
+        actor_id: userId,
+        metadata: { installation_id: INSTALLATION_ID, reason: "installation_not_accessible" },
+      },
+    ]);
+  });
+
+  it("refuses a replayed install state, even for the user who started it", async () => {
+    stubInstallFlow();
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const state = await installState(owner, workspaceId);
+    const first = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state,
+      code: "good-code",
+    });
+    expect(first.headers.get("location")).toContain("status=installed");
+    const callsBefore = recorded.length;
+
+    const replay = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state,
+      code: "good-code",
+    });
+    expect(replay.status).toBe(302);
+    expect(replay.headers.get("location")).toBe("https://cp.test/settings/github?error=link_used");
+    expect(recorded.length).toBe(callsBefore);
+    expect((await rejections()).map((r) => r.metadata.reason)).toEqual(["link_used"]);
+
+    // A fresh link works again.
+    const again = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state: await installState(owner, workspaceId),
+      code: "good-code",
+    });
+    expect(again.headers.get("location")).toContain("status=installed");
+  });
+
+  it("refuses a callback without an authorization code", async () => {
+    stubInstallFlow();
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const state = await installState(owner, workspaceId);
+    const res = await callback(owner, { installation_id: INSTALLATION_ID, state });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(
+      "https://cp.test/settings/github?error=authorization_required",
+    );
+    expect(recorded).toEqual([]);
+    expect(await installationCount()).toBe(0);
+    expect((await rejections()).map((r) => r.metadata.reason)).toEqual(["authorization_required"]);
+  });
+
+  it("refuses a code GitHub doesn't accept", async () => {
+    stubInstallFlow();
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const state = await installState(owner, workspaceId);
+    const res = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state,
+      code: "stolen-or-expired",
+    });
+    expect(res.headers.get("location")).toBe(
+      "https://cp.test/settings/github?error=authorization_failed",
+    );
+    expect(await installationCount()).toBe(0);
+    expect((await rejections()).map((r) => r.metadata.reason)).toEqual(["authorization_failed"]);
+  });
+
+  it("refuses a forged or expired state before anything else", async () => {
+    stubInstallFlow();
+    const { owner } = await install();
+    await seedApp();
+    const forged = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state: "forged.state",
+      code: "good-code",
+    });
+    expect(forged.status).toBe(400);
+    expect(recorded).toEqual([]);
+    expect(await rejections()).toEqual([]);
+  });
+
+  it("refuses API tokens", async () => {
+    stubInstallFlow();
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const state = await installState(owner, workspaceId);
+    const { body } = await owner.json<{ secret: string }>(`/v1/workspaces/${workspaceId}/tokens`, {
+      method: "POST",
+      json: { name: "ci", scopes: ["projects:manage"], expires_in_days: 1 },
+    });
+    const res = await call(
+      `/v1/github/callback?installation_id=${INSTALLATION_ID}&state=${encodeURIComponent(state)}&code=good-code`,
+      { headers: { authorization: `Bearer ${body.secret}` }, redirect: "manual" },
+    );
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("repositories", () => {
   it("lists repositories through the workspace's installations", async () => {
     stubGithub([
       [

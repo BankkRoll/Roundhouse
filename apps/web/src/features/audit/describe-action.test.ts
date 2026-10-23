@@ -161,6 +161,47 @@ describe("describeAction", () => {
     );
   });
 
+  it("labels API token and environment resolution entries", () => {
+    expect(
+      describeAction(
+        makeAuditEntry({
+          ...byOwner,
+          action: "token.created",
+          target_type: "api_token",
+          target_id: "tok_1",
+          metadata: { name: "ci-deploy", scopes: ["projects:read"] },
+        }),
+      ),
+    ).toEqual({ verb: "created API token", target: "ci-deploy", icon: KeyRoundIcon });
+    expect(
+      describeAction(
+        makeAuditEntry({
+          ...byOwner,
+          action: "token.revoked",
+          target_type: "api_token",
+          metadata: { name: "ci-deploy" },
+        }),
+      ),
+    ).toMatchObject({ verb: "revoked API token", target: "ci-deploy" });
+    expect(
+      describeAction(
+        makeAuditEntry({ ...byOwner, action: "variables.resolved", metadata: { keys: ["A"] } }),
+      ).verb,
+    ).toBe("resolved the environment of");
+    expect(
+      describeAction(
+        makeAuditEntry({
+          ...byOwner,
+          action: "github.installation_rejected",
+          metadata: { reason: "installation_not_accessible" },
+        }),
+      ),
+    ).toMatchObject({
+      verb: "was refused a GitHub App installation",
+      target: "(installation not accessible)",
+    });
+  });
+
   it("ignores non-string metadata values", () => {
     expect(
       describeAction(makeAuditEntry({ ...byOwner, action: "node.removed", metadata: { name: 42 } }))
@@ -176,5 +217,12 @@ describe("actorLabel", () => {
     expect(
       actorLabel(makeAuditEntry({ actor_name: null, actor_id: null, actor_type: "system" })),
     ).toBe("system");
+  });
+
+  it("marks API tokens so they aren't mistaken for people", () => {
+    expect(actorLabel(makeAuditEntry({ actor_type: "token", actor_name: "ci-deploy" }))).toBe(
+      "ci-deploy (API token)",
+    );
+    expect(actorLabel(makeAuditEntry({ actor_type: "token", actor_name: null }))).toBe("API token");
   });
 });

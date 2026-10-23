@@ -44,7 +44,9 @@ type Options struct {
 	// Transport overrides the HTTP transport, for tests.
 	Transport http.RoundTripper
 	// OnSessionCookie is called when a response sets the session cookie, so a
-	// rotated session can be persisted.
+	// refreshed session can be persisted, or a cleared one forgotten (see
+	// [SessionCookieCleared]). It is never called when Credential is a
+	// [BearerToken]: a token request has no session to refresh.
 	OnSessionCookie func(*http.Cookie)
 }
 
@@ -74,6 +76,10 @@ func New(opts Options) (*Client, error) {
 		transport = &tracingTransport{next: transport, log: opts.Logger}
 	}
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	onSessionCookie := opts.OnSessionCookie
+	if _, ok := opts.Credential.(BearerToken); ok {
+		onSessionCookie = nil
+	}
 	return &Client{
 		base: base,
 		// SECURITY: redirects are not followed, so the Cookie header can
@@ -82,7 +88,7 @@ func New(opts Options) (*Client, error) {
 		stream:          &http.Client{Transport: transport, CheckRedirect: noRedirect},
 		cred:            opts.Credential,
 		userAgent:       opts.UserAgent,
-		onSessionCookie: opts.OnSessionCookie,
+		onSessionCookie: onSessionCookie,
 	}, nil
 }
 

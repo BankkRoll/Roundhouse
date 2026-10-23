@@ -1,22 +1,20 @@
 import {
   Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
   CodeBlock,
-  Label,
+  DangerZone,
+  SaveBar,
+  SettingsRow,
+  SettingsSection,
+  SettingsStack,
   Textarea,
   toast,
 } from "@openrail/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { ArrowLeftIcon } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
-import { FormField } from "../../components/form-field";
-import { PageHeader } from "../../components/page-header";
+import { SettingsField } from "../../components/settings-field";
 import { errorMessage } from "../../lib/api/client";
 import type { ProjectDetail } from "../../lib/api/deploy-types";
 import { usePermissions } from "../../lib/permissions";
@@ -61,69 +59,71 @@ function GeneralForm({ workspaceId, project }: { workspaceId: string; project: P
   }
 
   return (
-    <Card>
-      <form onSubmit={onSubmit} noValidate>
-        <CardHeader>
-          <div>
-            <CardTitle>General</CardTitle>
-            <CardDescription>Shown in the sidebar and on the home page.</CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent className="grid max-w-lg gap-4">
-          <FormField
-            label="Project name"
-            value={currentName}
-            onChange={(event) => setName(event.target.value)}
+    <form onSubmit={onSubmit} noValidate aria-label="General">
+      <SettingsSection title="General" description="Shown in the sidebar and on the home page.">
+        <SettingsField
+          label="Project name"
+          value={currentName}
+          onChange={(event) => setName(event.target.value)}
+          disabled={!allowed}
+          error={error}
+          maxLength={100}
+        />
+        <SettingsRow
+          label="Description"
+          description="One line on what the project runs. Optional."
+          htmlFor={descriptionId}
+        >
+          <Textarea
+            id={descriptionId}
+            aria-describedby={`${descriptionId}-description`}
+            value={currentDescription}
+            onChange={(event) => setDescription(event.target.value)}
             disabled={!allowed}
-            error={error}
-            maxLength={100}
+            maxLength={500}
+            className="min-h-20 font-sans text-sm"
           />
-          <div className="grid gap-1.5">
-            <Label htmlFor={descriptionId}>Description</Label>
-            <Textarea
-              id={descriptionId}
-              value={currentDescription}
-              onChange={(event) => setDescription(event.target.value)}
-              disabled={!allowed}
-              maxLength={500}
-              className="min-h-16 font-sans text-sm"
-            />
-          </div>
-        </CardContent>
-        {allowed ? (
-          <CardFooter className="justify-end">
-            <Button type="submit" variant="primary" disabled={!dirty} loading={update.isPending}>
-              Save
-            </Button>
-          </CardFooter>
-        ) : null}
-      </form>
-    </Card>
+        </SettingsRow>
+      </SettingsSection>
+      {allowed ? (
+        <SaveBar
+          dirty={dirty}
+          saving={update.isPending}
+          onDiscard={() => {
+            setName(null);
+            setDescription(null);
+            setError(null);
+          }}
+        />
+      ) : null}
+    </form>
   );
 }
 
-function DangerZone({ workspaceId, project }: { workspaceId: string; project: ProjectDetail }) {
+function DeleteProjectSection({
+  workspaceId,
+  project,
+}: {
+  workspaceId: string;
+  project: ProjectDetail;
+}) {
   const remove = useDeleteProject(workspaceId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
+  const count = project.services.length;
   return (
-    <Card className="border-danger/40">
-      <CardHeader>
-        <div>
-          <CardTitle>Delete project</CardTitle>
-          <CardDescription>
-            Removes {project.services.length}{" "}
-            {project.services.length === 1 ? "service" : "services"} and stops their containers on
-            every server. The slug becomes free immediately.
-          </CardDescription>
+    <DangerZone>
+      <SettingsRow
+        label="Delete project"
+        description={`Removes ${count} ${count === 1 ? "service" : "services"} and stops their containers on every server. The slug becomes free immediately.`}
+      >
+        <div className="md:flex md:justify-end">
+          <Button variant="danger-outline" onClick={() => setConfirming(true)}>
+            Delete project
+          </Button>
         </div>
-      </CardHeader>
-      <CardFooter className="justify-end">
-        <Button variant="danger" onClick={() => setConfirming(true)}>
-          Delete project
-        </Button>
-      </CardFooter>
+      </SettingsRow>
       <ConfirmDialog
         open={confirming}
         onOpenChange={(open) => {
@@ -148,13 +148,13 @@ function DangerZone({ workspaceId, project }: { workspaceId: string; project: Pr
           })
         }
       />
-    </Card>
+    </DangerZone>
   );
 }
 
 /**
- * Project settings: name and description, the project id, and deletion with a typed
- * confirmation.
+ * Project settings: name and description, the project's identifiers, and deletion with
+ * a typed confirmation.
  *
  * @param props - Workspace and project ids.
  * @returns The page.
@@ -166,29 +166,40 @@ export function ProjectSettingsPage({
   workspaceId: string;
   projectId: string;
 }) {
-  const { project } = useProjectEnvironment(projectId);
+  const { project, envParam } = useProjectEnvironment(projectId);
   const { can } = usePermissions(workspaceId);
   if (!project.data) return null;
   return (
-    <>
-      <PageHeader title="Project settings" subline={`/${project.data.slug}`} />
-      <div className="grid max-w-3xl gap-4">
-        <GeneralForm workspaceId={workspaceId} project={project.data} />
-        <Card>
-          <CardHeader>
-            <div>
-              <CardTitle>Project ID</CardTitle>
-              <CardDescription>Use this when talking to the API.</CardDescription>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <CodeBlock code={project.data.id} />
-          </CardContent>
-        </Card>
-        {can("projects:manage") ? (
-          <DangerZone workspaceId={workspaceId} project={project.data} />
-        ) : null}
+    <div className="max-w-[50rem]">
+      <Link
+        to="/w/$workspaceId/p/$projectId"
+        params={{ workspaceId, projectId }}
+        search={{ env: envParam }}
+        className="mb-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
+      >
+        <ArrowLeftIcon className="size-3.5" aria-hidden="true" />
+        {project.data.name}
+      </Link>
+      <div className="mb-8">
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">Project settings</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Applies to every environment of {project.data.name}.
+        </p>
       </div>
-    </>
+      <SettingsStack>
+        <GeneralForm workspaceId={workspaceId} project={project.data} />
+        <SettingsSection title="Identifiers" description="Use these when talking to the API.">
+          <SettingsRow label="Project ID">
+            <CodeBlock dense code={project.data.id} />
+          </SettingsRow>
+          <SettingsRow label="Slug" description="Stays the same when the project is renamed.">
+            <CodeBlock dense code={`/${project.data.slug}`} />
+          </SettingsRow>
+        </SettingsSection>
+        {can("projects:manage") ? (
+          <DeleteProjectSection workspaceId={workspaceId} project={project.data} />
+        ) : null}
+      </SettingsStack>
+    </div>
   );
 }

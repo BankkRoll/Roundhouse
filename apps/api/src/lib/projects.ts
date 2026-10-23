@@ -9,6 +9,7 @@ import { type Db, deployments, domains, serviceConfigs } from "@openrail/db";
 import {
   CANCELLABLE_DEPLOYMENT_STATUSES,
   type DomainTlsStatus,
+  freeSlug as freeSharedSlug,
   generatedHostname,
   newId,
   type ServiceConfigSpec,
@@ -33,24 +34,57 @@ import {
   retireDeployments,
   transitionDeployment,
 } from "./deployments";
-import { ApiError, type ErrorDetail, isUniqueViolation } from "./errors";
+import { ApiError, conflict, type ErrorDetail, isUniqueViolation } from "./errors";
 
 /** Longest slug the API accepts. */
 export const SLUG_MAX_LENGTH = 40;
 
 /**
- * Picks `base`, or `base-2`, `base-3`, … if taken.
+ * Picks `base`, or `base-2`, `base-3`, … if taken or reserved.
  *
  * @param taken - Slugs already in use in the scope.
  * @param base - Preferred slug.
+ * @param reserved - Slugs never handed out.
  * @returns A free slug.
  */
-export function freeSlug(taken: ReadonlySet<string>, base: string): string {
-  if (!taken.has(base)) return base;
-  for (let i = 2; ; i++) {
-    const suffix = `-${i}`;
-    const candidate = `${base.slice(0, SLUG_MAX_LENGTH - suffix.length).replace(/-+$/, "")}${suffix}`;
-    if (!taken.has(candidate)) return candidate;
+export function freeSlug(
+  taken: ReadonlySet<string>,
+  base: string,
+  reserved: readonly string[] = [],
+): string {
+  return freeSharedSlug(taken, base, reserved, SLUG_MAX_LENGTH);
+}
+
+/** Inserts that conflict on a slug get this many fresh attempts. */
+const SLUG_ATTEMPTS = 4;
+
+/**
+ * Inserts a row under the first free slug, re-reading the scope and retrying
+ * when a concurrent insert takes the slug in between.
+ *
+ * @param input.base - Preferred slug.
+ * @param input.reserved - Slugs never handed out, e.g. reference namespaces.
+ * @param input.taken - Reads the slugs in use in the scope.
+ * @param input.insert - Inserts with the chosen slug.
+ * @param input.uniqueOn - Table name in the UNIQUE violation message.
+ * @returns The slug used and the insert's result.
+ * @throws {ApiError} 409 when every attempt collided.
+ */
+export async function insertWithFreeSlug<T>(input: {
+  base: string;
+  reserved?: readonly string[];
+  taken: () => Promise<readonly string[]>;
+  insert: (slug: string) => Promise<T>;
+  uniqueOn: string;
+}): Promise<{ slug: string; result: T }> {
+  for (let attempt = 1; ; attempt++) {
+    const slug = freeSlug(new Set(await input.taken()), input.base, input.reserved);
+    try {
+      return { slug, result: await input.insert(slug) };
+    } catch (err) {
+      if (!isUniqueViolation(err, input.uniqueOn)) throw err;
+      if (attempt >= SLUG_ATTEMPTS) throw conflict(`Could not allocate a slug like ${input.base}`);
+    }
   }
 }
 

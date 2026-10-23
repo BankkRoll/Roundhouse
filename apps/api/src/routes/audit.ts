@@ -1,11 +1,12 @@
 /**
  * The workspace audit log: a newest-first, cursor-paginated read of every
- * recorded action, with actor names resolved for display.
+ * recorded action, with actor names (user, node or API token) resolved for
+ * display.
  *
  * @module
  */
 import { createRoute, z } from "@hono/zod-openapi";
-import { auditLogs, nodes, users } from "@openrail/db";
+import { apiTokens, auditLogs, nodes, users } from "@openrail/db";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import { createRouter, requireWorkspace } from "../context";
 import { AuditLogSchema, errors, json, sessionAuth, WorkspaceParams } from "../schemas";
@@ -41,11 +42,12 @@ export const auditRoutes = createRouter().openapi(list, async (c) => {
     .get("db")
     .select({
       log: auditLogs,
-      actorName: sql<string | null>`coalesce(${users.name}, ${nodes.name})`,
+      actorName: sql<string | null>`coalesce(${users.name}, ${nodes.name}, ${apiTokens.name})`,
     })
     .from(auditLogs)
     .leftJoin(users, and(eq(auditLogs.actorType, "user"), eq(users.id, auditLogs.actorId)))
     .leftJoin(nodes, and(eq(auditLogs.actorType, "node"), eq(nodes.id, auditLogs.actorId)))
+    .leftJoin(apiTokens, and(eq(auditLogs.actorType, "token"), eq(apiTokens.id, auditLogs.actorId)))
     .where(
       and(eq(auditLogs.workspaceId, workspaceId), cursor ? lt(auditLogs.id, cursor) : undefined),
     )

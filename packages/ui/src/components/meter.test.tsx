@@ -37,10 +37,10 @@ describe("Meter", () => {
     expect(meter).toHaveAttribute("data-tone", "warning");
   });
 
-  it("renders an empty track for unknown values", () => {
+  it("renders an empty track for unknown values, announced as unknown", () => {
     render(<Meter value={null} label="CPU usage" />);
     const meter = screen.getByRole("meter", { name: "CPU usage" });
-    expect(meter).not.toHaveAttribute("aria-valuenow");
+    expect(meter).toHaveAttribute("aria-valuenow", "0");
     expect(meter).toHaveAttribute("aria-valuetext", "Unknown");
     expect(meter).toHaveAttribute("data-tone", "unknown");
     expect(meter).toBeEmptyDOMElement();

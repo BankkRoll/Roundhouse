@@ -86,20 +86,20 @@ export function ServiceLayout({ workspaceId, projectId, serviceId }: ServicePage
         to="/w/$workspaceId/p/$projectId"
         params={{ workspaceId, projectId }}
         search={{ env: envParam }}
-        className="mb-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
+        className="mb-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
       >
         <ArrowLeftIcon className="size-3.5" aria-hidden="true" />
         {project.data?.name}
       </Link>
-      <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-3">
-            <h1 className="truncate font-mono text-xl font-semibold text-foreground">
+            <h1 className="truncate text-xl font-semibold tracking-tight text-foreground">
               {service.name}
             </h1>
             {latest.data ? <StatusBadge status={latest.data.status} kind="deployment" /> : null}
           </div>
-          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground">
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground">
             {config.data ? (
               <span>{describeSource(config.data.source)}</span>
             ) : (
@@ -136,7 +136,7 @@ export function ServiceLayout({ workspaceId, projectId, serviceId }: ServicePage
       </div>
       <nav
         aria-label="Service"
-        className="mb-6 flex gap-5 overflow-x-auto border-b border-border"
+        className="mb-6 flex gap-4 overflow-x-auto border-b border-border [scrollbar-width:none] sm:gap-5 lg:mb-8"
         {...{ [KEEP_FOCUS_ATTRIBUTE]: "" }}
       >
         {SERVICE_TABS.map((tab) => (

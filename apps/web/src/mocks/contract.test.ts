@@ -20,7 +20,12 @@
  * against `RealtimeServerMessageSchema`. Changing a schema or a mock without the other
  * fails.
  */
-import { JOIN_TOKEN_TTL_MS, type Role } from "@openrail/shared";
+import {
+  API_TOKEN_PRESETS,
+  JOIN_TOKEN_TTL_MS,
+  REALTIME_CLOSE_CODES,
+  type Role,
+} from "@openrail/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PHASE1_ROUTES } from "../../../api/src/contracts";
 import { RealtimeServerMessageSchema } from "../../../api/src/schemas";
@@ -72,6 +77,7 @@ const ROUTE_MODULES = [
   "github",
   "instance",
   "realtime",
+  "tokens",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -123,6 +129,8 @@ function routeKey(method: string, path: string): string {
 const BETTER_AUTH_PATHS = new Set(["/api/auth/sign-in/email", "/api/auth/sign-out"]);
 
 let apiRoutes: ApiRoute[] = [];
+/** `Location` of the last response `call` received, for redirects. */
+let lastLocation: string | null = null;
 const exercised = new Set<string>();
 const failures: string[] = [];
 
@@ -161,6 +169,7 @@ async function call(
     // NOTE: The GitHub callback answers 302; the redirect itself is what is checked.
     redirect: "manual",
   });
+  lastLocation = response.headers.get("location");
   const text = await response.text();
   const parsed: unknown = text ? JSON.parse(text) : undefined;
   if (BETTER_AUTH_PATHS.has(url.pathname)) {
@@ -568,8 +577,22 @@ describe("MSW mocks match the API contract", () => {
         body: { slug: "data-lake", environments: [{ kind: "production" }], services: [] },
       });
       expect(await call("POST", `${WS}/projects`, { name: "data lake" })).toMatchObject({
-        status: 409,
-        body: { error: { code: "conflict" } },
+        status: 201,
+        body: { slug: "data-lake-2" },
+      });
+      expect(
+        await call("POST", `${WS}/projects`, { name: "Lake 3", slug: "data-lake" }),
+      ).toMatchObject({ status: 201, body: { slug: "data-lake-3" } });
+      expect(await call("POST", `${WS}/projects`, { name: "!!!" })).toMatchObject({
+        status: 201,
+        body: { slug: "project" },
+      });
+      expect(await call("GET", `${WS}/projects?slug=data-lake-2`)).toMatchObject({
+        status: 200,
+        body: { projects: [{ name: "data lake", slug: "data-lake-2" }] },
+      });
+      expect(await call("GET", `${WS}/projects?slug=nope`)).toMatchObject({
+        body: { projects: [] },
       });
       const id = (created.body as { id: string }).id;
       expect((await call("GET", `/v1/projects/${id}`)).status).toBe(200);
@@ -616,8 +639,8 @@ describe("MSW mocks match the API contract", () => {
         (await call("POST", `${P}/environments`, { name: "Staging", kind: "staging" })).status,
       ).toBe(201);
       expect(
-        (await call("POST", `${P}/environments`, { name: "staging", kind: "staging" })).status,
-      ).toBe(409);
+        await call("POST", `${P}/environments`, { name: "staging", kind: "staging" }),
+      ).toMatchObject({ status: 201, body: { slug: "staging-2" } });
       as("member");
       expect(
         (await call("POST", `${P}/environments`, { name: "QA", kind: "staging" })).status,
@@ -648,7 +671,14 @@ describe("MSW mocks match the API contract", () => {
           name: "shared",
           source: { type: "image", image: "nginx" },
         }),
-      ).toMatchObject({ status: 400 });
+      ).toMatchObject({ status: 201, body: { service: { slug: "shared-2" } } });
+      expect(
+        await call("POST", `${P}/services`, {
+          name: "Reserved",
+          slug: "shared",
+          source: { type: "image", image: "nginx" },
+        }),
+      ).toMatchObject({ status: 201, body: { service: { slug: "shared-3" } } });
       const image = await call("POST", `${P}/services`, {
         name: "Cache",
         source: { type: "image", image: "redis:7" },
@@ -670,13 +700,11 @@ describe("MSW mocks match the API contract", () => {
       });
       expect(git.status).toBe(201);
       expect(
-        (
-          await call("POST", `${P}/services`, {
-            name: "Cache",
-            source: { type: "image", image: "redis" },
-          })
-        ).status,
-      ).toBe(409);
+        await call("POST", `${P}/services`, {
+          name: "Cache",
+          source: { type: "image", image: "redis" },
+        }),
+      ).toMatchObject({ status: 201, body: { service: { slug: "cache-2" } } });
       const id = (image.body as { service: { id: string } }).service.id;
       expect((await call("GET", `/v1/services/${id}`)).status).toBe(200);
       expect((await call("GET", "/v1/services/svc_nope")).status).toBe(404);
@@ -730,6 +758,14 @@ describe("MSW mocks match the API contract", () => {
         body: { service: { name: "storefront-web" }, config: null },
       });
       expect((await call("PATCH", S, { slug: "api" })).status).toBe(409);
+      expect(await call("PATCH", S, { slug: "shared" })).toMatchObject({
+        status: 200,
+        body: { service: { slug: "shared-4" } },
+      });
+      expect(await call("PATCH", S, { slug: "web" })).toMatchObject({
+        status: 200,
+        body: { service: { slug: "web" } },
+      });
       expect((await call("PATCH", "/v1/services/svc_nope", { name: "x" })).status).toBe(404);
 
       as("viewer");
@@ -991,7 +1027,20 @@ describe("MSW mocks match the API contract", () => {
         body: { apps_domain: "127.0.0.1.nip.io", tls_mode: "internal" },
       });
       expect(await call("PATCH", "/v1/instance/settings", { apps_domain: null })).toMatchObject({
-        body: { apps_domain: null },
+        body: { apps_domain: null, log_retention_days: 7 },
+      });
+      expect((await call("PATCH", "/v1/instance/settings", { log_retention_days: 0 })).status).toBe(
+        400,
+      );
+      expect(
+        (await call("PATCH", "/v1/instance/settings", { log_retention_days: 366 })).status,
+      ).toBe(400);
+      expect(
+        await call("PATCH", "/v1/instance/settings", { log_retention_days: 30 }),
+      ).toMatchObject({ status: 200, body: { log_retention_days: 30 } });
+      expect(db.audit.at(-1)).toMatchObject({
+        action: "instance.settings_updated",
+        metadata: { log_retention_days: 30 },
       });
       as("admin");
       expect((await call("GET", "/v1/instance/settings")).status).toBe(403);
@@ -1054,11 +1103,44 @@ describe("MSW mocks match the API contract", () => {
         workspace_id: WORKSPACE_ID,
         expires_at: Date.now() + 60_000,
       });
+      db.deploy.github.states.push(
+        { state: "ins2", workspace_id: WORKSPACE_ID, expires_at: Date.now() + 60_000 },
+        { state: "ins3", workspace_id: WORKSPACE_ID, expires_at: Date.now() + 60_000 },
+      );
       expect((await call("GET", "/v1/github/callback?state=ins")).status).toBe(400);
       expect(
-        (await call("GET", "/v1/github/callback?state=ins&installation_id=77&setup_action=install"))
-          .status,
+        (
+          await call(
+            "GET",
+            "/v1/github/callback?state=ins3&installation_id=77&setup_action=install",
+          )
+        ).status,
       ).toBe(302);
+      expect(lastLocation).toBe("/settings/github?error=authorization_required");
+      expect(db.audit.at(-1)).toMatchObject({
+        action: "github.installation_rejected",
+        metadata: { reason: "authorization_required" },
+      });
+      expect(
+        (await call("GET", "/v1/github/callback?state=ins3&installation_id=77&code=ok")).status,
+      ).toBe(302);
+      expect(lastLocation).toBe("/settings/github?error=link_used");
+      expect(db.audit.at(-1)).toMatchObject({ metadata: { reason: "link_used" } });
+      db.deploy.github.states.push(
+        { state: "ins4", workspace_id: WORKSPACE_ID, expires_at: Date.now() + 60_000 },
+        { state: "ins5", workspace_id: WORKSPACE_ID, expires_at: Date.now() + 60_000 },
+        { state: "ins6", workspace_id: WORKSPACE_ID, expires_at: Date.now() + 60_000 },
+      );
+      await call("GET", "/v1/github/callback?state=ins4&installation_id=77&code=denied");
+      expect(lastLocation).toBe("/settings/github?error=installation_not_accessible");
+      await call("GET", "/v1/github/callback?state=ins5&installation_id=77&code=invalid");
+      expect(lastLocation).toBe("/settings/github?error=authorization_failed");
+      await call("GET", "/v1/github/callback?state=ins6&installation_id=77&setup_action=request");
+      expect(lastLocation).toBe("/settings/github?status=requested");
+      expect(
+        (await call("GET", "/v1/github/callback?state=ins2&installation_id=77&code=ok")).status,
+      ).toBe(302);
+      expect(lastLocation).toBe("/settings/github?status=installed");
       expect(db.audit.at(-1)).toMatchObject({ action: "github.installation_added" });
 
       as("member");
@@ -1139,7 +1221,7 @@ describe("MSW mocks match the API contract", () => {
         status: 426,
         body: { error: { code: "upgrade_required" } },
       });
-      expect((await call("GET", "/v1/projects/prj_nope/realtime")).status).toBe(404);
+      expect((await call("GET", "/v1/projects/prj_nope/realtime")).status).toBe(426);
 
       const url = new URL(R, window.location.origin);
       url.protocol = "ws:";
@@ -1167,9 +1249,20 @@ describe("MSW mocks match the API contract", () => {
         .toEqual(["presence", "deployment.updated", "service.updated"]);
       socket.close();
 
-      as(null);
-      expect((await call("GET", R)).status).toBe(401);
+      const closeCode = async (path: string) => {
+        const target = new URL(path, window.location.origin);
+        target.protocol = "ws:";
+        const probe = new WebSocket(target);
+        return new Promise<number>((resolve) =>
+          probe.addEventListener("close", (event) => resolve(event.code), { once: true }),
+        );
+      };
+      expect(await closeCode("/v1/projects/prj_nope/realtime")).toBe(REALTIME_CLOSE_CODES.notFound);
+      db.memberships = db.memberships.filter((row) => row.user_id !== USERS.viewer.id);
       as("viewer");
+      expect(await closeCode(R)).toBe(REALTIME_CLOSE_CODES.notFound);
+      as(null);
+      expect(await closeCode(R)).toBe(REALTIME_CLOSE_CODES.unauthorized);
       expect((await call("GET", R)).status).toBe(426);
       for (const message of sentRealtimeMessages) {
         const result = RealtimeServerMessageSchema.safeParse(message);
@@ -1177,6 +1270,185 @@ describe("MSW mocks match the API contract", () => {
           failures.push(`realtime ${JSON.stringify(message)}: ${result.error.message}`);
       }
       expect(sentRealtimeMessages.length).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  it("summaries: one project in an environment, every project in production", async () => {
+    await fresh(async () => {
+      const P = `/v1/projects/${SEED.project}/summary`;
+      const one = await call("GET", P);
+      expect(one).toMatchObject({
+        status: 200,
+        body: {
+          name: "storefront",
+          environment: { id: SEED.production },
+          services: [
+            {
+              service: { id: SEED.api },
+              config_version: 2,
+              domain: { hostname: expect.stringMatching(/^api-production/) },
+              latest_deployment: { id: SEED.apiActive, project_id: SEED.project },
+            },
+            {
+              service: { id: SEED.web },
+              config_version: 3,
+              source: { type: "git" },
+              latest_deployment: { id: SEED.webActive, build: { commit_sha: expect.any(String) } },
+            },
+            { service: { id: SEED.worker }, domain: null },
+          ],
+        },
+      });
+      expect(await call("GET", `${P}?environment_id=${SEED.production}`)).toMatchObject({
+        status: 200,
+        body: { environment: { id: SEED.production } },
+      });
+      expect((await call("GET", `${P}?environment_id=env_nope`)).status).toBe(404);
+      expect((await call("GET", "/v1/projects/prj_nope/summary")).status).toBe(404);
+
+      const all = await call("GET", `${WS}/projects/summary`);
+      const projects = (all.body as { projects: { name: string; services: unknown[] }[] }).projects;
+      expect(projects.map((project) => [project.name, project.services.length])).toEqual([
+        ["internal-tools", 1],
+        ["storefront", 3],
+      ]);
+      expect((await call("GET", `${OTHER_WS}/projects/summary`)).status).toBe(404);
+
+      db.deploy.environments = db.deploy.environments.filter(
+        (row) => row.id !== SEED.toolsProduction,
+      );
+      expect(await call("GET", `${WS}/projects/summary`)).toMatchObject({
+        body: { projects: [{ environment: null, services: [{ latest_deployment: null }] }, {}] },
+      });
+      expect((await call("GET", `/v1/projects/${SEED.toolsProject}/summary`)).status).toBe(404);
+
+      as("viewer");
+      expect((await call("GET", P)).status).toBe(200);
+      expect((await call("GET", `${WS}/projects/summary`)).status).toBe(200);
+      as(null);
+      expect((await call("GET", P)).status).toBe(401);
+      expect((await call("GET", `${WS}/projects/summary`)).status).toBe(401);
+    });
+  });
+
+  it("resolve: a service's environment as a deployment gets it, audited by key", async () => {
+    await fresh(async () => {
+      const R = `/v1/services/${SEED.web}/variables/resolve`;
+      const env = `?environment_id=${SEED.production}`;
+      expect((await call("POST", R)).status).toBe(400);
+      expect((await call("POST", `${R}?environment_id=env_nope`)).status).toBe(404);
+      const resolved = await call("POST", `${R}${env}`);
+      expect(resolved.status).toBe(200);
+      const variables = (resolved.body as { variables: { key: string; value: string }[] })
+        .variables;
+      const value = (key: string) => variables.find((entry) => entry.key === key)?.value;
+      expect(variables.map((entry) => entry.key)).toEqual(
+        [...variables.map((entry) => entry.key)].sort(),
+      );
+      expect(value("API_URL")).toBe("http://api.production.internal:8080");
+      expect(value("REGION")).toBe("hel1");
+      expect(value("DATABASE_URL")).toContain("hunter2");
+      expect(value("OPENRAIL_DEPLOYMENT_ID")).toBe(SEED.webActive);
+      expect(value("PORT")).toBe("3000");
+      expect(db.audit.at(-1)).toMatchObject({
+        action: "variables.resolved",
+        metadata: { keys: expect.arrayContaining(["API_URL"]) },
+      });
+      expect(JSON.stringify(db.audit.at(-1))).not.toContain("hunter2");
+
+      await call("PUT", `/v1/services/${SEED.web}/variables${env}`, {
+        set: [{ key: "BROKEN", value: `\${{nowhere.X}}` }],
+      });
+      expect(await call("POST", `${R}${env}`)).toMatchObject({
+        status: 400,
+        body: { error: { code: "invalid_reference", details: [{ field: "web.BROKEN" }] } },
+      });
+
+      as("member");
+      expect((await call("POST", `${R}${env}`)).status).toBe(403);
+      as(null);
+      expect((await call("POST", `${R}${env}`)).status).toBe(401);
+    });
+  });
+
+  it("API tokens: list, create within the role, revoke idempotently", async () => {
+    await fresh(async () => {
+      const T = `${WS}/tokens`;
+      const list = await call("GET", T);
+      expect(list.status).toBe(200);
+      const listed = (list.body as { tokens: Record<string, unknown>[] }).tokens;
+      expect(listed.map((token) => token.id)).toEqual([
+        SEED.ciToken,
+        SEED.expiredToken,
+        SEED.revokedToken,
+      ]);
+      expect(JSON.stringify(listed)).not.toContain("mockmock");
+      expect((await call("GET", `${OTHER_WS}/tokens`)).status).toBe(404);
+
+      expect((await call("POST", T, { name: "", scopes: ["projects:read"] })).status).toBe(400);
+      expect((await call("POST", T, { name: "x", scopes: [], expires_in_days: null })).status).toBe(
+        400,
+      );
+      expect(
+        (await call("POST", T, { name: "x", scopes: ["instance:manage"], expires_in_days: 7 }))
+          .status,
+      ).toBe(400);
+      expect(
+        (await call("POST", T, { name: "x", scopes: ["projects:read"], expires_in_days: 367 }))
+          .status,
+      ).toBe(400);
+      const created = await call("POST", T, {
+        name: "deploy-bot",
+        scopes: [...API_TOKEN_PRESETS.deploy],
+        expires_in_days: 30,
+      });
+      expect(created).toMatchObject({
+        status: 201,
+        body: {
+          token: { name: "deploy-bot", revoked_at: null, created_by: { user_id: USERS.owner.id } },
+          secret: expect.stringMatching(/^tok_[A-Za-z0-9]{40}$/),
+        },
+      });
+      const { token, secret } = created.body as {
+        token: { id: string; prefix: string };
+        secret: string;
+      };
+      expect(secret.startsWith(token.prefix)).toBe(true);
+      expect(token.prefix).toHaveLength(8);
+      expect(db.audit.at(-1)).toMatchObject({ action: "token.created" });
+      expect(JSON.stringify(db.audit.at(-1))).not.toContain(secret);
+
+      expect((await call("DELETE", `${T}/tok_nope`)).status).toBe(404);
+      expect((await call("DELETE", `${T}/${token.id}`)).status).toBe(204);
+      const audits = db.audit.length;
+      expect((await call("DELETE", `${T}/${token.id}`)).status).toBe(204);
+      expect(db.audit.length).toBe(audits);
+
+      as("admin");
+      expect(
+        (await call("POST", T, { name: "a", scopes: ["members:manage"], expires_in_days: null }))
+          .status,
+      ).toBe(201);
+      expect(
+        await call("POST", T, { name: "a", scopes: ["workspace:delete"], expires_in_days: null }),
+      ).toMatchObject({
+        status: 403,
+        body: { error: { message: expect.stringContaining("workspace:delete") } },
+      });
+      as("member");
+      expect((await call("GET", T)).status).toBe(403);
+      expect(
+        (await call("POST", T, { name: "m", scopes: ["projects:read"], expires_in_days: 7 }))
+          .status,
+      ).toBe(403);
+      expect((await call("DELETE", `${T}/${SEED.ciToken}`)).status).toBe(403);
+      as(null);
+      expect((await call("GET", T)).status).toBe(401);
+      expect(
+        (await call("POST", T, { name: "n", scopes: ["projects:read"], expires_in_days: 7 }))
+          .status,
+      ).toBe(401);
+      expect((await call("DELETE", `${T}/${SEED.ciToken}`)).status).toBe(401);
     });
   });
 

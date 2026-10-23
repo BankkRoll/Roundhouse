@@ -10,6 +10,9 @@ export type Role = (typeof ROLES)[number];
  *
  * `instance:manage` covers install-wide settings. Instances have no roles of
  * their own, so it is granted to whoever is `owner` of any workspace.
+ *
+ * `tokens:manage` covers the workspace API tokens: creating, listing and
+ * revoking them.
  */
 export type Action =
   | "workspace:read"
@@ -17,6 +20,7 @@ export type Action =
   | "workspace:delete"
   | "members:read"
   | "members:manage"
+  | "tokens:manage"
   | "nodes:read"
   | "nodes:manage"
   | "audit:read"
@@ -37,6 +41,7 @@ export const ACTIONS = [
   "workspace:delete",
   "members:read",
   "members:manage",
+  "tokens:manage",
   "nodes:read",
   "nodes:manage",
   "audit:read",
@@ -72,6 +77,7 @@ const ROLE_GRANTS: Record<Role, ReadonlySet<Action>> = {
     "workspace:delete",
     "members:read",
     "members:manage",
+    "tokens:manage",
     "nodes:read",
     "nodes:manage",
     "audit:read",
@@ -83,6 +89,7 @@ const ROLE_GRANTS: Record<Role, ReadonlySet<Action>> = {
     "workspace:update",
     "members:read",
     "members:manage",
+    "tokens:manage",
     "nodes:read",
     "nodes:manage",
     "audit:read",

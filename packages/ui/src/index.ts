@@ -1,7 +1,8 @@
 /**
  * Dashboard component library: design tokens (`@openrail/ui/styles.css`), primitives
- * built on Radix, and domain widgets (server cards, meters, status glyphs, command
- * palette). Components rely only on the CSS tokens, never on app state.
+ * built on Radix, the settings system (layout, sections, rows, save bar, choice cards),
+ * and domain widgets (server cards, KPI strips, meters, status glyphs, command palette).
+ * Components rely only on the CSS tokens, never on app state.
  *
  * Heavier controls used only by some pages (sliders, switches, segmented controls, the
  * ANSI renderer and list windowing) live in `@openrail/ui/controls`, so apps that split
@@ -21,10 +22,12 @@ export * from "./components/dropdown-menu";
 export * from "./components/empty-state";
 export * from "./components/input";
 export * from "./components/kbd-hint";
+export * from "./components/kpi-strip";
 export * from "./components/label";
 export * from "./components/meter";
 export * from "./components/section-label";
 export * from "./components/server-card";
+export * from "./components/settings";
 export * from "./components/skeleton";
 export * from "./components/spinner";
 export * from "./components/stat-card";

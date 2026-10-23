@@ -42,6 +42,30 @@ const OUTCOMES: Record<string, { title: string; description: string; tone: Tone 
       "That GitHub account's installation belongs to another workspace on this instance. Ask its owners, or install on a different account.",
     tone: "error",
   },
+  authorization_required: {
+    title: "GitHub didn't confirm who you are",
+    description:
+      "GitHub sent you back without authorizing your account, so OpenRail can't tell whether you may use that installation. Install again from Platform settings and approve the authorization step.",
+    tone: "error",
+  },
+  authorization_failed: {
+    title: "Couldn't check your GitHub access",
+    description:
+      "GitHub rejected the authorization, or didn't answer in time. Nothing was installed. Try installing again from Platform settings.",
+    tone: "error",
+  },
+  installation_not_accessible: {
+    title: "That installation isn't yours to add",
+    description:
+      "The GitHub account you signed in with can't access that installation. Sign in to GitHub as someone who can (an owner of the account or organization), then install again.",
+    tone: "error",
+  },
+  link_used: {
+    title: "This install link was already used",
+    description:
+      "Each install link works once, so a copied or reloaded callback can't add an installation again. Start a new install from Platform settings.",
+    tone: "error",
+  },
 };
 
 const ICONS = {

@@ -17,7 +17,7 @@ describe("app shell", () => {
     await findPageHeading("Home");
     expect(screen.getAllByText(PRODUCT_NAME)[0]).toBeInTheDocument();
     expect(screen.getAllByText("self-host")[0]).toBeInTheDocument();
-    const switcher = screen.getByRole("button", { name: "Workspace: Acme. Switch workspace" });
+    const switcher = screen.getByRole("button", { name: /^Acme .*, switch workspace$/ });
     await waitFor(() => expect(switcher).toHaveTextContent("4 members"));
 
     const nav = screen.getByRole("navigation", { name: "Main" });
@@ -36,7 +36,7 @@ describe("app shell", () => {
     expect(within(nav).getByRole("link", { name: /Home/ })).toHaveAttribute("aria-current", "page");
     expect(within(nav).getByRole("link", { name: /Servers/ })).not.toHaveAttribute("aria-current");
     expect(
-      screen.getByRole("button", { name: "Account menu for Ada Lovelace" }),
+      screen.getByRole("button", { name: /^Ada Lovelace, account menu$/ }),
     ).toBeInTheDocument();
   });
 
@@ -110,7 +110,7 @@ describe("app shell", () => {
   it("ignores G-key shortcuts while a menu is open", async () => {
     const { router, user } = renderApp(BASE);
     await findPageHeading("Home");
-    await user.click(screen.getByRole("button", { name: "Account menu for Ada Lovelace" }));
+    await user.click(screen.getByRole("button", { name: /^Ada Lovelace, account menu$/ }));
     await screen.findByRole("menu");
     pressSequence("g", "s");
     expect(router.state.location.pathname).toBe(BASE);
@@ -226,7 +226,7 @@ describe("app shell", () => {
   it("signs out from the user menu", async () => {
     const { router, user } = renderApp(BASE);
     await findPageHeading("Home");
-    await user.click(screen.getByRole("button", { name: "Account menu for Ada Lovelace" }));
+    await user.click(screen.getByRole("button", { name: /^Ada Lovelace, account menu$/ }));
     await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
     await expectPath(router, "/login");
     expect(db.sessionUserId).toBeNull();
@@ -243,12 +243,12 @@ describe("app shell", () => {
     });
     const { router, user } = renderApp(BASE);
     await findPageHeading("Home");
-    await user.click(screen.getByRole("button", { name: "Workspace: Acme. Switch workspace" }));
+    await user.click(screen.getByRole("button", { name: /^Acme .*, switch workspace$/ }));
     await user.click(await screen.findByRole("menuitemradio", { name: /Second/ }));
     await expectPath(router, "/w/ws_two");
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Workspace: Second. Switch workspace" }),
+        screen.getByRole("button", { name: /^Second .*, switch workspace$/ }),
       ).toHaveTextContent("viewer"),
     );
   });
@@ -257,7 +257,7 @@ describe("app shell", () => {
     signInAs(USERS.member.id);
     const { user } = renderApp(BASE);
     await findPageHeading("Home");
-    await user.click(screen.getByRole("button", { name: "Workspace: Acme. Switch workspace" }));
+    await user.click(screen.getByRole("button", { name: /^Acme .*, switch workspace$/ }));
     expect(await screen.findByRole("menuitemradio", { name: /Acme/ })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "New workspace" })).not.toBeInTheDocument();
   });
@@ -265,14 +265,14 @@ describe("app shell", () => {
   it("creates a workspace from the switcher", async () => {
     const { router, user } = renderApp(BASE);
     await findPageHeading("Home");
-    await user.click(screen.getByRole("button", { name: "Workspace: Acme. Switch workspace" }));
+    await user.click(screen.getByRole("button", { name: /^Acme .*, switch workspace$/ }));
     await user.click(await screen.findByRole("menuitem", { name: "New workspace" }));
     const dialog = await screen.findByRole("dialog", { name: "New workspace" });
     await user.type(within(dialog).getByLabelText("Workspace name"), "Lab");
     await user.click(within(dialog).getByRole("button", { name: "Create workspace" }));
     await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/w\/ws_mock\d+$/));
     expect(
-      await screen.findByRole("button", { name: "Workspace: Lab. Switch workspace" }),
+      await screen.findByRole("button", { name: /^Lab .*, switch workspace$/ }),
     ).toBeInTheDocument();
   });
 

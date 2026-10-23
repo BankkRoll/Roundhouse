@@ -43,7 +43,10 @@ func newAgent(cfg config.Config, client *conn.Client, log *slog.Logger) (*agent,
 		return nil, err
 	}
 	a := &agent{log: log, client: client, docker: dc}
-	a.ingress = ingress.New(ingress.Options{Logger: log.With("component", "ingress")})
+	a.ingress = ingress.New(ingress.Options{
+		Logger:        log.With("component", "ingress"),
+		UpstreamsPath: filepath.Join(dataDir, "ingress-upstreams.json"),
+	})
 	a.logs, err = logship.New(logship.Options{
 		Docker: dc,
 		Send:   func(ctx context.Context, l *protocol.Logs) error { return client.Send(ctx, l) },
@@ -60,6 +63,11 @@ func newAgent(cfg config.Config, client *conn.Client, log *slog.Logger) (*agent,
 		Logger:     log.With("component", "runtime"),
 		Report:     a.reportStatus,
 		Containers: a.followContainers,
+		// SECURITY: two nodes can share one Docker engine; each manages
+		// only its own containers.
+		Namespace:       cfg.NodeID,
+		AdoptUnlabelled: true,
+		MinDrain:        ingress.SwitchDelay,
 	})
 
 	var b builder.Builder
@@ -119,6 +127,13 @@ func (a *agent) run(ctx context.Context) error {
 		}()
 	}
 
+	// The upstream DNS server goes first: Caddy resolves every route through
+	// it, and serves the answers persisted before a restart right away.
+	if pc, ln, err := ingress.ListenDNS(ingress.DefaultDNSListen); err != nil {
+		return fmt.Errorf("upstream DNS on %s: %w", ingress.DefaultDNSListen, err)
+	} else {
+		goRun("dns", func(ctx context.Context) error { return a.ingress.ServeDNSOn(ctx, pc, ln) })
+	}
 	goRun("runtime", a.runtime.Run)
 	goRun("ingress", a.ingress.Run)
 	goRun("logs", a.logs.Run)
@@ -164,3 +179,5 @@ func (h handler) HasDesiredState() bool { return h.a.runtime.HasDesiredState() }
 func (h handler) ApplyDesiredState(m *protocol.DesiredState) bool { return h.a.runtime.Apply(m) }
 
 func (h handler) StartBuild(m *protocol.BuildJob) { h.a.builds.Start(m) }
+
+func (h handler) CancelBuild(m *protocol.BuildCancel) { h.a.builds.Cancel(m.BuildID) }

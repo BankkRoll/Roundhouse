@@ -102,8 +102,7 @@ export const nodeRoutes = createRouter()
     await c.env.NODE_CONNECTION.get(c.env.NODE_CONNECTION.idFromName(nodeId)).disconnect("removed");
     await recordAudit(c.get("db"), {
       workspaceId,
-      actorType: "user",
-      actorId: m.user.id,
+      ...m.actor,
       action: "node.removed",
       targetType: "node",
       targetId: nodeId,
@@ -130,8 +129,7 @@ export const nodeRoutes = createRouter()
       });
     await recordAudit(c.get("db"), {
       workspaceId,
-      actorType: "user",
-      actorId: m.user.id,
+      ...m.actor,
       action: "node.join_token_created",
       targetType: "join_token",
       targetId: id,

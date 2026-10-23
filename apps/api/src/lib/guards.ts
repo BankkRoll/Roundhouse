@@ -7,6 +7,7 @@
  */
 import { createMiddleware } from "hono/factory";
 import { type AppEnv, clientIp, originOf } from "../context";
+import { bearerSecret } from "./api-tokens";
 import { errorBody } from "./errors";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -21,9 +22,18 @@ const NON_BROWSER_ROUTES = [/^\/v1\/nodes\/join$/, /^\/v1\/webhooks\/github\/?$/
  * ones, and user apps will be served from sibling subdomains of the same site.
  * Browsers always send `Origin` on non-GET requests, so requiring it to match
  * closes that gap without affecting CLI/agent callers.
+ *
+ * Requests with a bearer credential are exempt: a bearer request is
+ * authenticated by its `Authorization` header alone (cookies are ignored when
+ * one is present), and a cross-site page can't attach that header without a
+ * CORS preflight this API never grants.
  */
 export const sameOriginMutations = createMiddleware<AppEnv>(async (c, next) => {
-  if (SAFE_METHODS.has(c.req.method) || NON_BROWSER_ROUTES.some((r) => r.test(c.req.path))) {
+  if (
+    SAFE_METHODS.has(c.req.method) ||
+    NON_BROWSER_ROUTES.some((r) => r.test(c.req.path)) ||
+    bearerSecret(c.req.header("authorization")) !== null
+  ) {
     return next();
   }
   const origin = c.req.header("origin");

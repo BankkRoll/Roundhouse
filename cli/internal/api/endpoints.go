@@ -23,6 +23,7 @@ var (
 	RouteServiceVars     = Route{http.MethodGet, "/v1/services/{serviceId}/variables"}
 	RoutePutServiceVars  = Route{http.MethodPut, "/v1/services/{serviceId}/variables"}
 	RouteRevealService   = Route{http.MethodPost, "/v1/services/{serviceId}/variables/reveal"}
+	RouteResolveVars     = Route{http.MethodPost, "/v1/services/{serviceId}/variables/resolve"}
 	RouteSharedVars      = Route{http.MethodGet, "/v1/projects/{projectId}/variables"}
 	RoutePutSharedVars   = Route{http.MethodPut, "/v1/projects/{projectId}/variables"}
 	RouteRevealShared    = Route{http.MethodPost, "/v1/projects/{projectId}/variables/reveal"}
@@ -37,6 +38,9 @@ var (
 	RouteListNodes       = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/nodes"}
 	RouteJoinToken       = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/nodes/join-tokens"}
 	RouteRealtime        = Route{http.MethodGet, "/v1/projects/{projectId}/realtime"}
+	RouteListTokens      = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/tokens"}
+	RouteCreateToken     = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/tokens"}
+	RouteRevokeToken     = Route{http.MethodDelete, "/v1/workspaces/{workspaceId}/tokens/{tokenId}"}
 )
 
 // Better Auth routes. They are served by Better Auth's own router, outside
@@ -50,11 +54,11 @@ var (
 var Routes = []Route{
 	RouteMe, RouteListProjects, RouteCreateProject, RouteGetProject, RouteDeleteProject,
 	RouteListServices, RouteCreateService, RouteGetService, RouteDeleteService, RouteServiceConfig,
-	RouteServiceVars, RoutePutServiceVars, RouteRevealService,
+	RouteServiceVars, RoutePutServiceVars, RouteRevealService, RouteResolveVars,
 	RouteSharedVars, RoutePutSharedVars, RouteRevealShared,
 	RouteListDeployments, RouteCreateDeploy, RouteGetDeployment, RouteRollback, RouteCancel,
 	RouteDeploymentLogs, RouteBuildLogs, RouteListDomains, RouteListNodes, RouteJoinToken,
-	RouteRealtime,
+	RouteRealtime, RouteListTokens, RouteCreateToken, RouteRevokeToken,
 }
 
 // AuthRoutes lists the Better Auth routes the client calls.
@@ -120,10 +124,32 @@ func (c *Client) Me(ctx context.Context) (*Me, error) {
 
 // ListProjects lists the live projects of a workspace.
 func (c *Client) ListProjects(ctx context.Context, workspaceID string) ([]Project, error) {
+	return c.listProjects(ctx, workspaceID, nil)
+}
+
+// ProjectBySlug returns the live project of a workspace with exactly this
+// slug, or nil when there is none.
+//
+// NOTE: a control plane that predates the `slug` filter ignores it and
+// returns every project, so the result is filtered here as well.
+func (c *Client) ProjectBySlug(ctx context.Context, workspaceID, slug string) (*Project, error) {
+	projects, err := c.listProjects(ctx, workspaceID, url.Values{"slug": {slug}})
+	if err != nil {
+		return nil, err
+	}
+	for i := range projects {
+		if projects[i].Slug == slug {
+			return &projects[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (c *Client) listProjects(ctx context.Context, workspaceID string, q url.Values) ([]Project, error) {
 	var out struct {
 		Projects []Project `json:"projects"`
 	}
-	if err := c.call(ctx, RouteListProjects, nil, nil, &out, workspaceID); err != nil {
+	if err := c.call(ctx, RouteListProjects, q, nil, &out, workspaceID); err != nil {
 		return nil, err
 	}
 	return out.Projects, nil
@@ -258,6 +284,17 @@ func (c *Client) RevealVariables(ctx context.Context, scope VariableScope, envir
 	return out.Variables, nil
 }
 
+// ResolveVariables returns a service's environment exactly as a deployment
+// in environmentID would get it, secrets in plaintext, resolved by the
+// control plane's own resolver. The control plane audits every call.
+func (c *Client) ResolveVariables(ctx context.Context, serviceID, environmentID string) ([]ResolvedVariable, error) {
+	out, err := fetch[ResolvedVariables](ctx, c, RouteResolveVars, envQuery(environmentID), nil, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	return out.Variables, nil
+}
+
 // -----------------------------------------------------------------------------
 // Deployments and logs
 // -----------------------------------------------------------------------------
@@ -333,6 +370,32 @@ func (c *Client) ListNodes(ctx context.Context, workspaceID string) ([]Node, err
 // CreateJoinToken mints a single-use join token and its install command.
 func (c *Client) CreateJoinToken(ctx context.Context, workspaceID string) (*JoinToken, error) {
 	return fetch[JoinToken](ctx, c, RouteJoinToken, nil, nil, workspaceID)
+}
+
+// -----------------------------------------------------------------------------
+// API tokens
+// -----------------------------------------------------------------------------
+
+// ListAPITokens lists a workspace's API tokens, newest first, revoked and
+// expired ones included.
+func (c *Client) ListAPITokens(ctx context.Context, workspaceID string) ([]APIToken, error) {
+	var out struct {
+		Tokens []APIToken `json:"tokens"`
+	}
+	if err := c.call(ctx, RouteListTokens, nil, nil, &out, workspaceID); err != nil {
+		return nil, err
+	}
+	return out.Tokens, nil
+}
+
+// CreateAPIToken creates a token; the returned secret is never shown again.
+func (c *Client) CreateAPIToken(ctx context.Context, workspaceID string, in CreateAPITokenInput) (*CreatedAPIToken, error) {
+	return fetch[CreatedAPIToken](ctx, c, RouteCreateToken, nil, in, workspaceID)
+}
+
+// RevokeAPIToken revokes a token at once; revoking it again is a no-op.
+func (c *Client) RevokeAPIToken(ctx context.Context, workspaceID, tokenID string) error {
+	return c.call(ctx, RouteRevokeToken, nil, nil, nil, workspaceID, tokenID)
 }
 
 func (c *Client) call(ctx context.Context, r Route, q url.Values, in, out any, params ...string) error {

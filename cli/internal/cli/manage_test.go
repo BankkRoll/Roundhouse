@@ -25,7 +25,8 @@ func TestProjects(t *testing.T) {
 
 	r = h.ok("", "projects", "create", "Internal Tools", "--slug", "tools", "--json")
 	h.golden("projects-create.json", r.stdout)
-	h.expect(exitcode.Conflict, "", "projects", "create", "Again", "--slug", "tools")
+	r = h.ok("", "projects", "create", "Again", "--slug", "tools")
+	contains(t, r.stdout, "Created project Again (slug tools-2, ")
 
 	r = h.expect(exitcode.InputRequired, "", "projects", "delete", "tools")
 	contains(t, r.stderr, "pass --confirm tools")
@@ -63,6 +64,12 @@ func TestServices(t *testing.T) {
 	}
 	r = h.ok("", "services", "create", "worker", "--repo", "https://github.com/acme/worker", "--root-dir", "apps/worker")
 	contains(t, r.stdout, "roundhouse deploy --service worker")
+	// Taken and reserved slugs are suffixed by the API, not refused.
+	r = h.ok("", "services", "create", "Shared", "--image", "redis:7")
+	contains(t, r.stdout, "Created service Shared (shared-2) in Shop")
+	contains(t, r.stdout, "roundhouse deploy --service shared-2")
+	r = h.ok("", "services", "create", "API v2", "--slug", "api", "--image", "nginx:1.27", "--json")
+	contains(t, r.stdout, `"slug": "api-2"`)
 	h.expect(exitcode.Usage, "", "services", "create", "x")
 	h.expect(exitcode.Usage, "", "services", "create", "x", "--image", "a", "--repo", "b")
 

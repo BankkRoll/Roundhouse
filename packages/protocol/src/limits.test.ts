@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  environmentNetworkName,
+  HASHED_NETWORK_PREFIX,
   HOSTNAME_RE,
   IMAGE_REPOSITORY_RE,
   isSafeRelativePath,
   localImageRepository,
   MAX_LOG_LINE_BYTES,
-  projectNetworkName,
+  MAX_NETWORK_NAME_LENGTH,
+  NETWORK_RE,
   truncateLogLine,
   utf8ByteLength,
 } from "./index";
@@ -64,8 +67,32 @@ describe("formats", () => {
     expect(IMAGE_REPOSITORY_RE.test(repo)).toBe(true);
   });
 
-  it("names project networks", () => {
-    expect(projectNetworkName("prj_1")).toBe("openrail-prj_1");
+  it("gives every environment of a project its own network", async () => {
+    const prod = await environmentNetworkName("prj_1", "env_prod");
+    const staging = await environmentNetworkName("prj_1", "env_staging");
+    expect(prod).toBe("openrail-prj_1-env_prod");
+    expect(staging).toBe("openrail-prj_1-env_staging");
+    expect(prod).not.toBe(staging);
+  });
+
+  it("hashes names that would be too long, keeping them valid and distinct", async () => {
+    const long = (prefix: string, c: string) => `${prefix}_${c.repeat(64)}`;
+    const a = await environmentNetworkName(long("prj", "a"), long("env", "b"));
+    const b = await environmentNetworkName(long("prj", "a"), long("env", "c"));
+    for (const name of [a, b]) {
+      expect(name.startsWith(HASHED_NETWORK_PREFIX)).toBe(true);
+      expect(name.length).toBeLessThanOrEqual(MAX_NETWORK_NAME_LENGTH);
+      expect(NETWORK_RE.test(name)).toBe(true);
+    }
+    expect(a).not.toBe(b);
+    expect(await environmentNetworkName(long("prj", "a"), long("env", "b"))).toBe(a);
+  });
+
+  it("keeps the readable form up to the length limit", async () => {
+    const name = await environmentNetworkName(`prj_${"a".repeat(55)}`, `env_${"b".repeat(55)}`);
+    expect(name.length).toBe(MAX_NETWORK_NAME_LENGTH);
+    expect(NETWORK_RE.test(name)).toBe(true);
+    expect(name.startsWith(HASHED_NETWORK_PREFIX)).toBe(false);
   });
 
   it.each(["a.b", "api-production-x7k2.127.0.0.1.nip.io", `${"a".repeat(63)}.com`])(

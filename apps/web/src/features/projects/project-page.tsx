@@ -33,7 +33,7 @@ export function ProjectPage({
   const deploy = useDeploy();
   const now = useNow(15_000);
   const services = project.data?.services ?? [];
-  const views = useServiceViews(services, environment);
+  const views = useServiceViews(projectId, services, environment);
   const deployingId = deploy.isPending ? (deploy.variables?.serviceId ?? null) : null;
 
   function onDeploy(service: Service) {
@@ -67,7 +67,7 @@ export function ProjectPage({
   return (
     <>
       <PageHeader
-        title={<span className="font-mono">{project.data?.name}</span>}
+        title={project.data?.name}
         subline={project.data?.description ?? `${services.length} services`}
         actions={
           <>

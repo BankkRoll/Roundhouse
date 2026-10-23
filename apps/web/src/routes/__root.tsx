@@ -1,8 +1,9 @@
-import { skipToken, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createRootRouteWithContext, Outlet, useMatches } from "@tanstack/react-router";
 import { useEffect } from "react";
 import type { ProjectDetail } from "../lib/api/deploy-types";
 import { formatDocumentTitle } from "../lib/document-title";
+import { useCachedQueryData } from "../lib/use-cached-query-data";
 import { queryKeys } from "../queries/keys";
 import { meQueryOptions } from "../queries/me";
 import type { RouterContext } from "../router";
@@ -29,12 +30,9 @@ function useDocumentTitle(): void {
   });
   // NOTE: Reads the cache without fetching, so public pages never call the API.
   const { data: me } = useQuery({ ...meQueryOptions(), enabled: false });
-  // NOTE: Cache-only too (skipToken), and without the project query module, which would
-  // pull the deploy API client into the entry chunk.
-  const { data: project } = useQuery<ProjectDetail>({
-    queryKey: queryKeys.project(projectId ?? ""),
-    queryFn: skipToken,
-  });
+  // NOTE: Cache-only too, and without the project query module, which would pull the
+  // deploy API client into the entry chunk.
+  const project = useCachedQueryData<ProjectDetail>(queryKeys.project(projectId ?? ""));
   const workspace = me?.workspaces.find((entry) => entry.id === workspaceId)?.name;
   const service = project?.services.find((entry) => entry.id === serviceId)?.name;
   const projectName = projectId ? project?.name : undefined;

@@ -24,7 +24,7 @@ describe("deployments tab", () => {
     expect(rows).toHaveLength(4);
     const current = row(table, "3f9c2b1");
     expect(current).toHaveTextContent(/active/i);
-    expect(current).toHaveTextContent("current");
+    expect(current).toHaveTextContent("Current");
     expect(current).toHaveTextContent("Fix cart totals rounding");
     expect(current).toHaveTextContent("git push");
     expect(current).toHaveTextContent("1m 40s");
@@ -61,8 +61,12 @@ describe("deployments tab", () => {
 
     await user.click(within(row(table, "a1b2c3d")).getByRole("button", { name: /Actions/ }));
     await user.click(await screen.findByRole("menuitem", { name: "Roll back to this" }));
-    const dialog = await screen.findByRole("dialog", { name: "Roll back to a1b2c3d?" });
+    const dialog = await screen.findByRole("dialog", {
+      name: `Roll back to deployment ${SEED.webOld}?`,
+    });
+    expect(dialog).toHaveTextContent("a1b2c3d");
     expect(dialog).toHaveTextContent("v2");
+    expect(dialog).toHaveTextContent("current variables, not the ones it had then");
     await user.click(within(dialog).getByRole("button", { name: "Roll back" }));
     expect(await screen.findByText("Rolling back")).toBeInTheDocument();
     expect(db.deploy.deployments.at(-1)).toMatchObject({
@@ -70,6 +74,27 @@ describe("deployments tab", () => {
       rollback_of: SEED.webOld,
     });
     await waitFor(() => expect(within(table).getAllByRole("row")[1]).toHaveTextContent("rollback"));
+  });
+
+  it("gives every row's link and actions a unique name, even for the same commit", async () => {
+    const { user, table } = await openWeb();
+    await user.click(
+      within(row(table, "a1b2c3d")).getByRole("button", { name: /Actions for deployment/ }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Redeploy" }));
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(6));
+    const names = (role: "link" | "button") =>
+      within(table)
+        .getAllByRole(role)
+        .map((element) => element.getAttribute("aria-label"));
+    const actions = names("button");
+    expect(
+      actions.filter((name) => name?.startsWith("Actions for deployment a1b2c3d")),
+    ).toHaveLength(2);
+    expect(new Set(actions).size).toBe(actions.length);
+    const links = names("link");
+    expect(new Set(links).size).toBe(links.length);
+    expect(actions).toContain(`Actions for deployment a1b2c3d (${SEED.webOld})`);
   });
 
   it("cancels an in-flight deployment optimistically", async () => {
@@ -126,10 +151,10 @@ describe("deployment detail", () => {
   it("shows the timeline, replicas and actions", async () => {
     const { user, router } = renderApp(servicePath(SEED.web, `deployments/${SEED.webActive}`));
     expect(await screen.findByRole("heading", { level: 2, name: "3f9c2b1" })).toBeInTheDocument();
-    const timeline = screen.getByRole("heading", { name: "Timeline" }).closest("div.rounded-lg")!;
+    const timeline = screen.getByRole("heading", { name: "Timeline" }).closest("section")!;
     expect(within(timeline as HTMLElement).getAllByRole("listitem")).toHaveLength(8);
     expect(timeline).toHaveTextContent("Traffic switched to the new replicas");
-    const replicas = screen.getByRole("heading", { name: "Replicas" }).closest("div.rounded-lg")!;
+    const replicas = screen.getByRole("heading", { name: "Replicas" }).closest("section")!;
     const rows = within(replicas as HTMLElement)
       .getAllByRole("row")
       .slice(1);

@@ -107,6 +107,9 @@ type App struct {
 	// directory can be re-linked to another control plane.
 	relinking bool
 
+	// apiToken is set once requests authenticate with a `tok_` API token.
+	apiToken bool
+
 	// submitted holds values sent in the current request, so an
 	// invalid_reference error can show where in the value it points.
 	submitted map[string]submittedValue
@@ -160,7 +163,7 @@ Sign in once with "roundhouse login", link a directory to a project with
 
 Environment:
   ROUNDHOUSE_URL         control plane URL, overriding the profile's
-  ROUNDHOUSE_TOKEN       credential for CI, overriding the profile's session
+  ROUNDHOUSE_TOKEN       API token (tok_…) for CI, overriding the profile's session
   ROUNDHOUSE_PROFILE     profile to use when --profile is not given
   ROUNDHOUSE_CONFIG_DIR  where credentials are stored
   NO_COLOR               disable colour
@@ -219,7 +222,7 @@ func (a *App) rootCommand() *cobra.Command {
 	add("auth", a.loginCmd(), a.logoutCmd(), a.whoamiCmd())
 	add("project", a.initCmd(), a.linkCmd(), a.unlinkCmd(), a.statusCmd(), a.openCmd())
 	add("deploy", a.deployCmd(), a.logsCmd(), a.rollbackCmd(), a.cancelCmd(), a.upCmd())
-	add("manage", a.varsCmd(), a.runCmd(), a.projectsCmd(), a.servicesCmd(), a.domainCmd(), a.serversCmd(), a.shellCmd(), a.dbCmd())
+	add("manage", a.varsCmd(), a.runCmd(), a.projectsCmd(), a.servicesCmd(), a.domainCmd(), a.serversCmd(), a.tokensCmd(), a.shellCmd(), a.dbCmd())
 	root.AddCommand(a.versionCmd())
 	return root
 }
@@ -335,6 +338,7 @@ func (a *App) connect() (*session, error) {
 	case token != "":
 		opts.Credential = tokenCredential(token, base.Scheme == "https")
 		s.fromEnv = true
+		a.apiToken = api.IsAPIToken(token)
 	case prof != nil && prof.Session != nil:
 		if exp := prof.Session.ExpiresAt; exp != nil && exp.Before(a.Now()) {
 			return nil, exitcode.New(exitcode.Unauthenticated, "the session for %s (profile %q) expired on %s; run `roundhouse login`",
@@ -351,34 +355,52 @@ func (a *App) connect() (*session, error) {
 	return s, nil
 }
 
-// tokenCredential interprets ROUNDHOUSE_TOKEN.
-//
-// TODO(api-tokens): the API has no token routes yet, so today the value is a
-// session token (the session cookie's value) and is sent as the session
-// cookie. API tokens will carry the `tok_` ID prefix reserved in
-// packages/shared/src/ids.ts and are sent as a bearer token; nothing outside
-// this function changes when they ship.
+// tokenCredential interprets ROUNDHOUSE_TOKEN: a `tok_…` workspace API token
+// is sent as a bearer token; any other value is taken as a session token (the
+// `value` in credentials.json) and sent as the session cookie.
 func tokenCredential(token string, https bool) api.Credential {
-	if strings.HasPrefix(token, "tok_") {
+	if api.IsAPIToken(token) {
 		return api.BearerToken(token)
 	}
 	return api.SessionCookie{Name: api.DefaultSessionCookieName(https), Value: token}
 }
 
-// persistRotatedSession stores a session cookie the server refreshed, so the
-// profile keeps working past the original expiry.
+// persistRotatedSession keeps the profile's session in step with the
+// session cookie the control plane sets: a refreshed cookie (Better Auth
+// re-issues it while extending the session) is saved so the profile keeps
+// working past the original expiry; a cleared one means the control plane
+// ended the session, so it is forgotten rather than overwritten with an
+// empty or expired value.
 func (a *App) persistRotatedSession(profile string) func(*http.Cookie) {
 	return func(ck *http.Cookie) {
 		prof := a.creds.Profiles[profile]
-		if prof == nil || prof.Session == nil || ck.Value == "" || ck.MaxAge < 0 || ck.Value == prof.Session.Value {
+		if prof == nil || prof.Session == nil || ck.Name != prof.Session.CookieName {
+			return
+		}
+		if api.SessionCookieCleared(ck, a.Now()) {
+			prof.Session = nil
+			if err := a.saveCreds(); err != nil {
+				a.IO.Warn("could not forget the ended session: %v", err)
+			}
+			return
+		}
+		expiry := cookieExpiry(ck, a.Now())
+		if ck.Value == prof.Session.Value && timesEqual(expiry, prof.Session.ExpiresAt) {
 			return
 		}
 		prof.Session.Value = ck.Value
-		prof.Session.ExpiresAt = cookieExpiry(ck, a.Now())
+		prof.Session.ExpiresAt = expiry
 		if err := a.saveCreds(); err != nil {
 			a.IO.Warn("could not save the refreshed session: %v", err)
 		}
 	}
+}
+
+func timesEqual(x, y *time.Time) bool {
+	if x == nil || y == nil {
+		return x == y
+	}
+	return x.Equal(*y)
 }
 
 func cookieExpiry(ck *http.Cookie, now time.Time) *time.Time {
@@ -404,10 +426,7 @@ func (a *App) printError(err error) {
 	}
 	var apiErr *api.Error
 	isAPI := errors.As(err, &apiErr)
-	hint := ""
-	if isAPI && apiErr.Status == http.StatusUnauthorized && !strings.HasPrefix(apiErr.Code, "invalid_email") {
-		hint = "your session expired or was revoked; run `roundhouse login`"
-	}
+	hint := a.errorHint(err)
 	if a.jsonOut {
 		body := map[string]any{"message": err.Error(), "exit_code": exitcode.Of(err)}
 		if isAPI {
@@ -424,7 +443,8 @@ func (a *App) printError(err error) {
 	}
 	c := a.IO.ErrColor()
 	msg := err.Error()
-	if isAPI && apiErr.Code == "invalid_reference" && len(apiErr.Details) > 0 {
+	// The details below repeat the API's summary of a rejected `vars set`.
+	if isAPI && apiErr.Code == "invalid_reference" && len(apiErr.Details) > 0 && a.submitted != nil {
 		msg = "invalid variable reference"
 	}
 	fmt.Fprintf(a.IO.Err, "%s %s\n", c.Red("error:"), msg)
@@ -436,6 +456,34 @@ func (a *App) printError(err error) {
 	if hint != "" {
 		fmt.Fprintf(a.IO.Err, "%s %s\n", c.Dim("hint:"), hint)
 	}
+}
+
+// errorHint suggests the next step for an authentication or authorization
+// failure, worded for the credential in use.
+func (a *App) errorHint(err error) string {
+	var apiErr *api.Error
+	var closed *api.RealtimeClosedError
+	status := 0
+	switch {
+	case errors.As(err, &apiErr):
+		status = apiErr.Status
+		if strings.HasPrefix(apiErr.Code, "invalid_email") {
+			return ""
+		}
+	case errors.As(err, &closed) && closed.Code == api.CloseUnauthorized:
+		status = http.StatusUnauthorized
+	case errors.As(err, &closed) && closed.Code == api.CloseForbidden:
+		status = http.StatusForbidden
+	}
+	switch {
+	case status == http.StatusUnauthorized && a.apiToken:
+		return EnvToken + " was rejected: the token is invalid, expired or revoked; create a new one with `roundhouse tokens create`"
+	case status == http.StatusUnauthorized:
+		return "your session expired or was revoked; run `roundhouse login`"
+	case status == http.StatusForbidden && a.apiToken:
+		return "the API token lacks a scope this needs, or its creator's role no longer grants it"
+	}
+	return ""
 }
 
 // printDetail shows one per-field problem; for a reference error with a

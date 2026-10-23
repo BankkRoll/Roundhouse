@@ -4,7 +4,7 @@
  * - Agent → control: `hello`, `heartbeat`, `workload_status`, `logs`,
  *   `build_result`.
  * - Control → agent, always inside a signed envelope (./signing): `welcome`,
- *   `desired_state`, `build_job`.
+ *   `desired_state`, `build_job`, `build_cancel`.
  *
  * @module
  */
@@ -36,20 +36,39 @@ import { REGISTRY_LISTEN, RegistryConfigSchema, TLS_MODES, WorkloadSpecSchema } 
 /**
  * Current wire protocol version, sent by agents in `hello`.
  *
- * Version 2 (Phase 1) is additive: every version 1 frame is still valid, and
- * a version 1 agent still decodes version 2 `desired_state` (it reads only
- * `id` and `image` of each workload and ignores unknown fields). It is bumped
- * anyway because the control plane must know whether an agent understands
- * `build_job`, runs workloads, and reports statuses and logs: it never sends
- * `build_job` to, or places workloads on, an agent below version 2.
+ * - Version 2 (Phase 1) is additive: every version 1 frame is still valid,
+ *   and a version 1 agent still decodes version 2 `desired_state` (it reads
+ *   only `id` and `image` of each workload and ignores unknown fields). It is
+ *   bumped anyway because the control plane must know whether an agent
+ *   understands `build_job`, runs workloads, and reports statuses and logs:
+ *   it never sends `build_job` to, or places workloads on, an agent below
+ *   version 2.
+ * - Version 3 is additive too: `build_cancel`, `build_job.secret_build_args`
+ *   and `build_result.cancelled`. A version 2 agent would drop the first and,
+ *   worse, ignore the second and bake secret build args into the image, so
+ *   the control plane sends neither below {@link BUILD_CANCEL_PROTOCOL_VERSION}
+ *   and {@link SECRET_BUILD_ARGS_PROTOCOL_VERSION}.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
-/** Oldest `hello.protocol_version` the control plane accepts (N-1). */
+/**
+ * Oldest `hello.protocol_version` the control plane accepts. Every version
+ * since 1 has been additive, so version 1 agents are still accepted; they
+ * just get no workloads and no builds.
+ */
 export const MIN_PROTOCOL_VERSION = 1;
 
 /** First protocol version whose agents run workloads and builds. */
 export const WORKLOADS_PROTOCOL_VERSION = 2;
+
+/** First protocol version whose agents understand `build_cancel`. */
+export const BUILD_CANCEL_PROTOCOL_VERSION = 3;
+
+/**
+ * First protocol version whose agents honour `build_job.secret_build_args`.
+ * A build with secret args is never sent to an older agent.
+ */
+export const SECRET_BUILD_ARGS_PROTOCOL_VERSION = 3;
 
 // -----------------------------------------------------------------------------
 // Shared shapes
@@ -278,10 +297,20 @@ export const BuildResultSchema = z
     image: BuiltImageSchema.optional(),
     /** Present exactly when not `ok`. */
     error: boundedString(MAX_MESSAGE_BYTES, 1).optional(),
+    /**
+     * The build stopped because of a `build_cancel` (or the agent shutting
+     * down) rather than failing. Only on failed results; sent from protocol
+     * version 3.
+     */
+    cancelled: z.boolean().optional(),
     duration_ms: z.number().int().nonnegative(),
   })
   .refine((r) => (r.ok ? r.image && !r.error : !r.image && r.error), {
     message: "a successful result has an image and no error; a failed one, the reverse",
+  })
+  .refine((r) => !(r.ok && r.cancelled), {
+    message: "only a failed result can be cancelled",
+    path: ["cancelled"],
   });
 
 /** Outcome of a `build_job`. */
@@ -424,6 +453,16 @@ export const BuildJobSchema = z
       .refine((a) => Object.keys(a).length <= MAX_BUILD_ARGS, {
         message: `at most ${MAX_BUILD_ARGS} build args`,
       }),
+    /**
+     * Names of `build_args` whose values are secret. The builder passes them
+     * as BuildKit secrets, never as build args (which end up in the image's
+     * history), and redacts their values from build output. Sent from
+     * protocol version 3; see {@link SECRET_BUILD_ARGS_PROTOCOL_VERSION}.
+     */
+    secret_build_args: z
+      .array(z.string().max(256).regex(ENV_KEY_RE, "expected a build arg name"))
+      .max(MAX_BUILD_ARGS)
+      .optional(),
     /** Repository to push to, in the local registry; see `localImageRepository`. */
     image_repository: z
       .string()
@@ -441,16 +480,45 @@ export const BuildJobSchema = z
     message: "dockerfile_path is only allowed with the dockerfile builder",
     path: ["dockerfile_path"],
   })
+  .refine(
+    (j) =>
+      !j.secret_build_args ||
+      (new Set(j.secret_build_args).size === j.secret_build_args.length &&
+        j.secret_build_args.every((name) => Object.hasOwn(j.build_args, name))),
+    {
+      message: "secret_build_args must name distinct keys of build_args",
+      path: ["secret_build_args"],
+    },
+  )
   .refine((j) => !carriesCredentials(j) || shortLived(j), SHORT_LIVED_ISSUE);
 
 /** Build an image and push it to the node's local registry. */
 export type BuildJob = z.infer<typeof BuildJobSchema>;
+
+/**
+ * Stops a running build. The builder aborts the solve and kills its git and
+ * Railpack processes, then answers the build's `build_job` with a failed
+ * `build_result` marked `cancelled`, which frees it for the next job. A
+ * cancel for a build that has not arrived yet is remembered briefly, so the
+ * job is answered as cancelled without running; one for a build already
+ * finished is ignored. Sent from protocol version 3; see
+ * {@link BUILD_CANCEL_PROTOCOL_VERSION}.
+ */
+export const BuildCancelSchema = z.object({
+  type: z.literal("build_cancel"),
+  ...ControlHeader,
+  build_id: IdString,
+});
+
+/** Stops a running build. */
+export type BuildCancel = z.infer<typeof BuildCancelSchema>;
 
 /** Any payload the control plane may sign and send. */
 export const ControlMessageSchema = z.discriminatedUnion("type", [
   WelcomeSchema,
   DesiredStateSchema,
   BuildJobSchema,
+  BuildCancelSchema,
 ]);
 
 /** Any payload the control plane may sign and send. */
@@ -472,7 +540,8 @@ export function carriesCredentials(
         registry: { storage: { type: string } } | null;
       }
     | { type: "build_job"; source: { token?: string } }
-    | { type: "welcome" },
+    | { type: "welcome" }
+    | { type: "build_cancel" },
 ): boolean {
   switch (message.type) {
     case "desired_state":

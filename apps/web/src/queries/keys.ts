@@ -14,10 +14,17 @@ export const queryKeys = {
     ["workspaces", workspaceId, "nodes", nodeId] as const,
   audit: (workspaceId: string) => ["workspaces", workspaceId, "audit"] as const,
   projects: (workspaceId: string) => ["workspaces", workspaceId, "projects"] as const,
+  projectSummaries: (workspaceId: string) =>
+    ["workspaces", workspaceId, "projects", "summary"] as const,
+  tokens: (workspaceId: string) => ["workspaces", workspaceId, "tokens"] as const,
   githubStatus: (workspaceId: string) => ["workspaces", workspaceId, "github"] as const,
   githubRepositories: (workspaceId: string) =>
     ["workspaces", workspaceId, "github", "repositories"] as const,
   project: (projectId: string) => ["projects", projectId] as const,
+  /** Every summary of a project, whatever the environment; prefix of {@link projectSummary}. */
+  projectSummaryAll: (projectId: string) => ["projects", projectId, "summary"] as const,
+  projectSummary: (projectId: string, environmentId: string) =>
+    ["projects", projectId, "summary", environmentId] as const,
   sharedVariables: (projectId: string, environmentId: string) =>
     ["projects", projectId, "variables", environmentId] as const,
   service: (serviceId: string) => ["services", serviceId] as const,

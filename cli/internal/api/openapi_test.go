@@ -21,6 +21,7 @@ type openAPIDoc struct {
 }
 
 type schema struct {
+	Enum       []string           `json:"enum"`
 	Ref        string             `json:"$ref"`
 	AllOf      []*schema          `json:"allOf"`
 	Properties map[string]*schema `json:"properties"`
@@ -112,26 +113,30 @@ func jsonFields(t reflect.Type) []string {
 func TestWireTypesMatchSchemas(t *testing.T) {
 	doc := loadOpenAPI(t)
 	for name, v := range map[string]any{
-		"Project":          Project{},
-		"ProjectDetail":    ProjectDetail{},
-		"Environment":      Environment{},
-		"Service":          Service{},
-		"CreatedService":   CreatedService{},
-		"ServiceConfig":    ServiceConfig{},
-		"NetworkingConfig": NetworkingConfig{},
-		"Variable":         Variable{},
-		"VariablesPut":     VariablesPut{},
-		"Build":            Build{},
-		"Deployment":       Deployment{},
-		"DeploymentPage":   DeploymentPage{},
-		"DeploymentEvent":  DeploymentEvent{},
-		"DeploymentDetail": DeploymentDetail{},
-		"Placement":        Placement{},
-		"LogEntry":         LogEntry{},
-		"LogPage":          LogPage{},
-		"Domain":           Domain{},
-		"Node":             Node{},
-		"CreateProject":    CreateProjectInput{},
+		"Project":           Project{},
+		"ProjectDetail":     ProjectDetail{},
+		"Environment":       Environment{},
+		"Service":           Service{},
+		"CreatedService":    CreatedService{},
+		"ServiceConfig":     ServiceConfig{},
+		"NetworkingConfig":  NetworkingConfig{},
+		"Variable":          Variable{},
+		"VariablesPut":      VariablesPut{},
+		"Build":             Build{},
+		"Deployment":        Deployment{},
+		"DeploymentPage":    DeploymentPage{},
+		"DeploymentEvent":   DeploymentEvent{},
+		"DeploymentDetail":  DeploymentDetail{},
+		"Placement":         Placement{},
+		"LogEntry":          LogEntry{},
+		"LogPage":           LogPage{},
+		"Domain":            Domain{},
+		"Node":              Node{},
+		"CreateProject":     CreateProjectInput{},
+		"ApiToken":          APIToken{},
+		"CreateApiToken":    CreateAPITokenInput{},
+		"CreatedApiToken":   CreatedAPIToken{},
+		"ResolvedVariables": ResolvedVariables{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
@@ -173,6 +178,56 @@ func TestErrorShapeMatchesSchema(t *testing.T) {
 	for _, f := range jsonFields(reflect.TypeOf(ErrorDetail{})) {
 		if !detailProps[f] {
 			t.Errorf("ErrorDetail.%s: no such property in the API schema", f)
+		}
+	}
+}
+
+// TestTokenScopesMatchAPI keeps the scopes `tokens create` validates and
+// completes in step with the API's ApiTokenScope enum.
+func TestTokenScopesMatchAPI(t *testing.T) {
+	doc := loadOpenAPI(t)
+	s := doc.Components.Schemas["ApiTokenScope"]
+	if s == nil {
+		t.Fatal("schema ApiTokenScope missing from the OpenAPI document")
+	}
+	if !slices.Equal(s.Enum, APITokenScopes) {
+		t.Errorf("APITokenScopes = %v\nAPI enum      = %v", APITokenScopes, s.Enum)
+	}
+	for name, scopes := range APITokenPresets {
+		for _, sc := range scopes {
+			if !slices.Contains(s.Enum, sc) {
+				t.Errorf("preset %s: unknown scope %s", name, sc)
+			}
+		}
+	}
+}
+
+// TestQueryParamsExist checks the query parameters the client sends on
+// routes where an unknown one would be silently ignored.
+func TestQueryParamsExist(t *testing.T) {
+	data, err := os.ReadFile("testdata/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type param struct {
+		In   string `json:"in"`
+		Name string `json:"name"`
+	}
+	var doc struct {
+		Paths map[string]map[string]struct {
+			Parameters []param `json:"parameters"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		route Route
+		param string
+	}{{RouteListProjects, "slug"}, {RouteRealtime, "client"}, {RouteResolveVars, "environment_id"}} {
+		op := doc.Paths[c.route.Path][strings.ToLower(c.route.Method)]
+		if !slices.Contains(op.Parameters, param{In: "query", Name: c.param}) {
+			t.Errorf("%s: no query parameter %q", c.route, c.param)
 		}
 	}
 }

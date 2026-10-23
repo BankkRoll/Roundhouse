@@ -1,0 +1,14 @@
+{
+  "uid": 1234,
+  "username": "exampleUser",
+  "email": "example-user@gmail.com",
+  "restricted": false,
+  "authorized_keys": null,
+  "timezone": "US/Eastern",
+  "two_factor_auth": true,
+  "email_notifications": true,
+  "ip_whitelist_enabled": false,
+  "lish_auth_method": "keys_only",
+  "authentication_type": "password",
+  "verified_phone_number": "+5555555555"
+}

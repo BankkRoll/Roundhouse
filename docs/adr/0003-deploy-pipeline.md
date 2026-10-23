@@ -67,7 +67,8 @@ converges Docker to it: it creates what is missing, recreates what changed
 (by spec hash), and removes containers labelled `openrail.managed=true` that
 are no longer listed. Containers run with `no-new-privileges`, all
 capabilities dropped except those listed, a PID limit, and memory/CPU limits.
-Each project gets a Docker bridge network `openrail-<project_id>`.
+Each environment of a project gets its own Docker bridge network; see
+"Environment networks" below.
 
 The agent reports `workload_status` on every change and with each hello.
 Runtime logs ship as batched `logs` frames (at most 64 KiB, flushed every
@@ -76,8 +77,10 @@ second), and the agent keeps a bounded on-disk buffer while disconnected.
 ### Ingress
 
 Caddy runs on every node and is configured only through its admin API on
-`localhost:2019` by the agent. Routes map hostnames to a container's IP and
-port on the project network. TLS mode is set per install:
+`localhost:2019` by the agent. Routes map hostnames to containers on their
+environment network, resolved through the agent's DNS server so that moving a
+route never reloads Caddy; see "Ingress swaps without reloads" below. TLS
+mode is set per install:
 - `acme`: on-demand certificates; Caddy's `ask` endpoint is served by the
   agent on `127.0.0.1:2020` and allows only hostnames in its desired routes.
 - `internal`: Caddy's local CA (development and tests).
@@ -131,7 +134,8 @@ Decisions made while fixing the contracts, which the sections above leave
 open:
 - **Protocol version 2.** The change is additive, but the control plane must
   not send `build_job` to, or place workloads on, a version 1 agent, so
-  `PROTOCOL_VERSION` is 2 and `MIN_PROTOCOL_VERSION` is 1.
+  `PROTOCOL_VERSION` is 2 and `MIN_PROTOCOL_VERSION` is 1. Version 3 is
+  described under "Hardening" below.
 - **System workloads are agent-owned.** `desired_state.workloads` lists only
   `service` workloads. A builder node derives its registry and BuildKit
   workloads from `desired_state.registry`, uses the same `WorkloadSpec` type
@@ -178,3 +182,170 @@ open:
 - Multi-node pulls depend on the Phase 2 mesh; until then the scheduler only
   places git-built workloads on nodes that can reach the builder's registry.
 - Workflows add a binding the deploy button must provision.
+
+## Rollback semantics
+
+A rollback creates a new deployment that reuses the earlier deployment's image
+digest and config version, but resolves variables as they are **now**. Each
+deployment seals its own resolved environment when it starts, and a rollback
+is a new deployment, so it gets the current service, shared and built-in
+values rather than the ones the earlier deployment ran with.
+
+This means a rollback undoes a bad build or config change, not a bad variable
+change: to undo a variable change, change the variable back and deploy (or
+roll back afterwards). The dashboard's rollback dialog says so before you
+confirm.
+
+## Instance settings audit
+
+Instances have no audit log of their own. A change to an instance setting is
+recorded as `instance.settings_updated` in every workspace the caller owns
+(owners are the only ones who can make it), with the changed keys and their
+before and after values, so it shows up in each of those workspaces' audit
+logs. A request that changes nothing records nothing.
+
+## Hardening (protocol 3)
+
+Decisions made while hardening Phase 1.
+
+### Environment networks
+
+One network per project let a staging container reach production containers
+by IP. Every environment now gets its own bridge network,
+`environmentNetworkName(project_id, environment_id)`:
+`openrail-<project_id>-<environment_id>`, or, when that would exceed the 128
+characters the protocol allows for a network name,
+`openrail-env-<hex SHA-256 of "<project_id>/<environment_id>">`. IDs always
+contain `_` and the hash never does, so the two forms cannot collide. TS and
+Go compute the name independently and agree on `fixtures/network-names.json`.
+
+- Private domains (`<service>.<environment>.internal`) are network aliases on
+  the environment's network only, so Docker's DNS answers them only inside
+  that environment, and Docker's inter-bridge isolation drops traffic between
+  environment networks, so another environment's address is unreachable.
+- Migration needs no code path of its own: `network` is part of the spec
+  hash, so a replica still on `openrail-<project_id>` gets a new hash and the
+  reconciler replaces it with its usual zero-downtime rollout. The agent then
+  removes the old project network once no container uses it. Every replica
+  of a node moves in the same pass, so during that one rollout old replicas
+  reach old ones and new replicas new ones, but an old replica cannot reach a
+  new one by private domain.
+- The agent does not second-guess `network`: the control plane is the
+  source of truth, and an agent that rewrote it would split a project across
+  old and new networks while its control plane is not yet upgraded.
+
+### Node namespace
+
+An agent sharing a Docker engine with another node used to manage, and
+garbage-collect, every `openrail.managed=true` container. Every container and
+network an agent creates is now labelled `openrail.namespace=<node ID>`, and
+the agent manages only those. A Phase 1 container (no namespace) is adopted
+once its workload ID is in this node's desired state, which the control plane
+only puts there for workloads it placed on the node. The adoption is recorded
+in `<data-dir>/adopted-containers.json`, so an adopted container is still
+drained and removed after its workload is dropped, across restarts too.
+Unlabelled containers whose workload is not desired are never touched.
+
+### Build cancel
+
+`build_cancel { build_id }` is a signed control frame. The control plane
+sends it when a deployment is cancelled or superseded while building, and
+when the deploy workflow fails a deployment whose build still runs (on the
+build timeout, for example). The agent's dispatcher cancels the build's
+context: the solve is cancelled and BuildKit drops the running step, git and
+Railpack are killed by process group, and the job is answered with a failed
+`build_result` carrying `cancelled: true`, which the control plane records as
+a `cancelled` build. A job that arrives while a cancelled build is still
+winding down waits for it instead of being refused as busy, so a redeploy
+right after a cancel builds at once. A cancel for a build the node has not
+seen yet is remembered (bounded); one for a finished build is ignored.
+
+### Secret build args
+
+`BuildConfig.secret_build_args` names the build args whose values are secret
+(additive; it must name keys of `build_args`), and
+`build_job.secret_build_args` carries the names. The Dockerfile builder
+passes those args only as BuildKit secrets, with the arg's name as the
+secret ID, read with `RUN --mount=type=secret,id=NAME,env=NAME`: a build arg
+would be recorded in every later history entry (`|1 NAME=value`). Railpack
+already passes every arg as a secret. The builder redacts marked values from
+build output whatever their name, and keeps the name-based heuristic as a
+fallback for args nobody marked.
+
+### Protocol 3 and version gating
+
+`PROTOCOL_VERSION` is 3 and `MIN_PROTOCOL_VERSION` stays 1, since every
+version so far is additive. The control plane never sends `build_cancel`
+below `BUILD_CANCEL_PROTOCOL_VERSION` (3), and never sends a `build_job` with
+`secret_build_args` below `SECRET_BUILD_ARGS_PROTOCOL_VERSION` (3): a version
+2 agent would ignore the field and bake the values into the image, so such a
+deployment fails and asks for the builder to be upgraded instead.
+
+### Ingress swaps without reloads
+
+Every Caddy config change through the admin API, a whole `POST /load` or a
+granular `PATCH`, provisions new apps and shuts the old HTTP servers down. A
+connection whose first request the old server reads after its shutdown began
+is closed without an answer: about one request in 5,000 under a request
+loop, at every upstream swap.
+
+Options considered, after reading Caddy's documentation and the source of
+the version we pin (2.11.7, `modules/caddyhttp/reverseproxy`):
+
+- **A stable per-route local upstream that the agent proxies and switches
+  atomically.** Swaps would be a pointer change in the agent, but the agent
+  joins the data path: an agent restart or crash drops every request.
+  Rejected.
+- **Dynamic upstreams with the `srv` source.** It has a `grace_period` that
+  keeps stale answers while the DNS server is down, but SRV targets are
+  hostnames that Caddy resolves again at dial time through the system
+  resolver, which knows nothing about container addresses. Rejected.
+- **Dynamic upstreams with the `a` source, against a DNS server the agent
+  runs on loopback.** Chosen.
+
+Each route (host and path prefix) gets, per container port, the name
+`<hash>.upstreams.openrail.invalid.`: `.invalid` is reserved (RFC 6761), so
+the name can never leak to a public resolver, and the trailing dot stops a
+search domain being appended. The route's reverse proxy has
+`dynamic_upstreams` `{"source": "a", "name": …, "port": …, "refresh": "1s",
+"resolver": {"addresses": ["127.0.0.1:2021"]}, "versions": {"ipv4": true}}`
+(a `multi` source while a route spans two ports) and no static upstreams. The
+agent answers those names authoritatively over UDP and TCP with the replicas
+the runtime picks, and refuses every other name.
+
+- Caddy's config now depends only on the routes, their ports and the TLS
+  mode, so a full `/load` happens only when a hostname or path is added or
+  removed, a route's port changes, or the TLS mode changes; never for a swap.
+  A swap changes only the DNS answer, which Caddy picks up within the 1 s
+  refresh, so a replaced container keeps serving for at least `SwitchDelay`
+  (2 s) after routes leave it, whatever its `drain_s`.
+- A route stays in the config while it is desired, even with no healthy
+  replica, so a crash-looping replica costs no reloads. Requests to it get a
+  503 after `try_duration` rather than a 404.
+- With no static upstreams, a failed lookup leaves Caddy with no upstream,
+  which it retries for any method (nothing was sent) every 100 ms for the 5 s
+  `try_duration`. With static upstreams it would fall back to them, and they
+  would be stale after the first swap. So while the agent restarts, requests
+  wait for its DNS server instead of failing. The agent persists the answers
+  in `<data-dir>/ingress-upstreams.json` and serves them as soon as it
+  starts, before its first desired state, and a restarted agent that finds
+  Caddy already running the config it wants does not reload it.
+- Caddy caches A answers in a process-wide map of 100 entries and evicts a
+  random one when it is full. On a node with more routes that costs extra
+  lookups over loopback, not correctness.
+
+The ingress integration test `TestSwapsNeverReloadCaddy` swaps a route
+between two upstreams 200 times under request loops on fresh and kept-alive
+connections: no failed or reset request, one load in total, and no upstream
+address in Caddy's config. The Phase 1 end-to-end suite now fails on any
+reset (it used to retry one) across five redeploys in a row.
+
+### Log flushes
+
+The node's Durable Object flushed buffered log lines on a `setTimeout`, which
+could fire after the environment was torn down, or in tests after the next
+test wiped the tables, failing the `log_chunks` foreign key. Flushes now run
+on the Durable Object's alarm, whose lifetime the runtime owns, and a chunk
+whose deployment or build no longer exists is dropped before anything is
+written to R2. A foreign key failure in the window between that check and
+the insert deletes the R2 object and is not logged as an error.

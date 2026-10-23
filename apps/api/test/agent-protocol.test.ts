@@ -8,6 +8,8 @@ import {
   CREDENTIAL_FRAME_TTL_MS,
   type DesiredState,
   MAX_AGENT_FRAME_BYTES,
+  MIN_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
 } from "@openrail/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CloseCode } from "../src/durable/node-connection";
@@ -72,12 +74,26 @@ describe("protocol versions", () => {
     expect(v1.received.filter(isDesired).every((m) => m.workloads.length === 0)).toBe(true);
   });
 
-  it.each([0, 3])("rejects protocol version %i", async (version) => {
+  it.each([MIN_PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1])(
+    "rejects protocol version %i",
+    async (version) => {
+      const { owner, workspaceId } = await install();
+      const joined = await joinNode(owner, workspaceId);
+      const agent = await connectAgent(joined);
+      agent.send(hello(joined.node_id, { protocol_version: version }));
+      expect((await agent.closed).code).toBe(CloseCode.policy);
+    },
+  );
+
+  it("accepts the current protocol version", async () => {
     const { owner, workspaceId } = await install();
     const joined = await joinNode(owner, workspaceId);
-    const agent = await connectAgent(joined);
-    agent.send(hello(joined.node_id, { protocol_version: version }));
-    expect((await agent.closed).code).toBe(CloseCode.policy);
+    const agent = await connectWorkloadAgent(joined, {}, { protocol_version: PROTOCOL_VERSION });
+    expect(agent.desired()).toBeDefined();
+    const row = await env.DB.prepare("SELECT protocol_version FROM nodes WHERE id = ?")
+      .bind(joined.node_id)
+      .first<{ protocol_version: number }>();
+    expect(row?.protocol_version).toBe(PROTOCOL_VERSION);
   });
 
   it("gives builder nodes a registry and others none", async () => {

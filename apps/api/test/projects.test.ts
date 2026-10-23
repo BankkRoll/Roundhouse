@@ -43,16 +43,17 @@ describe("projects", () => {
     expect(audit?.action).toBe("project.created");
   });
 
-  it("derives unique slugs and rejects a taken explicit slug", async () => {
+  it("suffixes a taken slug, derived or explicit", async () => {
     const { owner, workspaceId } = await install();
     const a = await createProject(owner, workspaceId, { name: "Shop" });
     const b = await createProject(owner, workspaceId, { name: "Shop" });
     expect([a.slug, b.slug]).toEqual(["shop", "shop-2"]);
-    const dup = await owner.json(`/v1/workspaces/${workspaceId}/projects`, {
+    const dup = await owner.json<{ slug: string }>(`/v1/workspaces/${workspaceId}/projects`, {
       method: "POST",
       json: { name: "Other", slug: "shop" },
     });
-    expect(dup.status).toBe(409);
+    expect(dup.status).toBe(201);
+    expect(dup.body.slug).toBe("shop-3");
     const bad = await owner.json(`/v1/workspaces/${workspaceId}/projects`, {
       method: "POST",
       json: { name: "x", slug: "Not A Slug" },
@@ -183,11 +184,12 @@ describe("environments", () => {
       `/v1/projects/${p.id}/environments`,
     );
     expect(list.body.environments.map((e) => e.kind)).toEqual(["production", "staging"]);
-    const dup = await owner.json(`/v1/projects/${p.id}/environments`, {
+    const dup = await owner.json<{ slug: string }>(`/v1/projects/${p.id}/environments`, {
       method: "POST",
       json: { name: "Staging", slug: "staging", kind: "staging" },
     });
-    expect(dup.status).toBe(409);
+    expect(dup.status).toBe(201);
+    expect(dup.body.slug).toBe("staging-2");
     const prod = await owner.json(`/v1/projects/${p.id}/environments`, {
       method: "POST",
       json: { name: "Prod 2", kind: "production" },

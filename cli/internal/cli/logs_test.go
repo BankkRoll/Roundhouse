@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -151,7 +153,7 @@ func TestLogsFollow(t *testing.T) {
 	contains(t, r.stderr, "is now removed")
 	for _, req := range h.fake.Requests() {
 		if req.Pattern == "GET /v1/projects/{projectId}/realtime" {
-			if req.Header.Get("Origin") != h.fake.URL || !strings.Contains(req.Header.Get("Cookie"), apitest.SessionToken) {
+			if req.Header.Get("Origin") != h.fake.URL || req.Query != "client=cli" || !strings.Contains(req.Header.Get("Cookie"), apitest.SessionToken) {
 				t.Errorf("realtime upgrade headers: Origin %q", req.Header.Get("Origin"))
 			}
 		}
@@ -215,22 +217,139 @@ func TestLogsFollowInterrupt(t *testing.T) {
 	}
 }
 
-func TestRealtimeRequiresOrigin(t *testing.T) {
+func TestRealtimeAuthCloseCodes(t *testing.T) {
 	h := newHarness(t)
 	h.fake.Login()
-	c, err := api.New(api.Options{BaseURL: h.fake.URL, Insecure: true, Credential: api.SessionCookie{Name: apitest.CookieName, Value: apitest.SessionToken}})
-	if err != nil {
-		t.Fatal(err)
+	dial := func(cred api.Credential, projectID string) error {
+		t.Helper()
+		c, err := api.New(api.Options{BaseURL: h.fake.URL, Insecure: true, Credential: cred})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		rt, err := c.DialRealtime(ctx, projectID)
+		if err != nil {
+			return err
+		}
+		defer rt.Close()
+		if err := rt.Subscribe(ctx, api.RealtimeTopic{DeploymentID: apitest.ActiveDeploy}); err != nil {
+			return err
+		}
+		h.fake.Publish(api.RealtimeMessage{Type: "presence"})
+		_, err = rt.Read(ctx)
+		return err
 	}
-	rt, err := c.DialRealtime(context.Background(), apitest.ProjectID)
-	if err != nil {
-		t.Fatalf("DialRealtime: %v", err)
+	session := api.SessionCookie{Name: apitest.CookieName, Value: apitest.SessionToken}
+	if err := dial(session, apitest.ProjectID); err != nil {
+		t.Fatalf("session dial: %v", err)
 	}
-	rt.Close()
+	reqs := h.fake.Requests()
+	if last := reqs[len(reqs)-1]; last.Query != "client=cli" || last.Header.Get("Origin") != h.fake.URL {
+		t.Errorf("upgrade query %q, Origin %q", last.Query, last.Header.Get("Origin"))
+	}
 
-	anon, _ := api.New(api.Options{BaseURL: h.fake.URL, Insecure: true})
-	if _, err := anon.DialRealtime(context.Background(), apitest.ProjectID); !api.IsStatus(err, 401) {
-		t.Errorf("anonymous dial: %v", err)
+	reader := h.fake.AddToken("reader", "projects:read")
+	for name, tc := range map[string]struct {
+		cred    api.Credential
+		project string
+		code    int
+	}{
+		"no credential":     {nil, apitest.ProjectID, api.CloseUnauthorized},
+		"revoked session":   {api.SessionCookie{Name: apitest.CookieName, Value: "stale"}, apitest.ProjectID, api.CloseUnauthorized},
+		"unknown token":     {api.BearerToken("tok_nope"), apitest.ProjectID, api.CloseUnauthorized},
+		"unknown project":   {session, "prj_nope", api.CloseNotFound},
+		"token, no scope":   {api.BearerToken(h.fake.AddToken("nodes", "nodes:read")), apitest.ProjectID, api.CloseForbidden},
+		"token, no project": {api.BearerToken(reader), "prj_nope", api.CloseNotFound},
+	} {
+		err := dial(tc.cred, tc.project)
+		var closed *api.RealtimeClosedError
+		if !errors.As(err, &closed) || closed.Code != tc.code || closed.Retryable() {
+			t.Errorf("%s: %v, want close %d", name, err, tc.code)
+		}
+	}
+	if err := dial(api.BearerToken(reader), apitest.ProjectID); err != nil {
+		t.Errorf("token dial: %v", err)
+	}
+}
+
+func TestLogsFollowStopsOnFinalCloseCodes(t *testing.T) {
+	for _, tc := range []struct {
+		code int
+		exit int
+		msg  string
+	}{
+		{api.CloseUnauthorized, exitcode.Unauthenticated, "hint: your session expired or was revoked; run `roundhouse login`"},
+		{api.CloseForbidden, exitcode.Forbidden, "access to the project was lost"},
+		{api.CloseNotFound, exitcode.NotFound, "project not found"},
+		{api.ClosePolicy, exitcode.Error, "protocol error"},
+		{api.CloseTooBig, exitcode.Error, "protocol error"},
+	} {
+		t.Run(strconv.Itoa(tc.code), func(t *testing.T) {
+			h := newHarness(t)
+			h.link()
+			done := followRun(h, context.Background(), "-n", "0")
+			h.fake.WaitSubscribed(t, "deployment_logs:"+apitest.ActiveDeploy)
+			h.fake.CloseSockets(tc.code, "closing")
+			r := await(t, done)
+			if r.code != tc.exit {
+				t.Fatalf("exit %d, want %d\n%s", r.code, tc.exit, r.stderr)
+			}
+			contains(t, r.stderr, tc.msg)
+			notContains(t, r.stderr, "reconnecting")
+			var dials int
+			for _, req := range h.fake.Requests() {
+				if req.Pattern == "GET /v1/projects/{projectId}/realtime" {
+					dials++
+				}
+			}
+			if dials != 1 {
+				t.Errorf("dialled %d times; close %d must not reconnect", dials, tc.code)
+			}
+		})
+	}
+}
+
+func TestLogsFollowReconnectsAfterServerRestart(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	done := followRun(h, context.Background(), "-n", "0")
+	h.fake.WaitSubscribed(t, "deployment_logs:"+apitest.ActiveDeploy)
+	h.fake.CloseSockets(1012, "service restart")
+	h.fake.WaitSubscribed(t, "deployment_logs:"+apitest.ActiveDeploy)
+	removed := h.fake.Deployment(apitest.ActiveDeploy).Deployment
+	removed.Status = api.StatusRemoved
+	h.fake.Publish(api.RealtimeMessage{Type: "deployment.updated", Deployment: &removed})
+	r := await(t, done)
+	if r.code != 0 {
+		t.Fatalf("exit %d\n%s", r.code, r.stderr)
+	}
+	contains(t, r.stderr, "realtime connection lost (realtime socket closed (1012, closed): service restart); reconnecting in 1s")
+}
+
+func TestLogsFollowWithToken(t *testing.T) {
+	h := newHarness(t)
+	h.fake.Login()
+	h.env[EnvURL] = h.fake.URL
+	h.env[EnvToken] = h.fake.AddToken("ci", "projects:read", "services:read")
+	done := followRun(h, context.Background(), "-n", "0", "--deployment", apitest.ActiveDeploy, "--insecure")
+	h.fake.WaitSubscribed(t, "deployment_logs:"+apitest.ActiveDeploy)
+	h.fake.Publish(runtimeLines("from a token socket"))
+	removed := h.fake.Deployment(apitest.ActiveDeploy).Deployment
+	removed.Status = api.StatusRemoved
+	h.fake.Publish(api.RealtimeMessage{Type: "deployment.updated", Deployment: &removed})
+	r := await(t, done)
+	if r.code != 0 {
+		t.Fatalf("exit %d\n%s", r.code, r.stderr)
+	}
+	contains(t, r.stdout, "from a token socket")
+	for _, req := range h.fake.Requests() {
+		if req.Pattern == "GET /v1/services/{serviceId}" {
+			t.Error("looked up the service; the deployment carries project_id")
+		}
+		if req.Header.Get("Cookie") != "" || !strings.HasPrefix(req.Header.Get("Authorization"), "Bearer tok_") {
+			t.Errorf("%s sent Cookie %q, Authorization %q", req.Pattern, req.Header.Get("Cookie"), req.Header.Get("Authorization"))
+		}
 	}
 }
 

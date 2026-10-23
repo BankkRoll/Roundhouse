@@ -173,7 +173,7 @@ export function StatusBadge({ status, kind, className }: StatusBadgeProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 font-mono text-[11px] lowercase",
+        "inline-flex items-center gap-1.5 text-xs whitespace-nowrap",
         meta.color,
         className,
       )}

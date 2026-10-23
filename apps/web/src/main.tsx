@@ -6,8 +6,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app";
 import { createAppContext } from "./bootstrap";
+import { applyPreferences, readPreferences } from "./lib/preferences";
 
 document.title = PRODUCT_NAME;
+applyPreferences(readPreferences());
 
 const { queryClient, router } = createAppContext();
 

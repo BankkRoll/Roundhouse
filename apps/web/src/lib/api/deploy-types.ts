@@ -7,8 +7,10 @@
  * @module
  */
 import type {
+  ApiToken,
   BodyOf,
   cancelDeployment,
+  createApiToken,
   createDeployment,
   createGithubManifest,
   createProject,
@@ -18,11 +20,13 @@ import type {
   LogPage,
   listDeployments,
   listGithubRepositories,
+  ProjectSummary,
   putServiceVariables,
   QueryOf,
   RealtimeClientMessage,
   RealtimeServerMessage,
   ResponseOf,
+  resolveServiceVariables,
   revealServiceVariables,
   ServiceConfig,
   updateInstanceSettings,
@@ -31,6 +35,7 @@ import type {
 } from "../../../../api/src/contracts";
 
 export type {
+  ApiToken,
   Deployment,
   DeploymentDetail,
   Domain,
@@ -40,6 +45,7 @@ export type {
   LogPage,
   Project,
   ProjectDetail,
+  ProjectSummary,
   RealtimeClientMessage,
   RealtimeServerMessage,
   Service,
@@ -84,6 +90,16 @@ export type GithubInstallation = ResponseOf<typeof getGithubStatus, 200>["instal
 export type GithubRepositoriesQuery = QueryOf<typeof listGithubRepositories>;
 /** `POST /v1/deployments/{id}/cancel` response. */
 export type CancelledDeployment = ResponseOf<typeof cancelDeployment, 200>;
+/** `POST /v1/workspaces/{workspaceId}/tokens` body. */
+export type CreateApiTokenBody = BodyOf<typeof createApiToken>;
+/** `POST /v1/workspaces/{workspaceId}/tokens` response: the token and, this once, its secret. */
+export type CreatedApiToken = ResponseOf<typeof createApiToken, 201>;
+/** `POST /v1/services/{serviceId}/variables/resolve` response. */
+export type ResolvedVariables = ResponseOf<typeof resolveServiceVariables, 200>;
+/** One service of a project summary: latest config version, first domain, newest deployment. */
+export type ServiceSummary = ProjectSummary["services"][number];
+/** A scope an API token can carry: one RBAC action. */
+export type ApiTokenScope = ApiToken["scopes"][number];
 
 /** One entry of a deployment's timeline. */
 export type DeploymentEvent = DeploymentDetail["events"][number];

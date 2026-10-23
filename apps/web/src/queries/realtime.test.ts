@@ -5,6 +5,7 @@ import type {
   DeploymentDetail,
   DeploymentPage,
   ProjectDetail,
+  ProjectSummary,
 } from "../lib/api/deploy-types";
 import { createQueryClient } from "../lib/query-client";
 import { queryKeys } from "./keys";
@@ -12,6 +13,7 @@ import { applyRealtimeMessage } from "./realtime";
 
 const base: Deployment = {
   id: "dep_1",
+  project_id: "prj_1",
   service_id: "svc_1",
   environment_id: "env_1",
   config_version: 1,
@@ -48,6 +50,49 @@ function seeded() {
 const list = (client: ReturnType<typeof seeded>) =>
   client.getQueryData<InfiniteData<DeploymentPage>>(queryKeys.deployments("svc_1", "env_1"))
     ?.pages[0]?.deployments;
+
+const service = {
+  id: "svc_1",
+  project_id: "prj_1",
+  name: "web",
+  slug: "web",
+  kind: "app" as const,
+  icon: null,
+  created_at: 1,
+  updated_at: 1,
+};
+
+const environment = {
+  id: "env_1",
+  project_id: "prj_1",
+  name: "production",
+  slug: "production",
+  kind: "production" as const,
+  pr_number: null,
+  source_branch: null,
+  created_at: 1,
+};
+
+const summary: ProjectSummary = {
+  id: "prj_1",
+  workspace_id: "ws",
+  name: "p",
+  slug: "p",
+  description: null,
+  created_at: 1,
+  updated_at: 1,
+  environment,
+  environments: [environment],
+  services: [
+    {
+      service,
+      config_version: 1,
+      source: { type: "image", image: "nginx" },
+      domain: null,
+      latest_deployment: base,
+    },
+  ],
+};
 
 describe("applyRealtimeMessage", () => {
   it("updates a deployment everywhere it is cached", () => {
@@ -91,6 +136,53 @@ describe("applyRealtimeMessage", () => {
     );
   });
 
+  it("updates the project summaries that show the service", () => {
+    const client = seeded();
+    client.setQueryData(queryKeys.projectSummary("prj_1", "env_1"), summary);
+    client.setQueryData(queryKeys.projectSummaries("ws"), { projects: [summary] });
+    const next = {
+      ...base,
+      id: "dep_2",
+      status: "queued" as const,
+      created_at: 50,
+      updated_at: 50,
+    };
+    applyRealtimeMessage(client, { type: "deployment.updated", deployment: next });
+    const latest = (data: ProjectSummary | undefined) => data?.services[0]?.latest_deployment?.id;
+    expect(latest(client.getQueryData(queryKeys.projectSummary("prj_1", "env_1")))).toBe("dep_2");
+    expect(
+      latest(
+        client.getQueryData<{ projects: ProjectSummary[] }>(queryKeys.projectSummaries("ws"))
+          ?.projects[0],
+      ),
+    ).toBe("dep_2");
+    applyRealtimeMessage(client, {
+      type: "deployment.updated",
+      deployment: { ...base, status: "removed", updated_at: 60 },
+    });
+    expect(latest(client.getQueryData(queryKeys.projectSummary("prj_1", "env_1")))).toBe("dep_2");
+  });
+
+  it("leaves summaries of other environments alone and refetches for unknown services", () => {
+    const client = seeded();
+    client.setQueryData(queryKeys.projectSummary("prj_1", "env_1"), summary);
+    applyRealtimeMessage(client, {
+      type: "deployment.updated",
+      deployment: { ...base, id: "dep_9", environment_id: "env_2", created_at: 99 },
+    });
+    expect(
+      client.getQueryData<ProjectSummary>(queryKeys.projectSummary("prj_1", "env_1"))?.services[0]
+        ?.latest_deployment?.id,
+    ).toBe("dep_1");
+    applyRealtimeMessage(client, {
+      type: "deployment.updated",
+      deployment: { ...base, id: "dep_new", service_id: "svc_new", created_at: 99 },
+    });
+    expect(client.getQueryState(queryKeys.projectSummary("prj_1", "env_1"))?.isInvalidated).toBe(
+      true,
+    );
+  });
+
   it("appends timeline events once, in order", () => {
     const client = seeded();
     const event = {
@@ -114,16 +206,7 @@ describe("applyRealtimeMessage", () => {
 
   it("renames a service in its project without resurrecting deleted ones", () => {
     const client = createQueryClient({ retry: false });
-    const service = {
-      id: "svc_1",
-      project_id: "prj_1",
-      name: "web",
-      slug: "web",
-      kind: "app" as const,
-      icon: null,
-      created_at: 1,
-      updated_at: 1,
-    };
+    client.setQueryData(queryKeys.projectSummary("prj_1", "env_1"), summary);
     client.setQueryData<ProjectDetail>(queryKeys.project("prj_1"), {
       id: "prj_1",
       workspace_id: "ws",
@@ -146,5 +229,8 @@ describe("applyRealtimeMessage", () => {
     expect(
       client.getQueryData<ProjectDetail>(queryKeys.project("prj_1"))?.services.map((s) => s.name),
     ).toEqual(["frontend"]);
+    expect(client.getQueryState(queryKeys.projectSummary("prj_1", "env_1"))?.isInvalidated).toBe(
+      true,
+    );
   });
 });

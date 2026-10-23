@@ -208,9 +208,18 @@ describe("setup", () => {
     expect(Object.keys(doc.paths)).toContain("/v1/workspaces/{workspaceId}/nodes");
 
     expect(doc.components.securitySchemes.session).toMatchObject({ type: "apiKey", in: "cookie" });
-    expect(doc.paths["/v1/workspaces/{workspaceId}/nodes"]!.get!.security).toEqual([
-      { session: [] },
-    ]);
+    expect(doc.components.securitySchemes.api_token).toMatchObject({
+      type: "http",
+      scheme: "bearer",
+    });
+    for (const path of [
+      "/v1/workspaces/{workspaceId}/nodes",
+      "/v1/workspaces/{workspaceId}/projects",
+    ]) {
+      expect(doc.paths[path]!.get!.security, path).toEqual([{ session: [] }, { api_token: [] }]);
+    }
+    expect(doc.paths["/v1/workspaces"]!.post!.security).toEqual([{ session: [] }]);
+    expect(doc.paths["/v1/instance/settings"]!.get!.security).toEqual([{ session: [] }]);
     for (const [path, method] of [
       ["/v1/setup", "post"],
       ["/v1/nodes/join", "post"],

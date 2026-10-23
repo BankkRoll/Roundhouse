@@ -98,10 +98,7 @@ export function DropdownMenuLabel({
 }: ComponentProps<typeof MenuPrimitive.Label>) {
   return (
     <MenuPrimitive.Label
-      className={cn(
-        "px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-subtle-foreground",
-        className,
-      )}
+      className={cn("px-2 py-1.5 text-xs font-medium text-muted-foreground", className)}
       {...props}
     />
   );

@@ -4,7 +4,7 @@ import type { GithubManifestBody, InstanceSettingsPatch } from "../lib/api/deplo
 import { queryKeys } from "./keys";
 
 /**
- * Reads install-wide ingress settings (apps domain, TLS mode). Owners only.
+ * Reads install-wide settings (apps domain, TLS mode, log retention). Owners only.
  *
  * @param enabled - Skip for callers without `instance:manage`.
  * @returns The settings query.

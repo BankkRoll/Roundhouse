@@ -4,7 +4,7 @@ import { cn } from "../lib/cn";
 
 /** Class recipe for {@link Badge}. */
 const badgeVariants = cva(
-  "inline-flex items-center gap-1 rounded-sm border px-1.5 py-px font-mono text-[10px] font-medium uppercase tracking-wider whitespace-nowrap",
+  "inline-flex h-5 flex-none items-center gap-1 rounded-sm border px-1.5 text-xs font-medium whitespace-nowrap",
   {
     variants: {
       tone: {
@@ -24,7 +24,8 @@ const badgeVariants = cva(
 export interface BadgeProps extends ComponentProps<"span">, VariantProps<typeof badgeVariants> {}
 
 /**
- * Compact uppercase mono label, e.g. a role or a `STAGED` marker.
+ * Compact status or category tag beside a value, e.g. a role or a `Staged` marker. A pale tint
+ * of its tone with text of the same hue; it never shrinks or wraps.
  *
  * @param props - Span props plus `tone`.
  * @returns The rendered badge.

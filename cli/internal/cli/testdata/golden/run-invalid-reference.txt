@@ -1,0 +1,3 @@
+error: cannot resolve the variables of API in production
+  api.GHOST: No service "ghost" in this environment
+  api.LOOP_B: Variables reference each other in a loop: api.LOOP_A → api.LOOP_B → api.LOOP_A

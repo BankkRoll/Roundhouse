@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentMessageSchema,
+  BUILD_CANCEL_PROTOCOL_VERSION,
+  BuildCancelSchema,
   BuildJobSchema,
   BuildResultSchema,
   ControlMessageSchema,
@@ -17,6 +19,8 @@ import {
   MAX_WORKLOADS_PER_NODE,
   MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  SECRET_BUILD_ARGS_PROTOCOL_VERSION,
+  WORKLOADS_PROTOCOL_VERSION,
   type WorkloadSpec,
   WorkloadSpecSchema,
   WorkloadStatusSchema,
@@ -40,7 +44,7 @@ function workload(overrides: Partial<WorkloadSpec> = {}): WorkloadSpec {
     healthcheck: null,
     resources: { cpu_millis: 250, memory_mb: 256, pids: 128 },
     restart: { policy: "always", max_retries: 0 },
-    network: "openrail-prj_1",
+    network: "openrail-prj_1-env_1",
     labels: {},
     drain_s: 10,
     spec_hash: HASH,
@@ -85,9 +89,20 @@ function buildJob(overrides: Record<string, unknown> = {}) {
 }
 
 describe("protocol version", () => {
-  it("keeps accepting the previous version", () => {
-    expect(PROTOCOL_VERSION).toBe(2);
-    expect(MIN_PROTOCOL_VERSION).toBe(PROTOCOL_VERSION - 1);
+  it("keeps accepting every additive version back to 1", () => {
+    expect(PROTOCOL_VERSION).toBe(3);
+    expect(MIN_PROTOCOL_VERSION).toBe(1);
+  });
+
+  it("gates every feature at a version the current one includes", () => {
+    for (const v of [
+      WORKLOADS_PROTOCOL_VERSION,
+      BUILD_CANCEL_PROTOCOL_VERSION,
+      SECRET_BUILD_ARGS_PROTOCOL_VERSION,
+    ]) {
+      expect(v).toBeGreaterThan(MIN_PROTOCOL_VERSION);
+      expect(v).toBeLessThanOrEqual(PROTOCOL_VERSION);
+    }
   });
 });
 
@@ -303,8 +318,23 @@ describe("BuildJobSchema", () => {
     ["a repository with a tag", { image_repository: "127.0.0.1:5000/a/b:latest" }],
     ["a bad build arg name", { build_args: { "a-b": "1" } }],
     ["a short timeout", { timeout_s: 5 }],
+    ["a secret build arg that is not a build arg", { secret_build_args: ["NPM_TOKEN"] }],
+    [
+      "a secret build arg listed twice",
+      { build_args: { NPM_TOKEN: "x" }, secret_build_args: ["NPM_TOKEN", "NPM_TOKEN"] },
+    ],
+    ["a bad secret build arg name", { build_args: { "a-b": "1" }, secret_build_args: ["a-b"] }],
   ])("rejects %s", (_name, overrides) => {
     expect(BuildJobSchema.safeParse(buildJob(overrides)).success).toBe(false);
+  });
+
+  it("marks build args as secret by name", () => {
+    const job = buildJob({
+      build_args: { NODE_ENV: "production", NPM_TOKEN: "npm_x" },
+      secret_build_args: ["NPM_TOKEN"],
+    });
+    expect(BuildJobSchema.parse(job).secret_build_args).toEqual(["NPM_TOKEN"]);
+    expect(BuildJobSchema.safeParse(buildJob({ secret_build_args: [] })).success).toBe(true);
   });
 
   it("caps the lifetime of jobs carrying a git token", () => {
@@ -316,6 +346,20 @@ describe("BuildJobSchema", () => {
     };
     expect(BuildJobSchema.safeParse(buildJob({ source })).success).toBe(true);
     expect(BuildJobSchema.safeParse(buildJob({ source, exp: header.exp + 1 })).success).toBe(false);
+  });
+});
+
+describe("BuildCancelSchema", () => {
+  const cancel = { type: "build_cancel", ...header, build_id: "bld_1" };
+
+  it("accepts a cancel and never treats it as carrying credentials", () => {
+    expect(ControlMessageSchema.parse(cancel)).toEqual(cancel);
+    expect(carriesCredentials({ type: "build_cancel" })).toBe(false);
+  });
+
+  it("needs a build id", () => {
+    expect(BuildCancelSchema.safeParse({ ...cancel, build_id: "nope" }).success).toBe(false);
+    expect(BuildCancelSchema.safeParse({ ...cancel, build_id: undefined }).success).toBe(false);
   });
 });
 
@@ -423,6 +467,17 @@ describe("agent messages", () => {
       false,
     );
     expect(BuildResultSchema.safeParse({ ...base, ok: false, image, error: "x" }).success).toBe(
+      false,
+    );
+  });
+
+  it("marks only failed build results as cancelled", () => {
+    const base = { type: "build_result", build_id: "bld_1", duration_ms: 1 };
+    const image = { repository: "127.0.0.1:5000/a/b", digest: `sha256:${"a".repeat(64)}` };
+    expect(
+      BuildResultSchema.safeParse({ ...base, ok: false, error: "x", cancelled: true }).success,
+    ).toBe(true);
+    expect(BuildResultSchema.safeParse({ ...base, ok: true, image, cancelled: true }).success).toBe(
       false,
     );
   });

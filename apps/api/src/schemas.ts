@@ -6,6 +6,7 @@
  * - Phase 1: projects, environments, services and their config versions,
  *   variables, deployments, builds, logs, domains, instance settings, the
  *   GitHub App, and realtime messages. Routes using them are in `./contracts`.
+ * - API tokens, project summaries and resolved variables.
  *
  * Config part schemas are checked against the `@openrail/shared` types they
  * store (`satisfies z.ZodType<…>`), so the API, the database and the
@@ -31,6 +32,7 @@ import {
   WORKLOAD_STATES,
 } from "@openrail/protocol";
 import {
+  API_TOKEN_SCOPES,
   AUDIT_ACTIONS,
   AUDIT_ACTOR_TYPES,
   BUILD_STATUSES,
@@ -47,6 +49,8 @@ import {
   GITHUB_ACCOUNT_TYPES,
   HEALTHCHECK_TYPES,
   type HealthcheckConfig,
+  MAX_API_TOKEN_TTL_DAYS,
+  MAX_LOG_RETENTION_DAYS,
   type NetworkingConfig,
   NODE_STATUSES,
   type PlacementConfig,
@@ -215,8 +219,20 @@ export function body<T extends z.ZodType>(schema: T) {
 /** Name of the session-cookie security scheme registered in the OpenAPI document. */
 export const SESSION_SCHEME = "session";
 
-/** `security` requirement for routes that need a signed-in browser session. */
-export const sessionAuth = [{ [SESSION_SCHEME]: [] }];
+/** Name of the API-token security scheme registered in the OpenAPI document. */
+export const TOKEN_SCHEME = "api_token";
+
+/**
+ * `security` requirement for routes a signed-in browser session or an API
+ * token (`Authorization: Bearer tok_…`) may call; either one suffices.
+ */
+export const sessionAuth: Record<string, string[]>[] = [
+  { [SESSION_SCHEME]: [] },
+  { [TOKEN_SCHEME]: [] },
+];
+
+/** `security` requirement for routes only a browser session may call. */
+export const sessionOnlyAuth: Record<string, string[]>[] = [{ [SESSION_SCHEME]: [] }];
 
 // -----------------------------------------------------------------------------
 // Phase 1: common fields
@@ -320,11 +336,13 @@ export const ProjectDetailSchema = ProjectSchema.extend({
   services: z.array(ServiceSchema),
 }).openapi("ProjectDetail");
 
-/** Service slug, excluding names reserved for reference namespaces. */
-export const ServiceSlugField = SlugField.refine(
-  (s) => !(RESERVED_SERVICE_SLUGS as readonly string[]).includes(s),
-  { message: `reserved slugs: ${RESERVED_SERVICE_SLUGS.join(", ")}` },
-);
+/**
+ * Service slug. A reserved one (`RESERVED_SERVICE_SLUGS`, the reference
+ * namespaces) is accepted and suffixed like a taken one, e.g. `shared-2`.
+ */
+export const ServiceSlugField = SlugField.openapi({
+  description: `Suffixed with -2, -3, … when taken or reserved (${RESERVED_SERVICE_SLUGS.join(", ")})`,
+});
 
 // -----------------------------------------------------------------------------
 // Phase 1: service config parts
@@ -369,12 +387,30 @@ const BuildConfigFields = z.object({
   build_args: z
     .record(VariableKeyField, z.string().max(4096))
     .refine((a) => Object.keys(a).length <= 64, { message: "at most 64 build args" }),
+  secret_build_args: z
+    .array(VariableKeyField)
+    .max(64)
+    .optional()
+    .openapi({
+      description:
+        "Names of build_args whose values are secret. The builder passes them as BuildKit " +
+        "secrets (read them with RUN --mount=type=secret,id=NAME,env=NAME), never as build " +
+        "args, so they stay out of the image and its history, and redacts them from build logs.",
+      example: ["NPM_TOKEN"],
+    }),
 });
 
 /** How a git source is built. */
-export const BuildConfigSchema = BuildConfigFields.openapi(
-  "BuildConfig",
-) satisfies z.ZodType<BuildConfig>;
+export const BuildConfigSchema = BuildConfigFields.refine(
+  (b) =>
+    !b.secret_build_args ||
+    (new Set(b.secret_build_args).size === b.secret_build_args.length &&
+      b.secret_build_args.every((name) => Object.hasOwn(b.build_args, name))),
+  {
+    message: "secret_build_args must name distinct keys of build_args",
+    path: ["secret_build_args"],
+  },
+).openapi("BuildConfig") satisfies z.ZodType<BuildConfig>;
 
 const CommandField = z.string().min(1).max(4096);
 
@@ -572,6 +608,8 @@ export const BuildSchema = z
 export const DeploymentSchema = z
   .object({
     id: z.string(),
+    /** Project of the service, so a deployment link can be built without another lookup. */
+    project_id: z.string(),
     service_id: z.string(),
     environment_id: z.string(),
     config_version: z.number().int().positive(),
@@ -681,13 +719,19 @@ export const InstanceSettingsSchema = z
     /** Parent of generated hostnames; `null` until set, which disables generated domains. */
     apps_domain: z.string().nullable(),
     tls_mode: TlsModeSchema,
+    /** Days runtime and build logs are kept; older chunks are deleted hourly. */
+    log_retention_days: z.number().int().min(1).max(MAX_LOG_RETENTION_DAYS),
   })
   .openapi("InstanceSettings");
 
 /** Partial update of instance settings. */
 export const InstanceSettingsPatchSchema = z
-  .object({ apps_domain: HostnameField.nullable().optional(), tls_mode: TlsModeSchema.optional() })
-  .refine((b) => b.apps_domain !== undefined || b.tls_mode !== undefined, {
+  .object({
+    apps_domain: HostnameField.nullable().optional(),
+    tls_mode: TlsModeSchema.optional(),
+    log_retention_days: z.number().int().min(1).max(MAX_LOG_RETENTION_DAYS).optional(),
+  })
+  .refine((b) => Object.values(b).some((v) => v !== undefined), {
     message: "nothing to update",
   })
   .openapi("InstanceSettingsPatch");
@@ -794,3 +838,97 @@ export const RealtimeClientMessageSchema = z
 
 /** Browser → server realtime message. */
 export type RealtimeClientMessage = z.infer<typeof RealtimeClientMessageSchema>;
+
+// -----------------------------------------------------------------------------
+// API tokens
+// -----------------------------------------------------------------------------
+
+/** A scope an API token can carry: one RBAC action. */
+export const ApiTokenScopeSchema = z.enum(API_TOKEN_SCOPES).openapi("ApiTokenScope");
+
+/** An API token as listed. The secret is only ever returned by the create route. */
+export const ApiTokenSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    scopes: z.array(ApiTokenScopeSchema),
+    /** `tok_` and the next four characters of the secret, to tell tokens apart. */
+    prefix: z.string().nullable(),
+    created_by: z
+      .object({ user_id: z.string(), name: z.string().nullable() })
+      .nullable()
+      .openapi({ description: "`null` once the creator's account is deleted" }),
+    last_used_at: Millis.nullable(),
+    /** `null` for a token that never expires. */
+    expires_at: Millis.nullable(),
+    revoked_at: Millis.nullable(),
+    created_at: Millis,
+  })
+  .openapi("ApiToken");
+
+/** Body of `POST /v1/workspaces/{workspaceId}/tokens`. */
+export const CreateApiTokenSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    /** Each must be granted by the creator's role (or, for a token, be one of its own scopes). */
+    scopes: z
+      .array(ApiTokenScopeSchema)
+      .min(1)
+      .max(API_TOKEN_SCOPES.length)
+      .refine((s) => new Set(s).size === s.length, { message: "scopes must be unique" }),
+    /** Lifetime in days; `null` for a token that never expires. */
+    expires_in_days: z.number().int().min(1).max(MAX_API_TOKEN_TTL_DAYS).nullable(),
+  })
+  .openapi("CreateApiToken");
+
+/** Response of the create route: the token and, this once, its secret. */
+export const CreatedApiTokenSchema = z
+  .object({
+    token: ApiTokenSchema,
+    /** `tok_…`; store it now, it can't be shown again. */
+    secret: z.string(),
+  })
+  .openapi("CreatedApiToken");
+
+// -----------------------------------------------------------------------------
+// Summaries
+// -----------------------------------------------------------------------------
+
+/** The first domain of a service in an environment. */
+export const DomainLinkSchema = z
+  .object({ hostname: z.string(), url: z.string() })
+  .openapi("DomainLink");
+
+/** One service as the home page, sidebar and project page draw it. */
+export const ServiceSummarySchema = z
+  .object({
+    service: ServiceSchema,
+    /** Latest config version in the summarised environment; `null` when it has none. */
+    config_version: z.number().int().positive().nullable(),
+    /** Source of that config version. */
+    source: ServiceSourceSchema.nullable(),
+    domain: DomainLinkSchema.nullable(),
+    /** Newest deployment in the environment, with its build (commit); `null` before the first. */
+    latest_deployment: DeploymentSchema.nullable(),
+  })
+  .openapi("ServiceSummary");
+
+/** A project with every service's state in one environment. */
+export const ProjectSummarySchema = ProjectSchema.extend({
+  /** The environment the services are summarised in. */
+  environment: EnvironmentSchema.nullable(),
+  environments: z.array(EnvironmentSchema),
+  services: z.array(ServiceSummarySchema),
+}).openapi("ProjectSummary");
+
+// -----------------------------------------------------------------------------
+// Resolved variables
+// -----------------------------------------------------------------------------
+
+/**
+ * A service's environment exactly as a deployment would get it: built-ins
+ * overlaid by its own variables, every reference substituted. Sorted by key.
+ */
+export const ResolvedVariablesSchema = z
+  .object({ variables: z.array(z.object({ key: z.string(), value: z.string() })) })
+  .openapi("ResolvedVariables");

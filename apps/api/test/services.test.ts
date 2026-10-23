@@ -5,7 +5,7 @@
  */
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { addMember, type Client, install } from "./helpers";
+import { addMember, beforeStatement, type Client, install } from "./helpers";
 import { createProject, createService, IMAGE_SERVICE } from "./pipeline-helpers";
 
 interface Config {
@@ -67,7 +67,6 @@ describe("services", () => {
     const { owner, workspaceId } = await install();
     const p = await createProject(owner, workspaceId);
     const cases: [Record<string, unknown>, number][] = [
-      [{ name: "x", slug: "shared", source: IMAGE_SERVICE.source }, 400],
       [{ name: "x", source: { type: "image", image: "Bad Image" } }, 400],
       [{ name: "x", source: IMAGE_SERVICE.source, config: { deploy: { replicas: 99 } } }, 400],
       [
@@ -92,13 +91,58 @@ describe("services", () => {
       expect(res.status, JSON.stringify(body)).toBe(status);
     }
     await createService(owner, p.id, { ...IMAGE_SERVICE, slug: "web" });
-    const dup = await owner.json(`/v1/projects/${p.id}/services`, {
-      method: "POST",
-      json: { ...IMAGE_SERVICE, slug: "web" },
-    });
-    expect(dup.status).toBe(409);
+    const dup = await createService(owner, p.id, { ...IMAGE_SERVICE, slug: "web" });
+    expect(dup.service.slug).toBe("web-2");
     const derived = await createService(owner, p.id, IMAGE_SERVICE);
-    expect(derived.service.slug).toBe("web-2");
+    expect(derived.service.slug).toBe("web-3");
+  });
+
+  it("suffixes the reserved shared slug instead of refusing it", async () => {
+    const { owner, workspaceId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const explicit = await createService(owner, p.id, { ...IMAGE_SERVICE, slug: "shared" });
+    expect(explicit.service.slug).toBe("shared-2");
+    const derived = await createService(owner, p.id, { ...IMAGE_SERVICE, name: "Shared" });
+    expect(derived.service.slug).toBe("shared-3");
+
+    const other = await createService(owner, p.id, { ...IMAGE_SERVICE, slug: "api" });
+    const renamed = await owner.json<{ service: { slug: string } }>(
+      `/v1/services/${other.service.id}`,
+      { method: "PATCH", json: { slug: "shared" } },
+    );
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.service.slug).toBe("shared-4");
+    // A rename is exact otherwise: a slug another service uses is a conflict.
+    const taken = await owner.json(`/v1/services/${other.service.id}`, {
+      method: "PATCH",
+      json: { slug: "shared-2" },
+    });
+    expect(taken.status).toBe(409);
+    // Renaming to its own reserved-suffixed slug is a no-op, not a new suffix.
+    const same = await owner.json<{ service: { slug: string } }>(
+      `/v1/services/${explicit.service.id}`,
+      { method: "PATCH", json: { slug: "shared" } },
+    );
+    expect(same.body.service.slug).toBe("shared-2");
+  });
+
+  it("retries the next suffix when a concurrent insert takes the slug", async () => {
+    const { owner, workspaceId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const restore = beforeStatement(/^insert into "services"/, (db) =>
+      db
+        .prepare(
+          "INSERT INTO services (id, project_id, name, slug, kind, created_at, updated_at) VALUES ('svc_racer', ?, 'racer', 'web', 'app', 0, 0)",
+        )
+        .bind(p.id)
+        .run(),
+    );
+    try {
+      const svc = await createService(owner, p.id, IMAGE_SERVICE);
+      expect(svc.service.slug).toBe("web-2");
+    } finally {
+      restore();
+    }
   });
 
   it("generates a hostname under the apps domain, retrying on collisions", async () => {

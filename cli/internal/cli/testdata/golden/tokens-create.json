@@ -1,0 +1,24 @@
+{
+  "token": {
+    "id": "tok_0002",
+    "name": "dashboards",
+    "scopes": [
+      "workspace:read",
+      "projects:read",
+      "services:read",
+      "variables:read",
+      "nodes:read",
+      "audit:read"
+    ],
+    "prefix": "tok_k002",
+    "created_by": {
+      "user_id": "usr_ada",
+      "name": "Ada Lovelace"
+    },
+    "last_used_at": null,
+    "expires_at": null,
+    "revoked_at": null,
+    "created_at": 1792670400002
+  },
+  "secret": "tok_k002SecretValueXq9vLm2PzR7t"
+}

@@ -1,0 +1,22 @@
+{
+  "id": "linode/ubuntu24.04",
+  "label": "Ubuntu 24.04 LTS",
+  "deprecated": false,
+  "size": 3500,
+  "created": "2024-04-25T13:00:11",
+  "updated": "2026-07-16T14:18:54",
+  "description": "",
+  "created_by": "linode",
+  "type": "manual",
+  "tags": [],
+  "is_public": true,
+  "is_shared": false,
+  "vendor": "Ubuntu",
+  "expiry": null,
+  "eol": "2029-05-31T04:00:00",
+  "regions": null,
+  "status": "available",
+  "capabilities": ["cloud-init", "distributed-sites"],
+  "image_sharing": null,
+  "is_product_image": false
+}

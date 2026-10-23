@@ -1,11 +1,13 @@
-import { Button, SectionLabel, Tooltip } from "@openrail/ui";
+import { Button, Tooltip } from "@openrail/ui";
 import { PlusIcon } from "lucide-react";
 import { PageHeader } from "../../components/page-header";
+import { SectionHeader } from "../../components/section-header";
 import { usePermissions } from "../../lib/permissions";
 import { useMembership } from "../../queries/me";
 import { ProjectsGrid } from "../projects/projects-grid";
 import { useShellActions } from "../shell/shell-actions";
 import { ActivityCard } from "./activity-card";
+import { DeploysChart } from "./deploys-chart";
 import { FleetCard } from "./fleet-card";
 import { StatRow } from "./stat-row";
 
@@ -27,8 +29,8 @@ function PhaseGatedButton({ label, reason }: { label: string; reason: string }) 
 }
 
 /**
- * Workspace home: fleet and service stats, the projects grid, recent activity and a
- * per-server RAM overview.
+ * Workspace home: headline figures, the projects, deploys this week, recent activity as
+ * a tagged feed, and per-server RAM.
  *
  * @param props - Workspace id.
  * @returns The page.
@@ -56,14 +58,15 @@ export function HomePage({ workspaceId }: { workspaceId: string }) {
         }
       />
       <StatRow workspaceId={workspaceId} />
-      <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <section aria-labelledby="projects-heading">
-          <SectionLabel id="projects-heading" className="mb-3">
-            Projects
-          </SectionLabel>
-          <ProjectsGrid workspaceId={workspaceId} />
-        </section>
-        <div className="grid content-start gap-4">
+      <div className="mt-10 grid gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,21rem)] xl:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] xl:gap-12">
+        <div className="grid min-w-0 content-start gap-10">
+          <section aria-labelledby="projects-heading">
+            <SectionHeader id="projects-heading" title="Projects" />
+            <ProjectsGrid workspaceId={workspaceId} />
+          </section>
+          <DeploysChart workspaceId={workspaceId} />
+        </div>
+        <div className="grid min-w-0 content-start gap-10">
           <ActivityCard workspaceId={workspaceId} />
           <FleetCard workspaceId={workspaceId} />
         </div>

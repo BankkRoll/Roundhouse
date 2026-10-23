@@ -5,6 +5,7 @@ package runtime_test
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -63,6 +64,7 @@ type harness struct {
 	c       *docker.Client
 	ns      string
 	project string
+	env     string
 	network string
 	caddy   string
 	rt      *runtime.Runtime
@@ -73,15 +75,15 @@ type harness struct {
 
 // newHarness starts a runtime scoped to a fresh namespace and project, with
 // a real Caddy the runtime's ingress manager configures. The test container
-// joins the project network, so it can probe replicas and reach Caddy.
+// joins the environment network, so it can probe replicas and reach Caddy.
 func newHarness(t *testing.T) *harness {
 	c := dockertest.Client(t)
 	ns := dockertest.Unique("it")
 	h := &harness{
-		t: t, c: c, ns: ns, project: "prj_" + ns, st: &statuses{},
+		t: t, c: c, ns: ns, project: "prj_" + ns, env: "env_" + ns, st: &statuses{},
 		http: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}},
 	}
-	h.network = protocol.ProjectNetworkName(h.project)
+	h.network = protocol.EnvironmentNetworkName(h.project, h.env)
 	t.Cleanup(func() { dockertest.RemoveLabelled(c, runtime.LabelNamespace+"="+ns) })
 	// Created up front (the runtime adopts it) so the test can join it.
 	dockertest.Network(t, c, h.network, map[string]string{runtime.LabelManaged: "true"})
@@ -94,9 +96,20 @@ func newHarness(t *testing.T) *harness {
 			`printf '{"admin":{"listen":"0.0.0.0:2019"}}' > /tmp/boot.json && exec caddy run --config /tmp/boot.json`},
 		HostConfig: docker.HostConfig{NetworkMode: h.network},
 	})
+	// The upstream DNS server runs in the test process, as in the agent;
+	// Caddy reaches it on the test container's address.
+	self := dockertest.IP(t, c, dockertest.Self(t, c), h.network)
+	pc, err := net.ListenPacket("udp", self+":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", pc.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
 	ing := ingress.New(ingress.Options{
 		AdminURL:   "http://" + h.caddy + ":2019",
-		Build:      ingress.BuildOptions{AdminListen: "0.0.0.0:2019"},
+		Build:      ingress.BuildOptions{AdminListen: "0.0.0.0:2019", Resolver: pc.LocalAddr().String()},
 		MinBackoff: 100 * time.Millisecond, MaxBackoff: time.Second,
 	})
 	h.rt = runtime.New(runtime.Options{
@@ -108,11 +121,13 @@ func newHarness(t *testing.T) *harness {
 		RestartBackoff:    200 * time.Millisecond,
 		MaxRestartBackoff: time.Second,
 		Namespace:         ns,
+		MinDrain:          ingress.SwitchDelay,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); _ = ing.Run(ctx) }()
+	go func() { defer wg.Done(); _ = ing.ServeDNSOn(ctx, pc, ln) }()
 	go func() { defer wg.Done(); _ = h.rt.Run(ctx) }()
 	t.Cleanup(func() {
 		cancel()
@@ -126,7 +141,7 @@ func (h *harness) workload(id string, env map[string]string) protocol.WorkloadSp
 		ID:            id,
 		Kind:          protocol.WorkloadService,
 		ProjectID:     ptr(h.project),
-		EnvironmentID: ptr("env_" + h.ns),
+		EnvironmentID: ptr(h.env),
 		ServiceID:     ptr("svc_" + h.ns),
 		DeploymentID:  ptr("dep_" + strings.TrimPrefix(id, "wl_")),
 		Image:         dockertest.WhoamiImage,
@@ -373,7 +388,7 @@ func TestRegistrySystemWorkload(t *testing.T) {
 	t.Cleanup(func() { _ = h.c.RemoveNetwork(context.Background(), runtime.SystemNetwork) })
 }
 
-func TestPrivateDomainResolvesOnProjectNetwork(t *testing.T) {
+func TestPrivateDomainResolvesOnEnvironmentNetwork(t *testing.T) {
 	h := newHarness(t)
 	apiID, clientID := "wl_api"+h.ns, "wl_cli"+h.ns
 	api := h.workload(apiID, map[string]string{})
@@ -412,5 +427,94 @@ func TestPrivateDomainResolvesOnProjectNetwork(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Hostname: "+apiStatus.ContainerID[:12]) {
 		t.Fatalf("client did not reach the api by its private domain:\n%s", out.String())
+	}
+}
+
+// containerOutput returns everything a container wrote.
+func containerOutput(t *testing.T, c *docker.Client, id string) string {
+	t.Helper()
+	rc, err := c.ContainerLogs(context.Background(), id, docker.LogsOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	var out strings.Builder
+	d := docker.NewDemuxer(rc)
+	for {
+		_, p, err := d.Next()
+		if err != nil {
+			break
+		}
+		out.Write(p)
+	}
+	return out.String()
+}
+
+// Two environments of one project run on separate networks: a container in
+// one reaches its own environment by private domain and IP, and the other
+// environment by neither.
+func TestEnvironmentsAreIsolated(t *testing.T) {
+	h := newHarness(t)
+	staging := "env_stg" + h.ns
+	stagingNet := protocol.EnvironmentNetworkName(h.project, staging)
+	if stagingNet == h.network {
+		t.Fatal("two environments got the same network")
+	}
+	t.Cleanup(func() { _ = h.c.RemoveNetwork(context.Background(), stagingNet) })
+
+	prodID, stagingID, clientID := "wl_prd"+h.ns, "wl_stg"+h.ns, "wl_cli"+h.ns
+	prod := h.workload(prodID, map[string]string{})
+	prod.Labels = map[string]string{runtime.LabelPrivateDomain: "api.production.internal"}
+	prod.Routes = nil
+	prod = rehash(prod)
+
+	stg := h.workload(stagingID, map[string]string{})
+	stg.EnvironmentID = ptr(staging)
+	stg.Network = stagingNet
+	stg.Labels = map[string]string{runtime.LabelPrivateDomain: "api.staging.internal"}
+	stg.Routes = nil
+	stg = rehash(stg)
+
+	h.apply(prod, stg)
+	// The agent probes replicas from the host, which reaches every bridge;
+	// the test process stands in for it, so it joins staging too.
+	dockertest.Eventually(t, time.Minute, "the staging network", func() bool {
+		_, err := h.c.InspectNetwork(context.Background(), stagingNet)
+		return err == nil
+	})
+	dockertest.Attach(t, h.c, stagingNet)
+	prodStatus := h.waitState(prodID, protocol.StateHealthy, 2*time.Minute)
+	stgStatus := h.waitState(stagingID, protocol.StateHealthy, 2*time.Minute)
+	prodIP := dockertest.IP(t, h.c, prodStatus.ContainerID, h.network)
+	stgIP := dockertest.IP(t, h.c, stgStatus.ContainerID, stagingNet)
+	if info, err := h.c.InspectContainer(context.Background(), stgStatus.ContainerID); err != nil {
+		t.Fatal(err)
+	} else if _, onProd := info.NetworkSettings.Networks[h.network]; onProd || len(info.NetworkSettings.Networks) != 1 {
+		t.Fatalf("staging replica networks: %v", info.NetworkSettings.Networks)
+	}
+
+	client := h.workload(clientID, map[string]string{"OWN_IP": prodIP, "OTHER_IP": stgIP})
+	client.ServiceID = ptr("svc_cli" + h.ns)
+	client.Image = dockertest.BusyboxImage
+	client.Command = []string{"/bin/sh", "-c", `
+ok=0
+for i in $(seq 1 60); do wget -T 2 -qO- http://api.production.internal/ >/dev/null && ok=1 && break; sleep 1; done
+[ "$ok" = 1 ] || { echo "OWN_NAME_UNREACHABLE"; exit 1; }
+wget -T 2 -qO- "http://$OWN_IP/" >/dev/null || { echo "OWN_IP_UNREACHABLE"; exit 1; }
+echo "OWN_OK"
+if nslookup api.staging.internal >/dev/null 2>&1; then echo "LEAK_DNS"; exit 2; fi
+if wget -T 2 -qO- http://api.staging.internal/ >/dev/null 2>&1; then echo "LEAK_NAME"; exit 2; fi
+if wget -T 3 -qO- "http://$OTHER_IP/" >/dev/null 2>&1; then echo "LEAK_IP"; exit 2; fi
+echo "ISOLATED"
+`}
+	client.Ports, client.Routes, client.Healthcheck = nil, nil, nil
+	client.Restart = protocol.Restart{Policy: protocol.RestartNever}
+	client = rehash(client)
+	h.apply(prod, stg, client)
+
+	r := h.waitState(clientID, protocol.StateExited, 3*time.Minute)
+	out := containerOutput(t, h.c, r.ContainerID)
+	if r.ExitCode == nil || *r.ExitCode != 0 || !strings.Contains(out, "OWN_OK") || !strings.Contains(out, "ISOLATED") {
+		t.Fatalf("exit %v; a production container reached staging or not even production:\n%s", r.ExitCode, out)
 	}
 }

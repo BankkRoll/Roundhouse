@@ -1,0 +1,3 @@
+✓ Created token ci (tok_0001) in Acme; expires 2027-01-20
+  Scopes: workspace:read, projects:read, services:read, variables:read, nodes:read, services:manage, deployments:create, variables:manage
+warning: copy the secret now: it will not be shown again. Use it as ROUNDHOUSE_TOKEN=<secret>.

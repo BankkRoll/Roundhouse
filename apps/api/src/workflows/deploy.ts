@@ -6,13 +6,15 @@
  * Steps:
  * 1. `snapshot`: load the deployment and its exact config version; resolve
  *    the image (image source, rollback) or the commit to build (git).
- * 2. `resolve-variables`: decrypt the environment's variables, resolve
- *    references and built-ins, and store the env sealed on the deployment.
- *    Done before the build so a broken reference fails in seconds, not after
- *    a build.
+ * 2. `resolve-variables`: resolve the service's variables, references and
+ *    built-ins with `resolveServiceEnvironment` (the same resolver the
+ *    variables API uses, so the two cannot disagree) and store the env
+ *    sealed on the deployment. Done before the build so a broken reference
+ *    fails in seconds, not after a build.
  * 3. Git only: `create-build` (pick a builder node, insert the build),
  *    `send-build-job` (signed, 60 s TTL, installation token when the repo is
- *    on an installation), then wait for the `build` event the node's
+ *    on an installation, secret build args marked so the builder never bakes
+ *    them into the image), then wait for the `build` event the node's
  *    Durable Object sends on `build_result`, up to `BUILD_TIMEOUT_S`.
  * 4. `schedule`: place replicas with `schedule()` and write placements.
  * 5. `rollout`: bump every target node's generation and push desired state.
@@ -22,12 +24,12 @@
  *    (`removed`, or `rolled_back` when this is a rollback) and push desired
  *    state again so agents drain the old replicas.
  *
- * Any failure marks the deployment `failed` with a reason and pulls its
- * replicas; the previous deployment keeps serving because it is only
- * touched in `finalize`. A cancelled deployment is noticed at the start of
- * every step and before every wait. Events are only wake-ups: each wait is
- * preceded by a step that reads the truth from D1, so a lost or duplicate
- * event changes nothing.
+ * Any failure marks the deployment `failed` with a reason, stops its build
+ * on the builder (`build_cancel`) and pulls its replicas; the previous
+ * deployment keeps serving because it is only touched in `finalize`. A
+ * cancelled deployment is noticed at the start of every step and before
+ * every wait. Events are only wake-ups: each wait is preceded by a step that
+ * reads the truth from D1, so a lost or duplicate event changes nothing.
  *
  * @module
  */
@@ -37,7 +39,6 @@ import {
   createDb,
   type Db,
   deployments,
-  domains,
   environments,
   githubInstallations,
   nodes,
@@ -55,11 +56,10 @@ import {
 } from "@openrail/protocol";
 import {
   BUILD_TIMEOUT_S,
-  type BuiltinVariable,
+  type BuildConfig,
   type DeploymentStatus,
   newId,
   ROLLOUT_TIMEOUT_MS,
-  resolveVariables,
   type SchedulerNode,
   schedule,
 } from "@openrail/shared";
@@ -69,18 +69,14 @@ import { recordAudit } from "../lib/audit";
 import { type Sealed, sealWith, unsealWith } from "../lib/crypto";
 import {
   addDeploymentEvent,
+  cancelBuildsOnNodes,
   disposeRpc,
   IllegalTransitionError,
   type LifecycleContext,
   retireDeployments,
   transitionDeployment,
 } from "../lib/deployments";
-import {
-  LIVE_DEPLOYMENT_STATUSES,
-  privateDomain,
-  refreshNodes,
-  restartSpec,
-} from "../lib/desired-state";
+import { LIVE_DEPLOYMENT_STATUSES, refreshNodes, restartSpec } from "../lib/desired-state";
 import { resolveBranch } from "../lib/git";
 import {
   type CommitState,
@@ -90,7 +86,8 @@ import {
   loadGithubApp,
 } from "../lib/github";
 import { effectiveStatus } from "../lib/nodes";
-import { deploymentEnvAad, loadEnvironmentVariables, projectKey } from "../lib/variables";
+import { resolveServiceEnvironment } from "../lib/resolve-env";
+import { deploymentEnvAad, projectKey } from "../lib/variables";
 
 /** Parameters a deploy workflow instance is created with. */
 export interface DeployParams {
@@ -149,6 +146,24 @@ const MAX_WAKEUPS = 100;
  * may reference variables like any other value.
  */
 const BUILD_ARG_PREFIX = "__OPENRAIL_BUILD_ARG__";
+
+/**
+ * A service's build config as stored. `secret_build_args` is part of the
+ * config API (`BuildConfigSchema`) but not yet of the shared type.
+ */
+type StoredBuildConfig = BuildConfig & { secret_build_args?: string[] };
+
+/**
+ * The names of `build_args` a config marks secret, limited to args it has.
+ *
+ * @param build - The service's build config.
+ * @returns Sorted, distinct names.
+ */
+export function secretBuildArgNames(build: StoredBuildConfig | undefined): string[] {
+  if (!build?.secret_build_args) return [];
+  const names = new Set(build.secret_build_args.filter((n) => Object.hasOwn(build.build_args, n)));
+  return [...names].sort();
+}
 
 const DB_STEP = {
   retries: { limit: 3, delay: "2 seconds", backoff: "exponential" },
@@ -448,74 +463,38 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     const { db } = this.lifecycle();
     const stopped = await this.stopped(db, plan, ["queued"]);
     if (stopped) return stopped;
-    const masterKey = this.masterKey();
-    const key = await projectKey(db, masterKey, plan.projectId);
-    const vars = await loadEnvironmentVariables(db, key, plan.projectId, plan.environmentId);
-
-    const live = await db
-      .select({ id: services.id, slug: services.slug, name: services.name })
-      .from(services)
-      .where(and(eq(services.projectId, plan.projectId), isNull(services.deletedAt)));
-    const latest = await db
-      .select({
-        serviceId: serviceConfigs.serviceId,
-        version: serviceConfigs.version,
-        networking: serviceConfigs.networking,
-        build: serviceConfigs.build,
-      })
+    const key = await projectKey(db, this.masterKey(), plan.projectId);
+    const environment = await db.query.environments.findFirst({
+      where: eq(environments.id, plan.environmentId),
+    });
+    if (!environment) return fail("The environment no longer exists");
+    const [config] = await db
+      .select({ build: serviceConfigs.build })
       .from(serviceConfigs)
       .where(
         and(
+          eq(serviceConfigs.serviceId, plan.serviceId),
           eq(serviceConfigs.environmentId, plan.environmentId),
-          inArray(
-            serviceConfigs.serviceId,
-            live.map((s) => s.id),
-          ),
+          eq(serviceConfigs.version, plan.configVersion),
         ),
       )
-      .orderBy(desc(serviceConfigs.version));
-    const configOf = new Map<string, (typeof latest)[number]>();
-    for (const c of latest) {
-      if (c.serviceId === plan.serviceId) {
-        if (c.version === plan.configVersion) configOf.set(c.serviceId, c);
-      } else if (!configOf.has(c.serviceId)) configOf.set(c.serviceId, c);
-    }
-    const hostRows = await db
-      .select({ serviceId: domains.serviceId, hostname: domains.hostname })
-      .from(domains)
-      .where(eq(domains.environmentId, plan.environmentId))
-      .orderBy(domains.id);
-    const publicDomain = new Map<string, string>();
-    for (const h of hostRows)
-      if (!publicDomain.has(h.serviceId)) publicDomain.set(h.serviceId, h.hostname);
-
-    const builtins: Record<string, Partial<Record<BuiltinVariable, string>>> = {};
-    for (const s of live) {
-      const port = configOf.get(s.id)?.networking.port;
-      const host = publicDomain.get(s.id);
-      builtins[s.slug] = {
-        ...(port ? { PORT: String(port) } : {}),
-        ...(host ? { OPENRAIL_PUBLIC_DOMAIN: host } : {}),
-        OPENRAIL_PRIVATE_DOMAIN: privateDomain(s.slug, plan.environmentSlug),
-        OPENRAIL_ENVIRONMENT: plan.environmentSlug,
-        OPENRAIL_SERVICE_NAME: s.name,
-      };
-    }
-    const own = builtins[plan.serviceSlug] ?? {};
-    own.OPENRAIL_DEPLOYMENT_ID = plan.deploymentId;
-    if (plan.git) own.OPENRAIL_GIT_COMMIT_SHA = plan.git.commitSha;
-    builtins[plan.serviceSlug] = own;
-
-    const buildArgs = plan.git ? (configOf.get(plan.serviceId)?.build.build_args ?? {}) : {};
-    const ownVars = { ...(vars.services[plan.serviceSlug] ?? {}) };
-    for (const [k, v] of Object.entries(buildArgs)) ownVars[`${BUILD_ARG_PREFIX}${k}`] = v;
-
-    const result = resolveVariables({
-      service: plan.serviceSlug,
-      services: { ...vars.services, [plan.serviceSlug]: ownVars },
-      shared: vars.shared,
-      builtins,
-    });
+      .limit(1);
+    const buildArgs = plan.git ? (config?.build.build_args ?? {}) : {};
+    const result = await resolveServiceEnvironment(
+      db,
+      key,
+      { projectId: plan.projectId, serviceId: plan.serviceId, environment },
+      {
+        deployment: {
+          id: plan.deploymentId,
+          commitSha: plan.git?.commitSha ?? null,
+          configVersion: plan.configVersion,
+        },
+        extra: Object.fromEntries(
+          Object.entries(buildArgs).map(([k, v]) => [`${BUILD_ARG_PREFIX}${k}`, v]),
+        ),
+      },
+    );
     if (!result.ok) {
       const first = result.errors[0]!;
       const name = first.variable.name.startsWith(BUILD_ARG_PREFIX)
@@ -665,6 +644,9 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     const git = plan.git!;
     const token = await this.repoToken(db, git.installationRef, git.repoUrl, { contents: "read" });
     const builder = config?.build.builder ?? "railpack";
+    const secretArgs = secretBuildArgNames(config?.build as StoredBuildConfig | undefined).filter(
+      (name) => Object.hasOwn(buildArgs, name),
+    );
 
     const stub = this.env.NODE_CONNECTION.get(this.env.NODE_CONNECTION.idFromName(nodeId));
     const result = await stub.sendBuildJob({
@@ -683,11 +665,17 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         : {}),
       context_dir: git.rootDir,
       build_args: buildArgs,
+      ...(secretArgs.length ? { secret_build_args: secretArgs } : {}),
       image_repository: localImageRepository(plan.projectId, plan.serviceId),
       cache_key: plan.serviceId,
       timeout_s: BUILD_TIMEOUT_S,
     });
     disposeRpc(result);
+    if (!result.sent && result.reason === "secret_build_args_unsupported") {
+      return fail(
+        "The builder's agent is too old for secret build args; upgrade it, or unmark the args",
+      );
+    }
     if (!result.sent) {
       // Thrown so the step retries: the builder may be mid-reconnect.
       throw new Error(
@@ -1003,8 +991,9 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         )[0]?.projectId;
       if (!projectId) return "failed" as DeploymentStatus;
       // The build is settled first so nobody sees a failed deployment with a
-      // running build. A cancel already settled it, so this is then a no-op.
-      await db
+      // running build, and stopped on its builder so the node is free for the
+      // next one. A cancel already settled it, so this is then a no-op.
+      const stopped = await db
         .update(builds)
         .set({ status: "failed", finishedAt: new Date(), error: failure.reason })
         .where(
@@ -1012,7 +1001,9 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
             eq(builds.deploymentId, params.deployment_id),
             inArray(builds.status, ["queued", "running"]),
           ),
-        );
+        )
+        .returning({ id: builds.id, nodeId: builds.nodeId });
+      await cancelBuildsOnNodes(ctx.env, stopped);
       try {
         await transitionDeployment(ctx, projectId, params.deployment_id, "failed", {
           reason: failure.reason,

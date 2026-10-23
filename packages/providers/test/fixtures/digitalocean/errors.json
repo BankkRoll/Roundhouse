@@ -1,0 +1,43 @@
+{
+  "bad_request": {
+    "id": "bad_request",
+    "message": "error parsing request body",
+    "request_id": "4851a473-1621-42ea-b2f9-5071c0ea8414"
+  },
+  "unauthorized": {
+    "id": "unauthorized",
+    "message": "Unable to authenticate you."
+  },
+  "forbidden": {
+    "id": "forbidden",
+    "message": "You do not have permission to perform this action."
+  },
+  "not_found": {
+    "id": "not_found",
+    "message": "The resource you requested could not be found."
+  },
+  "conflict": {
+    "id": "conflict",
+    "message": "The request could not be completed due to a conflict."
+  },
+  "unprocessable_entity": {
+    "id": "unprocessable_entity",
+    "message": "request payload validation failed",
+    "request_id": "4851a473-1621-42ea-b2f9-5071c0ea8414"
+  },
+  "too_many_requests": {
+    "id": "too_many_requests",
+    "message": "API rate limit exceeded."
+  },
+  "server_error": {
+    "id": "server_error",
+    "message": "Unexpected server-side error"
+  },
+  "tags_bad_request": {
+    "error": "Error validating resource tag: \"tag-name \\\"здорово\\\" contains invalid characters\"",
+    "messages": null,
+    "root_causes": [
+      "rpc error: code = InvalidArgument desc = Error validating resource tag: \"tag-name \\\"здорово\\\" contains invalid characters\""
+    ]
+  }
+}

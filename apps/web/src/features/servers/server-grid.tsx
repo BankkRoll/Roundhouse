@@ -6,7 +6,7 @@ import { useNow } from "../../lib/use-now";
 import { nodeMeterRows, nodeSubtitle } from "./node-metrics";
 
 /**
- * Card for one node, linking to its detail page.
+ * List row for one node, linking to its detail page.
  *
  * @param props - Workspace id, node, and the current time for "seen" labels.
  * @returns The card.
@@ -31,6 +31,7 @@ export function NodeCard({
           {node.name}
         </Link>
       }
+      layout="row"
       meta={nodeSubtitle(node)}
       status={node.status}
       metrics={nodeMeterRows(node)}
@@ -45,7 +46,7 @@ export function NodeCard({
 }
 
 /**
- * Responsive grid of {@link NodeCard}s.
+ * Every node as a list row: identity, CPU, RAM and disk, and when it was last seen.
  *
  * @param props - Workspace id and nodes.
  * @returns The grid.
@@ -59,7 +60,7 @@ export function ServerGrid({
 }) {
   const now = useNow(5000);
   return (
-    <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-label="Servers">
+    <ul className="divide-y divide-border/70 border-y border-border/70" aria-label="Servers">
       {nodes.map((node) => (
         <li key={node.id}>
           <NodeCard workspaceId={workspaceId} node={node} now={now} />
@@ -76,14 +77,9 @@ export function ServerGrid({
  */
 export function ServerGridSkeleton() {
   return (
-    <div
-      className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"
-      role="status"
-      aria-busy="true"
-      aria-label="Loading servers"
-    >
+    <div className="grid gap-3" role="status" aria-busy="true" aria-label="Loading servers">
       {[0, 1, 2].map((key) => (
-        <Skeleton key={key} className="h-56 rounded-lg" />
+        <Skeleton key={key} className="h-16 rounded-lg" />
       ))}
     </div>
   );

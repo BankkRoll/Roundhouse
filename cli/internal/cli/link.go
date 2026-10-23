@@ -67,7 +67,7 @@ the current directory to it. Add services with "roundhouse services create".`,
 				return err
 			}
 			if !a.jsonOut {
-				fmt.Fprintf(a.IO.Out, "%s Created project %s in workspace %s\n", a.IO.OutColor().Green("✓"), p.Name, ws.Name)
+				fmt.Fprintf(a.IO.Out, "%s Created project %s (slug %s) in workspace %s\n", a.IO.OutColor().Green("✓"), p.Name, p.Slug, ws.Name)
 			}
 			return a.writeLink(sess, ws.ID, p, env, nil, &gi)
 		},

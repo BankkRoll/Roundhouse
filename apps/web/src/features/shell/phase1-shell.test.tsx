@@ -1,9 +1,10 @@
-import { can, type Role } from "@openrail/shared";
+import { can, REALTIME_CLOSE_CODES, type Role } from "@openrail/shared";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { db, signInAs, USERS } from "../../mocks/db";
-import { realtimeLink } from "../../mocks/deploy-handlers";
+import { closeRealtime, realtimeLink } from "../../mocks/deploy-handlers";
 import { server } from "../../mocks/server";
+import { queryKeys } from "../../queries/keys";
 import { PROJECT_PATH, SEED, servicePath } from "../../test/phase1";
 import { expectPath, findPageHeading, renderApp } from "../../test/render";
 import { buildCommands } from "./commands";
@@ -125,6 +126,20 @@ describe("palette and shortcuts in a project", () => {
     expect(within(tabs).getByRole("link", { name: "Variables" })).toHaveFocus();
   });
 
+  it("keeps the project loadable when it is invalidated after the title read it", async () => {
+    const { queryClient, router } = renderApp(PROJECT_PATH);
+    await findPageHeading("storefront");
+    // NOTE: A hash change re-renders the root (which reads the project for the title)
+    // after the page, the order in which a cache-only observer used to clobber the query.
+    await act(() => router.navigate({ to: PROJECT_PATH, hash: "again" }));
+    db.deploy.projects[0]!.name = "storefront-renamed";
+    await act(() =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.project(SEED.project), exact: true }),
+    );
+    await waitFor(() => expect(document.title).toContain("storefront-renamed"));
+    expect(screen.queryByText(/Missing queryFn/)).not.toBeInTheDocument();
+  });
+
   it("titles the tab with the page, service, project and workspace", async () => {
     renderApp(servicePath(SEED.web, "logs"));
     await findPageHeading("web");
@@ -133,32 +148,38 @@ describe("palette and shortcuts in a project", () => {
 });
 
 describe("realtime session handling", () => {
-  it("sends the user to sign in when the socket is refused for an expired session", async () => {
+  it("sends the user to sign in when the server's re-check closes the socket with 4401", async () => {
     const { router } = renderApp(PROJECT_PATH);
     await findPageHeading("storefront");
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Live"));
-    server.use(
-      realtimeLink.addEventListener("connection", ({ client }) => client.close(4401, "expired")),
-    );
+    signInAs(null);
+    act(() => closeRealtime(SEED.project, REALTIME_CLOSE_CODES.unauthorized));
+    await expectPath(router, "/login");
+    expect(router.state.location.search).toEqual({ redirect: PROJECT_PATH });
+  });
+
+  it("signs out after a reconnect the server answers with 4401", async () => {
+    const { router } = renderApp(PROJECT_PATH);
+    await findPageHeading("storefront");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Live"));
     signInAs(null);
     act(() => {
       for (const client of realtimeLink.clients) client.close(1001, "going away");
     });
     await expectPath(router, "/login");
-    expect(router.state.location.search).toEqual({ redirect: PROJECT_PATH });
   });
 
-  it("leaves the project when membership is revoked (4003)", async () => {
+  it("stops quietly when access to the project is lost (4403)", async () => {
+    const connections = vi.fn();
+    server.use(realtimeLink.addEventListener("connection", connections));
     const { router } = renderApp(PROJECT_PATH);
     await findPageHeading("storefront");
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Live"));
-    act(() => {
-      for (const client of realtimeLink.clients) client.close(4003, "no longer a member");
-    });
-    expect(
-      await screen.findByText("You no longer have access to this project"),
-    ).toBeInTheDocument();
-    await waitFor(() => expect(router.state.location.pathname).not.toBe(PROJECT_PATH));
+    act(() => closeRealtime(SEED.project, REALTIME_CLOSE_CODES.forbidden));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("No access"));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 700)));
+    expect(connections).toHaveBeenCalledTimes(1);
+    expect(router.state.location.pathname).toBe(PROJECT_PATH);
   });
 
   it("hides deploy controls from viewers everywhere", async () => {

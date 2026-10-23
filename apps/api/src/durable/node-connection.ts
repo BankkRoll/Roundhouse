@@ -9,11 +9,14 @@
  * - apply `workload_status` (and `hello.statuses`) to placements, move
  *   deployments between `active` and `crashed`, and wake deploy workflows;
  * - record `build_result`s and wake the waiting workflow;
- * - redact, store (R2 + `log_chunks`) and forward `logs` to the project room;
+ * - redact, store (R2 + `log_chunks`) and forward `logs` to the project
+ *   room, flushing on the Durable Object's alarm and dropping lines whose
+ *   deployment or build no longer exists;
  * - sign and send control frames: `welcome`, `desired_state` (always
- *   computed from D1, so a reconnect gets the truth) and `build_job`, never
- *   sending workloads or builds below `WORKLOADS_PROTOCOL_VERSION`, and giving
- *   credential-carrying frames at most `CREDENTIAL_FRAME_TTL_MS`.
+ *   computed from D1, so a reconnect gets the truth), `build_job` and
+ *   `build_cancel`, never sending a frame or field to an agent whose
+ *   protocol version predates it, and giving credential-carrying frames at
+ *   most `CREDENTIAL_FRAME_TTL_MS`.
  *
  * Only the Worker can reach this object, and it authenticates the agent
  * before forwarding the upgrade, so the node ID header is trusted here.
@@ -35,6 +38,7 @@ import {
 import {
   type AgentMessage,
   AgentMessageSchema,
+  BUILD_CANCEL_PROTOCOL_VERSION,
   type BuildJob,
   type BuildResult,
   type ControlMessage,
@@ -49,6 +53,7 @@ import {
   MAX_CONTROL_FRAME_BYTES,
   MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  SECRET_BUILD_ARGS_PROTOCOL_VERSION,
   signEnvelope,
   WORKLOADS_PROTOCOL_VERSION,
   type WorkloadState,
@@ -164,14 +169,31 @@ interface LogBuffer {
 /** Fields a caller supplies for a build job; the header is added when sent. */
 export type BuildJobBody = Omit<BuildJob, "id" | "node_id" | "iat" | "exp" | "type">;
 
-/** Why {@link NodeConnection.sendBuildJob} could not deliver. */
-export type BuildJobRejection = "not_connected" | "protocol_too_old";
+/**
+ * Why {@link NodeConnection.sendBuildJob} could not deliver: no agent, an
+ * agent that runs no builds, or one that would ignore `secret_build_args`
+ * and bake the values into the image.
+ */
+export type BuildJobRejection =
+  | "not_connected"
+  | "protocol_too_old"
+  | "secret_build_args_unsupported";
+
+/** Why {@link NodeConnection.sendBuildCancel} could not deliver. */
+export type BuildCancelRejection = "not_connected" | "protocol_too_old";
+
+/** Whether a D1 error is a failed foreign key check. */
+function isForeignKeyViolation(err: unknown): boolean {
+  for (let e: unknown = err; e instanceof Error; e = e.cause) {
+    if (/FOREIGN KEY constraint failed/i.test(e.message)) return true;
+  }
+  return false;
+}
 
 /** Durable Object holding a single node's agent connection. */
 export class NodeConnection extends DurableObject<Env> {
   private db: Db;
   private logBuffers = new Map<string, LogBuffer>();
-  private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private owners = new Map<string, { owner: LogOwner | null; at: number }>();
   private secrets = new Map<string, { values: string[]; at: number }>();
 
@@ -301,6 +323,9 @@ export class NodeConnection extends DurableObject<Env> {
   }
 
   override async alarm(): Promise<void> {
+    // The alarm doubles as the log flush timer, so buffered lines go out
+    // whichever deadline it fired for.
+    await this.flushLogs();
     const lastSeen = (await this.ctx.storage.get<number>("last_seen")) ?? 0;
     const silentFor = Date.now() - lastSeen;
     if (silentFor < OFFLINE_AFTER_MS) {
@@ -378,6 +403,14 @@ export class NodeConnection extends DurableObject<Env> {
     if (attachment.protocolVersion < WORKLOADS_PROTOCOL_VERSION) {
       return { sent: false, reason: "protocol_too_old" };
     }
+    if (
+      job.secret_build_args?.length &&
+      attachment.protocolVersion < SECRET_BUILD_ARGS_PROTOCOL_VERSION
+    ) {
+      // SECURITY: an older agent ignores the field and would pass the
+      // values as plain build args, recorded in the image's history.
+      return { sent: false, reason: "secret_build_args_unsupported" };
+    }
     const now = Date.now();
     await this.send(ws, {
       type: "build_job",
@@ -388,12 +421,35 @@ export class NodeConnection extends DurableObject<Env> {
   }
 
   /**
-   * Writes every buffered log line to R2 now. Called on a timer, when a
+   * Signs and sends a `build_cancel`, so the builder stops the build and is
+   * free for the next one. Agents below `BUILD_CANCEL_PROTOCOL_VERSION`
+   * would drop the frame, so it is not sent to them.
+   *
+   * @param buildId - The build to stop.
+   * @returns `{ sent: true }`, or why the cancel could not be delivered.
+   */
+  async sendBuildCancel(
+    buildId: string,
+  ): Promise<{ sent: true } | { sent: false; reason: BuildCancelRejection }> {
+    const ws = this.greetedSocket();
+    if (!ws) return { sent: false, reason: "not_connected" };
+    const attachment = ws.deserializeAttachment() as Attachment;
+    if (attachment.protocolVersion < BUILD_CANCEL_PROTOCOL_VERSION) {
+      return { sent: false, reason: "protocol_too_old" };
+    }
+    await this.send(ws, {
+      type: "build_cancel",
+      ...this.header(attachment.nodeId, Date.now()),
+      build_id: buildId,
+    });
+    return { sent: true };
+  }
+
+  /**
+   * Writes every buffered log line to R2 now. Called by the alarm, when a
    * buffer fills, and when the socket closes; exposed for tests.
    */
   async flushLogs(): Promise<void> {
-    if (this.flushTimer) clearTimeout(this.flushTimer);
-    this.flushTimer = undefined;
     const buffers = [...this.logBuffers.values()];
     this.logBuffers.clear();
     for (const b of buffers) await this.writeChunk(b);
@@ -586,7 +642,7 @@ export class NodeConnection extends DurableObject<Env> {
     const [updated] = await this.db
       .update(builds)
       .set({
-        status: ok ? "succeeded" : "failed",
+        status: ok ? "succeeded" : result.cancelled ? "cancelled" : "failed",
         imageDigest: ok ? result.image!.digest : null,
         error,
         finishedAt: now,
@@ -622,7 +678,7 @@ export class NodeConnection extends DurableObject<Env> {
       this.logBuffers.delete(key);
       await this.writeChunk(buffer);
     } else {
-      this.flushTimer ??= setTimeout(() => void this.flushLogs(), LOG_FLUSH_DELAY_MS);
+      await this.scheduleFlush();
     }
 
     try {
@@ -752,9 +808,41 @@ export class NodeConnection extends DurableObject<Env> {
     return values;
   }
 
+  /**
+   * Brings the alarm forward so buffered lines are flushed within
+   * {@link LOG_FLUSH_DELAY_MS}.
+   *
+   * NOTE: a Durable Object alarm rather than setTimeout: the runtime owns
+   * its lifetime, so a flush never fires into a torn-down isolate, and it is
+   * retried if the flush throws.
+   */
+  private async scheduleFlush(): Promise<void> {
+    const due = Date.now() + LOG_FLUSH_DELAY_MS;
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > due) await this.ctx.storage.setAlarm(due);
+  }
+
+  /** Whether the deployment or build a buffer belongs to still exists. */
+  private async ownerExists(owner: LogOwner): Promise<boolean> {
+    const row = owner.deploymentId
+      ? await this.db.query.deployments.findFirst({
+          where: eq(deployments.id, owner.deploymentId),
+          columns: { id: true },
+        })
+      : await this.db.query.builds.findFirst({
+          where: eq(builds.id, owner.buildId!),
+          columns: { id: true },
+        });
+    return row !== undefined;
+  }
+
   private async writeChunk(buffer: LogBuffer): Promise<void> {
     if (!buffer.lines.length) return;
     const { owner, lines } = buffer;
+    // Lines of a deployment or build deleted meanwhile (its project was
+    // removed) have nowhere to go; writing them would orphan an R2 object
+    // and fail the index's foreign key.
+    if (!(await this.ownerExists(owner))) return;
     const id = newId("logChunk");
     const firstTs = lines[0]!.ts;
     const lastTs = lines[lines.length - 1]!.ts;
@@ -777,6 +865,11 @@ export class NodeConnection extends DurableObject<Env> {
         bytes: new TextEncoder().encode(body).byteLength,
       });
     } catch (err) {
+      if (isForeignKeyViolation(err)) {
+        // The owner was deleted between the check and the insert.
+        await this.env.LOGS.delete(r2Key).catch(() => {});
+        return;
+      }
       // Live lines already reached the dashboard; losing a stored chunk must
       // not take the agent connection down with it.
       console.error("log chunk write failed", r2Key, err);

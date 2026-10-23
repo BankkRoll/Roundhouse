@@ -136,6 +136,16 @@ func (m *BuildJob) Validate() error {
 			return fmt.Errorf("build_args: invalid %q", k)
 		}
 	}
+	if len(m.SecretBuildArgs) > MaxBuildArgs {
+		return fmt.Errorf("secret_build_args: at most %d", MaxBuildArgs)
+	}
+	secret := make(map[string]bool, len(m.SecretBuildArgs))
+	for _, k := range m.SecretBuildArgs {
+		if _, ok := m.BuildArgs[k]; !ok || secret[k] {
+			return errors.New("secret_build_args must name distinct keys of build_args")
+		}
+		secret[k] = true
+	}
 	if len(m.ImageRepository) > maxImageRepository || !imageRepositoryRE.MatchString(m.ImageRepository) ||
 		!strings.HasPrefix(m.ImageRepository, RegistryListen+"/") {
 		return fmt.Errorf("image_repository: must be in the local registry, got %q", m.ImageRepository)
@@ -147,6 +157,17 @@ func (m *BuildJob) Validate() error {
 		return errors.New("timeout_s: out of range")
 	}
 	return validateShortLived(m)
+}
+
+// Validate implements [Validator].
+func (m *BuildCancel) Validate() error {
+	if err := m.ControlHeader.validate(); err != nil {
+		return err
+	}
+	if !idRE.MatchString(m.BuildID) {
+		return fmt.Errorf("build_id: invalid %q", m.BuildID)
+	}
+	return nil
 }
 
 // Validate implements [Validator].
@@ -243,6 +264,9 @@ func (m *BuildResult) Validate() error {
 	}
 	if m.OK != (m.Image != nil) || m.OK == (m.Error != "") {
 		return errors.New("a successful result has an image and no error; a failed one, the reverse")
+	}
+	if m.OK && m.Cancelled {
+		return errors.New("only a failed result can be cancelled")
 	}
 	if m.Image != nil && (len(m.Image.Repository) > maxImageRepository ||
 		!imageRepositoryRE.MatchString(m.Image.Repository) || !digestRE.MatchString(m.Image.Digest)) {

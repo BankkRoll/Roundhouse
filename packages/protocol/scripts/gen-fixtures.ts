@@ -4,8 +4,11 @@
  * - `signed-envelope.json`: a minimal `desired_state` that never expires;
  * - `signed-desired-state.json`: a builder node's `desired_state` with a full
  *   workload, registry credentials and S3 registry storage;
- * - `signed-build-job.json`: a `build_job` carrying a git token;
- * - `spec-hash.json`: workload specs with their canonical text and hash.
+ * - `signed-build-job.json`: a `build_job` carrying a git token and a secret
+ *   build arg;
+ * - `signed-build-cancel.json`: a `build_cancel`;
+ * - `spec-hash.json`: workload specs with their canonical text and hash;
+ * - `network-names.json`: environment network names, readable and hashed.
  *
  * The signing key comes from a fixed seed and Ed25519 signatures are
  * deterministic, so regenerating produces identical output unless a message
@@ -22,9 +25,9 @@ import {
   ControlMessageSchema,
   CREDENTIAL_FRAME_TTL_MS,
   computeSpecHash,
+  environmentNetworkName,
   importSigningKey,
   localImageRepository,
-  projectNetworkName,
   signEnvelope,
   specHashInput,
   toBase64,
@@ -70,12 +73,14 @@ async function withHash(spec: Omit<WorkloadSpec, "spec_hash">): Promise<Workload
 
 const PROJECT = "prj_01JAAAAAAAAAAAAAAAAAAAAAAA";
 const SERVICE = "svc_01JAAAAAAAAAAAAAAAAAAAAAAA";
+const ENVIRONMENT = "env_01JAAAAAAAAAAAAAAAAAAAAAAA";
+const NETWORK = await environmentNetworkName(PROJECT, ENVIRONMENT);
 
 const fullWorkload = await withHash({
   id: "wl_01JAAAAAAAAAAAAAAAAAAAAAAA",
   kind: "service",
   project_id: PROJECT,
-  environment_id: "env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  environment_id: ENVIRONMENT,
   service_id: SERVICE,
   deployment_id: "dep_01JAAAAAAAAAAAAAAAAAAAAAAA",
   replica: 0,
@@ -103,7 +108,7 @@ const fullWorkload = await withHash({
   },
   resources: { cpu_millis: 500, memory_mb: 512, pids: 512 },
   restart: { policy: "on_failure", max_retries: 5 },
-  network: projectNetworkName(PROJECT),
+  network: NETWORK,
   labels: { "openrail.service_name": "api", "com.example.team": "platform" },
   drain_s: 30,
 });
@@ -112,7 +117,7 @@ const minimalWorkload = await withHash({
   id: "wl_01JBBBBBBBBBBBBBBBBBBBBBBB",
   kind: "service",
   project_id: PROJECT,
-  environment_id: "env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  environment_id: ENVIRONMENT,
   service_id: "svc_01JBBBBBBBBBBBBBBBBBBBBBBB",
   deployment_id: "dep_01JBBBBBBBBBBBBBBBBBBBBBBB",
   replica: 2,
@@ -123,7 +128,7 @@ const minimalWorkload = await withHash({
   healthcheck: null,
   resources: { cpu_millis: 10, memory_mb: 16, pids: 16 },
   restart: { policy: "always", max_retries: 0 },
-  network: projectNetworkName(PROJECT),
+  network: NETWORK,
   labels: {},
   drain_s: 0,
 });
@@ -233,10 +238,38 @@ await writeSigned("signed-build-job.json", {
   builder: "dockerfile",
   dockerfile_path: "docker/Dockerfile",
   context_dir: ".",
-  build_args: { NODE_ENV: "production" },
+  build_args: { NODE_ENV: "production", NPM_TOKEN: "npm_fixtureSecretValue" },
+  secret_build_args: ["NPM_TOKEN"],
   image_repository: localImageRepository(PROJECT, SERVICE),
   cache_key: "svc_01JAAAAAAAAAAAAAAAAAAAAAAA.production",
   timeout_s: 1800,
+});
+
+await writeSigned("signed-build-cancel.json", {
+  type: "build_cancel",
+  id: "msg_fixture_cancel",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: FAR_FUTURE,
+  build_id: "bld_01JAAAAAAAAAAAAAAAAAAAAAAA",
+});
+
+// Readable names, the longest readable one, and IDs too long for it.
+const networkCases: [string, string][] = [
+  [PROJECT, ENVIRONMENT],
+  ["prj_1", "env_2"],
+  [`prj_${"a".repeat(55)}`, `env_${"b".repeat(55)}`],
+  [`prj_${"a".repeat(64)}`, `env_${"b".repeat(64)}`],
+  [`prj_${"a".repeat(56)}`, `env_${"b".repeat(55)}`],
+];
+write("network-names.json", {
+  cases: await Promise.all(
+    networkCases.map(async ([project_id, environment_id]) => ({
+      project_id,
+      environment_id,
+      network: await environmentNetworkName(project_id, environment_id),
+    })),
+  ),
 });
 
 write("spec-hash.json", {

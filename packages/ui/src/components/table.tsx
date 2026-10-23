@@ -1,18 +1,43 @@
 import type { ComponentProps } from "react";
 import { cn } from "../lib/cn";
 
+/** Props for {@link Table}. */
+export interface TableProps extends ComponentProps<"table"> {
+  /**
+   * Below 640px, lay each row out as a two-line item instead of scrolling sideways. Mark
+   * the identity cell with `cell="primary"` and the row action with `cell="action"`; the
+   * other cells move to line 2.
+   */
+  stack?: boolean;
+}
+
 /**
- * Log-style data table: dense rows separated by hairlines. Wrapped in a horizontally
- * scrollable container so wide tables never break the layout.
+ * Data table: rows split by hairlines, no header band. Wide tables scroll inside their
+ * own box so they never push the page sideways; pass `stack` to turn rows into stacked
+ * items on phones instead.
  *
- * @param props - Table props.
+ * @param props - Table props plus `stack`.
  * @returns The rendered table.
+ * @example
+ * <Table stack>
+ *   <TableBody>
+ *     <TableRow>
+ *       <TableCell cell="primary">web</TableCell>
+ *       <TableCell>2h ago</TableCell>
+ *       <TableCell cell="action"><Button size="sm">Logs</Button></TableCell>
+ *     </TableRow>
+ *   </TableBody>
+ * </Table>
  */
-export function Table({ className, ...props }: ComponentProps<"table">) {
+export function Table({ className, stack = false, ...props }: TableProps) {
   return (
     <div className="relative w-full overflow-x-auto">
       <table
-        className={cn("w-full caption-bottom border-collapse text-sm", className)}
+        className={cn(
+          "w-full caption-bottom border-collapse text-sm",
+          stack && "table-stack",
+          className,
+        )}
         {...props}
       />
     </div>
@@ -20,13 +45,13 @@ export function Table({ className, ...props }: ComponentProps<"table">) {
 }
 
 /**
- * Table header group.
+ * Table header group. The header row carries the table's one strong rule.
  *
  * @param props - Thead props.
  * @returns The rendered header group.
  */
 export function TableHeader({ className, ...props }: ComponentProps<"thead">) {
-  return <thead className={cn("[&_tr]:border-b", className)} {...props} />;
+  return <thead className={cn("[&_tr]:border-b [&_tr]:border-border", className)} {...props} />;
 }
 
 /**
@@ -40,7 +65,7 @@ export function TableBody({ className, ...props }: ComponentProps<"tbody">) {
 }
 
 /**
- * Table row with a hairline separator and hover tint.
+ * Table row with a hairline separator and a faint hover tint.
  *
  * @param props - Tr props.
  * @returns The rendered row.
@@ -48,23 +73,8 @@ export function TableBody({ className, ...props }: ComponentProps<"tbody">) {
 export function TableRow({ className, ...props }: ComponentProps<"tr">) {
   return (
     <tr
-      className={cn("border-b border-border transition-colors hover:bg-muted/40", className)}
-      {...props}
-    />
-  );
-}
-
-/**
- * Column header cell in the small uppercase mono label style.
- *
- * @param props - Th props.
- * @returns The rendered header cell.
- */
-export function TableHead({ className, ...props }: ComponentProps<"th">) {
-  return (
-    <th
       className={cn(
-        "h-8 px-3 text-left align-middle font-mono text-[10px] font-medium uppercase tracking-[0.1em] whitespace-nowrap text-subtle-foreground",
+        "border-b border-border/70 transition-colors hover:bg-muted/30 [thead_&]:hover:bg-transparent",
         className,
       )}
       {...props}
@@ -73,11 +83,45 @@ export function TableHead({ className, ...props }: ComponentProps<"th">) {
 }
 
 /**
- * Body cell.
+ * Column header cell: small grey sentence-case label. Right-align numeric columns with
+ * `text-right` so the header sits flush with its figures.
  *
- * @param props - Td props.
+ * @param props - Th props.
+ * @returns The rendered header cell.
+ */
+export function TableHead({ className, ...props }: ComponentProps<"th">) {
+  return (
+    <th
+      className={cn(
+        "h-9 px-3 text-left align-middle text-xs font-normal whitespace-nowrap text-muted-foreground first:pl-0 last:pr-0",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+/** Props for {@link TableCell}. */
+export interface TableCellProps extends ComponentProps<"td"> {
+  /**
+   * Role of the cell when a {@link Table} with `stack` collapses on a phone: `primary`
+   * leads line 1, `action` sits at its right, `hide-mobile` drops out.
+   */
+  cell?: "primary" | "action" | "hide-mobile";
+}
+
+/**
+ * Body cell. Its vertical padding follows the table density preference.
+ *
+ * @param props - Td props plus `cell`.
  * @returns The rendered cell.
  */
-export function TableCell({ className, ...props }: ComponentProps<"td">) {
-  return <td className={cn("px-3 py-2 align-middle", className)} {...props} />;
+export function TableCell({ className, cell, ...props }: TableCellProps) {
+  return (
+    <td
+      data-cell={cell}
+      className={cn("px-3 py-(--cell-py) align-middle first:pl-0 last:pr-0", className)}
+      {...props}
+    />
+  );
 }

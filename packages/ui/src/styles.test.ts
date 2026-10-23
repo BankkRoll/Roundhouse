@@ -37,6 +37,18 @@ function luminance(hex: string): number {
   return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
 }
 
+/** `#rrggbb` of `top` painted at `alpha` over `bottom`. */
+function blend(top: string, bottom: string, alpha: number): string {
+  const channel = (hex: string, i: number) => Number.parseInt(hex.slice(1 + i, 3 + i), 16);
+  return `#${[0, 2, 4]
+    .map((i) =>
+      Math.round(channel(top, i) * alpha + channel(bottom, i) * (1 - alpha))
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
 /** WCAG 2.x contrast ratio between two `#rrggbb` colours. */
 function contrast(a: string, b: string): number {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
@@ -74,6 +86,21 @@ describe.each([
     ["danger-foreground", "danger"],
   ])("--%s reaches 4.5:1 on --%s buttons", (text, fill) => {
     expect(contrast(token(text), token(fill))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each([
+    ["success", "success", 0.1],
+    ["warning", "warning", 0.1],
+    ["danger", "danger", 0.1],
+    ["info", "info", 0.1],
+    ["accent-text", "accent-subtle", 0.12],
+  ])("--%s badge text reaches 4.5:1 on its tinted fill", (text, fill, alpha) => {
+    // NOTE: Badges paint `bg-<tone>/10` over the page (accent: --accent-subtle, which is
+    // the --ring colour at 12%), so text is measured against that blend.
+    const tint = fill === "accent-subtle" ? token("ring") : token(fill);
+    for (const base of ["background", "surface"]) {
+      expect(contrast(token(text), blend(tint, token(base), alpha))).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it("draws state indicators (accent-text) at 3:1 or better", () => {

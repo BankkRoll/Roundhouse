@@ -119,15 +119,15 @@ func pullAuth(s *wantSpec) (*docker.AuthConfig, bool) {
 
 // LabelPrivateDomain carries a service replica's private hostname,
 // "<service>.<environment>.internal", which the agent registers as a network
-// alias so other containers on the project network resolve it.
+// alias so other containers of the same environment resolve it.
 const LabelPrivateDomain = "openrail.private_domain"
 
 // networkAliases returns the DNS aliases s answers to on its network.
 //
-// NOTE: the bare service slug is deliberately not registered. One project
-// network spans every environment, so "api" would resolve to production and
-// staging replicas alike and leak traffic across environments; the private
-// domain names exactly one environment.
+// Aliases live on the replica's environment network only, so Docker's
+// embedded DNS answers them only to containers of that environment: a
+// staging container asking for "api.production.internal" gets NXDOMAIN, and
+// has no route to production's addresses either.
 func networkAliases(s *wantSpec) []string {
 	d := s.Labels[LabelPrivateDomain]
 	if s.Kind != protocol.WorkloadService || !protocol.IsHostname(d) {

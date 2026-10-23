@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -187,8 +189,32 @@ func LocalImageRepository(projectID, serviceID string) string {
 	return RegistryListen + "/" + strings.ToLower(projectID) + "/" + strings.ToLower(serviceID)
 }
 
-// ProjectNetworkName returns the Docker network a project's replicas join.
+// ProjectNetworkName returns Phase 1's per-project network name. Workloads no
+// longer use it, since one network per project let every environment reach
+// every other one ([EnvironmentNetworkName] replaced it); agents use it to
+// recognise, and remove, the networks Phase 1 left behind.
 func ProjectNetworkName(projectID string) string { return "openrail-" + projectID }
+
+// MaxNetworkNameLength is the longest network name the protocol accepts.
+const MaxNetworkNameLength = 128
+
+// HashedNetworkPrefix starts the hashed form of [EnvironmentNetworkName].
+const HashedNetworkPrefix = "openrail-env-"
+
+// EnvironmentNetworkName returns the Docker network one environment of a
+// project joins: "openrail-<project_id>-<environment_id>" when that fits
+// [MaxNetworkNameLength], else "openrail-env-" and the hex SHA-256 of
+// "<project_id>/<environment_id>". Environments never share a network, so a
+// container in one cannot reach another environment by IP or by name.
+// Mirrors environmentNetworkName in TypeScript.
+func EnvironmentNetworkName(projectID, environmentID string) string {
+	readable := "openrail-" + projectID + "-" + environmentID
+	if len(readable) <= MaxNetworkNameLength {
+		return readable
+	}
+	sum := sha256.Sum256([]byte(projectID + "/" + environmentID))
+	return HashedNetworkPrefix + hex.EncodeToString(sum[:])
+}
 
 // Validate checks w against the constraints of the zod WorkloadSpecSchema.
 func (w *WorkloadSpec) Validate() error {

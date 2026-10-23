@@ -458,6 +458,9 @@
           "type": "string",
           "minLength": 1
         },
+        "cancelled": {
+          "type": "boolean"
+        },
         "duration_ms": {
           "type": "integer",
           "minimum": 0,

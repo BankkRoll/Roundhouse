@@ -1,12 +1,19 @@
 /**
  * Install-wide settings: the first-run setup lock and completion marker, the
- * control-plane signing key, and the ingress settings (`apps_domain`, `tls_mode`).
+ * control-plane signing key, the ingress settings (`apps_domain`,
+ * `tls_mode`), and log retention.
  *
  * @module
  */
 import { type Db, instanceSettings } from "@openrail/db";
 import { generateSigningKey, importSigningKey } from "@openrail/protocol";
-import { DEFAULT_TLS_MODE, TLS_MODES, type TlsMode } from "@openrail/shared";
+import {
+  DEFAULT_LOG_RETENTION_DAYS,
+  DEFAULT_TLS_MODE,
+  MAX_LOG_RETENTION_DAYS,
+  TLS_MODES,
+  type TlsMode,
+} from "@openrail/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { seal, unseal } from "./crypto";
@@ -24,6 +31,8 @@ export const SettingKey = {
   githubApp: "github_app",
   /** Pending manifest-flow state token and its expiry, checked by the callback. */
   githubManifestState: "github_manifest_state",
+  /** Days logs are kept (an integer); `DEFAULT_LOG_RETENTION_DAYS` when unset. */
+  logRetentionDays: "log_retention_days",
 } as const;
 
 /**
@@ -214,4 +223,24 @@ export function putSetting(db: Db, key: string, value: unknown) {
     .insert(instanceSettings)
     .values({ key, value })
     .onConflictDoUpdate({ target: instanceSettings.key, set: { value, updatedAt: new Date() } });
+}
+
+// -----------------------------------------------------------------------------
+// Log retention
+// -----------------------------------------------------------------------------
+
+/**
+ * Reads `log_retention_days`, falling back to the default for an unset or
+ * out-of-range value.
+ *
+ * @param db - Database client.
+ * @returns Days logs are kept, between 1 and `MAX_LOG_RETENTION_DAYS`.
+ */
+export async function getLogRetentionDays(db: Db): Promise<number> {
+  const value = await getSetting<unknown>(db, SettingKey.logRetentionDays);
+  return Number.isInteger(value) &&
+    (value as number) >= 1 &&
+    (value as number) <= MAX_LOG_RETENTION_DAYS
+    ? (value as number)
+    : DEFAULT_LOG_RETENTION_DAYS;
 }

@@ -1,0 +1,18 @@
+{
+  "unauthorized": {
+    "error": "Invalid API token.",
+    "status": 401
+  },
+  "not_found": {
+    "error": "Not found.",
+    "status": 404
+  },
+  "method_not_allowed": {
+    "error": "Method not allowed. Must be one of: GET",
+    "status": 405
+  },
+  "per_page": {
+    "error": "only 500 objects are allowed to be returned per page",
+    "status": 400
+  }
+}

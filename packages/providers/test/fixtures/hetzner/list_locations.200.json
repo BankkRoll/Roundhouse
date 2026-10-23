@@ -1,0 +1,24 @@
+{
+  "locations": [
+    {
+      "id": 42,
+      "name": "fsn1",
+      "description": "Falkenstein DC Park 1",
+      "country": "DE",
+      "city": "Falkenstein",
+      "latitude": 50.47612,
+      "longitude": 12.370071,
+      "network_zone": "eu-central"
+    }
+  ],
+  "meta": {
+    "pagination": {
+      "page": 3,
+      "per_page": 25,
+      "previous_page": 2,
+      "next_page": 4,
+      "last_page": 4,
+      "total_entries": 100
+    }
+  }
+}

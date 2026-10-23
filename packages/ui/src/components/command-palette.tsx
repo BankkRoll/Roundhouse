@@ -231,7 +231,7 @@ export function CommandPalette({
                   {group.name ? (
                     <div
                       aria-hidden="true"
-                      className="px-2 pt-2 pb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-subtle-foreground"
+                      className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground"
                     >
                       {group.name}
                     </div>

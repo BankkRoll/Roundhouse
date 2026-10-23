@@ -1,6 +1,7 @@
 /**
  * The instance's GitHub App: creation through the manifest flow, sealed
  * credential storage, App JWTs (RS256 via WebCrypto), installation tokens,
+ * the user-authorization check that proves who may claim an installation,
  * the few REST calls the control plane makes, and webhook signatures.
  *
  * GitHub hands out App private keys as PKCS#1 PEM (`BEGIN RSA PRIVATE KEY`),
@@ -156,6 +157,9 @@ export interface GithubApp {
   slug: string;
   name: string;
   htmlUrl: string;
+  /** OAuth client ID, for exchanging user authorization codes. */
+  clientId: string;
+  clientSecret: string;
   webhookSecret: string;
   privateKeyPem: string;
 }
@@ -247,6 +251,8 @@ export async function loadGithubApp(db: Db, masterKey: string): Promise<GithubAp
     slug: a.slug,
     name: a.name,
     htmlUrl: a.html_url,
+    clientId: a.client_id,
+    clientSecret: await unseal(masterKey, a.client_secret as Sealed, aad("client_secret")),
     webhookSecret: await unseal(masterKey, a.webhook_secret as Sealed, aad("webhook_secret")),
     privateKeyPem: await unseal(masterKey, a.private_key as Sealed, aad("private_key")),
   };
@@ -338,6 +344,10 @@ export function buildManifest(origin: string, name: string): Record<string, unkn
     callback_urls: [callback],
     setup_url: callback,
     setup_on_update: true,
+    // SECURITY: GitHub then sends an OAuth code for the installing user with
+    // the installation redirect, which the callback needs to prove that user
+    // can access the installation ID it is handed.
+    request_oauth_on_install: true,
     public: false,
     default_permissions: GITHUB_APP_PERMISSIONS,
     default_events: GITHUB_APP_EVENTS,
@@ -365,6 +375,100 @@ export async function getInstallation(
   return githubRequest<GithubInstallationInfo>(`/app/installations/${installationId}`, {
     auth: jwt,
   });
+}
+
+// -----------------------------------------------------------------------------
+// User authorization
+// -----------------------------------------------------------------------------
+
+/**
+ * Exchanges a user authorization code for a user-to-server token.
+ *
+ * @param app - The App (its OAuth client credentials).
+ * @param code - The `code` GitHub sent with the installation redirect.
+ * @returns The user's access token. Revoke it with {@link revokeUserToken} once used.
+ * @throws {GithubApiError} When GitHub rejects the code (expired, reused, wrong App).
+ */
+export async function exchangeUserCode(app: GithubApp, code: string): Promise<string> {
+  const res = await fetch(`${GITHUB_WEB}/login/oauth/access_token`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "user-agent": "openrail",
+    },
+    body: JSON.stringify({ client_id: app.clientId, client_secret: app.clientSecret, code }),
+  });
+  let body: { access_token?: string; error?: string; error_description?: string } = {};
+  try {
+    body = (await res.json()) as typeof body;
+  } catch {
+    // Not JSON; reported below.
+  }
+  // GitHub answers 200 with an `error` field for a bad code.
+  if (!res.ok || !body.access_token) {
+    throw new GithubApiError(
+      res.ok ? 400 : res.status,
+      `GitHub OAuth: ${body.error_description ?? body.error ?? res.status}`,
+    );
+  }
+  return body.access_token;
+}
+
+/** Most pages of `/user/installations` read (100 per page). */
+const MAX_USER_INSTALLATION_PAGES = 10;
+
+/**
+ * Whether the user behind a user-to-server token can access an installation
+ * of this App. `GET /user/installations` lists exactly the App's
+ * installations the user has explicit access to.
+ *
+ * @param userToken - Token from {@link exchangeUserCode}.
+ * @param installationId - GitHub's numeric installation ID.
+ * @returns `true` when the installation is listed.
+ */
+export async function userCanAccessInstallation(
+  userToken: string,
+  installationId: number,
+): Promise<boolean> {
+  for (let page = 1; page <= MAX_USER_INSTALLATION_PAGES; page++) {
+    const res = await githubRequest<{ total_count: number; installations: { id: number }[] }>(
+      `/user/installations?per_page=100&page=${page}`,
+      { auth: userToken },
+    );
+    if (res.installations.some((i) => i.id === installationId)) return true;
+    if (res.installations.length < 100 || page * 100 >= res.total_count) return false;
+  }
+  return false;
+}
+
+/**
+ * Revokes a user-to-server token. Best effort: the token expires on its own,
+ * and failing to revoke it must not fail the request that used it.
+ *
+ * @param app - The App (its OAuth client credentials authenticate the call).
+ * @param userToken - Token to revoke.
+ */
+export async function revokeUserToken(app: GithubApp, userToken: string): Promise<void> {
+  try {
+    const res = await fetch(
+      `${GITHUB_API}/applications/${encodeURIComponent(app.clientId)}/token`,
+      {
+        method: "DELETE",
+        headers: {
+          accept: "application/vnd.github+json",
+          "x-github-api-version": "2022-11-28",
+          "user-agent": "openrail",
+          "content-type": "application/json",
+          authorization: `Basic ${btoa(`${app.clientId}:${app.clientSecret}`)}`,
+        },
+        body: JSON.stringify({ access_token: userToken }),
+      },
+    );
+    await res.body?.cancel();
+  } catch (err) {
+    console.warn("revoking a GitHub user token failed", err);
+  }
 }
 
 /**

@@ -8,13 +8,13 @@
 import { builds, deployments, environments, projects, services, workspaces } from "@openrail/db";
 import type { Action } from "@openrail/shared";
 import { and, eq, isNull } from "drizzle-orm";
-import { type AppContext, type Membership, requireWorkspace, type SessionUser } from "../context";
+import { type AppContext, requireWorkspace } from "../context";
 import { ApiError, notFound } from "./errors";
 
 type EnvironmentRow = typeof environments.$inferSelect;
 
-/** The caller's membership in the resource's workspace. */
-export type Caller = Membership & { user: SessionUser };
+/** The caller's membership in the resource's workspace, with their identity and audit actor. */
+export type Caller = Awaited<ReturnType<typeof requireWorkspace>>;
 
 /**
  * Checks `action` in `workspaceId`, reporting a non-member as "`what` not

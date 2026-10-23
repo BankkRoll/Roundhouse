@@ -7,6 +7,18 @@
  * @module
  */
 import type { RealtimeServerMessage } from "../schemas";
+import type { ApiDeploymentWithoutProject } from "./serialize";
+
+/**
+ * A message as callers hand it to {@link publish}: a deployment may come
+ * without `project_id`, which the room's project fills in.
+ */
+export type PublishedMessage =
+  | Exclude<RealtimeServerMessage, { type: "deployment.updated" }>
+  | {
+      type: "deployment.updated";
+      deployment: ApiDeploymentWithoutProject & { project_id?: string };
+    };
 
 /** The bindings publishing needs. */
 interface RoomEnv {
@@ -35,10 +47,14 @@ export function projectRoom(env: RoomEnv, projectId: string) {
 export async function publish(
   env: RoomEnv,
   projectId: string,
-  message: RealtimeServerMessage,
+  message: PublishedMessage,
 ): Promise<void> {
+  const complete: RealtimeServerMessage =
+    message.type === "deployment.updated"
+      ? { ...message, deployment: { ...message.deployment, project_id: projectId } }
+      : message;
   try {
-    await projectRoom(env, projectId).broadcast(message);
+    await projectRoom(env, projectId).broadcast(complete);
   } catch (err) {
     console.warn("realtime publish failed", err);
   }

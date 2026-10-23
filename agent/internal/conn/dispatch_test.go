@@ -21,9 +21,10 @@ import (
 // fakeHandler records dispatched messages and accepts desired states the
 // way the runtime does: only newer generations.
 type fakeHandler struct {
-	mu      sync.Mutex
-	applied []int64
-	builds  []string
+	mu        sync.Mutex
+	applied   []int64
+	builds    []string
+	cancelled []string
 }
 
 func (h *fakeHandler) HasDesiredState() bool {
@@ -46,6 +47,18 @@ func (h *fakeHandler) StartBuild(m *protocol.BuildJob) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.builds = append(h.builds, m.BuildID)
+}
+
+func (h *fakeHandler) CancelBuild(m *protocol.BuildCancel) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cancelled = append(h.cancelled, m.BuildID)
+}
+
+func (h *fakeHandler) cancels() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.cancelled...)
 }
 
 func (h *fakeHandler) snapshot() ([]int64, []string) {
@@ -91,12 +104,16 @@ func TestDispatchesDesiredStateInOrderAndBuildJobs(t *testing.T) {
 	cp.push(t, priv, desired("m_3", 3, future))
 	cp.push(t, priv, desired("m_3_again", 3, future))
 	cp.push(t, priv, buildJob("bld_1", future))
+	cp.push(t, priv, &protocol.BuildCancel{Type: protocol.TypeBuildCancel, ControlHeader: header("m_cancel", future), BuildID: "bld_1"})
 	cp.push(t, priv, desired("m_4", 4, future))
 	waitFor(t, "generation 4", func() bool { a, _ := h.snapshot(); return len(a) == 2 })
 	waitFor(t, "the build job", func() bool { _, b := h.snapshot(); return len(b) == 1 })
 	applied, builds := h.snapshot()
 	if len(applied) != 2 || applied[0] != 3 || applied[1] != 4 || builds[0] != "bld_1" {
 		t.Fatalf("applied %v builds %v", applied, builds)
+	}
+	if c := h.cancels(); len(c) != 1 || c[0] != "bld_1" {
+		t.Fatalf("cancels %v", c)
 	}
 	waitFor(t, "persisted generation 4", func() bool {
 		st, _ := store.Load()

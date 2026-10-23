@@ -45,6 +45,8 @@ export interface KeyValueEditorProps {
   /** Error per row index. */
   errors?: Readonly<Record<number, string>>;
   max?: number;
+  /** Keep the legend for assistive tech only, when a visible label already names the list. */
+  hideLegend?: boolean;
 }
 
 /**
@@ -63,11 +65,14 @@ export function KeyValueEditor({
   disabled,
   errors = {},
   max = 64,
+  hideLegend = false,
 }: KeyValueEditorProps) {
   return (
     <fieldset className="grid gap-2" disabled={disabled}>
-      <legend className="mb-1.5 text-xs font-medium text-muted-foreground">{label}</legend>
-      {pairs.length === 0 ? <p className="text-xs text-subtle-foreground">None.</p> : null}
+      <legend className={hideLegend ? "sr-only" : "mb-1.5 text-[13px] font-medium text-foreground"}>
+        {label}
+      </legend>
+      {pairs.length === 0 ? <p className="text-sm text-muted-foreground">None set.</p> : null}
       {pairs.map((pair, index) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: rows have no identity until saved; editing keeps order
         <div key={index} className="grid gap-1">
@@ -82,7 +87,7 @@ export function KeyValueEditor({
                   pairs.map((row, i) => (i === index ? { ...row, key: event.target.value } : row)),
                 )
               }
-              className="font-mono text-xs"
+              className="font-mono text-[13px]"
               spellCheck={false}
             />
             <Input
@@ -96,7 +101,7 @@ export function KeyValueEditor({
                   ),
                 )
               }
-              className="font-mono text-xs"
+              className="font-mono text-[13px]"
               spellCheck={false}
             />
             <Button

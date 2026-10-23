@@ -1,5 +1,5 @@
 import { JOIN_TOKEN_TTL_MS } from "@openrail/shared";
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
 import { db, makeNode, WORKSPACE_ID } from "../../mocks/db";
@@ -8,6 +8,7 @@ import { server } from "../../mocks/server";
 import { renderWithProviders } from "../../test/render";
 import { AddServerDialog } from "./add-server-dialog";
 import { AddServerFlow } from "./add-server-flow";
+import { INSTALL_METHOD_STORAGE_KEY } from "./install-methods";
 
 function connectNode(name = "hel-2") {
   db.nodes.push({
@@ -168,5 +169,171 @@ describe("AddServerFlow", () => {
     const label = await screen.findByText(/Expires in/);
     expect(label).toHaveTextContent(/1:3\d/);
     await waitFor(() => expect(label).toHaveTextContent(/1:2\d|1:30/), { timeout: 3000 });
+  });
+});
+
+describe("install method tabs", () => {
+  async function openFlow(origin = "https://cp.example.com") {
+    const app = renderWithProviders(
+      <AddServerFlow
+        workspaceId={WORKSPACE_ID}
+        pollIntervalMs={1000}
+        onDone={() => {}}
+        origin={origin}
+      />,
+    );
+    const tabs = await screen.findByRole("tablist", { name: "How to add the server" });
+    const token = db.joinTokens[0]?.token ?? "";
+    return { ...app, tabs, token };
+  }
+
+  it("shows the same token on every tab, with one countdown and waiting state", async () => {
+    const { user, token } = await openFlow("http://localhost:5173");
+    expect(screen.getByRole("tab", { name: "Linux server" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("tabpanel")).toHaveTextContent(`--token ${token}`);
+    expect(screen.getByText("Ubuntu 22.04 and 24.04, Debian 12", { exact: false })).toBeVisible();
+
+    await user.click(screen.getByRole("tab", { name: "This computer" }));
+    expect(screen.getByRole("tabpanel")).toHaveTextContent(`pnpm dev:node ${token}`);
+    expect(screen.getByRole("tabpanel")).toHaveTextContent(
+      /from a clone of the OpenRail repository/,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Linux server" }));
+    expect(screen.getByRole("tabpanel")).toHaveTextContent(`--token ${token}`);
+    expect(db.joinTokens).toHaveLength(1);
+    expect(screen.getAllByText(/Expires in/)).toHaveLength(1);
+    expect(screen.getAllByText("Waiting for the server to connect…")).toHaveLength(1);
+  });
+
+  it("appends --builder for a builder node, on the Linux and cloud-init tabs alike", async () => {
+    const { user, token } = await openFlow();
+    const panel = () => screen.getByRole("tabpanel");
+    expect(panel()).not.toHaveTextContent("--builder");
+    await user.click(screen.getByRole("checkbox", { name: "Builder node" }));
+    expect(within(panel()).getByText(`--token ${token} --builder`, { exact: false })).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Cloud-init" }));
+    expect(screen.getByRole("checkbox", { name: "Builder node" })).toBeChecked();
+    expect(panel()).toHaveTextContent("--builder");
+  });
+
+  it("builds cloud-init that keeps the token in a 0600 file, out of runcmd", async () => {
+    const { user, token } = await openFlow();
+    await user.click(screen.getByRole("tab", { name: "Cloud-init" }));
+    const name = screen.getByLabelText("Server name");
+    await user.clear(name);
+    await user.type(name, "web-1");
+    const userData = screen.getByText(/^#cloud-config/).textContent ?? "";
+    expect(userData).toContain('permissions: "0600"');
+    expect(userData).toContain(`content: ${JSON.stringify(`${token}\n`)}`);
+    expect(userData).toContain("--token-file");
+    expect(userData).toContain("--name 'web-1'");
+    expect(userData).toContain("--proto '=https'");
+    expect(userData).toContain("https://cp.example.com/install.sh");
+    expect(userData).toMatch(/shred -u/);
+    const runcmd = userData.slice(userData.indexOf("runcmd:"));
+    expect(runcmd).not.toContain(token);
+    expect(userData.split("\n").filter((line) => line.includes(token))).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Copy to clipboard" })).toBeInTheDocument();
+
+    await user.clear(name);
+    await user.type(name, "Bad Name");
+    expect(screen.getByText(/must be 1-63 lowercase letters/)).toBeInTheDocument();
+    expect(screen.queryByText(/^#cloud-config/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["plain HTTP", "http://10.0.0.5:8787"],
+    ["this machine", "https://localhost:8443"],
+  ])("explains instead of showing cloud-init when the dashboard is on %s", async (_, origin) => {
+    const { user } = await openFlow(origin);
+    await user.click(screen.getByRole("tab", { name: "Cloud-init" }));
+    expect(screen.getByText("Cloud servers can't use this address")).toBeInTheDocument();
+    expect(screen.getByRole("tabpanel")).toHaveTextContent(origin);
+    expect(screen.queryByText(/#cloud-config/)).not.toBeInTheDocument();
+  });
+
+  it("offers the local Docker node only when the dashboard runs on this machine", async () => {
+    const remote = await openFlow("https://cp.example.com");
+    expect(within(remote.tabs).queryByRole("tab", { name: "This computer" })).toBeNull();
+    remote.unmount();
+    for (const origin of ["http://127.0.0.1:8787", "http://localhost:5173"]) {
+      const local = await openFlow(origin);
+      expect(within(local.tabs).getByRole("tab", { name: "This computer" })).toBeInTheDocument();
+      local.unmount();
+    }
+  });
+
+  it("shows Hetzner as coming soon and never selects it", async () => {
+    const { user } = await openFlow();
+    const hetzner = screen.getByRole("tab", { name: /Hetzner/ });
+    expect(hetzner).toHaveAccessibleName("Hetzner soon");
+    expect(hetzner).toHaveAttribute("aria-disabled", "true");
+    await user.hover(hetzner);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Coming soon: connect Hetzner to create servers in one click.",
+    );
+    await user.click(hetzner);
+    expect(hetzner).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Linux server" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("moves between tabs with the arrow keys", async () => {
+    const { user } = await openFlow("http://localhost:5173");
+    screen.getByRole("tab", { name: "Linux server" }).focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "Cloud-init" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Cloud-init" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    expect(screen.getByRole("tab", { name: /Hetzner/ })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "This computer" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("remembers the last tab picked, and copes without storage", async () => {
+    const first = await openFlow();
+    await first.user.click(screen.getByRole("tab", { name: "Cloud-init" }));
+    expect(localStorage.getItem(INSTALL_METHOD_STORAGE_KEY)).toBe("cloud-init");
+    first.unmount();
+    await openFlow();
+    expect(screen.getByRole("tab", { name: "Cloud-init" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    cleanup();
+
+    localStorage.setItem(INSTALL_METHOD_STORAGE_KEY, "local");
+    await openFlow("https://cp.example.com");
+    expect(screen.getByRole("tab", { name: "Linux server" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    cleanup();
+
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    const blocked = await openFlow();
+    await blocked.user.click(screen.getByRole("tab", { name: "Cloud-init" }));
+    expect(screen.getByRole("tab", { name: "Cloud-init" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    getItem.mockRestore();
+    setItem.mockRestore();
   });
 });

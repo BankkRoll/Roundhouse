@@ -6,8 +6,8 @@
 //   - send hello on every connection, then heartbeats on the interval the
 //     control plane's welcome sets, from a single writer goroutine;
 //   - verify every inbound signed envelope against the pinned control-plane
-//     key, act on welcome, and dispatch desired_state (in generation order)
-//     and build_job to a [Handler];
+//     key, act on welcome, and dispatch desired_state (in generation order),
+//     build_job and build_cancel to a [Handler];
 //   - carry workload_status, logs and build_result frames from the rest of
 //     the agent through that same writer ([Client.Send]), within the
 //     protocol's frame size limit.
@@ -91,6 +91,8 @@ type Handler interface {
 	ApplyDesiredState(m *protocol.DesiredState) bool
 	// StartBuild takes a build job.
 	StartBuild(m *protocol.BuildJob)
+	// CancelBuild stops the build a build_cancel names.
+	CancelBuild(m *protocol.BuildCancel)
 }
 
 // Client is a long-lived connection to the control plane. Configure the
@@ -510,6 +512,12 @@ func (s *session) apply(kid string, msg protocol.ControlMessage) {
 		}
 		s.Logger.Info("received build job", "msg_id", m.ID, "build_id", m.BuildID, "deployment_id", m.DeploymentID)
 		s.Handler.StartBuild(m)
+	case *protocol.BuildCancel:
+		if s.Handler == nil {
+			return
+		}
+		s.Logger.Info("received build cancel", "msg_id", m.ID, "build_id", m.BuildID)
+		s.Handler.CancelBuild(m)
 	}
 }
 

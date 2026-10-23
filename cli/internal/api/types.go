@@ -27,10 +27,21 @@ type Membership struct {
 	MemberID string `json:"member_id"`
 }
 
-// Me is the response of GET /v1/me.
+// Me is the response of GET /v1/me. With an API token, User is the token's
+// creator and Workspaces holds only the token's workspace.
 type Me struct {
 	User       User         `json:"user"`
 	Workspaces []Membership `json:"workspaces"`
+	// Token is the API token the request used; nil for a session.
+	Token *MeToken `json:"token,omitempty"`
+}
+
+// MeToken describes the API token behind a GET /v1/me request.
+type MeToken struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	WorkspaceID string   `json:"workspace_id"`
+	Scopes      []string `json:"scopes"`
 }
 
 // Project is a project in a workspace.
@@ -167,6 +178,7 @@ type Build struct {
 // Deployment is a deployment, with its build when it has one.
 type Deployment struct {
 	ID            string  `json:"id"`
+	ProjectID     string  `json:"project_id"`
 	ServiceID     string  `json:"service_id"`
 	EnvironmentID string  `json:"environment_id"`
 	ConfigVersion int     `json:"config_version"`
@@ -281,6 +293,90 @@ type JoinToken struct {
 	Token          string `json:"token"`
 	ExpiresAt      int64  `json:"expires_at"`
 	InstallCommand string `json:"install_command"`
+}
+
+// ResolvedVariable is one entry of a service's resolved environment.
+type ResolvedVariable struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// ResolvedVariables is the response of POST
+// /v1/services/{serviceId}/variables/resolve, sorted by key.
+type ResolvedVariables struct {
+	Variables []ResolvedVariable `json:"variables"`
+}
+
+// APITokenCreator is the member who created an API token.
+type APITokenCreator struct {
+	UserID string  `json:"user_id"`
+	Name   *string `json:"name"`
+}
+
+// APIToken is a workspace API token as listed; its secret is never returned
+// after creation.
+type APIToken struct {
+	ID     string   `json:"id"`
+	Name   string   `json:"name"`
+	Scopes []string `json:"scopes"`
+	// Prefix is `tok_` and the next four characters of the secret.
+	Prefix    *string          `json:"prefix"`
+	CreatedBy *APITokenCreator `json:"created_by"`
+	// LastUsedAt, ExpiresAt and RevokedAt are millisecond timestamps.
+	LastUsedAt *int64 `json:"last_used_at"`
+	// ExpiresAt is nil for a token that never expires.
+	ExpiresAt *int64 `json:"expires_at"`
+	RevokedAt *int64 `json:"revoked_at"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// State is "revoked", "expired" or "active" at now (milliseconds).
+func (t *APIToken) State(now int64) string {
+	switch {
+	case t.RevokedAt != nil:
+		return "revoked"
+	case t.ExpiresAt != nil && *t.ExpiresAt <= now:
+		return "expired"
+	}
+	return "active"
+}
+
+// CreateAPITokenInput is the body of POST /v1/workspaces/{workspaceId}/tokens.
+type CreateAPITokenInput struct {
+	Name   string   `json:"name"`
+	Scopes []string `json:"scopes"`
+	// ExpiresInDays is 1..[MaxAPITokenDays]; nil (sent as null) never expires.
+	ExpiresInDays *int `json:"expires_in_days"`
+}
+
+// CreatedAPIToken is the response of POST /v1/workspaces/{workspaceId}/tokens.
+type CreatedAPIToken struct {
+	Token APIToken `json:"token"`
+	// Secret is the `tok_…` value, returned this once. SECURITY: print it
+	// only to stdout, never to logs or files.
+	Secret string `json:"secret"`
+}
+
+// MaxAPITokenDays is the longest token lifetime the API accepts
+// (MAX_API_TOKEN_TTL_DAYS).
+const MaxAPITokenDays = 366
+
+// APITokenScopes are the scopes a token may carry, from API_TOKEN_SCOPES in
+// packages/shared/src/tokens.ts (every RBAC action but instance:manage).
+var APITokenScopes = []string{
+	"workspace:read", "workspace:update", "workspace:delete",
+	"members:read", "members:manage", "tokens:manage",
+	"nodes:read", "nodes:manage", "audit:read",
+	"projects:read", "projects:manage",
+	"services:read", "services:manage", "deployments:create",
+	"variables:read", "variables:reveal", "variables:manage",
+}
+
+// APITokenPresets are the named scope sets of API_TOKEN_PRESETS.
+var APITokenPresets = map[string][]string{
+	"read": {"workspace:read", "projects:read", "services:read", "variables:read", "nodes:read"},
+	"deploy": {"workspace:read", "projects:read", "services:read", "variables:read", "nodes:read",
+		"services:manage", "deployments:create", "variables:manage"},
 }
 
 // CreateProjectInput is the body of POST /v1/workspaces/{workspaceId}/projects.

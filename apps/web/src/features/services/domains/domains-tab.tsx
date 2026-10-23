@@ -18,7 +18,7 @@ const TLS_TONE: Record<Domain["tls_status"], "success" | "warning" | "danger" | 
 
 function DomainRow({ domain }: { domain: Domain }) {
   return (
-    <li className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-0">
+    <li className="flex flex-wrap items-center gap-3 border-b border-border/70 py-3.5">
       <GlobeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <a
@@ -30,13 +30,13 @@ function DomainRow({ domain }: { domain: Domain }) {
           {domain.hostname}
           <span className="sr-only"> (opens in a new tab)</span>
         </a>
-        <p className="font-mono text-[11px] text-muted-foreground">
+        <p className="mt-0.5 text-xs text-muted-foreground">
           {domain.type} · port {domain.target_port} · added {formatRelativeTime(domain.created_at)}
         </p>
       </div>
       <Badge tone={TLS_TONE[domain.tls_status]}>
-        <LockIcon className="size-2.5" aria-hidden="true" />
-        tls {domain.tls_status}
+        <LockIcon className="size-3" aria-hidden="true" />
+        TLS {domain.tls_status}
       </Badge>
       <Button
         variant="ghost"
@@ -93,7 +93,7 @@ export function DomainsTab({ workspaceId, projectId, serviceId }: ServicePagePro
   );
 
   return (
-    <section aria-label="Domains" className="grid max-w-4xl gap-4">
+    <section aria-label="Domains" className="grid max-w-[50rem] gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p id="custom-domain-note" className="text-sm text-muted-foreground">
           Generated hostnames come with TLS. Custom domains (your own DNS name, verified and with
@@ -128,7 +128,7 @@ export function DomainsTab({ workspaceId, projectId, serviceId }: ServicePagePro
           className="py-12"
         />
       ) : (
-        <ul className="rounded-lg border border-border bg-surface" aria-label="Domain list">
+        <ul className="border-t border-border/70" aria-label="Domain list">
           {domains.data.map((domain) => (
             <DomainRow key={domain.id} domain={domain} />
           ))}

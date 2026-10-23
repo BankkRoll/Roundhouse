@@ -3,16 +3,20 @@
 //
 // Responsibilities:
 //   - diff the desired workloads (plus the agent's own system workloads)
-//     against the containers labelled openrail.managed=true, every 5 s and
-//     immediately on a new generation or a container event;
+//     against this node's containers (openrail.managed=true and
+//     openrail.namespace=<node ID>), every 5 s and immediately on a new
+//     generation or a container event; containers of other nodes sharing
+//     the engine are never touched, and Phase 1 containers without a
+//     namespace are adopted once when their workload is desired;
 //   - create what is missing, recreate what changed (by spec hash) and
 //     remove what is no longer wanted, in zero-downtime order: the new
 //     container becomes healthy, routes switch to it, the old one drains for
 //     drain_s, then it is removed;
 //   - run health probes and the restart policy itself, with crash-loop
 //     backoff, so every crash is seen and reported;
-//   - keep one bridge network per project, report workload_status on every
-//     state change, and garbage-collect unused images under disk pressure.
+//   - keep one bridge network per environment, remove the ones no longer
+//     used, report workload_status on every state change, and
+//     garbage-collect unused images under disk pressure.
 //
 // Nothing secret is written to disk: environment values live only in the
 // engine's container config and in memory.
@@ -102,10 +106,23 @@ type Options struct {
 	Prober Prober
 	// GC configures image garbage collection; see [GCOptions].
 	GC GCOptions
+	// MinDrain is the shortest time a replaced container keeps serving after
+	// routes stop naming it, whatever its drain_s: how long the ingress may
+	// take to stop sending it requests ([ingress.SwitchDelay]).
+	MinDrain time.Duration
 	// Namespace, when set, restricts the runtime to containers labelled
-	// openrail.namespace=<Namespace> and labels the ones it creates so.
-	// Integration tests use it to stay clear of everything else on the host.
+	// openrail.namespace=<Namespace> and labels the containers and networks
+	// it creates so. The agent sets it to the node ID, so two nodes sharing
+	// a Docker engine never manage or remove each other's containers;
+	// integration tests use a random one to stay clear of everything else.
 	Namespace string
+	// AdoptUnlabelled makes the runtime also manage containers labelled
+	// openrail.managed=true without any namespace, as Phase 1 agents created
+	// them, but only once their workload ID is in the desired state. An
+	// adopted container stays managed (it is recorded in DataDir) until it is
+	// removed, so it is still drained and removed after its workload is
+	// dropped. Requires Namespace.
+	AdoptUnlabelled bool
 }
 
 // Runtime is the reconciler. Create it with [New], feed it desired states
@@ -136,6 +153,11 @@ type Runtime struct {
 	// started is when this runtime was created; containers already running
 	// before it were started by an earlier agent process.
 	started time.Time
+	// adopted holds the IDs of unlabelled containers adopted under
+	// [Options.AdoptUnlabelled].
+	adopted map[string]bool
+	// networksCheckedAt is when unused networks were last looked for.
+	networksCheckedAt time.Time
 }
 
 // instance is one managed container.
@@ -199,7 +221,7 @@ func New(opts Options) *Runtime {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Runtime{
+	r := &Runtime{
 		opts:      opts,
 		log:       log,
 		d:         opts.Docker,
@@ -210,7 +232,12 @@ func New(opts Options) *Runtime {
 		workloads: map[string]*workState{},
 		networks:  map[string]bool{},
 		started:   time.Now(),
+		adopted:   map[string]bool{},
 	}
+	if opts.AdoptUnlabelled {
+		r.adopted = loadAdopted(r.adoptedPath(), log)
+	}
+	return r
 }
 
 // Apply hands the runtime a verified desired state. A state whose
@@ -300,10 +327,19 @@ func (r *Runtime) selector() []string {
 	return []string{ManagedFilter}
 }
 
+// adopting reports whether unlabelled containers may be adopted.
+func (r *Runtime) adopting() bool {
+	return r.opts.AdoptUnlabelled && r.opts.Namespace != ""
+}
+
 // watchEvents wakes the reconciler on container lifecycle events, so crashes
 // and exits are handled in well under the loop interval.
 func (r *Runtime) watchEvents(ctx context.Context) {
-	filters := map[string][]string{"type": {"container"}, "label": r.selector()}
+	labels := r.selector()
+	if r.adopting() {
+		labels = []string{ManagedFilter}
+	}
+	filters := map[string][]string{"type": {"container"}, "label": labels}
 	delay := time.Second
 	for ctx.Err() == nil {
 		start := time.Now()
@@ -363,7 +399,7 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 	r.listSeq++
 	seq := r.listSeq
 	r.mu.Unlock()
-	list, err := r.d.ListContainers(ctx, r.selector()...)
+	list, err := r.listOwn(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			r.engineError("list containers", err)
@@ -383,6 +419,7 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 	}
 	specs := r.wantSpecs(ds)
 	r.ensureNetworks(ctx, specs)
+	r.collectNetworks(ctx, specs)
 
 	now := time.Now()
 	r.mu.Lock()
@@ -410,7 +447,7 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 		drainStart := time.Now()
 		for _, inst := range toDrain {
 			inst.drainAt = drainStart
-			drain := time.Duration(r.drainSeconds(inst, specs)) * time.Second
+			drain := r.drainFor(inst, specs)
 			next = min(next, drain)
 			r.log.Info("draining replaced container", "workload_id", inst.meta.workloadID,
 				"container", short(inst.id), "drain", drain)
@@ -631,7 +668,7 @@ func (r *Runtime) reconcileObsolete(specs []*wantSpec, now time.Time) ([]*instan
 		case !inst.running, s != nil && s.exclusive:
 			r.removeAsync(inst, "replaced")
 		case !inst.drainAt.IsZero():
-			end := inst.drainAt.Add(time.Duration(r.drainSeconds(inst, specs)) * time.Second)
+			end := inst.drainAt.Add(r.drainFor(inst, specs))
 			if now.Before(end) {
 				next = minPositive(next, end.Sub(now))
 				continue
@@ -642,6 +679,12 @@ func (r *Runtime) reconcileObsolete(specs []*wantSpec, now time.Time) ([]*instan
 		}
 	}
 	return toDrain, next
+}
+
+// drainFor is how long a replaced container drains: its drain_s, but never
+// less than [Options.MinDrain].
+func (r *Runtime) drainFor(inst *instance, specs []*wantSpec) time.Duration {
+	return max(time.Duration(r.drainSeconds(inst, specs))*time.Second, r.opts.MinDrain)
 }
 
 // drainSeconds prefers the desired spec's drain_s, which can change without
@@ -719,22 +762,26 @@ func short(id string) string {
 // it: healthy containers of the desired spec; failing that, the replaced
 // containers still running and not yet draining (they keep serving until
 // their replacement is healthy); failing that, desired containers whose
-// probe is failing, since a degraded answer beats none. Caller holds r.mu.
+// probe is failing, since a degraded answer beats none. Every desired route
+// is listed with its port even while nothing serves it, so the ingress
+// keeps the route (and Caddy's config) stable. Caller holds r.mu.
 func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec) ingress.Config {
 	type key struct{ host, prefix string }
 	healthy := map[key][]string{}
 	old := map[key][]string{}
 	degraded := map[key][]string{}
+	ports := map[key][]int{}
 	var keys []key
 	var hosts []string
-	add := func(m map[key][]string, k key, upstream string) {
-		if _, seen := healthy[k]; !seen {
-			if _, seen := old[k]; !seen {
-				if _, seen := degraded[k]; !seen {
-					keys = append(keys, k)
-				}
-			}
+	seen := map[key]bool{}
+	note := func(k key) {
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
 		}
+	}
+	add := func(m map[key][]string, k key, upstream string) {
+		note(k)
 		m[k] = append(m[k], upstream)
 	}
 	upstream := func(inst *instance, network string, port int) (string, bool) {
@@ -747,6 +794,9 @@ func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec) in
 		wanted[s.ID] = s
 		for _, rt := range s.Routes {
 			hosts = append(hosts, rt.Hostname)
+			k := key{rt.Hostname, rt.PathPrefix}
+			note(k)
+			ports[k] = append(ports[k], rt.ContainerPort)
 		}
 		cur := r.current(s)
 		if cur == nil || !cur.running || cur.busy {
@@ -792,7 +842,7 @@ func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec) in
 		if len(ups) == 0 {
 			ups = degraded[k]
 		}
-		cfg.Routes = append(cfg.Routes, ingress.Route{Host: k.host, PathPrefix: k.prefix, Upstreams: ups})
+		cfg.Routes = append(cfg.Routes, ingress.Route{Host: k.host, PathPrefix: k.prefix, Upstreams: ups, Ports: ports[k]})
 	}
 	return cfg
 }
@@ -1031,6 +1081,12 @@ func (r *Runtime) ensureNetwork(ctx context.Context, s *wantSpec) error {
 	labels := map[string]string{LabelManaged: "true"}
 	if s.ProjectID != nil {
 		labels[LabelProjectID] = *s.ProjectID
+	}
+	if s.EnvironmentID != nil {
+		labels[LabelEnvironmentID] = *s.EnvironmentID
+	}
+	if r.opts.Namespace != "" {
+		labels[LabelNamespace] = r.opts.Namespace
 	}
 	_, err = r.d.CreateNetwork(ctx, docker.NetworkCreate{Name: s.Network, Driver: "bridge", Labels: labels})
 	if docker.IsConflict(err) {

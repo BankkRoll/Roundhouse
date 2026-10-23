@@ -1,4 +1,4 @@
-import { slugify } from "@openrail/shared";
+import { freeSlug, slugify } from "@openrail/shared";
 import {
   Button,
   Dialog,
@@ -15,7 +15,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useId, useState } from "react";
 import { FormField } from "../../components/form-field";
 import { errorMessage } from "../../lib/api/client";
-import { useCreateProject } from "../../queries/projects";
+import { useCreateProject, useProjects } from "../../queries/projects";
 
 /** Longest project description the API accepts. */
 const MAX_DESCRIPTION = 500;
@@ -40,7 +40,10 @@ export function NewProjectDialog({ workspaceId, open, onOpenChange }: NewProject
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
   const descriptionId = useId();
-  const slug = slugify(name, 40, "");
+  const projects = useProjects(workspaceId, open);
+  const base = slugify(name, 40, "");
+  // NOTE: The API suffixes a taken slug the same way, so this predicts what it will pick.
+  const slug = base ? freeSlug(new Set(projects.data?.map((project) => project.slug)), base) : "";
 
   function reset() {
     setName("");
@@ -100,7 +103,7 @@ export function NewProjectDialog({ workspaceId, open, onOpenChange }: NewProject
             placeholder="storefront"
             maxLength={100}
             error={error}
-            hint={slug ? `Slug: ${slug}` : undefined}
+            hint={slug ? `Slug: ${slug}${slug === base ? "" : ` (${base} is taken)`}` : undefined}
             autoFocus
           />
           <div className="grid gap-1.5">

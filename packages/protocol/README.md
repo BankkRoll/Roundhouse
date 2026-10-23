@@ -26,11 +26,14 @@ CI fails if `schema/` or `fixtures/` are stale.
 Hand-written fixtures (`hello.json`, `logs-runtime.json`, …) are plain
 messages. Generated ones come from `scripts/gen-fixtures.ts` and are excluded
 from formatting in `biome.json`:
-- `signed-*.json`: control frames signed with a fixed RFC 8032 test key. The
-  Go tests verify the signature, decode the payload and re-encode it, so a
-  field that exists on only one side fails.
+- `signed-*.json`: control frames signed with a fixed RFC 8032 test key
+  (`desired_state`, `build_job`, `build_cancel`). The Go tests verify the
+  signature, decode the payload and re-encode it, so a field that exists on
+  only one side fails.
 - `spec-hash.json`: workload specs with their canonical text and
   `spec_hash`. Both sides must reproduce both exactly.
+- `network-names.json`: `environmentNetworkName` cases, readable and hashed.
+  Both sides must produce the same names.
 
 ### Go decoding rules
 
@@ -50,15 +53,22 @@ constraints (ranges, formats, sizes) live in each type's `Validate()`.
 
 ### Versions
 
-The control plane accepts `MIN_PROTOCOL_VERSION` through `PROTOCOL_VERSION`
-(N-1 and N). Bump `PROTOCOL_VERSION`, in both `src/messages.ts` and
-`go/messages.go`, when:
+The control plane accepts `MIN_PROTOCOL_VERSION` through `PROTOCOL_VERSION`:
+at least N-1 and N, and older versions for as long as every change since
+them is additive (today 1 through 3). Bump `PROTOCOL_VERSION`, in both
+`src/messages.ts` and `go/messages.go`, when:
 - a change is breaking; or
 - the control plane must know whether an agent understands something new
-  before sending it (version 2 gates `build_job` and workload placement).
+  before sending it. Version 2 gates `build_job` and workload placement.
+  Version 3 gates `build_cancel`, which a version 2 agent would drop, and
+  `build_job.secret_build_args`, which it would ignore and then bake the
+  secret values into the image.
 
-Purely additive optional fields need no bump. Changes to the envelope or
-signing scheme need an ADR.
+Give each gated feature its own constant (`WORKLOADS_PROTOCOL_VERSION`,
+`BUILD_CANCEL_PROTOCOL_VERSION`, `SECRET_BUILD_ARGS_PROTOCOL_VERSION`) and
+check it where the control plane sends the frame or field. Purely additive
+optional fields that an older agent may safely ignore need no bump. Changes
+to the envelope or signing scheme need an ADR.
 
 ### Credentials on the wire
 

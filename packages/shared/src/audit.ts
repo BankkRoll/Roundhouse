@@ -35,6 +35,7 @@ export const AUDIT_ACTIONS = [
   "service.deleted",
   "variables.updated",
   "variables.revealed",
+  "variables.resolved",
   "deployment.created",
   "deployment.rolled_back",
   "deployment.cancelled",
@@ -42,7 +43,10 @@ export const AUDIT_ACTIONS = [
   "deployment.failed",
   "github.app_created",
   "github.installation_added",
+  "github.installation_rejected",
   "instance.settings_updated",
+  "token.created",
+  "token.revoked",
 ] as const;
 
 /** An audited action name. */

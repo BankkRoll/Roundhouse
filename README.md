@@ -51,7 +51,7 @@ pnpm --filter @openrail/e2e test:browser           # browser end-to-end
 | ------------------- | -------------------------------------- |
 | `apps/api`          | Control plane Worker                   |
 | `apps/web`          | Dashboard                              |
-| `landing`           | Public site, published to GitHub Pages |
+| `apps/landing`      | Public site, published to GitHub Pages |
 | `agent`             | Node agent (Go)                        |
 | `install`           | Server install script and systemd unit |
 | `packages/protocol` | Control plane ↔ agent wire protocol    |

@@ -63,7 +63,7 @@ describe("image deployments", () => {
     expect(workload).toMatchObject({
       kind: "service",
       image: "nginx:1.27",
-      network: `openrail-${s.project.id}`,
+      network: `openrail-${s.project.id}-${s.envId}`,
       ports: [{ container_port: 8080, protocol: "http" }],
     });
     expect(workload.env).toMatchObject({

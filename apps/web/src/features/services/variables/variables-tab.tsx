@@ -158,7 +158,7 @@ function RowEditor({
       onKeyDown={(event) => {
         if (event.key === "Escape" && !event.defaultPrevented) onCancel();
       }}
-      className="grid gap-2 border-b border-border bg-muted/30 px-3 py-3 md:grid-cols-[14rem_minmax(0,1fr)_auto]"
+      className="-mx-3 grid gap-2 rounded-md bg-muted/40 px-3 py-3 md:grid-cols-[14rem_minmax(0,1fr)_auto]"
       aria-label={editor.isNew ? "New variable" : `Edit ${editor.key}`}
     >
       <div className="grid content-start gap-1">
@@ -484,7 +484,7 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
+      <div className="border-y border-border/70">
         {editorFor(null)}
         {rows.length === 0 && !editor ? (
           <EmptyState
@@ -505,10 +505,10 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
               const masked = plain === undefined;
               const error = fieldErrors[row.key] ?? null;
               return (
-                <li key={row.key} className="border-b border-border last:border-0">
+                <li key={row.key} className="border-b border-border/70 last:border-0">
                   {editorFor(row.key) ?? (
                     <div
-                      className="grid items-center gap-x-3 gap-y-1 px-3 py-2 md:grid-cols-[14rem_minmax(0,1fr)_auto]"
+                      className="grid items-center gap-x-4 gap-y-1 py-2.5 md:grid-cols-[14rem_minmax(0,1fr)_auto]"
                       data-change={row.change}
                     >
                       <div className="flex min-w-0 items-center gap-2">

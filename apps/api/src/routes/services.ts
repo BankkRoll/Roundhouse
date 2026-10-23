@@ -8,12 +8,15 @@
  *   deployment picks it up.
  * - Deleting a service is a soft delete that stops its deployments and pulls
  *   its replicas from nodes.
+ * - The slug is the `${{slug.VAR}}` namespace: on create, a taken or reserved
+ *   slug (`shared`) is suffixed -2, -3, …; a rename is exact (409 when taken)
+ *   except that a reserved slug is suffixed the same way.
  *
  * @module
  */
-import { domains, environments, serviceConfigs, services } from "@openrail/db";
-import { defaultServiceConfig, newId } from "@openrail/shared";
-import { and, asc, desc, eq, isNull, like } from "drizzle-orm";
+import { type Db, domains, environments, serviceConfigs, services } from "@openrail/db";
+import { defaultServiceConfig, newId, RESERVED_SERVICE_SLUGS } from "@openrail/shared";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { clientIp, createRouter } from "../context";
 import {
   createService,
@@ -31,6 +34,7 @@ import {
   type ConfigPatch,
   configInsert,
   freeSlug,
+  insertWithFreeSlug,
   latestConfig,
   liveServices,
   mergeConfig,
@@ -44,6 +48,14 @@ import { environmentOf, projectScope, serviceScope } from "../lib/scope";
 import { toApiConfig, toApiDomain, toApiService } from "../lib/serialize";
 import { getIngressSettings } from "../lib/settings";
 import { SERVICE_CONFIG_PARTS } from "../schemas";
+
+async function liveSlugs(db: Db, projectId: string): Promise<string[]> {
+  const rows = await db
+    .select({ slug: services.slug })
+    .from(services)
+    .where(and(eq(services.projectId, projectId), isNull(services.deletedAt)));
+  return rows.map((r) => r.slug);
+}
 
 /** Service, config and domain routes. */
 export const serviceRoutes = createRouter()
@@ -60,52 +72,38 @@ export const serviceRoutes = createRouter()
     const db = c.get("db");
     const spec = mergeConfig(defaultServiceConfig(body.source), body.config ?? {});
 
-    let slug = body.slug;
-    if (!slug) {
-      const base = slugFor(body.name, "service");
-      const taken = await db
-        .select({ slug: services.slug })
-        .from(services)
-        .where(
-          and(
-            eq(services.projectId, projectId),
-            isNull(services.deletedAt),
-            like(services.slug, `${base}%`),
-          ),
-        );
-      // `shared` is a reference namespace, never a service slug.
-      slug = freeSlug(new Set([...taken.map((t) => t.slug), "shared"]), base);
-    }
     const envs = await db
       .select()
       .from(environments)
       .where(eq(environments.projectId, projectId))
       .orderBy(asc(environments.id));
     const id = newId("service");
-    try {
-      await db.batch([
-        db.insert(services).values({
-          id,
-          projectId,
-          name: body.name,
-          slug,
-          kind: body.kind,
-          icon: body.icon ?? null,
-        }),
-        ...envs.map((e) =>
-          configInsert(db, {
-            serviceId: id,
-            environmentId: e.id,
-            version: 1,
-            createdBy: caller.user.id,
-            spec,
+    const { slug } = await insertWithFreeSlug({
+      base: body.slug ?? slugFor(body.name, "service"),
+      reserved: RESERVED_SERVICE_SLUGS,
+      uniqueOn: "services",
+      taken: () => liveSlugs(db, projectId),
+      insert: (slug) =>
+        db.batch([
+          db.insert(services).values({
+            id,
+            projectId,
+            name: body.name,
+            slug,
+            kind: body.kind,
+            icon: body.icon ?? null,
           }),
-        ),
-      ]);
-    } catch (err) {
-      if (isUniqueViolation(err, "services")) throw conflict(`A service with slug ${slug} exists`);
-      throw err;
-    }
+          ...envs.map((e) =>
+            configInsert(db, {
+              serviceId: id,
+              environmentId: e.id,
+              version: 1,
+              createdBy: caller.user.id,
+              spec,
+            }),
+          ),
+        ]),
+    });
     const ingress = await getIngressSettings(db);
     for (const e of envs) {
       await syncGeneratedDomain(
@@ -116,8 +114,7 @@ export const serviceRoutes = createRouter()
     }
     await recordAudit(db, {
       workspaceId: project.workspaceId,
-      actorType: "user",
-      actorId: caller.user.id,
+      ...caller.actor,
       action: "service.created",
       targetType: "service",
       targetId: id,
@@ -147,6 +144,17 @@ export const serviceRoutes = createRouter()
     );
     const body = c.req.valid("json");
     const db = c.get("db");
+    // A rename is exact, except that a reserved slug gets the suffix it would on create.
+    const newSlug =
+      body.slug === undefined
+        ? undefined
+        : (RESERVED_SERVICE_SLUGS as readonly string[]).includes(body.slug)
+          ? freeSlug(
+              new Set((await liveSlugs(db, project.id)).filter((s) => s !== service.slug)),
+              body.slug,
+              RESERVED_SERVICE_SLUGS,
+            )
+          : body.slug;
 
     const patch: ConfigPatch = {};
     for (const part of SERVICE_CONFIG_PARTS) {
@@ -182,7 +190,7 @@ export const serviceRoutes = createRouter()
         db,
         {
           serviceId,
-          serviceSlug: body.slug ?? service.slug,
+          serviceSlug: newSlug ?? service.slug,
           environmentId: env.id,
           environmentSlug: env.slug,
           spec,
@@ -192,13 +200,13 @@ export const serviceRoutes = createRouter()
     }
 
     let updated = service;
-    if (body.name !== undefined || body.slug !== undefined || body.icon !== undefined || config) {
+    if (body.name !== undefined || newSlug !== undefined || body.icon !== undefined || config) {
       try {
         const [row] = await db
           .update(services)
           .set({
             ...(body.name !== undefined ? { name: body.name } : {}),
-            ...(body.slug !== undefined ? { slug: body.slug } : {}),
+            ...(newSlug !== undefined ? { slug: newSlug } : {}),
             ...(body.icon !== undefined ? { icon: body.icon } : {}),
             updatedAt: new Date(),
           })
@@ -208,15 +216,14 @@ export const serviceRoutes = createRouter()
         updated = row;
       } catch (err) {
         if (isUniqueViolation(err, "services")) {
-          throw conflict(`A service with slug ${body.slug} exists`);
+          throw conflict(`A service with slug ${newSlug} exists`);
         }
         throw err;
       }
     }
     await recordAudit(db, {
       workspaceId: project.workspaceId,
-      actorType: "user",
-      actorId: caller.user.id,
+      ...caller.actor,
       action: "service.updated",
       targetType: "service",
       targetId: serviceId,
@@ -250,8 +257,7 @@ export const serviceRoutes = createRouter()
     if (!row) throw notFound("Service");
     await recordAudit(db, {
       workspaceId: project.workspaceId,
-      actorType: "user",
-      actorId: caller.user.id,
+      ...caller.actor,
       action: "service.deleted",
       targetType: "service",
       targetId: serviceId,

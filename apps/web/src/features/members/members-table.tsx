@@ -44,12 +44,12 @@ export function MembersTable({ workspaceId, members }: { workspaceId: string; me
 
   return (
     <>
-      <Table>
+      <Table stack>
         <TableHeader>
           <TableRow>
             <TableHead>Member</TableHead>
             <TableHead>Role</TableHead>
-            <TableHead>Joined</TableHead>
+            <TableHead className="text-right">Joined</TableHead>
             {canManage ? (
               <TableHead>
                 <span className="sr-only">Actions</span>
@@ -60,9 +60,9 @@ export function MembersTable({ workspaceId, members }: { workspaceId: string; me
         <TableBody>
           {members.map((member) => (
             <TableRow key={member.id}>
-              <TableCell>
-                <div className="flex items-center gap-2.5">
-                  <Avatar name={member.name || member.email} seed={member.user_id} size={24} />
+              <TableCell cell="primary">
+                <div className="flex items-center gap-3">
+                  <Avatar name={member.name || member.email} seed={member.user_id} size={32} />
                   <div className="min-w-0">
                     <p className="truncate text-sm text-foreground">
                       {member.name || member.email}
@@ -70,13 +70,11 @@ export function MembersTable({ workspaceId, members }: { workspaceId: string; me
                         <span className="ml-1.5 text-xs text-muted-foreground">(you)</span>
                       ) : null}
                     </p>
-                    <p className="truncate font-mono text-[11px] text-muted-foreground">
-                      {member.email}
-                    </p>
+                    <p className="truncate text-xs text-muted-foreground">{member.email}</p>
                   </div>
                 </div>
               </TableCell>
-              <TableCell>
+              <TableCell cell="action">
                 {editable(member) ? (
                   <RoleSelect
                     aria-label={`Role for ${member.name || member.email}`}
@@ -103,11 +101,14 @@ export function MembersTable({ workspaceId, members }: { workspaceId: string; me
                     }
                   />
                 ) : (
-                  <Badge tone={member.role === "owner" ? "accent" : "neutral"}>{member.role}</Badge>
+                  <Badge tone={member.role === "owner" ? "accent" : "neutral"}>
+                    {roleLabel(member.role)}
+                  </Badge>
                 )}
               </TableCell>
-              <TableCell className="font-mono text-xs text-muted-foreground">
+              <TableCell className="text-right text-xs whitespace-nowrap text-muted-foreground tabular-nums">
                 <span title={formatTimestamp(member.created_at)}>
+                  <span className="sm:hidden">Joined </span>
                   {formatRelativeTime(member.created_at)}
                 </span>
               </TableCell>

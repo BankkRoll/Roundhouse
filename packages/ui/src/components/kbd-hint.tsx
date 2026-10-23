@@ -19,7 +19,7 @@ export function KbdHint({ keys, className, ...props }: KbdHintProps) {
     <span
       aria-hidden="true"
       className={cn(
-        "inline-flex items-center gap-1 font-mono text-[10px] text-subtle-foreground",
+        "inline-flex items-center gap-1 font-mono text-[11px] text-subtle-foreground",
         className,
       )}
       {...props}

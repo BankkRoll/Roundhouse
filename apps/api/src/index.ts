@@ -7,6 +7,7 @@
  * - Agent join/connect endpoints and the install script
  * - The project realtime socket (`ProjectRoom`) and the deploy workflow
  *   (`DeployWorkflow`), exported for their bindings
+ * - The hourly retention job (Cron Trigger), see `lib/retention.ts`
  * - Static SPA assets (served by the platform for everything else)
  *
  * @module
@@ -17,6 +18,7 @@ import { authFor, createRouter, withDb } from "./context";
 import type { Env } from "./env";
 import { ApiError, errorBody, errorCodeForStatus } from "./lib/errors";
 import { rateLimitSecrets, sameOriginMutations } from "./lib/guards";
+import { runRetention } from "./lib/retention";
 import { agentRoutes } from "./routes/agent";
 import { auditRoutes } from "./routes/audit";
 import { deploymentRoutes } from "./routes/deployments";
@@ -28,9 +30,10 @@ import { projectRoutes } from "./routes/projects";
 import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
 import { serviceRoutes } from "./routes/services";
 import { setupRoutes } from "./routes/setup";
+import { tokenRoutes } from "./routes/tokens";
 import { variableRoutes } from "./routes/variables";
 import { workspaceRoutes } from "./routes/workspaces";
-import { SESSION_SCHEME } from "./schemas";
+import { SESSION_SCHEME, TOKEN_SCHEME } from "./schemas";
 
 export { NodeConnection } from "./durable/node-connection";
 export { ProjectRoom } from "./durable/project-room";
@@ -73,6 +76,7 @@ app
   .route("/", deploymentRoutes)
   .route("/", instanceRoutes)
   .route("/", githubRoutes)
+  .route("/", tokenRoutes)
   .route("/", realtimeRoutes);
 
 app.openAPIRegistry.registerComponent("securitySchemes", SESSION_SCHEME, {
@@ -82,6 +86,14 @@ app.openAPIRegistry.registerComponent("securitySchemes", SESSION_SCHEME, {
   description:
     "Better Auth session cookie, set by sign-in, setup, and invite acceptance. " +
     "Named `better-auth.session_token` (no `__Secure-` prefix) over plain HTTP in local dev.",
+});
+
+app.openAPIRegistry.registerComponent("securitySchemes", TOKEN_SCHEME, {
+  type: "http",
+  scheme: "bearer",
+  description:
+    "Workspace API token (`tok_…`) created under Settings → API tokens. Limited to its " +
+    "workspace and scopes; cookies are ignored when it is sent.",
 });
 
 app.doc31("/v1/openapi.json", {
@@ -108,4 +120,8 @@ export { app };
 
 export default {
   fetch: app.fetch,
+  async scheduled(controller, env) {
+    const report = await runRetention(env, controller.scheduledTime);
+    console.log("retention", JSON.stringify(report));
+  },
 } satisfies ExportedHandler<Env>;

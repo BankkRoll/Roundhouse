@@ -3,11 +3,16 @@
  * control plane and a real Go agent:
  * fresh install → setup wizard → dashboard → add server → agent connects →
  * live usage shows → invite a teammate → they sign up and land with their role.
+ *
+ * Along the way every main page (login, setup, home, servers, a project, a
+ * service's deployments, settings) is audited with axe in both themes, and the
+ * run fails on any WCAG 2.1 A/AA violation.
  */
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 import { E2E_MASTER_KEY } from "../constants.mjs";
 
@@ -43,6 +48,34 @@ async function shot(page: Page, name: string) {
   await page.screenshot({ path: join(SHOTS, `${name}.png`), fullPage: true });
 }
 
+/**
+ * Runs axe against the page as it is now, in the dark and light themes, and fails
+ * with a readable list of WCAG 2.1 A/AA violations. While a modal dialog is open only
+ * the dialog is audited: the page behind it is inert and dimmed by the backdrop, so its
+ * contrast there is not what anyone reads.
+ */
+async function audit(page: Page, name: string) {
+  const found: string[] = [];
+  for (const colorScheme of ["dark", "light"] as const) {
+    await page.emulateMedia({ colorScheme });
+    // NOTE: Theme colors transition; let them settle so contrast is measured on the end state.
+    await page.waitForTimeout(250);
+    const builder = new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]);
+    if (await page.locator("[role=dialog]").count()) {
+      builder.include("[role=dialog]");
+    }
+    const results = await builder.analyze();
+    for (const violation of results.violations) {
+      const targets = violation.nodes.map((node) => node.target.join(" ")).join(", ");
+      found.push(
+        `[${colorScheme}] ${violation.id} (${violation.impact}): ${violation.help} → ${targets}`,
+      );
+    }
+  }
+  await page.emulateMedia({ colorScheme: "dark" });
+  expect(found, `axe violations on ${name}`).toEqual([]);
+}
+
 test.describe
   .serial("first run", () => {
     let workspacePath = "";
@@ -56,6 +89,7 @@ test.describe
       await page.goto("/dashboard");
       await expect(page).toHaveURL(/\/setup/);
       await shot(page, "01-setup-master-key");
+      await audit(page, "setup");
     });
 
     test("setup rejects the wrong master key, then completes with the right one", async ({
@@ -79,7 +113,12 @@ test.describe
       await page.getByLabel("Master key").fill(E2E_MASTER_KEY);
       await page.getByRole("button", { name: "Create admin account" }).click();
       await expect(page.getByText(/add your first server|add a server/i).first()).toBeVisible();
+      await expect(page.getByRole("tab", { name: "Linux server" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
       await shot(page, "04-setup-add-server");
+      await audit(page, "setup: first server");
     });
 
     test("lands on Home with the workspace shell", async ({ page }) => {
@@ -87,6 +126,16 @@ test.describe
       await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
       workspacePath = new URL(page.url()).pathname.match(/^\/w\/[^/]+/)![0];
       await shot(page, "05-home-empty");
+      await audit(page, "home");
+    });
+
+    test("the sign-in page is accessible", async ({ browser }) => {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.goto("/login");
+      await expect(page.getByRole("button", { name: /sign in|log in/i })).toBeVisible();
+      await audit(page, "login");
+      await context.close();
     });
 
     test("adding a server shows a live install command that flips to connected", async ({
@@ -98,6 +147,7 @@ test.describe
       await page.keyboard.press("s");
       await expect(page.getByRole("heading", { name: "Servers", level: 1 })).toBeVisible();
       await shot(page, "06-servers-empty");
+      await audit(page, "servers");
 
       await page
         .getByRole("button", { name: /add server/i })
@@ -107,6 +157,25 @@ test.describe
       const token = command?.match(/--token (\S+)/)?.[1];
       expect(token).toMatch(/^njt_/);
       await shot(page, "07-add-server-dialog");
+      await audit(page, "add server: Linux");
+
+      const dialog = page.getByRole("dialog", { name: "Add a server" });
+      await dialog.getByRole("checkbox", { name: "Builder node" }).check();
+      await expect(dialog.getByText(`--token ${token} --builder`)).toBeVisible();
+      await dialog.getByRole("checkbox", { name: "Builder node" }).uncheck();
+      await dialog.getByRole("tab", { name: "Cloud-init" }).click();
+      await expect(dialog.getByText("Cloud servers can't use this address")).toBeVisible();
+      await shot(page, "07b-add-server-cloud-init");
+      await audit(page, "add server: cloud-init");
+      await dialog.getByRole("tab", { name: "This computer" }).click();
+      await expect(dialog.getByText(`pnpm dev:node ${token}`)).toBeVisible();
+      await shot(page, "07c-add-server-this-computer");
+      await audit(page, "add server: this computer");
+      await dialog.getByRole("tab", { name: "This computer" }).press("ArrowRight");
+      await expect(dialog.getByRole("tab", { name: /Hetzner/ })).toBeFocused();
+      await expect(page.getByRole("tooltip")).toContainText("Coming soon");
+      await shot(page, "07d-add-server-hetzner-soon");
+      await dialog.getByRole("tab", { name: "Linux server" }).click();
 
       const config = join(agentDir, "agent.yaml");
       const join_ = spawnSync(agentBin, [
@@ -133,13 +202,140 @@ test.describe
       await expect(page.getByText(/online/i).first()).toBeVisible();
       await expect(page.getByRole("meter").first()).toBeVisible({ timeout: 20_000 });
       await shot(page, "09-servers-online");
+      await audit(page, "servers with a server online");
     });
 
     test("Home reflects the fleet and the activity feed", async ({ page }) => {
       await signIn(page);
-      await expect(page.getByText(/1 online/i)).toBeVisible();
+      await expect(page.getByRole("region", { name: "Servers online" })).toContainText("1 of 1");
       await expect(page.getByText(/hel-1 connected/i).first()).toBeVisible();
       await shot(page, "10-home-fleet");
+      await audit(page, "home with the fleet");
+    });
+
+    test("a project, its service and its deployments are accessible", async ({ page }) => {
+      await signIn(page);
+      await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+      await page.getByRole("button", { name: "New project" }).first().click();
+      const create = page.getByRole("dialog", { name: "New project" });
+      await create.getByLabel("Project name").fill("storefront");
+      await create.getByRole("button", { name: "Create project" }).click();
+      await expect(page.getByRole("heading", { name: "No services yet" })).toBeVisible();
+
+      await page.getByRole("button", { name: "New service" }).first().click();
+      const service = page.getByRole("dialog", { name: "New service" });
+      await service.getByLabel("Image", { exact: true }).fill("nginx:1.27-alpine");
+      await service.getByRole("button", { name: "Continue" }).click();
+      await shot(page, "16-new-service");
+      await audit(page, "new service");
+      await service.getByRole("button", { name: "Create and deploy" }).click();
+      await expect(page).toHaveURL(/\/s\/[^/]+/);
+      await expect(page.getByRole("table")).toBeVisible();
+      await shot(page, "17-service-deployments");
+      await audit(page, "service deployments");
+      await page
+        .getByRole("link", { name: /^Deployment / })
+        .first()
+        .click();
+      await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
+      await audit(page, "deployment detail");
+      await page.goBack();
+
+      await page.goto(new URL(page.url()).pathname.replace(/\/s\/.*$/, ""));
+      await expect(page.getByRole("list", { name: "Services" })).toBeVisible();
+      await shot(page, "18-project");
+      await audit(page, "project");
+
+      await page.goto("/dashboard");
+      await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "storefront" }).first()).toBeVisible();
+      await audit(page, "home with a project");
+    });
+
+    test("settings pages are accessible", async ({ page }) => {
+      await signIn(page);
+      for (const [path, name] of [
+        ["settings", "settings: general"],
+        ["members", "settings: members"],
+        ["audit", "settings: audit log"],
+        ["tokens", "settings: API tokens"],
+        ["platform", "settings: platform"],
+      ] as const) {
+        await page.goto(`${workspacePath}/${path}`);
+        await expect(page.getByRole("navigation", { name: "Settings" })).toBeVisible();
+        await page.waitForLoadState("networkidle");
+        await audit(page, name);
+      }
+
+      await page.goto(`${workspacePath}/tokens`);
+      await page.getByRole("button", { name: "Create token" }).first().click();
+      const dialog = page.getByRole("dialog", { name: "Create API token" });
+      await dialog.getByLabel("Name").fill("github-actions");
+      await dialog.getByRole("radio", { name: /^Deploy/ }).check();
+      await shot(page, "19-create-token");
+      await audit(page, "create API token");
+      await dialog.getByRole("button", { name: "Create token" }).click();
+      const created = page.getByRole("dialog", { name: "Token created" });
+      await expect(created.getByText(/^tok_/)).toBeVisible();
+      await shot(page, "20-token-created");
+      await audit(page, "token created");
+      await created.getByRole("button", { name: "Done" }).click();
+      await expect(page.getByText("github-actions").first()).toBeVisible();
+      await shot(page, "21-api-tokens");
+      await audit(page, "settings: API tokens with a token");
+    });
+
+    test("cloud-init user data keeps the token out of every command line", async ({
+      browser,
+      baseURL,
+    }) => {
+      // NOTE: Cloud-init needs an https:// control plane. The browser is shown the local
+      // one under a public https origin; requests are forwarded with that origin
+      // rewritten, so the session cookie and CSRF checks behave as on a real host.
+      const origin = "https://cp.example.test";
+      const local = baseURL ?? "";
+      const context = await browser.newContext();
+      await context.route(`${origin}/**`, async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const headers = { ...request.headers() };
+        if (headers.origin) headers.origin = local;
+        if (headers.referer) headers.referer = headers.referer.replace(origin, local);
+        const response = await route.fetch({
+          url: `${local}${url.pathname}${url.search}`,
+          headers,
+          maxRedirects: 0,
+        });
+        await route.fulfill({ response });
+      });
+      const page = await context.newPage();
+      await page.goto(`${origin}/login`);
+      await page.getByLabel("Email").fill(OWNER.email);
+      await page.getByLabel("Password").fill(OWNER.password);
+      await page.getByRole("button", { name: /sign in|log in/i }).click();
+      await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+      await page.goto(`${origin}${workspacePath}/servers`);
+      await page
+        .getByRole("button", { name: /add server/i })
+        .first()
+        .click();
+      const dialog = page.getByRole("dialog", { name: "Add a server" });
+      await expect(dialog.getByRole("tab", { name: "This computer" })).toHaveCount(0);
+      await dialog.getByRole("tab", { name: "Cloud-init" }).click();
+      await dialog.getByLabel("Server name").fill("web-1");
+      await dialog.getByRole("checkbox", { name: "Builder node" }).check();
+      const userData = (await dialog.locator("pre code").textContent()) ?? "";
+      const token = /content: "(njt_[^"\\]+)/.exec(userData)?.[1] ?? "";
+      expect(token).toMatch(/^njt_/);
+      expect(userData).toContain('permissions: "0600"');
+      expect(userData).toContain(`curl --proto '=https' --tlsv1.2`);
+      expect(userData).toContain(`'${origin}/install.sh'`);
+      expect(userData).toContain("--token-file");
+      expect(userData).toContain("--builder");
+      expect(userData.slice(userData.indexOf("runcmd:"))).not.toContain(token);
+      await shot(page, "07e-add-server-cloud-init-https");
+      await audit(page, "add server: cloud-init on https");
+      await context.close();
     });
 
     test("the command palette navigates", async ({ page }) => {

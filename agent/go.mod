@@ -11,6 +11,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/tonistiigi/fsutil v0.0.0-20260819142231-83cac42c1c52
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0
 	google.golang.org/grpc v1.84.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -68,7 +69,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260825221802-da73d73af1c5 // indirect

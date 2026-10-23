@@ -165,7 +165,7 @@ export function ReferenceInput({
               )}
             >
               <span className="truncate">{suggestion.label}</span>
-              <span className="shrink-0 font-sans text-[10px] text-subtle-foreground">
+              <span className="shrink-0 font-sans text-[11px] text-muted-foreground">
                 {suggestion.detail}
               </span>
             </div>

@@ -1,9 +1,12 @@
 package protocol
 
+import "slices"
+
 // ProtocolVersion is the wire protocol version agents send in [Hello].
-// Version 2 adds workloads, builds, statuses and logs; see PROTOCOL_VERSION
-// in messages.ts for why an additive change bumps it.
-const ProtocolVersion = 2
+// Version 2 adds workloads, builds, statuses and logs; version 3 adds
+// [BuildCancel], [BuildJob].SecretBuildArgs and [BuildResult].Cancelled.
+// See PROTOCOL_VERSION in messages.ts for why additive changes bump it.
+const ProtocolVersion = 3
 
 // MinProtocolVersion is the oldest version the control plane accepts.
 const MinProtocolVersion = 1
@@ -18,6 +21,7 @@ const (
 	TypeWelcome        = "welcome"
 	TypeDesiredState   = "desired_state"
 	TypeBuildJob       = "build_job"
+	TypeBuildCancel    = "build_cancel"
 )
 
 // Arch is a CPU architecture the control plane can schedule onto.
@@ -220,12 +224,15 @@ type BuiltImage struct {
 // BuildResult answers a [BuildJob]. Exactly one of Image (when OK) and Error
 // (when not) is set. Type must be [TypeBuildResult].
 type BuildResult struct {
-	Type       string      `json:"type"`
-	BuildID    string      `json:"build_id"`
-	OK         bool        `json:"ok"`
-	Image      *BuiltImage `json:"image,omitempty"`
-	Error      string      `json:"error,omitempty"`
-	DurationMS int64       `json:"duration_ms"`
+	Type    string      `json:"type"`
+	BuildID string      `json:"build_id"`
+	OK      bool        `json:"ok"`
+	Image   *BuiltImage `json:"image,omitempty"`
+	Error   string      `json:"error,omitempty"`
+	// Cancelled marks a failed result for a build stopped by [BuildCancel]
+	// or by the agent shutting down, rather than one that failed.
+	Cancelled  bool  `json:"cancelled,omitempty"`
+	DurationMS int64 `json:"duration_ms"`
 }
 
 func (*BuildResult) agentMessage() {}
@@ -253,8 +260,8 @@ type ControlHeader struct {
 func (h ControlHeader) Header() ControlHeader { return h }
 
 // ControlMessage is any payload the control plane may sign and send. It is
-// implemented only by [*Welcome], [*DesiredState] and [*BuildJob]; use a type
-// switch to handle each.
+// implemented only by [*Welcome], [*DesiredState], [*BuildJob] and
+// [*BuildCancel]; use a type switch to handle each.
 type ControlMessage interface {
 	// Header returns the message's routing and replay-protection fields.
 	Header() ControlHeader
@@ -329,6 +336,10 @@ type BuildJob struct {
 	// ContextDir is the build context inside the repository; "." for the root.
 	ContextDir string            `json:"context_dir"`
 	BuildArgs  map[string]string `json:"build_args"`
+	// SecretBuildArgs names the BuildArgs whose values are secret: they are
+	// passed as BuildKit secrets, never as build args, and redacted from
+	// build output.
+	SecretBuildArgs []string `json:"secret_build_args,omitempty"`
 	// ImageRepository is the local-registry repository to push to; see
 	// [LocalImageRepository].
 	ImageRepository string `json:"image_repository"`
@@ -339,3 +350,19 @@ type BuildJob struct {
 }
 
 func (*BuildJob) controlMessage() {}
+
+// IsSecretArg reports whether the build arg name is listed in SecretBuildArgs.
+func (j *BuildJob) IsSecretArg(name string) bool {
+	return slices.Contains(j.SecretBuildArgs, name)
+}
+
+// BuildCancel stops a running build; the builder answers its [BuildJob] with
+// a failed [BuildResult] whose Cancelled is set. Type must be
+// [TypeBuildCancel].
+type BuildCancel struct {
+	Type string `json:"type"`
+	ControlHeader
+	BuildID string `json:"build_id"`
+}
+
+func (*BuildCancel) controlMessage() {}

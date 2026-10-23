@@ -25,3 +25,14 @@ export const SERVICE_TABS: readonly { id: ServiceTab; label: string }[] = [
   { id: "settings", label: "Settings" },
   { id: "domains", label: "Domains" },
 ];
+
+/**
+ * "G then <key>" shortcuts that exist only on a service's pages, opening its tabs. They
+ * take precedence over the workspace shortcut with the same key (G L opens the service's
+ * logs, not the workspace Logs page).
+ */
+export const SERVICE_SHORTCUTS: readonly { key: string; tab: ServiceTab; label: string }[] = [
+  { key: "d", tab: "deployments", label: "Deployments" },
+  { key: "l", tab: "logs", label: "Logs" },
+  { key: "v", tab: "variables", label: "Variables" },
+];

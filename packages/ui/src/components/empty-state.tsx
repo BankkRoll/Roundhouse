@@ -44,11 +44,7 @@ export function EmptyState({
         </div>
       ) : null}
       <div className="grid max-w-sm gap-1">
-        {eyebrow ? (
-          <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-accent-text">
-            {eyebrow}
-          </p>
-        ) : null}
+        {eyebrow ? <p className="text-xs font-medium text-accent-text">{eyebrow}</p> : null}
         <h3 className="text-sm font-semibold text-foreground">{title}</h3>
         {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
       </div>

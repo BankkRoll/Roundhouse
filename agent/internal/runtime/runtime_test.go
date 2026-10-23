@@ -33,7 +33,7 @@ func spec(id, service string) protocol.WorkloadSpec {
 		},
 		Resources: protocol.Resources{CPUMillis: 500, MemoryMB: 256, PIDs: 128},
 		Restart:   protocol.Restart{Policy: protocol.RestartAlways},
-		Network:   protocol.ProjectNetworkName("prj_1"),
+		Network:   protocol.EnvironmentNetworkName("prj_1", "env_1"),
 		Labels:    map[string]string{"openrail.service_name": "web", LabelManaged: "false"},
 		DrainS:    0,
 	}
@@ -179,7 +179,7 @@ func TestCreatesHardenedContainer(t *testing.T) {
 		t.Error("read-only root must be off by default")
 	case hc.LogConfig.Type != "json-file" || hc.LogConfig.Config["max-size"] == "":
 		t.Errorf("log config %+v", hc.LogConfig)
-	case hc.NetworkMode != "openrail-prj_1":
+	case hc.NetworkMode != "openrail-prj_1-env_1":
 		t.Errorf("network %q", hc.NetworkMode)
 	}
 	if !slices.Equal(c.spec.Env, []string{"GREETING=hello"}) || !slices.Equal(c.spec.Cmd, w.Command) {
@@ -191,8 +191,8 @@ func TestCreatesHardenedContainer(t *testing.T) {
 		l["openrail.service_name"] != "web" {
 		t.Errorf("labels %v", l)
 	}
-	if _, ok := h.d.networks["openrail-prj_1"]; !ok {
-		t.Error("project network not created")
+	if _, ok := h.d.networks["openrail-prj_1-env_1"]; !ok {
+		t.Error("environment network not created")
 	}
 	got, _ := h.status.lastOf("wl_a")
 	if got.ContainerID != c.id || got.DeploymentID == nil || *got.DeploymentID != "dep_a" || got.TS == 0 {
@@ -307,7 +307,7 @@ func TestRecreateIsZeroDowntime(t *testing.T) {
 		t.Fatalf("routes after swap: %v", r)
 	}
 	ops := h.d.opLog()
-	switchAt := slices.Index(ops, "routes [{app.example.com  ["+next.ip+":80]}]")
+	switchAt := slices.Index(ops, "routes [{app.example.com  ["+next.ip+":80] [80]}]")
 	stopAt := slices.Index(ops, "stop "+old.name)
 	removeAt := slices.Index(ops, "remove "+old.name)
 	if switchAt < 0 || stopAt < switchAt || removeAt < stopAt {

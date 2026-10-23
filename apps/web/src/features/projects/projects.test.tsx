@@ -1,12 +1,43 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { db, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
+import { server } from "../../mocks/server";
 import { PROJECT_PATH, pushRealtime, SEED } from "../../test/phase1";
 import { expectPath, findPageHeading, renderApp } from "../../test/render";
 
 const BASE = `/w/${WORKSPACE_ID}`;
 
+/** Records the path of every API request made while `run` is awaited. */
+async function requestsDuring(run: () => Promise<void>): Promise<string[]> {
+  const paths: string[] = [];
+  const listener = ({ request }: { request: Request }) => {
+    paths.push(new URL(request.url).pathname);
+  };
+  server.events.on("request:start", listener);
+  try {
+    await run();
+  } finally {
+    server.events.removeListener("request:start", listener);
+  }
+  return paths;
+}
+
+const perServiceOrProject = (path: string) =>
+  /\/v1\/services\/[^/]+\/(deployments|config)$/.test(path) || /^\/v1\/projects\/[^/]+$/.test(path);
+
 describe("projects in the shell and on Home", () => {
+  it("draws Home and the sidebar from one summaries request, not one per project or service", async () => {
+    const paths = await requestsDuring(async () => {
+      renderApp(BASE);
+      await findPageHeading("Home");
+      const card = (await screen.findByRole("link", { name: "storefront" })).closest("li")!;
+      await waitFor(() => expect(card).toHaveTextContent("3 services · production"));
+      await screen.findByText(/3 live · 1 deploying · 2 projects/);
+    });
+    expect(paths.filter(perServiceOrProject)).toEqual([]);
+    expect(paths.filter((path) => path.endsWith("/projects/summary"))).toHaveLength(1);
+  });
+
   it("lists projects in the sidebar with status dots and service counts", async () => {
     renderApp(BASE);
     const nav = await screen.findByRole("navigation", { name: "Projects" });
@@ -59,18 +90,37 @@ describe("projects in the shell and on Home", () => {
     expect(db.deploy.projects.at(-1)).toMatchObject({ name: "Data Lake", description: "ETL jobs" });
   });
 
-  it("shows the API's conflict in the dialog", async () => {
-    const { user } = renderApp(BASE);
+  it("predicts the suffixed slug of a taken name, and the API agrees", async () => {
+    const { user, router } = renderApp(BASE);
     await findPageHeading("Home");
     await user.click(screen.getByRole("button", { name: "New project" }));
     const dialog = await screen.findByRole("dialog", { name: "New project" });
     await user.type(within(dialog).getByLabelText("Project name"), "Storefront");
+    expect(
+      await within(dialog).findByText("Slug: storefront-2 (storefront is taken)"),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Create project" }));
-    expect(await within(dialog).findByText(/already exists/)).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/\/p\/prj_mock\d+$/));
+    expect(db.deploy.projects.at(-1)).toMatchObject({ name: "Storefront", slug: "storefront-2" });
   });
 });
 
 describe("project page", () => {
+  it("loads every service card from one summary request", async () => {
+    const paths = await requestsDuring(async () => {
+      renderApp(PROJECT_PATH);
+      const list = await screen.findByRole("list", { name: "Services" });
+      const api = within(list).getByRole("link", { name: "api" }).closest("li")!;
+      await waitFor(() => expect(api).toHaveTextContent("api-production-q3zk.apps.example.com"));
+    });
+    expect(
+      paths.filter(perServiceOrProject).filter((path) => path.startsWith("/v1/services")),
+    ).toEqual([]);
+    expect(paths.filter((path) => path.endsWith(`/projects/${SEED.project}/summary`))).toHaveLength(
+      1,
+    );
+  });
+
   it("lists services with source, status and config, and shows who is here", async () => {
     renderApp(PROJECT_PATH);
     expect(await findPageHeading("storefront")).toBeInTheDocument();

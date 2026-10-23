@@ -59,7 +59,9 @@ export function Meter({ value, label, valueText, className, ...props }: MeterPro
       aria-label={label}
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={known ? Math.round(percent) : undefined}
+      // NOTE: role="meter" requires aria-valuenow. An unknown value reports 0 with the
+      // value text "Unknown", which assistive tech announces instead of the number.
+      aria-valuenow={known ? Math.round(percent) : 0}
       aria-valuetext={valueText ?? (known ? `${Math.round(percent)}%` : "Unknown")}
       data-tone={known ? meterTone(percent) : "unknown"}
       className={cn("h-1 w-full overflow-hidden rounded-full bg-meter-track", className)}
@@ -100,7 +102,7 @@ export function MeterRow({ label, percent, value, meterLabel, className }: Meter
     <div className={cn("grid gap-1.5", className)}>
       <div className="flex items-baseline justify-between gap-2 text-xs">
         <span className="text-muted-foreground">{label}</span>
-        <span className="font-mono text-[11px] text-foreground tabular-nums">{value}</span>
+        <span className="text-xs text-foreground tabular-nums">{value}</span>
       </div>
       <Meter value={percent} label={meterLabel ?? `${label} usage`} valueText={value} />
     </div>

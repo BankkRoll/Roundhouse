@@ -13,6 +13,13 @@ export interface CodeBlockProps {
   prompt?: boolean;
   /** Called after a successful copy. */
   onCopy?: () => void;
+  /**
+   * Caps the code at about 16 lines and scrolls the rest, keeping the copy button in
+   * view. For long files such as cloud-init user data.
+   */
+  scroll?: boolean;
+  /** Tighter padding, for a single short value such as an id in a settings row. */
+  dense?: boolean;
   /** Extra classes for the wrapper. */
   className?: string;
 }
@@ -24,7 +31,15 @@ export interface CodeBlockProps {
  * @param props - The code and presentation options.
  * @returns The rendered block.
  */
-export function CodeBlock({ code, label, prompt = false, onCopy, className }: CodeBlockProps) {
+export function CodeBlock({
+  code,
+  label,
+  prompt = false,
+  onCopy,
+  scroll = false,
+  dense = false,
+  className,
+}: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -41,12 +56,20 @@ export function CodeBlock({ code, label, prompt = false, onCopy, className }: Co
   return (
     <div className={cn("overflow-hidden rounded-md border border-border bg-background", className)}>
       {label ? (
-        <div className="border-b border-border px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-subtle-foreground">
+        <div className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
           {label}
         </div>
       ) : null}
-      <div className="flex items-start gap-2 p-3">
-        <pre className="min-w-0 flex-1 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap text-foreground">
+      <div className={cn("flex items-start gap-2", dense ? "py-1.5 pr-1.5 pl-2.5" : "p-3")}>
+        <pre
+          // NOTE: A capped region must be reachable by keyboard to be scrolled (WCAG 2.1.1).
+          tabIndex={scroll ? 0 : undefined}
+          className={cn(
+            "min-w-0 flex-1 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap text-foreground",
+            scroll &&
+              "max-h-64 overflow-y-auto rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          )}
+        >
           {prompt ? (
             <span className="text-subtle-foreground select-none" aria-hidden="true">
               ${" "}

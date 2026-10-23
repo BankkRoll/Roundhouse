@@ -6,8 +6,9 @@
  * stored sealed; GitHub redirects to `GET /v1/github/callback?code&state`,
  * which exchanges the code for the App's credentials, stores them sealed and
  * sends the browser on to install the App. GitHub then redirects back with
- * `installation_id` and our signed install state, binding the installation
- * to the workspace that started it.
+ * `installation_id`, our signed single-use install state, and an OAuth code
+ * for the installing user. The installation is bound to the workspace that
+ * started the flow only once that user is shown to have access to it.
  *
  * The webhook verifies `X-Hub-Signature-256` over the raw bytes before
  * parsing anything, records each `X-GitHub-Delivery` once, tracks
@@ -26,7 +27,7 @@ import {
   workspaces,
 } from "@openrail/db";
 import { type GithubAccountType, newId } from "@openrail/shared";
-import { and, asc, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import {
   type AppContext,
   clientIp,
@@ -58,6 +59,7 @@ import { ApiError, conflict, notFound } from "../lib/errors";
 import {
   buildManifest,
   exchangeManifestCode,
+  exchangeUserCode,
   GITHUB_WEB,
   GithubApiError,
   getInstallation,
@@ -67,9 +69,12 @@ import {
   loadGithubApp,
   MANIFEST_STATE_TTL_MS,
   normalizeRepoUrl,
+  revokeUserToken,
   storeGithubApp,
+  userCanAccessInstallation,
   verifyWebhookSignature,
 } from "../lib/github";
+import { consumeNonce } from "../lib/nonces";
 import { getSetting, putSetting, SettingKey } from "../lib/settings";
 
 /** Purpose of signed install states. */
@@ -80,9 +85,6 @@ const INSTALL_STATE_TTL_MS = 60 * 60 * 1000;
 
 /** Largest webhook body accepted; GitHub caps payloads at 25 MB. */
 const MAX_WEBHOOK_BYTES = 25 * 1024 * 1024;
-
-/** How long delivery IDs are kept for replay protection. */
-const DELIVERY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** Dashboard page the setup callback returns to. */
 export const GITHUB_SETTINGS_PATH = "/settings/github";
@@ -104,10 +106,62 @@ async function installUrl(c: AppContext, htmlUrl: string, workspaceId: string, u
   const state = await signState(
     requireMasterKey(c),
     INSTALL_STATE,
-    { w: workspaceId, u: userId },
+    { w: workspaceId, u: userId, n: crypto.randomUUID() },
     INSTALL_STATE_TTL_MS,
   );
   return `${htmlUrl}/installations/new?state=${encodeURIComponent(state)}`;
+}
+
+/** Why an installation claim was refused; the dashboard shows each as `?error=`. */
+type InstallRejection =
+  | "authorization_required"
+  | "authorization_failed"
+  | "installation_not_accessible"
+  | "link_used";
+
+async function rejectInstallation(
+  c: AppContext,
+  input: { workspaceId: string; userId: string; installationId: number; reason: InstallRejection },
+) {
+  await recordAudit(c.get("db"), {
+    workspaceId: input.workspaceId,
+    actorType: "user",
+    actorId: input.userId,
+    action: "github.installation_rejected",
+    targetType: "github_installation",
+    metadata: { installation_id: input.installationId, reason: input.reason },
+    ip: clientIp(c),
+  });
+  return settingsRedirect(c, { error: input.reason });
+}
+
+/**
+ * Proves the signed-in GitHub user can access `installationId` by exchanging
+ * the installation redirect's OAuth code and listing their installations. The
+ * user token is revoked right after.
+ */
+async function verifyInstallationAccess(
+  app: NonNullable<Awaited<ReturnType<typeof loadGithubApp>>>,
+  code: string,
+  installationId: number,
+): Promise<"ok" | "authorization_failed" | "installation_not_accessible"> {
+  let userToken: string;
+  try {
+    userToken = await exchangeUserCode(app, code);
+  } catch (err) {
+    if (err instanceof GithubApiError) return "authorization_failed";
+    throw err;
+  }
+  try {
+    return (await userCanAccessInstallation(userToken, installationId))
+      ? "ok"
+      : "installation_not_accessible";
+  } catch (err) {
+    if (err instanceof GithubApiError) return "authorization_failed";
+    throw err;
+  } finally {
+    await revokeUserToken(app, userToken);
+  }
 }
 
 /**
@@ -226,7 +280,7 @@ export const githubRoutes = createRouter()
     const masterKey = requireMasterKey(c);
     const db = c.get("db");
 
-    if (query.code) {
+    if (query.installation_id === undefined && query.code) {
       const stored = await getSetting<StoredManifestState>(db, SettingKey.githubManifestState);
       if (!stored || stored.expires_at < Date.now()) {
         throw new ApiError(400, "invalid_token", "The GitHub setup link expired; start again");
@@ -261,22 +315,38 @@ export const githubRoutes = createRouter()
 
     if (query.installation_id !== undefined) {
       const state = await verifyState(masterKey, INSTALL_STATE, query.state);
-      if (!state || typeof state.w !== "string") {
+      if (
+        !state ||
+        typeof state.w !== "string" ||
+        typeof state.n !== "string" ||
+        typeof state.exp !== "number"
+      ) {
         throw new ApiError(400, "invalid_token", "The GitHub install link expired; start again");
       }
       if (state.u !== user.id) {
         throw new ApiError(403, "forbidden", "This install link was started by another user");
       }
       const workspaceId = state.w;
+      const installationId = query.installation_id;
       await requireWorkspace(c, workspaceId, policyOf(githubCallback).action!);
       if (query.setup_action === "request") return settingsRedirect(c, { status: "requested" });
       const app = await loadGithubApp(db, masterKey);
       if (!app) throw new ApiError(400, "github_not_configured", "No GitHub App is configured");
+      const reject = (reason: InstallRejection) =>
+        rejectInstallation(c, { workspaceId, userId: user.id, installationId, reason });
+      // SECURITY: The state is a bearer link for an hour; redeeming it once
+      // stops a captured callback URL from being replayed.
+      if (!(await consumeNonce(db, INSTALL_STATE, state.n, state.exp))) return reject("link_used");
+      // SECURITY: `installation_id` comes from the browser, so on its own it
+      // would let anyone claim any installation of our App (and deploy its
+      // private repositories). The OAuth code proves which GitHub user came
+      // back, and GitHub tells us whether they can access the installation.
+      if (!query.code) return reject("authorization_required");
+      const access = await verifyInstallationAccess(app, query.code, installationId);
+      if (access !== "ok") return reject(access);
       let info: Awaited<ReturnType<typeof getInstallation>>;
       try {
-        // SECURITY: `installation_id` comes from the browser. Asking GitHub
-        // with the App's own JWT proves the installation is of our App.
-        info = await getInstallation(app, query.installation_id);
+        info = await getInstallation(app, installationId);
       } catch (err) {
         if (err instanceof GithubApiError) {
           return settingsRedirect(c, { error: "installation_not_found" });
@@ -370,10 +440,6 @@ export const githubRoutes = createRouter()
       .onConflictDoNothing()
       .returning();
     if (!fresh) return c.body(null, 202);
-    // Redeliveries happen within days; older IDs only need to outlive them.
-    await db
-      .delete(githubDeliveries)
-      .where(lt(githubDeliveries.createdAt, new Date(Date.now() - DELIVERY_RETENTION_MS)));
 
     try {
       const payload = JSON.parse(new TextDecoder().decode(raw)) as WebhookPayload;

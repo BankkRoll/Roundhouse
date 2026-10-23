@@ -38,7 +38,7 @@ describe("GitHub manifest submission", () => {
 describe("platform settings", () => {
   it("lets owners set the apps domain and TLS mode", async () => {
     const { user } = renderApp(PLATFORM);
-    await findPageHeading("Settings");
+    await findPageHeading("Platform");
     const form = await screen.findByRole("form", { name: "Ingress" });
     const domain = within(form).getByLabelText("Apps domain");
     expect(domain).toHaveValue("apps.example.com");
@@ -52,7 +52,36 @@ describe("platform settings", () => {
     expect(within(form).getByText(/local CA/)).toBeInTheDocument();
     await user.click(within(form).getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Platform settings saved")).toBeInTheDocument();
-    expect(db.deploy.instance).toEqual({ apps_domain: "127.0.0.1.nip.io", tls_mode: "internal" });
+    expect(db.deploy.instance).toEqual({
+      apps_domain: "127.0.0.1.nip.io",
+      tls_mode: "internal",
+      log_retention_days: 7,
+    });
+  });
+
+  it("lets owners choose how long logs are kept, and says where changes are recorded", async () => {
+    const { user } = renderApp(PLATFORM);
+    const form = await screen.findByRole("form", { name: "Logs" });
+    expect(
+      screen.getByText(/recorded in the audit log of every workspace you own/),
+    ).toBeInTheDocument();
+    const days = within(form).getByLabelText("Keep logs for (days)");
+    expect(days).toHaveValue(7);
+    const save = within(form).getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    await user.clear(days);
+    await user.type(days, "400");
+    await user.click(save);
+    expect(within(form).getByText(/from 1 to 365/)).toBeInTheDocument();
+    await user.clear(days);
+    await user.type(days, "30");
+    await user.click(save);
+    expect(await screen.findByText("Log retention saved")).toBeInTheDocument();
+    expect(db.deploy.instance.log_retention_days).toBe(30);
+    expect(db.audit.at(-1)).toMatchObject({
+      action: "instance.settings_updated",
+      metadata: { log_retention_days: 30 },
+    });
   });
 
   it("shows the GitHub App, its installations and the install link", async () => {
@@ -92,9 +121,10 @@ describe("platform settings", () => {
     signInAs(USERS.admin.id);
     renderApp(PLATFORM);
     expect(
-      await screen.findByRole("heading", { name: "Ingress settings are for owners" }),
+      await screen.findByRole("heading", { name: "Instance settings are for owners" }),
     ).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "Install on GitHub" })).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Logs" })).not.toBeInTheDocument();
   });
 
   it("is a settings tab for owners and admins only", async () => {
@@ -118,6 +148,10 @@ describe("GitHub setup landing page", () => {
     ["error=exchange_failed", "GitHub App wasn't created"],
     ["error=installation_not_found", "Installation not found"],
     ["error=installation_claimed", "Already used by another workspace"],
+    ["error=authorization_required", "GitHub didn't confirm who you are"],
+    ["error=authorization_failed", "Couldn't check your GitHub access"],
+    ["error=installation_not_accessible", "That installation isn't yours to add"],
+    ["error=link_used", "This install link was already used"],
     ["", "GitHub setup didn't finish"],
   ])("explains ?%s", async (query, title) => {
     renderApp(`/settings/github?${query}`);

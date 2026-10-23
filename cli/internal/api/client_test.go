@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
 )
@@ -195,6 +197,79 @@ func TestStatusHelpers(t *testing.T) {
 		got := [3]bool{IsSettled(status), IsSuccess(status), IsCancellable(status)}
 		if got != want {
 			t.Errorf("%s: %v, want %v", status, got, want)
+		}
+	}
+}
+
+func TestSessionCookieCleared(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		header  string
+		cleared bool
+	}{
+		{"better-auth.session_token=abc.sig; Max-Age=604800; Path=/", false},
+		{"better-auth.session_token=abc.sig; Path=/", false},
+		{"better-auth.session_token=abc.sig; Expires=Thu, 29 Oct 2026 12:00:00 GMT", false},
+		{"better-auth.session_token=; Max-Age=0; Path=/", true},
+		{"better-auth.session_token=abc.sig; Max-Age=0", true},
+		{"better-auth.session_token=; Path=/", true},
+		{"better-auth.session_token=abc.sig; Expires=Thu, 01 Jan 1970 00:00:00 GMT", true},
+	} {
+		ck, err := http.ParseSetCookie(tc.header)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.header, err)
+		}
+		if got := SessionCookieCleared(ck, now); got != tc.cleared {
+			t.Errorf("SessionCookieCleared(%q) = %v, want %v", tc.header, got, tc.cleared)
+		}
+	}
+}
+
+func TestBearerTokenIgnoresSetCookie(t *testing.T) {
+	var auth, cookie string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, cookie = r.Header.Get("Authorization"), r.Header.Get("Cookie")
+		http.SetCookie(w, &http.Cookie{Name: "better-auth.session_token", Value: "someone-elses-session"})
+		w.Write([]byte(`{"user":{"id":"usr_1"},"workspaces":[]}`))
+	}))
+	defer srv.Close()
+	called := false
+	c, _ := New(Options{BaseURL: srv.URL, Insecure: true, Credential: BearerToken("tok_abc"),
+		OnSessionCookie: func(*http.Cookie) { called = true }})
+	if _, err := c.Me(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer tok_abc" || cookie != "" {
+		t.Errorf("Authorization %q, Cookie %q", auth, cookie)
+	}
+	if called {
+		t.Error("a bearer-token client reported a session cookie")
+	}
+	if !IsAPIToken("tok_abc") || IsAPIToken("sess_abc.sig") {
+		t.Error("IsAPIToken")
+	}
+}
+
+func TestRealtimeClosedError(t *testing.T) {
+	for code, want := range map[int]struct {
+		exit      int
+		retryable bool
+	}{
+		CloseUnauthorized: {exitcode.Unauthenticated, false},
+		CloseForbidden:    {exitcode.Forbidden, false},
+		CloseNotFound:     {exitcode.NotFound, false},
+		ClosePolicy:       {exitcode.Error, false},
+		CloseTooBig:       {exitcode.Error, false},
+		1001:              {exitcode.Network, true},
+		1011:              {exitcode.Network, true},
+		1012:              {exitcode.Network, true},
+	} {
+		e := &RealtimeClosedError{Code: code, Reason: "r"}
+		if e.ExitCode() != want.exit || e.Retryable() != want.retryable || exitcode.Of(e) != want.exit {
+			t.Errorf("close %d: exit %d retryable %v, want %+v", code, e.ExitCode(), e.Retryable(), want)
+		}
+		if !strings.Contains(e.Error(), strconv.Itoa(code)) {
+			t.Errorf("close %d: message %q", code, e.Error())
 		}
 	}
 }

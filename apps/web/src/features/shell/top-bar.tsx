@@ -52,7 +52,7 @@ function ProjectCrumbs({
           to="/w/$workspaceId/p/$projectId"
           params={{ workspaceId, projectId }}
           search={{ env: envParam }}
-          className={`${crumbLink} font-mono`}
+          className={crumbLink}
         >
           {project.data?.name ?? "Project"}
         </Link>
@@ -61,10 +61,10 @@ function ProjectCrumbs({
       <li className="shrink-0">
         <DropdownMenu>
           <DropdownMenuTrigger
-            className="flex h-6 items-center gap-1.5 rounded-md border border-border bg-surface px-1.5 font-mono text-xs text-foreground outline-none transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex h-7 items-center gap-1.5 rounded-md border border-border bg-surface px-2 text-xs text-foreground outline-none transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={`Environment: ${environment?.name ?? "loading"}. Switch environment`}
           >
-            <LayersIcon className="size-3 text-accent-text" aria-hidden="true" />
+            <LayersIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
             {environment?.name ?? "…"}
             <ChevronsUpDownIcon className="size-3 text-muted-foreground" aria-hidden="true" />
           </DropdownMenuTrigger>
@@ -85,10 +85,8 @@ function ProjectCrumbs({
             >
               {project.data?.environments.map((entry) => (
                 <DropdownMenuRadioItem key={entry.id} value={entry.slug}>
-                  <span className="font-mono">{entry.name}</span>
-                  <span className="ml-auto font-mono text-[10px] text-subtle-foreground">
-                    {entry.kind}
-                  </span>
+                  <span>{entry.name}</span>
+                  <span className="ml-auto text-xs text-subtle-foreground">{entry.kind}</span>
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
@@ -106,7 +104,7 @@ function ProjectCrumbs({
               to="/w/$workspaceId/p/$projectId/s/$serviceId"
               params={{ workspaceId, projectId, serviceId }}
               search={{ env: envParam }}
-              className={`${crumbLink} font-mono`}
+              className={crumbLink}
             >
               {service?.name ?? "Service"}
             </Link>
@@ -149,7 +147,7 @@ export function TopBar({
     );
   }
   return (
-    <header className="sticky top-0 z-30 flex h-12 items-center gap-3 border-b border-border bg-background/85 px-4 backdrop-blur md:px-6">
+    <header className="sticky top-0 z-30 flex h-12 items-center gap-3 border-b border-border bg-background px-4 sm:px-6 lg:px-8">
       <Button
         variant="ghost"
         size="icon-sm"
@@ -184,7 +182,7 @@ export function TopBar({
       <button
         type="button"
         onClick={onOpenPalette}
-        className="hidden h-8 w-72 items-center gap-2 rounded-md border border-border bg-surface px-2.5 text-sm text-subtle-foreground outline-none transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring sm:flex"
+        className="hidden h-8 w-64 items-center gap-2 rounded-md border border-border bg-surface px-2.5 text-sm text-muted-foreground outline-none transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring lg:flex xl:w-72"
       >
         <SearchIcon className="size-3.5" aria-hidden="true" />
         <span className="flex-1 text-left">Search or run a command</span>
@@ -193,7 +191,7 @@ export function TopBar({
       <Button
         variant="ghost"
         size="icon-sm"
-        className="sm:hidden"
+        className="lg:hidden"
         onClick={onOpenPalette}
         aria-label="Search or run a command"
       >

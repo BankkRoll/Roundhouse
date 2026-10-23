@@ -1,0 +1,37 @@
+{
+  "id": 123,
+  "label": "firewall123",
+  "status": "enabled",
+  "created": "2025-01-01T00:01:01",
+  "updated": "2025-01-02T00:01:01",
+  "tags": ["example tag", "another example"],
+  "rules": {
+    "fingerprint": "997dd135",
+    "version": 1,
+    "inbound_policy": "DROP",
+    "outbound_policy": "ACCEPT",
+    "inbound": [
+      {
+        "action": "ACCEPT",
+        "addresses": {
+          "ipv4": ["192.0.2.0/24", "198.51.100.2/32"],
+          "ipv6": ["2001:DB8::/128"]
+        },
+        "description": "An example firewall rule description.",
+        "label": "firewallrule123",
+        "ports": "22-24, 80, 443",
+        "protocol": "TCP"
+      }
+    ],
+    "outbound": []
+  },
+  "entities": [
+    {
+      "id": 123,
+      "label": "my-linode",
+      "parent_entity": null,
+      "type": "linode",
+      "url": "/v4/linode/instances/123"
+    }
+  ]
+}

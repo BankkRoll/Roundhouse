@@ -44,6 +44,7 @@ const VERBS: Record<AuditAction, string> = {
   "service.deleted": "deleted service",
   "variables.updated": "updated variables of",
   "variables.revealed": "revealed secret variables of",
+  "variables.resolved": "resolved the environment of",
   "deployment.created": "deployed",
   "deployment.rolled_back": "rolled back",
   "deployment.cancelled": "cancelled a deployment of",
@@ -51,7 +52,10 @@ const VERBS: Record<AuditAction, string> = {
   "deployment.failed": "deployment failed for",
   "github.app_created": "created the GitHub App",
   "github.installation_added": "installed the GitHub App on",
+  "github.installation_rejected": "was refused a GitHub App installation",
   "instance.settings_updated": "updated instance settings",
+  "token.created": "created API token",
+  "token.revoked": "revoked API token",
 };
 
 /**
@@ -69,6 +73,10 @@ const TARGETS: Partial<Record<AuditAction, (metadata: Metadata) => string | null
     return role ? `as ${role}` : null;
   },
   "member.left": () => null,
+  "github.installation_rejected": (metadata) => {
+    const reason = stringField(metadata, "reason") ?? stringField(metadata, "code");
+    return reason ? `(${reason.replace(/_/g, " ")})` : null;
+  },
 };
 
 function isKnownAction(action: string): action is AuditAction {
@@ -81,6 +89,8 @@ const ICONS: Record<string, LucideIcon> = {
   member: UsersIcon,
   invite: UserPlusIcon,
   workspace: Building2Icon,
+  api_token: KeyRoundIcon,
+  token: KeyRoundIcon,
 };
 
 function stringField(metadata: Metadata, key: string): string | null {
@@ -122,11 +132,17 @@ export function describeAction(entry: AuditLogEntry): DescribedAction {
 }
 
 /**
- * Display name for whoever performed an audited action.
+ * Display name for whoever performed an audited action. API tokens are marked as such,
+ * so a token named after a person isn't mistaken for them.
  *
  * @param entry - Audit log entry.
  * @returns Actor name, falling back to the id or the actor type ("system").
+ * @example
+ * actorLabel({ actor_type: "token", actor_name: "ci-deploy", ... }); // "ci-deploy (API token)"
  */
 export function actorLabel(entry: AuditLogEntry): string {
+  if (entry.actor_type === "token") {
+    return entry.actor_name ? `${entry.actor_name} (API token)` : "API token";
+  }
   return entry.actor_name ?? entry.actor_id ?? entry.actor_type;
 }

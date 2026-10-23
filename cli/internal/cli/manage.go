@@ -314,12 +314,12 @@ func (a *App) projectsCmd() *cobra.Command {
 			if a.jsonOut {
 				return a.printJSON(p)
 			}
-			fmt.Fprintf(a.IO.Out, "%s Created project %s (%s) in %s\n", a.IO.OutColor().Green("✓"), p.Name, p.ID, ws.Name)
+			fmt.Fprintf(a.IO.Out, "%s Created project %s (slug %s, %s) in %s\n", a.IO.OutColor().Green("✓"), p.Name, p.Slug, p.ID, ws.Name)
 			return nil
 		},
 	}
 	create.Flags().StringVarP(&createWorkspace, "workspace", "w", "", "workspace ID, slug or name")
-	create.Flags().StringVar(&slug, "slug", "", "URL slug (default: derived from the name)")
+	create.Flags().StringVar(&slug, "slug", "", "URL slug (default: derived from the name; -2, -3… is added when taken)")
 	create.Flags().StringVar(&description, "description", "", "project description")
 
 	var confirm string
@@ -463,7 +463,7 @@ deployed until you run "roundhouse deploy".`,
 	create.Flags().StringVar(&branch, "branch", "main", "with --repo, the branch to build")
 	create.Flags().StringVar(&rootDir, "root-dir", ".", "with --repo, the directory to build")
 	create.Flags().StringVar(&kind, "kind", "app", "service kind: app, database or cron")
-	create.Flags().StringVar(&slug, "slug", "", "slug, also its reference namespace (default: derived from the name)")
+	create.Flags().StringVar(&slug, "slug", "", "slug, also its ${{slug.VAR}} reference namespace (default: derived from the name; -2, -3… is added when taken or reserved)")
 	create.Flags().IntVar(&port, "port", 0, "port the service listens on (default 8080)")
 
 	var df targetFlags

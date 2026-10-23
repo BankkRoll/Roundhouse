@@ -1,5 +1,5 @@
 import { JOIN_TOKEN_TTL_MS } from "@openrail/shared";
-import { Button, CodeBlock, Spinner } from "@openrail/ui";
+import { Button, Spinner } from "@openrail/ui";
 import { Link } from "@tanstack/react-router";
 import { CircleCheckIcon, RefreshCwIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -7,6 +7,7 @@ import { errorMessage } from "../../lib/api/client";
 import { formatCountdown } from "../../lib/format";
 import { useNow } from "../../lib/use-now";
 import { NODE_POLL_INTERVAL_MS, useCreateJoinToken, useNodes } from "../../queries/nodes";
+import { InstallMethodTabs } from "./install-method-tabs";
 
 /** Props for {@link AddServerFlow}. */
 export interface AddServerFlowProps {
@@ -18,12 +19,15 @@ export interface AddServerFlowProps {
   doneLabel?: string;
   /** Called when the user finishes, after a server connected. */
   onDone: () => void;
+  /** Origin servers reach the control plane at (tests). Defaults to the page's origin. */
+  origin?: string;
 }
 
 /**
- * Mints a join token, shows the install one-liner with an expiry countdown, and waits
- * for a node that was not there when the flow started. Used by the add-server dialog and
- * the last step of the setup wizard.
+ * Mints one join token, shows the ways to use it as tabs (Linux one-liner, cloud-init,
+ * a local Docker node, Hetzner soon) above one expiry countdown, and waits for a node
+ * that was not there when the flow started. Used by the add-server dialog and the last
+ * step of the setup wizard.
  *
  * @param props - Workspace, polling interval and completion callback.
  * @returns The flow.
@@ -33,6 +37,7 @@ export function AddServerFlow({
   pollIntervalMs = NODE_POLL_INTERVAL_MS,
   doneLabel = "Done",
   onDone,
+  origin,
 }: AddServerFlowProps) {
   const createToken = useCreateJoinToken(workspaceId);
   const nodes = useNodes(workspaceId, pollIntervalMs);
@@ -119,11 +124,7 @@ export function AddServerFlow({
 
   return (
     <div className="grid gap-4">
-      <p className="text-sm text-muted-foreground">
-        Run this on a fresh Linux server with root access. It installs Docker if needed, then the
-        agent, which connects back here.
-      </p>
-      <CodeBlock code={token.install_command} label="Install command" prompt />
+      <InstallMethodTabs token={token} origin={origin} />
       <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground">
         <span>Single use</span>
         {expired ? (

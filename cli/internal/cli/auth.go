@@ -31,7 +31,8 @@ the credentials file of the selected profile (mode 0600), in your OS config
 directory. Use --profile to keep sessions for several control planes.
 
 The password is read without echo. In scripts, pipe it in with
---password-stdin; for CI prefer ROUNDHOUSE_URL and ROUNDHOUSE_TOKEN.`,
+--password-stdin; for CI prefer ROUNDHOUSE_URL and an API token in
+ROUNDHOUSE_TOKEN (see "roundhouse tokens create").`,
 		Example: `  roundhouse login --url https://roundhouse.example.com
   roundhouse login --url https://staging.example.com --profile staging
   printf '%s' "$PASSWORD" | roundhouse login --url https://cp.example.com --email me@example.com --password-stdin
@@ -190,6 +191,8 @@ type whoamiResult struct {
 	URL        string           `json:"url"`
 	User       api.User         `json:"user"`
 	Workspaces []api.Membership `json:"workspaces"`
+	// Token is the API token in use; omitted for a session.
+	Token *api.MeToken `json:"token,omitempty"`
 }
 
 func (a *App) whoamiCmd() *cobra.Command {
@@ -209,7 +212,7 @@ func (a *App) whoamiCmd() *cobra.Command {
 				return err
 			}
 			if a.jsonOut {
-				return a.printJSON(whoamiResult{Profile: sess.profile, URL: sess.url, User: me.User, Workspaces: me.Workspaces})
+				return a.printJSON(whoamiResult{Profile: sess.profile, URL: sess.url, User: me.User, Workspaces: me.Workspaces, Token: me.Token})
 			}
 			c := a.IO.OutColor()
 			fmt.Fprintf(a.IO.Out, "%s <%s>\n", c.Bold(me.User.Name), me.User.Email)
@@ -218,6 +221,9 @@ func (a *App) whoamiCmd() *cobra.Command {
 				via = EnvToken
 			}
 			fmt.Fprintf(a.IO.Out, "Control plane: %s (%s)\n", sess.url, via)
+			if tok := me.Token; tok != nil {
+				fmt.Fprintf(a.IO.Out, "API token: %s (%s), scopes: %s\n", tok.Name, tok.ID, strings.Join(tok.Scopes, ", "))
+			}
 			if len(me.Workspaces) > 0 {
 				fmt.Fprintln(a.IO.Out, "Workspaces:")
 				t := a.newTable()

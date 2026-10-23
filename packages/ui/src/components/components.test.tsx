@@ -2,7 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ActivityItem } from "./activity-item";
-import { Avatar, avatarColorIndex, initials } from "./avatar";
+import { AVATAR_PALETTE, Avatar, avatarColorIndex, initials } from "./avatar";
 import { Badge } from "./badge";
 import { Button } from "./button";
 import { CodeBlock } from "./code-block";
@@ -95,6 +95,18 @@ describe("Avatar", () => {
   it("renders the initials", () => {
     render(<Avatar name="Ada Lovelace" />);
     expect(screen.getByText("AL")).toBeInTheDocument();
+  });
+
+  it.each(AVATAR_PALETTE)("keeps white initials at 4.5:1 or better on %s", (classes) => {
+    const hex = /bg-\[#([0-9a-f]{6})\]/.exec(classes)?.[1];
+    if (!hex) throw new Error(`No hex background in ${classes}`);
+    const [r, g, b] = [0, 2, 4].map((i) => {
+      const c = Number.parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    const luminance = 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    expect(classes).toContain("text-white");
+    expect(1.05 / (luminance + 0.05)).toBeGreaterThanOrEqual(4.5);
   });
 });
 

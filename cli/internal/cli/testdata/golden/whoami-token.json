@@ -1,0 +1,34 @@
+{
+  "profile": "default",
+  "url": "{{URL}}",
+  "user": {
+    "id": "usr_ada",
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "image": null
+  },
+  "workspaces": [
+    {
+      "id": "ws_acme",
+      "name": "Acme",
+      "slug": "acme",
+      "role": "owner",
+      "member_id": "mem_ada"
+    }
+  ],
+  "token": {
+    "id": "tok_0001",
+    "name": "ci",
+    "workspace_id": "ws_acme",
+    "scopes": [
+      "workspace:read",
+      "projects:read",
+      "services:read",
+      "variables:read",
+      "nodes:read",
+      "services:manage",
+      "deployments:create",
+      "variables:manage"
+    ]
+  }
+}

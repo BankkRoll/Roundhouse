@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -160,7 +161,7 @@ func New(opts Options) (Builder, error) {
 // Run implements [Builder].
 func (b *builder) Run(ctx context.Context, job protocol.BuildJob, emit func(protocol.Logs)) protocol.BuildResult {
 	start := time.Now()
-	red := newRedactor(job.Source.Token, job.BuildArgs)
+	red := newRedactor(job.Source.Token, job.BuildArgs, job.SecretBuildArgs)
 	timeout := buildTimeout(&job, b.opts.Timeout)
 	if timeout <= 0 {
 		timeout = b.opts.Timeout
@@ -291,6 +292,11 @@ func (b *builder) build(ctx context.Context, job *protocol.BuildJob, logs *logBa
 	switch job.Builder {
 	case protocol.BuilderDockerfile:
 		logs.system(fmt.Sprintf("Building %s with Dockerfile %s", describePath(job.ContextDir), paths.dockerfileName))
+		if len(job.SecretBuildArgs) > 0 {
+			names := slices.Sorted(slices.Values(job.SecretBuildArgs))
+			logs.system(fmt.Sprintf("Secret build args %s are BuildKit secrets, not ARGs: read one with "+
+				"RUN --mount=type=secret,id=%s,env=%s", strings.Join(names, ", "), names[0], names[0]))
+		}
 		spec = dockerfileSolve(job, paths)
 	case protocol.BuilderRailpack:
 		if err := checkRailpackArgs(job.BuildArgs); err != nil {

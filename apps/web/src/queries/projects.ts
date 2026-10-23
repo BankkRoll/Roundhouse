@@ -2,7 +2,6 @@ import {
   type QueryClient,
   queryOptions,
   useMutation,
-  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -13,6 +12,8 @@ import type {
   Environment,
   Project,
   ProjectDetail,
+  ProjectSummary,
+  Service,
   UpdateProjectBody,
 } from "../lib/api/deploy-types";
 import { queryKeys } from "./keys";
@@ -114,21 +115,6 @@ export function latestDeploymentQueryOptions(serviceId: string, environmentId: s
 /** Overall state of a project, from its services' newest deployments. */
 export type ProjectHealth = "deploying" | "failing" | "healthy" | "idle" | "unknown";
 
-/** A project's services and their newest deployments, for cards and sidebar dots. */
-export interface ProjectSummary {
-  project: ProjectDetail | undefined;
-  production: Environment | undefined;
-  /** Newest deployment per service id; `null` when the service was never deployed. */
-  latest: Record<string, Deployment | null>;
-  health: ProjectHealth;
-  /** Newest deployment across all services. */
-  lastDeploy: Deployment | null;
-  /** Services whose newest deployment failed or crashed. */
-  failing: number;
-  isPending: boolean;
-  isError: boolean;
-}
-
 /**
  * Derives a project's health from its services' newest deployments.
  *
@@ -147,46 +133,165 @@ export function projectHealth(latest: readonly (Deployment | null | undefined)[]
   return "idle";
 }
 
+/** What cards, sidebar dots and stat cards draw for one project summary. */
+export interface ProjectOverview {
+  health: ProjectHealth;
+  /** Newest deployment across all services, or `null` before the first. */
+  lastDeploy: Deployment | null;
+  /** The service of {@link ProjectOverview.lastDeploy}. */
+  lastDeployService: Service | undefined;
+  /** Services whose newest deployment failed or crashed. */
+  failing: Service[];
+}
+
 /**
- * Summarises a project from real data: its detail, then the newest deployment of each
- * service in production. Requests are shared with every other component asking for the
- * same project, so the sidebar and home cards cost one set of requests.
+ * Derives health, the last deploy and failing services from a project summary.
+ *
+ * @param summary - A project summarised in one environment.
+ * @returns The overview.
+ * @example
+ * const { health, lastDeploy } = describeProjectSummary(summary);
+ */
+export function describeProjectSummary(summary: ProjectSummary): ProjectOverview {
+  const latest = summary.services.map((entry) => entry.latest_deployment);
+  let lastDeploy: Deployment | null = null;
+  let lastDeployService: Service | undefined;
+  for (const entry of summary.services) {
+    const deployment = entry.latest_deployment;
+    if (deployment && (!lastDeploy || deployment.created_at > lastDeploy.created_at)) {
+      lastDeploy = deployment;
+      lastDeployService = entry.service;
+    }
+  }
+  return {
+    health: projectHealth(latest),
+    lastDeploy,
+    lastDeployService,
+    failing: summary.services
+      .filter(({ latest_deployment: d }) => d?.status === "failed" || d?.status === "crashed")
+      .map((entry) => entry.service),
+  };
+}
+
+/**
+ * Query options for every project of a workspace, each summarised in production. One
+ * request feeds the sidebar, the home cards and the stat row.
+ *
+ * @param workspaceId - Workspace id.
+ * @returns Options whose data is the summaries, by name.
+ */
+export function projectSummariesQueryOptions(workspaceId: string) {
+  return queryOptions({
+    queryKey: queryKeys.projectSummaries(workspaceId),
+    queryFn: ({ signal }) => deployApi.listProjectSummaries(workspaceId, signal),
+    select: (data) => data.projects,
+    refetchInterval: PROJECT_SUMMARY_POLL_MS,
+    staleTime: 15_000,
+  });
+}
+
+/**
+ * Reads every project of a workspace summarised in production.
+ *
+ * @param workspaceId - Workspace id.
+ * @param enabled - Skip when the caller cannot read projects.
+ * @returns The summaries query, ordered by name.
+ */
+export function useProjectSummaries(workspaceId: string, enabled = true) {
+  return useQuery({ ...projectSummariesQueryOptions(workspaceId), enabled });
+}
+
+/**
+ * Query options for one project summarised in an environment.
  *
  * @param projectId - Project id.
- * @returns Detail, newest deployments, health and the last deploy.
+ * @param environmentId - Environment to summarise.
+ * @returns Options for `useQuery`.
  */
-export function useProjectSummary(projectId: string): ProjectSummary {
-  const project = useQuery({ ...projectQueryOptions(projectId), staleTime: 30_000 });
-  const production = project.data ? pickEnvironment(project.data.environments) : undefined;
-  const services = project.data?.services ?? [];
-  const latestQueries = useQueries({
-    queries: services.map((service) => ({
-      ...latestDeploymentQueryOptions(service.id, production?.id ?? ""),
-      enabled: Boolean(production),
-      staleTime: 15_000,
-    })),
+export function projectSummaryQueryOptions(projectId: string, environmentId: string) {
+  return queryOptions({
+    queryKey: queryKeys.projectSummary(projectId, environmentId),
+    queryFn: ({ signal }) => deployApi.getProjectSummary(projectId, environmentId, signal),
+    refetchInterval: PROJECT_SUMMARY_POLL_MS,
+    staleTime: 15_000,
   });
-  const latest: Record<string, Deployment | null> = {};
-  services.forEach((service, index) => {
-    const data = latestQueries[index]?.data;
-    if (data !== undefined) latest[service.id] = data;
+}
+
+/**
+ * Reads one project summarised in an environment: every service's latest config version,
+ * source, first domain and newest deployment, in a single request.
+ *
+ * @param projectId - Project id.
+ * @param environmentId - Environment id; the query waits while it is unknown.
+ * @returns The summary query.
+ */
+export function useProjectSummary(projectId: string, environmentId: string | undefined) {
+  return useQuery({
+    ...projectSummaryQueryOptions(projectId, environmentId ?? ""),
+    enabled: Boolean(environmentId),
   });
-  const deployments = services.map((service) => latest[service.id]);
-  const lastDeploy = deployments.reduce<Deployment | null>(
-    (newest, deployment) =>
-      deployment && (!newest || deployment.created_at > newest.created_at) ? deployment : newest,
-    null,
-  );
-  return {
-    project: project.data,
-    production,
-    latest,
-    health: project.data ? projectHealth(deployments) : "unknown",
-    lastDeploy,
-    failing: deployments.filter((d) => d?.status === "failed" || d?.status === "crashed").length,
-    isPending: project.isPending,
-    isError: project.isError,
+}
+
+function isSummaryListKey(key: readonly unknown[]): boolean {
+  return key[0] === "workspaces" && key[2] === "projects" && key[3] === "summary";
+}
+
+/**
+ * Writes a deployment into every cached project summary that shows its service in its
+ * environment, unless the cached copy is newer. A deployment of a service no summary
+ * knows yet (one created moments ago) makes those summaries refetch instead.
+ *
+ * @param queryClient - Shared query client.
+ * @param deployment - The deployment as the API last reported it.
+ * @param options - `force` writes even over newer copies (undoing an optimistic update).
+ */
+export function patchSummaryDeployment(
+  queryClient: QueryClient,
+  deployment: Deployment,
+  options: { force?: boolean } = {},
+): void {
+  let unknownService = false;
+  const patch = (summary: ProjectSummary): ProjectSummary => {
+    if (summary.id !== deployment.project_id) return summary;
+    if (summary.environment?.id !== deployment.environment_id) return summary;
+    const index = summary.services.findIndex((entry) => entry.service.id === deployment.service_id);
+    const entry = summary.services[index];
+    if (!entry) {
+      unknownService = true;
+      return summary;
+    }
+    const current = entry.latest_deployment;
+    const replace =
+      !current ||
+      (current.id === deployment.id
+        ? options.force || current.updated_at <= deployment.updated_at
+        : deployment.created_at >= current.created_at);
+    if (!replace) return summary;
+    const services = [...summary.services];
+    services[index] = { ...entry, latest_deployment: deployment };
+    return { ...summary, services };
   };
+  queryClient.setQueriesData<ProjectSummary>(
+    { queryKey: queryKeys.projectSummaryAll(deployment.project_id) },
+    (data) => (data ? patch(data) : data),
+  );
+  queryClient.setQueriesData<{ projects: ProjectSummary[] }>(
+    { predicate: (query) => isSummaryListKey(query.queryKey) },
+    (data) => (data ? { projects: data.projects.map(patch) } : data),
+  );
+  if (unknownService) invalidateProjectSummaries(queryClient, deployment.project_id);
+}
+
+/**
+ * Marks a project's summaries, and every cached workspace summary list, stale so open
+ * views refetch them. Used when services are added, changed or removed.
+ *
+ * @param queryClient - Shared query client.
+ * @param projectId - The project that changed.
+ */
+export function invalidateProjectSummaries(queryClient: QueryClient, projectId: string): void {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.projectSummaryAll(projectId) });
+  void queryClient.invalidateQueries({ predicate: (query) => isSummaryListKey(query.queryKey) });
 }
 
 /**
@@ -205,6 +310,7 @@ export function useCreateProject(workspaceId: string) {
         queryKey: queryKeys.projects(workspaceId),
         exact: true,
       });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projectSummaries(workspaceId) });
     },
   });
 }
@@ -212,10 +318,14 @@ export function useCreateProject(workspaceId: string) {
 function patchProjectList(
   queryClient: QueryClient,
   workspaceId: string,
-  update: (projects: Project[]) => Project[],
+  update: <T extends Project>(projects: T[]) => T[],
 ) {
   queryClient.setQueryData<{ projects: Project[] }>(queryKeys.projects(workspaceId), (data) =>
     data ? { projects: update(data.projects) } : data,
+  );
+  queryClient.setQueryData<{ projects: ProjectSummary[] }>(
+    queryKeys.projectSummaries(workspaceId),
+    (data) => (data ? { projects: update(data.projects) } : data),
   );
 }
 
@@ -235,7 +345,11 @@ export function useUpdateProject(workspaceId: string, projectId: string) {
         detail ? { ...detail, ...project } : detail,
       );
       patchProjectList(queryClient, workspaceId, (projects) =>
-        projects.map((entry) => (entry.id === project.id ? project : entry)),
+        projects.map((entry) => (entry.id === project.id ? { ...entry, ...project } : entry)),
+      );
+      queryClient.setQueriesData<ProjectSummary>(
+        { queryKey: queryKeys.projectSummaryAll(projectId) },
+        (summary) => (summary ? { ...summary, ...project } : summary),
       );
     },
   });

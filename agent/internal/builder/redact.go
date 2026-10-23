@@ -15,8 +15,9 @@ const redactedText = "********"
 const minSecretLen = 4
 
 // secretArgName matches build argument names whose values are treated as
-// secret. BuildJob does not mark secret build args, so this is a heuristic
-// on top of the control plane's own redaction of known secret values.
+// secret even when the job does not mark them: a fallback for args a user
+// forgot to mark, on top of the control plane's own redaction of known
+// secret values.
 var secretArgName = regexp.MustCompile(`(?i)(secret|token|passw|pwd|private|credential|api_?key|access_?key|auth|signing|cookie|session|dsn|database_url|_key$)`)
 
 // redactor replaces known secret values in text.
@@ -26,10 +27,10 @@ type redactor struct {
 	secrets []string
 }
 
-// newRedactor returns a redactor for the job's git token and the values of
-// secret-looking build args. Encodings a token takes on the wire (HTTP Basic
-// credentials) are redacted too.
-func newRedactor(token string, buildArgs map[string]string) *redactor {
+// newRedactor returns a redactor for the job's git token, the build args it
+// marks secret, and the values of secret-looking build args. Encodings a
+// token takes on the wire (HTTP Basic credentials) are redacted too.
+func newRedactor(token string, buildArgs map[string]string, secretArgs []string) *redactor {
 	r := &redactor{}
 	if token != "" {
 		r.add(token)
@@ -37,7 +38,7 @@ func newRedactor(token string, buildArgs map[string]string) *redactor {
 		r.add(base64.StdEncoding.EncodeToString([]byte(token)))
 	}
 	for k, v := range buildArgs {
-		if secretArgName.MatchString(k) {
+		if slices.Contains(secretArgs, k) || secretArgName.MatchString(k) {
 			r.add(v)
 			// A value spanning lines is printed one line at a time.
 			for line := range strings.SplitSeq(v, "\n") {

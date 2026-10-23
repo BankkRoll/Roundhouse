@@ -191,8 +191,7 @@ export const inviteRoutes = createRouter()
       .returning();
     await recordAudit(db, {
       workspaceId,
-      actorType: "user",
-      actorId: m.user.id,
+      ...m.actor,
       action: "invite.created",
       targetType: "invite",
       targetId: row!.id,
@@ -220,8 +219,7 @@ export const inviteRoutes = createRouter()
     if (!row) throw notFound("Invite");
     await recordAudit(c.get("db"), {
       workspaceId,
-      actorType: "user",
-      actorId: m.user.id,
+      ...m.actor,
       action: "invite.revoked",
       targetType: "invite",
       targetId: inviteId,

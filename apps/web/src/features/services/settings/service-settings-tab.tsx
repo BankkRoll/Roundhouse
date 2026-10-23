@@ -1,14 +1,16 @@
 import {
   Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
+  DangerZone,
   Input,
-  Label,
+  SaveBar,
   Select,
+  SettingsLayout,
+  SettingsNav,
+  SettingsNavGroup,
+  SettingsNavItem,
+  SettingsRow,
+  SettingsSection,
+  SettingsStack,
   Skeleton,
   toast,
 } from "@openrail/ui";
@@ -20,6 +22,7 @@ import { type FormEvent, type ReactNode, useId, useState } from "react";
 import { ConfirmDialog } from "../../../components/confirm-dialog";
 import { ErrorState } from "../../../components/error-state";
 import { FormField } from "../../../components/form-field";
+import { SettingsField } from "../../../components/settings-field";
 import { errorMessage, isApiError } from "../../../lib/api/client";
 import type {
   HealthcheckConfig,
@@ -68,7 +71,24 @@ interface SaveContext {
   save: (part: Part, value: UpdateServiceBody[Part]) => void;
 }
 
+/** The page's sections in order, for the jump list and the anchors. */
+const SECTIONS = [
+  { id: "general", label: "General" },
+  { id: "source", label: "Source" },
+  { id: "build", label: "Build" },
+  { id: "deploy", label: "Deploy" },
+  { id: "resources", label: "Resources" },
+  { id: "healthcheck", label: "Healthcheck" },
+  { id: "networking", label: "Networking" },
+  { id: "placement", label: "Placement" },
+] as const;
+
+/**
+ * One part of the config as its own form: the rows, any save error, and a save bar that
+ * saves only this part as a new version.
+ */
 function Section({
+  id,
   title,
   description,
   dirty,
@@ -78,6 +98,7 @@ function Section({
   onReset,
   children,
 }: {
+  id: string;
   title: string;
   description: ReactNode;
   dirty: boolean;
@@ -93,47 +114,58 @@ function Section({
     onSubmit();
   }
   return (
-    <Card>
-      <form onSubmit={submit} noValidate aria-label={title}>
-        <CardHeader>
-          <div>
-            <CardTitle>{title}</CardTitle>
-            <CardDescription>{description}</CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <fieldset disabled={!context.canEdit} className="grid gap-4">
-            {children}
-          </fieldset>
-          {error ? (
-            <p role="alert" className="mt-3 text-sm text-danger">
-              {error}
-            </p>
-          ) : null}
-        </CardContent>
-        {context.canEdit ? (
-          <CardFooter className="justify-end">
-            {dirty ? (
-              <>
-                <span className="mr-auto font-mono text-[11px] text-warning">unsaved</span>
-                <Button variant="ghost" onClick={onReset}>
-                  Reset
-                </Button>
-              </>
-            ) : null}
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={!dirty}
-              loading={context.saving === part}
-            >
-              Save
-            </Button>
-          </CardFooter>
-        ) : null}
-      </form>
-    </Card>
+    <form onSubmit={submit} noValidate aria-label={title}>
+      <SettingsSection id={id} title={title} description={description} className="scroll-mt-20">
+        <fieldset disabled={!context.canEdit} className="min-w-0 divide-y divide-border/70">
+          {children}
+        </fieldset>
+      </SettingsSection>
+      {error ? (
+        <p role="alert" className="mt-3 text-sm text-danger">
+          {error}
+        </p>
+      ) : null}
+      {context.canEdit ? (
+        <SaveBar dirty={dirty} saving={context.saving === part} onDiscard={onReset} />
+      ) : null}
+    </form>
   );
+}
+
+/** A select as a settings row. */
+function SelectRow({
+  label,
+  description,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  description?: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: ReactNode;
+}) {
+  const id = useId();
+  return (
+    <SettingsRow label={label} description={description} htmlFor={id}>
+      <Select
+        id={id}
+        value={value}
+        aria-describedby={description ? `${id}-description` : undefined}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {children}
+      </Select>
+    </SettingsRow>
+  );
+}
+
+function numberError(value: string, min: number, max: number): string | null {
+  const number = Number(value);
+  return value.trim() === "" || !Number.isInteger(number) || number < min || number > max
+    ? `Enter a whole number from ${min} to ${max}.`
+    : null;
 }
 
 function NumberField({
@@ -142,7 +174,7 @@ function NumberField({
   onChange,
   min,
   max,
-  hint,
+  description,
   suffix,
 }: {
   label: string;
@@ -150,30 +182,23 @@ function NumberField({
   onChange: (value: string) => void;
   min: number;
   max: number;
-  hint?: string;
+  description?: string;
   suffix?: string;
 }) {
-  const number = Number(value);
-  const error =
-    value.trim() === "" || !Number.isInteger(number) || number < min || number > max
-      ? `Enter a whole number from ${min} to ${max}.`
-      : null;
   return (
-    <FormField
+    <SettingsField
       label={suffix ? `${label} (${suffix})` : label}
+      description={description}
       value={value}
       inputMode="numeric"
       onChange={(event) => onChange(event.target.value)}
-      error={error}
-      hint={hint}
+      error={numberError(value, min, max)}
+      inputClassName="w-32 tabular-nums"
     />
   );
 }
 
-const isWhole = (value: string, min: number, max: number) => {
-  const number = Number(value);
-  return value.trim() !== "" && Number.isInteger(number) && number >= min && number <= max;
-};
+const isWhole = (value: string, min: number, max: number) => numberError(value, min, max) === null;
 
 // -----------------------------------------------------------------------------
 // Sections
@@ -211,10 +236,10 @@ function SourceSection({ config, context }: { config: ServiceConfig; context: Sa
         };
   const dirty = JSON.stringify(next) !== JSON.stringify(source);
   const show = (message: string | null) => (submitted ? message : null);
-  const kindId = useId();
 
   return (
     <Section
+      id="source"
       title="Source"
       description="Where the code comes from. Git sources deploy on every push to the branch."
       dirty={dirty}
@@ -222,6 +247,10 @@ function SourceSection({ config, context }: { config: ServiceConfig; context: Sa
       context={context}
       onReset={() => {
         setKind(source.type);
+        setImage(source.type === "image" ? source.image : "");
+        setRepoUrl(source.type === "git" ? source.repo_url : "");
+        setBranch(source.type === "git" ? source.branch : "main");
+        setRootDir(source.type === "git" ? source.root_dir : ".");
         setSubmitted(false);
       }}
       onSubmit={() => {
@@ -230,20 +259,14 @@ function SourceSection({ config, context }: { config: ServiceConfig; context: Sa
         context.save("source", next);
       }}
     >
-      <div className="grid max-w-xs gap-1.5">
-        <Label htmlFor={kindId}>Type</Label>
-        <Select
-          id={kindId}
-          value={kind}
-          onChange={(event) => setKind(event.target.value as typeof kind)}
-        >
-          <option value="image">Docker image</option>
-          <option value="git">Git repository</option>
-        </Select>
-      </div>
+      <SelectRow label="Type" value={kind} onChange={(value) => setKind(value as typeof kind)}>
+        <option value="image">Docker image</option>
+        <option value="git">Git repository</option>
+      </SelectRow>
       {kind === "image" ? (
-        <FormField
+        <SettingsField
           label="Image"
+          description="A registry reference, e.g. ghcr.io/owner/app:tag."
           value={image}
           onChange={(event) => setImage(event.target.value)}
           error={show(errors.image ?? null)}
@@ -251,29 +274,34 @@ function SourceSection({ config, context }: { config: ServiceConfig; context: Sa
           spellCheck={false}
         />
       ) : (
-        <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
-          <FormField
+        <>
+          <SettingsField
             label="Repository URL"
             value={repoUrl}
             onChange={(event) => setRepoUrl(event.target.value)}
             error={show((errors as { repoUrl: string | null }).repoUrl)}
+            inputClassName="font-mono"
             spellCheck={false}
           />
-          <FormField
+          <SettingsField
             label="Branch"
+            description="Pushes to this branch deploy."
             value={branch}
             onChange={(event) => setBranch(event.target.value)}
             error={show((errors as { branch: string | null }).branch)}
+            inputClassName="font-mono"
             spellCheck={false}
           />
-          <FormField
+          <SettingsField
             label="Root directory"
+            description="Where the app lives in a monorepo."
             value={rootDir}
             onChange={(event) => setRootDir(event.target.value)}
             error={show((errors as { rootDir: string | null }).rootDir)}
+            inputClassName="font-mono"
             spellCheck={false}
           />
-        </div>
+        </>
       )}
     </Section>
   );
@@ -284,7 +312,6 @@ function BuildSection({ config, context }: { config: ServiceConfig; context: Sav
   const [builder, setBuilder] = useState(build.builder);
   const [dockerfile, setDockerfile] = useState(build.dockerfile_path ?? "");
   const [args, setArgs] = useState<KeyValuePair[]>(toPairs(build.build_args));
-  const builderId = useId();
   const argErrors = Object.fromEntries(
     args.flatMap((pair, index) =>
       pair.key && !VAR_NAME.test(pair.key) ? [[index, "Use letters, digits and _."]] : [],
@@ -307,6 +334,7 @@ function BuildSection({ config, context }: { config: ServiceConfig; context: Sav
 
   return (
     <Section
+      id="build"
       title="Build"
       description={
         isGit
@@ -331,37 +359,40 @@ function BuildSection({ config, context }: { config: ServiceConfig; context: Sav
         });
       }}
     >
-      <div className="grid gap-3 md:grid-cols-2">
-        <div className="grid gap-1.5">
-          <Label htmlFor={builderId}>Builder</Label>
-          <Select
-            id={builderId}
-            value={builder}
-            onChange={(event) => setBuilder(event.target.value as typeof builder)}
-          >
-            <option value="railpack">Railpack (automatic)</option>
-            <option value="dockerfile">Dockerfile</option>
-          </Select>
-        </div>
-        {builder === "dockerfile" ? (
-          <FormField
-            label="Dockerfile path"
-            value={dockerfile}
-            onChange={(event) => setDockerfile(event.target.value)}
-            placeholder="Dockerfile"
-            hint="Relative to the root directory."
-            spellCheck={false}
-          />
-        ) : null}
-      </div>
-      <KeyValueEditor
+      <SelectRow
+        label="Builder"
+        value={builder}
+        onChange={(value) => setBuilder(value as typeof builder)}
+      >
+        <option value="railpack">Railpack (automatic)</option>
+        <option value="dockerfile">Dockerfile</option>
+      </SelectRow>
+      {builder === "dockerfile" ? (
+        <SettingsField
+          label="Dockerfile path"
+          description="Relative to the root directory."
+          value={dockerfile}
+          onChange={(event) => setDockerfile(event.target.value)}
+          placeholder="Dockerfile"
+          inputClassName="font-mono"
+          spellCheck={false}
+        />
+      ) : null}
+      <SettingsRow
         label="Build arguments"
-        pairs={args}
-        onChange={setArgs}
-        keyPlaceholder="NODE_VERSION"
-        valuePlaceholder="22"
-        errors={argErrors}
-      />
+        description="Passed to the build as --build-arg. Not available at runtime; use variables for that."
+        control="wide"
+      >
+        <KeyValueEditor
+          label="Build arguments"
+          hideLegend
+          pairs={args}
+          onChange={setArgs}
+          keyPlaceholder="NODE_VERSION"
+          valuePlaceholder="22"
+          errors={argErrors}
+        />
+      </SettingsRow>
     </Section>
   );
 }
@@ -374,7 +405,6 @@ function DeploySection({ config, context }: { config: ServiceConfig; context: Sa
   const [policy, setPolicy] = useState(deploy.restart_policy);
   const [retries, setRetries] = useState(String(deploy.max_retries));
   const [drain, setDrain] = useState(String(deploy.drain_s));
-  const policyId = useId();
   const valid = isWhole(replicas, 0, 20) && isWhole(retries, 0, 100) && isWhole(drain, 0, 3600);
   const dirty =
     start !== (deploy.start_command ?? "") ||
@@ -386,6 +416,7 @@ function DeploySection({ config, context }: { config: ServiceConfig; context: Sa
 
   return (
     <Section
+      id="deploy"
       title="Deploy"
       description="How the service runs once built. Replicas spread across servers when they can."
       dirty={dirty}
@@ -411,63 +442,66 @@ function DeploySection({ config, context }: { config: ServiceConfig; context: Sa
         });
       }}
     >
-      <div className="grid gap-3 md:grid-cols-2">
-        <FormField
-          label="Start command"
-          value={start}
-          onChange={(event) => setStart(event.target.value)}
-          placeholder="Image default"
-          inputClassName="font-mono"
-          spellCheck={false}
-        />
-        <FormField
-          label="Pre-deploy command"
-          value={preDeploy}
-          onChange={(event) => setPreDeploy(event.target.value)}
-          placeholder="e.g. npm run migrate"
-          hint="Runs once before the rollout."
-          inputClassName="font-mono"
-          spellCheck={false}
-        />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <NumberField
-          label="Replicas"
-          value={replicas}
-          onChange={setReplicas}
-          min={0}
-          max={20}
-          hint="0 stops the service."
-        />
-        <div className="grid content-start gap-1.5">
-          <Label htmlFor={policyId}>Restart policy</Label>
-          <Select
-            id={policyId}
-            value={policy}
-            onChange={(event) => setPolicy(event.target.value as typeof policy)}
-          >
-            <option value="on_failure">On failure</option>
-            <option value="always">Always</option>
-            <option value="never">Never</option>
-          </Select>
-        </div>
-        <NumberField label="Max retries" value={retries} onChange={setRetries} min={0} max={100} />
-        <NumberField
-          label="Drain"
-          suffix="seconds"
-          value={drain}
-          onChange={setDrain}
-          min={0}
-          max={3600}
-          hint="Old replicas keep serving this long."
-        />
-      </div>
+      <SettingsField
+        label="Start command"
+        description="Overrides the image's command."
+        value={start}
+        onChange={(event) => setStart(event.target.value)}
+        placeholder="Image default"
+        inputClassName="font-mono"
+        spellCheck={false}
+      />
+      <SettingsField
+        label="Pre-deploy command"
+        description="Runs once before the rollout."
+        value={preDeploy}
+        onChange={(event) => setPreDeploy(event.target.value)}
+        placeholder="e.g. npm run migrate"
+        inputClassName="font-mono"
+        spellCheck={false}
+      />
+      <NumberField
+        label="Replicas"
+        description="0 stops the service."
+        value={replicas}
+        onChange={setReplicas}
+        min={0}
+        max={20}
+      />
+      <SelectRow
+        label="Restart policy"
+        description="When a crashed replica is started again."
+        value={policy}
+        onChange={(value) => setPolicy(value as typeof policy)}
+      >
+        <option value="on_failure">On failure</option>
+        <option value="always">Always</option>
+        <option value="never">Never</option>
+      </SelectRow>
+      <NumberField
+        label="Max retries"
+        description="Restarts before the replica is marked crashed."
+        value={retries}
+        onChange={setRetries}
+        min={0}
+        max={100}
+      />
+      <NumberField
+        label="Drain"
+        suffix="seconds"
+        description="Old replicas keep serving this long."
+        value={drain}
+        onChange={setDrain}
+        min={0}
+        max={3600}
+      />
     </Section>
   );
 }
 
 function ResourceControl({
   label,
+  description,
   value,
   onChange,
   bounds,
@@ -476,6 +510,7 @@ function ResourceControl({
   unit,
 }: {
   label: string;
+  description: string;
   value: number;
   onChange: (value: number) => void;
   bounds: { min: number; max: number; step: number };
@@ -485,11 +520,18 @@ function ResourceControl({
 }) {
   const inputId = useId();
   return (
-    <div className="grid gap-2">
-      <div className="flex items-baseline justify-between">
-        <Label htmlFor={inputId}>{label}</Label>
-        <span className="font-mono text-xs text-foreground tabular-nums">{format(value)}</span>
-      </div>
+    <SettingsRow
+      label={
+        <span className="flex items-baseline justify-between gap-3">
+          {label}
+          <span className="text-sm font-normal text-muted-foreground tabular-nums md:hidden">
+            {format(value)}
+          </span>
+        </span>
+      }
+      description={description}
+      htmlFor={inputId}
+    >
       <div className="flex items-center gap-3">
         <Slider
           thumbLabel={label}
@@ -502,7 +544,7 @@ function ResourceControl({
             if (next !== undefined) onChange(next);
           }}
         />
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1.5">
           <Input
             id={inputId}
             aria-label={`${label} in ${unit === "m" ? "millicores" : unit}`}
@@ -512,12 +554,15 @@ function ResourceControl({
               const next = Number(event.target.value);
               if (Number.isInteger(next) && next >= 0 && next <= apiMax) onChange(next);
             }}
-            className="h-7 w-20 text-right font-mono text-xs"
+            className="w-20 text-right tabular-nums"
           />
-          <span className="font-mono text-[11px] text-subtle-foreground">{unit}</span>
+          <span className="w-6 text-xs text-muted-foreground">{unit}</span>
         </div>
       </div>
-    </div>
+      <p className="mt-1.5 hidden text-xs text-muted-foreground tabular-nums md:block">
+        {format(value)} per replica
+      </p>
+    </SettingsRow>
   );
 }
 
@@ -529,6 +574,7 @@ function ResourcesSection({ config, context }: { config: ServiceConfig; context:
   const dirty = cpu !== resources.cpu_millis || memory !== resources.memory_mb;
   return (
     <Section
+      id="resources"
       title="Resources"
       description="Limits per replica. Memory is never overcommitted on a server; CPU may be, up to 2x."
       dirty={dirty}
@@ -542,28 +588,28 @@ function ResourcesSection({ config, context }: { config: ServiceConfig; context:
         if (valid) context.save("resources", { cpu_millis: cpu, memory_mb: memory });
       }}
     >
-      <div className="grid gap-6 md:grid-cols-2">
-        <ResourceControl
-          label="CPU"
-          value={cpu}
-          onChange={setCpu}
-          bounds={CPU_SLIDER}
-          apiMax={64_000}
-          format={formatCpu}
-          unit="m"
-        />
-        <ResourceControl
-          label="Memory"
-          value={memory}
-          onChange={setMemory}
-          bounds={MEMORY_SLIDER}
-          apiMax={262_144}
-          format={formatMemoryMb}
-          unit="MB"
-        />
-      </div>
+      <ResourceControl
+        label="CPU"
+        description="In millicores: 1000 is one vCPU."
+        value={cpu}
+        onChange={setCpu}
+        bounds={CPU_SLIDER}
+        apiMax={64_000}
+        format={formatCpu}
+        unit="m"
+      />
+      <ResourceControl
+        label="Memory"
+        description="The replica is stopped if it goes over."
+        value={memory}
+        onChange={setMemory}
+        bounds={MEMORY_SLIDER}
+        apiMax={262_144}
+        format={formatMemoryMb}
+        unit="MB"
+      />
       {!valid ? (
-        <p className="text-xs text-danger">
+        <p className="py-3 text-xs text-danger">
           CPU must be 10–64000 millicores and memory 16–262144 MB.
         </p>
       ) : null}
@@ -580,6 +626,31 @@ const DEFAULT_PROBE: HealthcheckConfig = {
   start_period_s: 5,
 };
 
+function TimingField({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  min: number;
+  max: number;
+}) {
+  return (
+    <FormField
+      label={label}
+      value={value}
+      inputMode="numeric"
+      onChange={(event) => onChange(event.target.value)}
+      error={numberError(value, min, max)}
+      inputClassName="tabular-nums"
+    />
+  );
+}
+
 function HealthcheckSection({ config, context }: { config: ServiceConfig; context: SaveContext }) {
   const probe = config.healthcheck;
   const base = probe ?? DEFAULT_PROBE;
@@ -590,7 +661,6 @@ function HealthcheckSection({ config, context }: { config: ServiceConfig; contex
   const [timeout, setTimeoutValue] = useState(String(base.timeout_s));
   const [retries, setRetries] = useState(String(base.retries));
   const [startPeriod, setStartPeriod] = useState(String(base.start_period_s));
-  const typeId = useId();
   const parsedPort = parsePort(port);
   const pathError =
     type === "http" && !/^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/.test(path)
@@ -620,32 +690,39 @@ function HealthcheckSection({ config, context }: { config: ServiceConfig; contex
 
   return (
     <Section
+      id="healthcheck"
       title="Healthcheck"
       description="Traffic moves to a new replica only after its probe passes. Without one, a running container counts as healthy."
       dirty={dirty}
       part="healthcheck"
       context={context}
-      onReset={() => setType(probe?.type ?? "none")}
+      onReset={() => {
+        setType(probe?.type ?? "none");
+        setPath(base.path ?? "/healthz");
+        setPort(base.port ? String(base.port) : "");
+        setInterval(String(base.interval_s));
+        setTimeoutValue(String(base.timeout_s));
+        setRetries(String(base.retries));
+        setStartPeriod(String(base.start_period_s));
+      }}
       onSubmit={() => {
         if (valid) context.save("healthcheck", next);
       }}
     >
-      <div className="grid max-w-xs gap-1.5">
-        <Label htmlFor={typeId}>Probe</Label>
-        <Select
-          id={typeId}
-          value={type}
-          onChange={(event) => setType(event.target.value as typeof type)}
-        >
-          <option value="none">None</option>
-          <option value="http">HTTP</option>
-          <option value="tcp">TCP</option>
-        </Select>
-      </div>
+      <SelectRow
+        label="Probe"
+        description="HTTP expects a 2xx or 3xx; TCP only needs the port to accept."
+        value={type}
+        onChange={(value) => setType(value as typeof type)}
+      >
+        <option value="none">None</option>
+        <option value="http">HTTP</option>
+        <option value="tcp">TCP</option>
+      </SelectRow>
       {type !== "none" ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <>
           {type === "http" ? (
-            <FormField
+            <SettingsField
               label="Path"
               value={path}
               onChange={(event) => setPath(event.target.value)}
@@ -653,41 +730,52 @@ function HealthcheckSection({ config, context }: { config: ServiceConfig; contex
               inputClassName="font-mono"
             />
           ) : null}
-          <FormField
+          <SettingsField
             label="Port"
+            description="Defaults to the service port."
             value={port}
             onChange={(event) => setPort(event.target.value)}
             placeholder={config.networking.port ? String(config.networking.port) : "service port"}
             error={typeof parsedPort === "string" ? parsedPort : null}
-            hint="Defaults to the service port."
             inputMode="numeric"
+            inputClassName="w-32 tabular-nums"
           />
-          <NumberField
-            label="Interval"
-            suffix="s"
-            value={interval}
-            onChange={setInterval}
-            min={1}
-            max={3600}
-          />
-          <NumberField
-            label="Timeout"
-            suffix="s"
-            value={timeout}
-            onChange={setTimeoutValue}
-            min={1}
-            max={300}
-          />
-          <NumberField label="Retries" value={retries} onChange={setRetries} min={0} max={100} />
-          <NumberField
-            label="Start period"
-            suffix="s"
-            value={startPeriod}
-            onChange={setStartPeriod}
-            min={0}
-            max={3600}
-          />
-        </div>
+          <SettingsRow
+            label="Timing"
+            description="How often to probe, how long to wait, failures allowed, and the grace period after start."
+          >
+            <div className="grid grid-cols-2 gap-3">
+              <TimingField
+                label="Interval (s)"
+                value={interval}
+                onChange={setInterval}
+                min={1}
+                max={3600}
+              />
+              <TimingField
+                label="Timeout (s)"
+                value={timeout}
+                onChange={setTimeoutValue}
+                min={1}
+                max={300}
+              />
+              <TimingField
+                label="Retries"
+                value={retries}
+                onChange={setRetries}
+                min={0}
+                max={100}
+              />
+              <TimingField
+                label="Start period (s)"
+                value={startPeriod}
+                onChange={setStartPeriod}
+                min={0}
+                max={3600}
+              />
+            </div>
+          </SettingsRow>
+        </>
       ) : null}
     </Section>
   );
@@ -704,6 +792,7 @@ function NetworkingSection({ config, context }: { config: ServiceConfig; context
     generated !== networking.generated_domain;
   return (
     <Section
+      id="networking"
       title="Networking"
       description="The port your app listens on (injected as PORT) and its public hostname."
       dirty={dirty}
@@ -721,34 +810,33 @@ function NetworkingSection({ config, context }: { config: ServiceConfig; context
         });
       }}
     >
-      <div className="grid max-w-xs">
-        <FormField
-          label="Port"
-          value={port}
-          onChange={(event) => setPort(event.target.value)}
-          error={typeof parsed === "string" ? parsed : null}
-          hint="Leave empty for workers that don't listen."
-          inputMode="numeric"
-        />
-      </div>
-      <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-background px-3 py-2.5">
-        <div className="grid gap-0.5">
-          <Label htmlFor={domainId} className="text-sm text-foreground">
-            Generated domain
-          </Label>
-          <p className="text-xs text-muted-foreground">
-            {parsed === null
-              ? "Needs a port."
-              : "A hostname under the instance's apps domain, routed to this port."}
-          </p>
-        </div>
+      <SettingsField
+        label="Port"
+        description="Leave empty for workers that don't listen."
+        value={port}
+        onChange={(event) => setPort(event.target.value)}
+        error={typeof parsed === "string" ? parsed : null}
+        inputMode="numeric"
+        inputClassName="w-32 tabular-nums"
+      />
+      <SettingsRow
+        label="Generated domain"
+        description={
+          parsed === null
+            ? "Needs a port."
+            : "A hostname under the instance's apps domain, routed to this port."
+        }
+        htmlFor={domainId}
+        control="switch"
+      >
         <Switch
           id={domainId}
+          aria-describedby={`${domainId}-description`}
           checked={generated && parsed !== null}
           disabled={parsed === null || typeof parsed === "string"}
           onCheckedChange={setGenerated}
         />
-      </div>
+      </SettingsRow>
     </Section>
   );
 }
@@ -766,6 +854,7 @@ function PlacementSection({ config, context }: { config: ServiceConfig; context:
   const dirty = JSON.stringify(fromPairs(pairs)) !== JSON.stringify(fromPairs(toPairs(selector)));
   return (
     <Section
+      id="placement"
       title="Placement"
       description="Only servers whose labels match every selector run this service."
       dirty={dirty}
@@ -777,15 +866,22 @@ function PlacementSection({ config, context }: { config: ServiceConfig; context:
           context.save("placement", { node_selector: fromPairs(pairs) });
       }}
     >
-      <KeyValueEditor
+      <SettingsRow
         label="Node selector"
-        pairs={pairs}
-        onChange={setPairs}
-        keyPlaceholder="region"
-        valuePlaceholder="eu-central"
-        errors={errors}
-        max={16}
-      />
+        description="Label pairs a server must carry. Empty runs the service on any server."
+        control="wide"
+      >
+        <KeyValueEditor
+          label="Node selector"
+          hideLegend
+          pairs={pairs}
+          onChange={setPairs}
+          keyPlaceholder="region"
+          valuePlaceholder="eu-central"
+          errors={errors}
+          max={16}
+        />
+      </SettingsRow>
     </Section>
   );
 }
@@ -804,59 +900,52 @@ function GeneralSection({
   const [error, setError] = useState<string | null>(null);
   const dirty = name.trim() !== service.name;
   return (
-    <Card>
-      <form
-        noValidate
-        aria-label="General"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!name.trim()) {
-            setError("Enter a name.");
-            return;
-          }
-          update.mutate(
-            { name: name.trim() },
-            {
-              onSuccess: () => {
-                setError(null);
-                toast({ title: "Service renamed", tone: "success" });
-              },
-              onError: (cause) => setError(errorMessage(cause)),
+    <form
+      noValidate
+      aria-label="General"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!name.trim()) {
+          setError("Enter a name.");
+          return;
+        }
+        update.mutate(
+          { name: name.trim() },
+          {
+            onSuccess: () => {
+              setError(null);
+              toast({ title: "Service renamed", tone: "success" });
             },
-          );
-        }}
-      >
-        <CardHeader>
-          <div>
-            <CardTitle>General</CardTitle>
-            <CardDescription>
-              Renaming keeps the slug <span className="font-mono">{service.slug}</span>, so
-              references keep working.
-            </CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent className="grid max-w-sm">
-          <FormField
-            label="Service name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            error={error}
-            disabled={!canEdit}
-          />
-        </CardContent>
-        {canEdit ? (
-          <CardFooter className="justify-end">
-            <Button type="submit" variant="primary" disabled={!dirty} loading={update.isPending}>
-              Save
-            </Button>
-          </CardFooter>
-        ) : null}
-      </form>
-    </Card>
+            onError: (cause) => setError(errorMessage(cause)),
+          },
+        );
+      }}
+    >
+      <SettingsSection id="general" title="General" className="scroll-mt-20">
+        <SettingsField
+          label="Service name"
+          description={`Renaming keeps the slug ${service.slug}, so references keep working.`}
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          error={error}
+          disabled={!canEdit}
+        />
+      </SettingsSection>
+      {canEdit ? (
+        <SaveBar
+          dirty={dirty}
+          saving={update.isPending}
+          onDiscard={() => {
+            setName(service.name);
+            setError(null);
+          }}
+        />
+      ) : null}
+    </form>
   );
 }
 
-function DangerZone({
+function DeleteServiceSection({
   workspaceId,
   projectId,
   service,
@@ -870,20 +959,17 @@ function DangerZone({
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   return (
-    <Card className="border-danger/40">
-      <CardHeader>
-        <div>
-          <CardTitle>Delete service</CardTitle>
-          <CardDescription>
-            Stops every replica, removes its domains, and deletes its deployments and variables.
-          </CardDescription>
+    <DangerZone>
+      <SettingsRow
+        label="Delete service"
+        description="Stops every replica, removes its domains, and deletes its deployments and variables."
+      >
+        <div className="md:flex md:justify-end">
+          <Button variant="danger-outline" onClick={() => setConfirming(true)}>
+            Delete service
+          </Button>
         </div>
-      </CardHeader>
-      <CardFooter className="justify-end">
-        <Button variant="danger" onClick={() => setConfirming(true)}>
-          Delete service
-        </Button>
-      </CardFooter>
+      </SettingsRow>
       <ConfirmDialog
         open={confirming}
         onOpenChange={(open) => {
@@ -911,14 +997,29 @@ function DangerZone({
           })
         }
       />
-    </Card>
+    </DangerZone>
+  );
+}
+
+function SectionNav({ canDelete }: { canDelete: boolean }) {
+  return (
+    <SettingsNav label="Service settings" className="hidden lg:block">
+      <SettingsNavGroup label="On this page">
+        {SECTIONS.map((section) => (
+          <SettingsNavItem key={section.id} href={`#${section.id}`}>
+            {section.label}
+          </SettingsNavItem>
+        ))}
+        {canDelete ? <SettingsNavItem href="#danger-zone">Danger zone</SettingsNavItem> : null}
+      </SettingsNavGroup>
+    </SettingsNav>
   );
 }
 
 /**
  * Every part of a service's config, one form per part. Each save writes a new immutable
  * version (guarded by `expected_version`, so concurrent editors can't overwrite each
- * other) and takes effect on the next deploy, which the banner offers.
+ * other) and takes effect on the next deploy, which the notice at the top offers.
  *
  * @param props - Workspace, project and service ids.
  * @returns The tab.
@@ -939,7 +1040,7 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
 
   if (config.isPending || !service) {
     return (
-      <div className="grid gap-4" aria-busy="true">
+      <div className="grid max-w-[50rem] gap-4" aria-busy="true">
         <Skeleton className="h-32 rounded-lg" />
         <Skeleton className="h-48 rounded-lg" />
       </div>
@@ -986,21 +1087,26 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
   const undeployed =
     latest.data !== undefined &&
     (latest.data === null || latest.data.config_version < current.version);
+  const canDelete = can("services:manage");
 
   return (
-    <div className="grid max-w-4xl gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 font-mono text-xs text-muted-foreground">
-        <span>
-          config v{current.version} · saved {formatRelativeTime(current.created_at)}
-        </span>
+    <SettingsLayout nav={<SectionNav canDelete={canDelete} />}>
+      <div className="mb-8 grid gap-3">
+        <p className="text-sm text-muted-foreground">
+          Each save is a new config version and applies on the next deploy.{" "}
+          <span className="text-foreground tabular-nums">
+            config v{current.version} · saved {formatRelativeTime(current.created_at)}
+          </span>
+        </p>
         {undeployed && latest.data ? (
-          <span className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1 text-warning">
-            v{current.version} isn't deployed yet (running v{latest.data.config_version})
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 py-2 pr-2 pl-3.5 text-sm text-foreground">
+            <span>
+              v{current.version} isn't deployed yet (running v{latest.data.config_version})
+            </span>
             {can("deployments:create") && environment ? (
               <Button
                 size="sm"
                 variant="primary"
-                className="h-6"
                 loading={deploy.isPending}
                 onClick={() =>
                   deploy.mutate(
@@ -1022,20 +1128,28 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
                 Deploy to apply
               </Button>
             ) : null}
-          </span>
+          </div>
         ) : null}
       </div>
-      <GeneralSection service={service} serviceId={serviceId} canEdit={context.canEdit} />
-      <SourceSection config={current} context={context} />
-      <BuildSection config={current} context={context} />
-      <DeploySection config={current} context={context} />
-      <ResourcesSection config={current} context={context} />
-      <HealthcheckSection config={current} context={context} />
-      <NetworkingSection config={current} context={context} />
-      <PlacementSection config={current} context={context} />
-      {can("services:manage") ? (
-        <DangerZone workspaceId={workspaceId} projectId={projectId} service={service} />
-      ) : null}
-    </div>
+      <SettingsStack>
+        <GeneralSection service={service} serviceId={serviceId} canEdit={context.canEdit} />
+        <SourceSection config={current} context={context} />
+        <BuildSection config={current} context={context} />
+        <DeploySection config={current} context={context} />
+        <ResourcesSection config={current} context={context} />
+        <HealthcheckSection config={current} context={context} />
+        <NetworkingSection config={current} context={context} />
+        <PlacementSection config={current} context={context} />
+        {canDelete ? (
+          <div id="danger-zone" className="scroll-mt-20">
+            <DeleteServiceSection
+              workspaceId={workspaceId}
+              projectId={projectId}
+              service={service}
+            />
+          </div>
+        ) : null}
+      </SettingsStack>
+    </SettingsLayout>
   );
 }

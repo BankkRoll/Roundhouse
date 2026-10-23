@@ -1,3 +1,4 @@
+import { REALTIME_CLOSE_CODES } from "@openrail/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   parseServerMessage,
@@ -47,13 +48,13 @@ function setup(options: { checkSession?: () => Promise<boolean> } = {}) {
   const statuses: RealtimeStatus[] = [];
   const onMessage = vi.fn();
   const onSessionExpired = vi.fn();
-  const onForbidden = vi.fn();
+  const onUnavailable = vi.fn();
   const client = new RealtimeClient({
     url: "ws://localhost/v1/projects/prj_1/realtime",
     onMessage,
     onStatus: (status) => statuses.push(status),
     onSessionExpired,
-    onForbidden,
+    onUnavailable,
     checkSession: options.checkSession,
     createSocket: (url) => new FakeSocket(url),
     // The top of the jitter range, so delays equal the backoff ceiling.
@@ -72,7 +73,7 @@ function setup(options: { checkSession?: () => Promise<boolean> } = {}) {
   });
   const socket = () => FakeSocket.all.at(-1) as FakeSocket;
   const fire = () => timers.shift()?.run();
-  return { client, timers, statuses, onMessage, onSessionExpired, onForbidden, socket, fire };
+  return { client, timers, statuses, onMessage, onSessionExpired, onUnavailable, socket, fire };
 }
 
 const topic = { kind: "deployment_logs", deployment_id: "dep_1" } as const;
@@ -201,19 +202,47 @@ describe("RealtimeClient", () => {
     expect(checkSession).not.toHaveBeenCalled();
     expect(timers).toHaveLength(1);
     timers.shift()?.run();
-    socket().drop(1008);
+    socket().drop(1006);
     await vi.waitFor(() => expect(timers).toHaveLength(1));
     expect(checkSession).toHaveBeenCalledTimes(1);
     expect(onSessionExpired).not.toHaveBeenCalled();
   });
 
-  it("stops and reports a revoked membership (4003)", () => {
-    const { client, socket, timers, onForbidden } = setup();
+  it("stops at once and reports an expired session when the server closes with 4401", () => {
+    const checkSession = vi.fn().mockResolvedValue(true);
+    const { client, socket, timers, onSessionExpired, statuses } = setup({ checkSession });
     client.connect();
     socket().open();
-    socket().drop(4003);
-    expect(onForbidden).toHaveBeenCalledTimes(1);
+    socket().drop(REALTIME_CLOSE_CODES.unauthorized);
+    expect(onSessionExpired).toHaveBeenCalledTimes(1);
+    expect(checkSession).not.toHaveBeenCalled();
+    expect(statuses.at(-1)).toBe("expired");
     expect(timers).toHaveLength(0);
+    client.reconnectNow();
+    expect(FakeSocket.all).toHaveLength(1);
+  });
+
+  it.each([
+    [REALTIME_CLOSE_CODES.forbidden, "forbidden"],
+    [REALTIME_CLOSE_CODES.notFound, "not_found"],
+  ] as const)("stops quietly after %i (%s)", (code, reason) => {
+    const { client, socket, timers, onUnavailable, onSessionExpired, statuses } = setup();
+    client.connect();
+    socket().open();
+    socket().drop(code);
+    expect(onUnavailable).toHaveBeenCalledWith(reason);
+    expect(onSessionExpired).not.toHaveBeenCalled();
+    expect(statuses.at(-1)).toBe(reason);
+    expect(timers).toHaveLength(0);
+  });
+
+  it("doesn't retry after a policy close, which would only repeat", () => {
+    const { client, socket, timers, statuses } = setup();
+    client.connect();
+    socket().open();
+    socket().drop(REALTIME_CLOSE_CODES.policy);
+    expect(timers).toHaveLength(0);
+    expect(statuses.at(-1)).toBe("closed");
   });
 
   it("closes cleanly without reconnecting", () => {

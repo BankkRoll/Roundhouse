@@ -27,7 +27,7 @@ describe("service settings", () => {
     expect(within(deploy).getByRole("button", { name: "Save" })).toBeDisabled();
     await user.clear(replicas);
     await user.type(replicas, "4");
-    expect(within(deploy).getByText("unsaved")).toBeInTheDocument();
+    expect(within(deploy).getByText("Unsaved changes")).toBeInTheDocument();
     await user.click(within(deploy).getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Saved as version 4")).toBeInTheDocument();
     expect(latest(SEED.web)).toMatchObject({
@@ -174,7 +174,7 @@ describe("domains tab", () => {
         name: /^web-production-x7k2\.apps\.example\.com\s*\(opens/,
       }),
     ).toHaveAttribute("href", "https://web-production-x7k2.apps.example.com");
-    expect(list).toHaveTextContent("tls issued");
+    expect(list).toHaveTextContent("TLS issued");
     await user.click(within(list).getByRole("button", { name: /Copy/ }));
     expect(await navigator.clipboard.readText()).toBe(
       "https://web-production-x7k2.apps.example.com",

@@ -58,6 +58,9 @@
     }
   ],
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "openrail_metrics" }],
+  // Hourly retention: expired log chunks (R2 and D1), GitHub delivery IDs,
+  // join tokens, sessions, invites, verifications. See src/lib/retention.ts.
+  "triggers": { "crons": ["17 * * * *"] },
   "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": true }],
   "observability": { "enabled": true }
 }

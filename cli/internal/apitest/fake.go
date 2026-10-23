@@ -4,9 +4,11 @@
 //
 // Responses use the CLI's wire types, whose fields are checked against the
 // API's OpenAPI document, and the fake enforces the API's request rules that
-// matter to a client: session cookies, the same-origin guard on /v1
-// mutations, Better Auth's Origin check on cookie-bearing POSTs, the Origin
-// check on the realtime upgrade, and `${{…}}` syntax validation.
+// matter to a client: session cookies and their refresh, workspace API
+// tokens with their workspace and scopes, the same-origin guard on /v1
+// mutations, Better Auth's Origin check on cookie-bearing POSTs, the
+// realtime socket's Origin check and close codes, slug suffixing, and
+// `${{…}}` syntax validation and resolution.
 package apitest
 
 import (
@@ -27,7 +29,6 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/BankkRoll/Open-Rail/cli/internal/api"
-	"github.com/BankkRoll/Open-Rail/cli/internal/varref"
 )
 
 // Seed data, fixed so golden files are stable.
@@ -87,12 +88,42 @@ type Fake struct {
 	requests    []Request
 	reveals     [][]string
 	seq         int
+	tokens      []*apiToken
+	tokenSeq    int
+
+	// refresh, when set, is the session cookie the next authenticated /v1
+	// response sets; endSession, when set, ends the session on the next /v1
+	// request with this clearing cookie.
+	refresh    *http.Cookie
+	endSession *http.Cookie
 
 	// OnGetDeployment runs on every GET of a deployment, under the lock,
 	// so tests can advance its status between polls.
 	OnGetDeployment func(d *api.DeploymentDetail)
 
 	hub *hub
+}
+
+// apiToken is a stored API token: what the API lists, plus its secret and
+// workspace.
+type apiToken struct {
+	api.APIToken
+	secret      string
+	workspaceID string
+}
+
+// caller is who made an authenticated request: the seeded user through a
+// session, or one of their API tokens.
+type caller struct {
+	// token is nil for a session.
+	token *apiToken
+}
+
+// can reports whether the caller may perform action. The seeded user is
+// the workspace owner, so a session may do anything; a token only what its
+// scopes list.
+func (c *caller) can(action string) bool {
+	return c.token == nil || action == "" || slices.Contains(c.token.Scopes, action)
 }
 
 // New starts a fake seeded with one user, workspace, project with two
@@ -209,7 +240,7 @@ func config(serviceID, envID string, src api.ServiceSource, port *int) *api.Serv
 
 func (f *Fake) deployment(id, status string, created int64, build *api.Build) *api.DeploymentDetail {
 	d := &api.DeploymentDetail{
-		Deployment: api.Deployment{ID: id, ServiceID: APIServiceID, EnvironmentID: ProductionID, ConfigVersion: 1, Status: status,
+		Deployment: api.Deployment{ID: id, ProjectID: ProjectID, ServiceID: APIServiceID, EnvironmentID: ProductionID, ConfigVersion: 1, Status: status,
 			Trigger: "manual", TriggeredBy: str("usr_ada"), CreatedAt: created, UpdatedAt: created},
 		Events: []api.DeploymentEvent{}, Placements: []api.Placement{},
 	}
@@ -283,18 +314,84 @@ func (f *Fake) SetLogs(source string, lines []api.LogEntry) {
 	f.mu.Unlock()
 }
 
+// AddToken stores an API token of the seeded workspace, created by the
+// seeded user, and returns its secret.
+func (f *Fake) AddToken(name string, scopes ...string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.addToken(WorkspaceID, name, scopes, nil).secret
+}
+
+// AddTokenIn stores an API token of another workspace, which owns none of
+// the seeded resources, and returns its secret.
+func (f *Fake) AddTokenIn(workspaceID, name string, scopes ...string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.addToken(workspaceID, name, scopes, nil).secret
+}
+
+// Token returns a stored API token by ID.
+func (f *Fake) Token(id string) *api.APIToken {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, t := range f.tokens {
+		if t.ID == id {
+			out := t.APIToken
+			return &out
+		}
+	}
+	return nil
+}
+
+// RefreshSession makes the next authenticated /v1 response set the session
+// cookie to value with Max-Age maxAge, as Better Auth does when it extends a
+// session. The new value is accepted from then on.
+func (f *Fake) RefreshSession(value string, maxAge int) {
+	f.mu.Lock()
+	f.refresh = &http.Cookie{Name: CookieName, Value: value, Path: "/", MaxAge: maxAge, HttpOnly: true, SameSite: http.SameSiteLaxMode}
+	f.mu.Unlock()
+}
+
+// EndSession makes the next /v1 request end the seeded session, answering
+// 401 with clear, a Set-Cookie that deletes the session cookie.
+func (f *Fake) EndSession(clear *http.Cookie) {
+	f.mu.Lock()
+	f.endSession = clear
+	f.mu.Unlock()
+}
+
+func (f *Fake) addToken(workspaceID, name string, scopes []string, expiresInDays *int) *apiToken {
+	f.tokenSeq++
+	secret := fmt.Sprintf("tok_k%03dSecretValueXq9vLm2PzR7t", f.tokenSeq)
+	t := &apiToken{
+		APIToken: api.APIToken{
+			ID: fmt.Sprintf("tok_%04d", f.tokenSeq), Name: name, Scopes: slices.Clone(scopes), Prefix: str(secret[:8]),
+			CreatedBy: &api.APITokenCreator{UserID: f.user.ID, Name: str(f.user.Name)}, CreatedAt: Now + int64(f.tokenSeq),
+		},
+		secret: secret, workspaceID: workspaceID,
+	}
+	if expiresInDays != nil {
+		t.ExpiresAt = i64(Now + int64(*expiresInDays)*86400000)
+	}
+	f.tokens = append(f.tokens, t)
+	return t
+}
+
 // -----------------------------------------------------------------------------
 // HTTP plumbing
 // -----------------------------------------------------------------------------
 
-func (f *Fake) record(next http.Handler) http.Handler {
+// record keeps every request before handling it, so a realtime socket that is
+// still open (or closing) is already on record.
+func (f *Fake) record(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		r = r.WithContext(context.WithValue(r.Context(), bodyKey{}, body))
-		next.ServeHTTP(w, r)
+		_, pattern := mux.Handler(r)
 		f.mu.Lock()
-		f.requests = append(f.requests, Request{Method: r.Method, Pattern: r.Pattern, Path: r.URL.Path, Query: r.URL.RawQuery, Header: r.Header.Clone(), Body: string(body)})
+		f.requests = append(f.requests, Request{Method: r.Method, Pattern: pattern, Path: r.URL.Path, Query: r.URL.RawQuery, Header: r.Header.Clone(), Body: string(body)})
 		f.mu.Unlock()
+		mux.ServeHTTP(w, r)
 	})
 }
 
@@ -319,18 +416,58 @@ func apiError(w http.ResponseWriter, status int, code, message string, details .
 	writeJSON(w, status, map[string]any{"error": body})
 }
 
-func (f *Fake) authed(r *http.Request) bool {
-	ck, err := r.Cookie(CookieName)
-	if err != nil {
-		return false
+// authenticate finds the caller of a request: a live session cookie, or an
+// API token that is neither revoked nor expired. Must hold f.mu.
+func (f *Fake) authenticate(r *http.Request) (*caller, bool) {
+	if secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		for _, t := range f.tokens {
+			if t.secret == secret && t.State(Now) == "active" {
+				t.LastUsedAt = i64(Now)
+				return &caller{token: t}, true
+			}
+		}
+		return nil, false
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.sessions[ck.Value]
+	ck, err := r.Cookie(CookieName)
+	if err != nil || !f.sessions[ck.Value] {
+		return nil, false
+	}
+	return &caller{}, true
 }
 
-// guard applies the API's request rules before a /v1 handler.
-func (f *Fake) guard(h func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+// workspaceOf returns the workspace that owns a route's resource, or "" when
+// the resource does not exist (the handler then answers 404). Must hold f.mu.
+func (f *Fake) workspaceOf(r *http.Request) string {
+	if id := r.PathValue("workspaceId"); id != "" {
+		return id
+	}
+	projectID := r.PathValue("projectId")
+	serviceID := r.PathValue("serviceId")
+	for _, d := range f.deployments {
+		if d.ID == r.PathValue("deploymentId") || d.BuildID != nil && *d.BuildID == r.PathValue("buildId") {
+			serviceID = d.ServiceID
+		}
+	}
+	for _, p := range f.projects {
+		if p.ID == projectID || slices.ContainsFunc(p.Services, func(s api.Service) bool { return s.ID == serviceID }) {
+			return p.WorkspaceID
+		}
+	}
+	return ""
+}
+
+type callerKey struct{}
+
+// callerOf returns the authenticated caller of a guarded request.
+func callerOf(r *http.Request) *caller {
+	c, _ := r.Context().Value(callerKey{}).(*caller)
+	return c
+}
+
+// guard applies the API's request rules before a /v1 handler: the
+// same-origin guard, authentication (with session refresh), and for an API
+// token its workspace (404 outside it) and its scopes (403 without action).
+func (f *Fake) guard(action string, h func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Mirrors sameOriginMutations in apps/api/src/lib/guards.ts.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
@@ -340,49 +477,83 @@ func (f *Fake) guard(h func(http.ResponseWriter, *http.Request)) http.HandlerFun
 				return
 			}
 		}
-		if !f.authed(r) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if clear := f.endSession; clear != nil {
+			f.endSession = nil
+			delete(f.sessions, SessionToken)
+			http.SetCookie(w, clear)
+			apiError(w, http.StatusUnauthorized, "unauthorized", "Your session expired; sign in again")
+			return
+		}
+		c, ok := f.authenticate(r)
+		if !ok {
 			apiError(w, http.StatusUnauthorized, "unauthorized", "Sign in to continue")
 			return
 		}
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		h(w, r)
+		if ck := f.refresh; ck != nil {
+			f.refresh = nil
+			f.sessions[ck.Value] = true
+			http.SetCookie(w, ck)
+		}
+		if c.token != nil {
+			if ws := f.workspaceOf(r); ws != "" && ws != c.token.workspaceID {
+				apiError(w, http.StatusNotFound, "not_found", "Not found")
+				return
+			}
+			if !c.can(action) {
+				apiError(w, http.StatusForbidden, "forbidden", "This API token lacks the "+action+" scope")
+				return
+			}
+		}
+		h(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, c)))
 	}
+}
+
+// guarded is a /v1 handler and the RBAC action its route requires, from
+// apps/api/src/contracts.ts; "" for routes any signed-in caller may use.
+type guarded struct {
+	action string
+	h      func(http.ResponseWriter, *http.Request)
 }
 
 func (f *Fake) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/sign-in/email", f.signIn)
 	mux.HandleFunc("POST /api/auth/sign-out", f.signOut)
-	handlers := map[api.Route]func(http.ResponseWriter, *http.Request){
-		api.RouteMe:              f.me,
-		api.RouteListProjects:    f.listProjects,
-		api.RouteCreateProject:   f.createProject,
-		api.RouteGetProject:      f.getProject,
-		api.RouteDeleteProject:   f.deleteProject,
-		api.RouteListServices:    f.listServices,
-		api.RouteCreateService:   f.createService,
-		api.RouteGetService:      f.getService,
-		api.RouteDeleteService:   f.deleteService,
-		api.RouteServiceConfig:   f.serviceConfig,
-		api.RouteServiceVars:     f.listVars,
-		api.RoutePutServiceVars:  f.putVars,
-		api.RouteRevealService:   f.revealVars,
-		api.RouteSharedVars:      f.listVars,
-		api.RoutePutSharedVars:   f.putVars,
-		api.RouteRevealShared:    f.revealVars,
-		api.RouteListDeployments: f.listDeployments,
-		api.RouteCreateDeploy:    f.createDeployment,
-		api.RouteGetDeployment:   f.getDeployment,
-		api.RouteRollback:        f.rollback,
-		api.RouteCancel:          f.cancel,
-		api.RouteDeploymentLogs:  f.getLogs,
-		api.RouteBuildLogs:       f.getLogs,
-		api.RouteListDomains:     f.listDomains,
-		api.RouteListNodes:       f.listNodes,
-		api.RouteJoinToken:       f.joinToken,
+	handlers := map[api.Route]guarded{
+		api.RouteMe:              {"", f.me},
+		api.RouteListProjects:    {"projects:read", f.listProjects},
+		api.RouteCreateProject:   {"projects:manage", f.createProject},
+		api.RouteGetProject:      {"projects:read", f.getProject},
+		api.RouteDeleteProject:   {"projects:manage", f.deleteProject},
+		api.RouteListServices:    {"services:read", f.listServices},
+		api.RouteCreateService:   {"services:manage", f.createService},
+		api.RouteGetService:      {"services:read", f.getService},
+		api.RouteDeleteService:   {"services:manage", f.deleteService},
+		api.RouteServiceConfig:   {"services:read", f.serviceConfig},
+		api.RouteServiceVars:     {"variables:read", f.listVars},
+		api.RoutePutServiceVars:  {"variables:manage", f.putVars},
+		api.RouteRevealService:   {"variables:reveal", f.revealVars},
+		api.RouteResolveVars:     {"variables:reveal", f.resolveVars},
+		api.RouteSharedVars:      {"variables:read", f.listVars},
+		api.RoutePutSharedVars:   {"variables:manage", f.putVars},
+		api.RouteRevealShared:    {"variables:reveal", f.revealVars},
+		api.RouteListDeployments: {"services:read", f.listDeployments},
+		api.RouteCreateDeploy:    {"deployments:create", f.createDeployment},
+		api.RouteGetDeployment:   {"services:read", f.getDeployment},
+		api.RouteRollback:        {"deployments:create", f.rollback},
+		api.RouteCancel:          {"deployments:create", f.cancel},
+		api.RouteDeploymentLogs:  {"services:read", f.getLogs},
+		api.RouteBuildLogs:       {"services:read", f.getLogs},
+		api.RouteListDomains:     {"services:read", f.listDomains},
+		api.RouteListNodes:       {"nodes:read", f.listNodes},
+		api.RouteJoinToken:       {"nodes:manage", f.joinToken},
+		api.RouteListTokens:      {"tokens:manage", f.listTokens},
+		api.RouteCreateToken:     {"tokens:manage", f.createToken},
+		api.RouteRevokeToken:     {"tokens:manage", f.revokeToken},
 	}
-	for route, h := range handlers {
-		mux.HandleFunc(route.Method+" "+route.Path, f.guard(h))
+	for route, g := range handlers {
+		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
 	}
 	mux.HandleFunc(api.RouteRealtime.Method+" "+api.RouteRealtime.Path, f.realtime)
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -445,8 +616,32 @@ func (f *Fake) nextID(prefix string) string {
 	return fmt.Sprintf("%s_%04d", prefix, f.seq)
 }
 
-func (f *Fake) me(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, api.Me{User: f.user, Workspaces: f.workspaces})
+// me answers a token with its creator, its workspace only, and itself.
+func (f *Fake) me(w http.ResponseWriter, r *http.Request) {
+	c := callerOf(r)
+	if c.token == nil {
+		writeJSON(w, http.StatusOK, api.Me{User: f.user, Workspaces: f.workspaces})
+		return
+	}
+	t := c.token
+	out := api.Me{User: f.user, Workspaces: []api.Membership{},
+		Token: &api.MeToken{ID: t.ID, Name: t.Name, WorkspaceID: t.workspaceID, Scopes: t.Scopes}}
+	for _, m := range f.workspaces {
+		if m.ID == t.workspaceID {
+			out.Workspaces = append(out.Workspaces, m)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// uniqueSlug suffixes base with -2, -3, … until taken reports it free, as
+// the API does for project and service slugs.
+func uniqueSlug(base string, taken func(string) bool) string {
+	slug := base
+	for n := 2; taken(slug); n++ {
+		slug = fmt.Sprintf("%s-%d", base, n)
+	}
+	return slug
 }
 
 func (f *Fake) workspace(w http.ResponseWriter, r *http.Request) bool {
@@ -461,19 +656,27 @@ func (f *Fake) listProjects(w http.ResponseWriter, r *http.Request) {
 	if !f.workspace(w, r) {
 		return
 	}
+	slug, filtered := r.URL.Query()["slug"]
+	if filtered && !validSlug.MatchString(slug[0]) {
+		apiError(w, http.StatusBadRequest, "invalid_request", "slug: expected a lowercase slug")
+		return
+	}
 	out := []api.Project{}
 	for _, id := range slices.Sorted(mapKeys(f.projects)) {
-		if p := f.projects[id]; p.WorkspaceID == r.PathValue("workspaceId") {
+		if p := f.projects[id]; p.WorkspaceID == r.PathValue("workspaceId") && (!filtered || p.Slug == slug[0]) {
 			out = append(out, p.Project)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": out})
 }
 
-var slugPattern = regexp.MustCompile(`[^a-z0-9]+`)
+var (
+	nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
+	validSlug    = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
+)
 
 func slugify(name string) string {
-	return strings.Trim(slugPattern.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	return strings.Trim(nonSlugChars.ReplaceAllString(strings.ToLower(name), "-"), "-")
 }
 
 func (f *Fake) createProject(w http.ResponseWriter, r *http.Request) {
@@ -489,12 +692,15 @@ func (f *Fake) createProject(w http.ResponseWriter, r *http.Request) {
 	if slug == "" {
 		slug = slugify(in.Name)
 	}
-	for _, p := range f.projects {
-		if p.Slug == slug {
-			apiError(w, http.StatusConflict, "conflict", "A project with slug "+slug+" exists")
-			return
+	ws := r.PathValue("workspaceId")
+	slug = uniqueSlug(slug, func(s string) bool {
+		for _, p := range f.projects {
+			if p.WorkspaceID == ws && p.Slug == s {
+				return true
+			}
 		}
-	}
+		return false
+	})
 	id := f.nextID("prj")
 	env := api.Environment{ID: f.nextID("env"), ProjectID: id, Name: "production", Slug: "production", Kind: "production", CreatedAt: Now}
 	p := &api.ProjectDetail{
@@ -549,6 +755,10 @@ func (f *Fake) createService(w http.ResponseWriter, r *http.Request) {
 	if slug == "" {
 		slug = slugify(in.Name)
 	}
+	// `shared` is the shared variables' reference namespace, so it is reserved.
+	slug = uniqueSlug(slug, func(s string) bool {
+		return s == sharedNamespace || slices.ContainsFunc(p.Services, func(x api.Service) bool { return x.Slug == s })
+	})
 	kind := in.Kind
 	if kind == "" {
 		kind = "app"
@@ -720,10 +930,10 @@ func (f *Fake) putVars(w http.ResponseWriter, r *http.Request) {
 			apiError(w, http.StatusBadRequest, "invalid_request", "set.key: expected a name like DATABASE_URL")
 			return
 		}
-		_, errs := varref.Parse(s.Value)
+		_, errs := parseValue(s.Value)
 		for _, e := range errs {
-			start, end := utf16Offset(s.Value, e.Start), utf16Offset(s.Value, e.End)
-			details = append(details, api.ErrorDetail{Field: s.Key, Code: e.Code, Message: e.Message, Start: &start, End: &end})
+			start, end := utf16Offset(s.Value, e.start), utf16Offset(s.Value, e.end)
+			details = append(details, api.ErrorDetail{Field: s.Key, Code: e.code, Message: e.message, Start: &start, End: &end})
 		}
 	}
 	if len(details) > 0 {
@@ -774,6 +984,162 @@ func (f *Fake) revealVars(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"variables": out})
 }
 
+// resolveVars mirrors the resolve route in apps/api/src/routes/variables.ts:
+// every service's raw variables, the shared ones and the built-ins go
+// through the resolver, and reference errors become one detail each.
+func (f *Fake) resolveVars(w http.ResponseWriter, r *http.Request) {
+	p, s := f.service(w, r.PathValue("serviceId"))
+	if s == nil {
+		return
+	}
+	envID, ok := environment(w, r, p, true)
+	if !ok {
+		return
+	}
+	raw := func(scopeID string) map[string]string {
+		out := map[string]string{}
+		for k, v := range f.vars[varKey(scopeID, envID)] {
+			out[k] = v.value
+		}
+		return out
+	}
+	in := resolveInput{service: s.Slug, services: map[string]map[string]string{}, shared: raw(p.ID), builtins: map[string]map[string]string{}}
+	for _, svc := range p.Services {
+		in.services[svc.Slug] = raw(svc.ID)
+		in.builtins[svc.Slug] = f.builtins(p, svc, envID)
+	}
+	env, errs := resolveEnv(in)
+	if len(errs) > 0 {
+		details := make([]api.ErrorDetail, len(errs))
+		for i, e := range errs {
+			details[i] = api.ErrorDetail{Field: e.variable, Code: e.code, Message: e.message}
+		}
+		apiError(w, http.StatusBadRequest, "invalid_reference", errs[0].variable+": "+errs[0].message, details...)
+		return
+	}
+	out := []api.ResolvedVariable{}
+	for _, k := range slices.Sorted(mapKeys(env)) {
+		out = append(out, api.ResolvedVariable{Key: k, Value: env[k]})
+	}
+	writeJSON(w, http.StatusOK, api.ResolvedVariables{Variables: out})
+}
+
+// builtins computes a service's built-in variables in an environment as the
+// deploy workflow does; the deployment ones come from its live deployment.
+func (f *Fake) builtins(p *api.ProjectDetail, svc api.Service, envID string) map[string]string {
+	envSlug := ""
+	for _, e := range p.Environments {
+		if e.ID == envID {
+			envSlug = e.Slug
+		}
+	}
+	b := map[string]string{
+		"OPENRAIL_PRIVATE_DOMAIN": svc.Slug + "." + envSlug + ".internal",
+		"OPENRAIL_ENVIRONMENT":    envSlug,
+		"OPENRAIL_SERVICE_NAME":   svc.Name,
+	}
+	if c, ok := f.configs[svc.ID+"/"+envID]; ok && c.Networking.Port != nil {
+		b["PORT"] = strconv.Itoa(*c.Networking.Port)
+	}
+	var first *api.Domain
+	for i, d := range f.domains {
+		if d.ServiceID == svc.ID && d.EnvironmentID == envID && (first == nil || d.ID < first.ID) {
+			first = &f.domains[i]
+		}
+	}
+	if first != nil {
+		b["OPENRAIL_PUBLIC_DOMAIN"] = first.Hostname
+	}
+	for _, d := range f.deployments {
+		if d.ServiceID == svc.ID && d.EnvironmentID == envID && d.Status == api.StatusActive {
+			b["OPENRAIL_DEPLOYMENT_ID"] = d.ID
+			if d.Build != nil {
+				b["OPENRAIL_GIT_COMMIT_SHA"] = d.Build.CommitSHA
+			}
+		}
+	}
+	return b
+}
+
+// -----------------------------------------------------------------------------
+// API tokens
+// -----------------------------------------------------------------------------
+
+func (f *Fake) listTokens(w http.ResponseWriter, r *http.Request) {
+	if !f.workspace(w, r) {
+		return
+	}
+	out := []api.APIToken{}
+	for i := len(f.tokens) - 1; i >= 0; i-- {
+		if t := f.tokens[i]; t.workspaceID == r.PathValue("workspaceId") {
+			out = append(out, t.APIToken)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": out})
+}
+
+// createToken validates like CreateApiTokenSchema; a token creating a token
+// may only grant scopes it holds itself.
+func (f *Fake) createToken(w http.ResponseWriter, r *http.Request) {
+	if !f.workspace(w, r) {
+		return
+	}
+	var in struct {
+		Name          string          `json:"name"`
+		Scopes        []string        `json:"scopes"`
+		ExpiresInDays json.RawMessage `json:"expires_in_days"`
+	}
+	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || len(in.Name) > 100 {
+		apiError(w, http.StatusBadRequest, "invalid_request", "name: Required")
+		return
+	}
+	if len(in.Scopes) == 0 || len(in.Scopes) > len(api.APITokenScopes) {
+		apiError(w, http.StatusBadRequest, "invalid_request", "scopes: expected at least one scope")
+		return
+	}
+	for i, s := range in.Scopes {
+		if !slices.Contains(api.APITokenScopes, s) || slices.Contains(in.Scopes[:i], s) {
+			apiError(w, http.StatusBadRequest, "invalid_request", "scopes: invalid or repeated scope "+s)
+			return
+		}
+	}
+	var days *int
+	if in.ExpiresInDays == nil {
+		apiError(w, http.StatusBadRequest, "invalid_request", "expires_in_days: Required")
+		return
+	}
+	if err := json.Unmarshal(in.ExpiresInDays, &days); err != nil || days != nil && (*days < 1 || *days > api.MaxAPITokenDays) {
+		apiError(w, http.StatusBadRequest, "invalid_request", "expires_in_days: expected 1-366 or null")
+		return
+	}
+	if c := callerOf(r); c.token != nil {
+		for _, s := range in.Scopes {
+			if !c.can(s) {
+				apiError(w, http.StatusForbidden, "forbidden", "A token can only grant scopes it holds: "+s)
+				return
+			}
+		}
+	}
+	t := f.addToken(r.PathValue("workspaceId"), strings.TrimSpace(in.Name), in.Scopes, days)
+	writeJSON(w, http.StatusCreated, api.CreatedAPIToken{Token: t.APIToken, Secret: t.secret})
+}
+
+func (f *Fake) revokeToken(w http.ResponseWriter, r *http.Request) {
+	if !f.workspace(w, r) {
+		return
+	}
+	for _, t := range f.tokens {
+		if t.ID == r.PathValue("tokenId") && t.workspaceID == r.PathValue("workspaceId") {
+			if t.RevokedAt == nil {
+				t.RevokedAt = i64(Now)
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+	apiError(w, http.StatusNotFound, "not_found", "Token not found")
+}
+
 // -----------------------------------------------------------------------------
 // Deployments and logs
 // -----------------------------------------------------------------------------
@@ -819,7 +1185,7 @@ func (f *Fake) createDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := f.deployment(f.nextID("dep"), "queued", Now, nil)
-	d.ServiceID, d.EnvironmentID = s.ID, env
+	d.ProjectID, d.ServiceID, d.EnvironmentID = p.ID, s.ID, env
 	f.deployments = append(f.deployments, d)
 	writeJSON(w, http.StatusCreated, d.Deployment)
 }
@@ -855,7 +1221,7 @@ func (f *Fake) rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := f.deployment(f.nextID("dep"), "queued", Now, nil)
-	d.ServiceID, d.EnvironmentID, d.Trigger, d.RollbackOf = src.ServiceID, src.EnvironmentID, "rollback", &src.ID
+	d.ProjectID, d.ServiceID, d.EnvironmentID, d.Trigger, d.RollbackOf = src.ProjectID, src.ServiceID, src.EnvironmentID, "rollback", &src.ID
 	f.deployments = append(f.deployments, d)
 	writeJSON(w, http.StatusCreated, d.Deployment)
 }
@@ -964,30 +1330,41 @@ func (h *hub) closeAll() {
 	}
 }
 
-// realtime mirrors apps/api/src/routes/realtime.ts: WebSocket upgrade only,
-// Origin must equal the control plane's, session required.
+// realtime mirrors apps/api/src/routes/realtime.ts: only a non-upgrade
+// request (426) and a cookie upgrade from another Origin (403) are refused
+// over HTTP. A caller who may not open the socket gets it accepted and
+// closed at once with 4401 (not signed in), 4404 (no such project, or one
+// outside a token's workspace) or 4403 (a token without projects:read).
 func (f *Fake) realtime(w http.ResponseWriter, r *http.Request) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		apiError(w, http.StatusUpgradeRequired, "upgrade_required", "Expected a WebSocket upgrade")
 		return
 	}
-	if r.Header.Get("Origin") != f.URL {
+	bearer := strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !bearer && r.Header.Get("Origin") != f.URL {
 		apiError(w, http.StatusForbidden, "forbidden", "Cross-origin WebSocket rejected")
 		return
 	}
-	if !f.authed(r) {
-		apiError(w, http.StatusUnauthorized, "unauthorized", "Sign in to continue")
-		return
-	}
 	f.mu.Lock()
-	_, ok := f.projects[r.PathValue("projectId")]
-	f.mu.Unlock()
-	if !ok {
-		apiError(w, http.StatusNotFound, "not_found", "Project not found")
-		return
+	who, authed := f.authenticate(r)
+	p, found := f.projects[r.PathValue("projectId")]
+	var refuse websocket.StatusCode
+	var reason string
+	switch {
+	case !authed:
+		refuse, reason = api.CloseUnauthorized, "unauthorized"
+	case !found || who.token != nil && p.WorkspaceID != who.token.workspaceID:
+		refuse, reason = api.CloseNotFound, "project not found"
+	case !who.can("projects:read"):
+		refuse, reason = api.CloseForbidden, "forbidden"
 	}
+	f.mu.Unlock()
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
+		return
+	}
+	if refuse != 0 {
+		_ = conn.Close(refuse, reason)
 		return
 	}
 	c := &client{conn: conn, topics: map[string]bool{}}
@@ -1061,4 +1438,21 @@ func (f *Fake) Publish(msg api.RealtimeMessage) {
 // DropSockets closes every realtime socket abnormally, to test reconnects.
 func (f *Fake) DropSockets() {
 	f.hub.closeAll()
+}
+
+// CloseSockets closes every realtime socket with a close frame, as the
+// project room does when its periodic re-check finds a session expired
+// (4401) or access lost (4403).
+func (f *Fake) CloseSockets(code int, reason string) {
+	f.hub.mu.Lock()
+	var clients []*client
+	for c := range f.hub.clients {
+		clients = append(clients, c)
+	}
+	f.hub.mu.Unlock()
+	// Close waits for the client's reply, read by the socket's own handler,
+	// which needs the hub lock to unregister; so close outside it.
+	for _, c := range clients {
+		go func() { _ = c.conn.Close(websocket.StatusCode(code), reason) }()
+	}
 }

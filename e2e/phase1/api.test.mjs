@@ -40,15 +40,19 @@ const APPS_DOMAIN = "127.0.0.1.nip.io";
 const SECRET = `s3cret-${randomId(16)}`;
 const repoUrl = (name) => `https://127.0.0.1:${GIT_PORT}/${name}.git`;
 
+/** Redeploys step 5 swaps through under one request loop. */
+const SWAPS = 5;
+
 /** Shared across steps. */
 const S = {
   /** @type {string} */ workspaceId: "",
   /** @type {string} */ projectId: "",
   /** @type {string} */ envId: "",
+  /** @type {string} */ stagingId: "",
   /** @type {string} */ nodeId: "",
   whoami: { id: "", host: "", deploymentId: "" },
   /** `active` is the app deployment currently serving. */
-  app: { id: "", host: "", v1: "", v2: "", rollback: "", active: "" },
+  app: { id: "", host: "", v1: "", v2: "", rollback: "", active: "", cancelledBuild: "" },
   /** Every deployment created, for diagnostics. */
   deployments: new Set(),
 };
@@ -77,32 +81,6 @@ function step(name, fn) {
       broken = true;
       E[name] = { ...(E[name] ?? {}), failed: err.message };
       await dumpDeployments();
-      throw err;
-    } finally {
-      writeArtifact("evidence.json", E);
-    }
-  });
-}
-
-/**
- * Registers a step for a known, reported bug: it runs and its outcome is
- * reported as TODO, without failing the suite or skipping later steps.
- *
- * @param {string} name - Step title.
- * @param {string} bug - What is known to be broken.
- * @param {() => Promise<void>} fn - The step.
- */
-function knownBug(name, bug, fn) {
-  it(name, { todo: bug }, async (t) => {
-    if (broken) {
-      t.skip("an earlier step failed");
-      return;
-    }
-    try {
-      await fn();
-      evidence(name, { outcome: "passed: the known bug looks fixed" });
-    } catch (err) {
-      evidence(name, { outcome: `still failing: ${err.message}` });
       throw err;
     } finally {
       writeArtifact("evidence.json", E);
@@ -184,9 +162,48 @@ async function viaCaddy(host, path = "/", opts = {}) {
   return r;
 }
 
-async function running(label) {
-  const { stdout } = await docker(["ps", "-q", "--no-trunc", "--filter", `label=${label}`]);
+async function running(...labels) {
+  const filters = labels.flatMap((l) => ["--filter", `label=${l}`]);
+  const { stdout } = await docker(["ps", "-q", "--no-trunc", ...filters]);
   return stdout.split("\n").filter(Boolean);
+}
+
+/**
+ * Requests each URL from inside a container with Node's fetch and returns,
+ * per URL, `ok <status>` or `fail <error code>`.
+ *
+ * @param {string} container - Container ID; its image must have node.
+ * @param {Record<string, string>} urls - Label to URL.
+ * @returns {Promise<Record<string, string>>}
+ */
+async function fetchFrom(container, urls) {
+  const script = `
+const urls = ${JSON.stringify(urls)};
+const out = {};
+for (const [k, u] of Object.entries(urls)) {
+  try {
+    const r = await fetch(u, { signal: AbortSignal.timeout(4000) });
+    out[k] = "ok " + r.status;
+  } catch (e) {
+    out[k] = "fail " + (e.cause?.code ?? e.name);
+  }
+}
+console.log(JSON.stringify(out));`;
+  const { stdout } = await docker(
+    ["exec", container, "node", "--input-type=module", "-e", script],
+    {
+      timeoutMs: 60_000,
+    },
+  );
+  return JSON.parse(stdout.trim().split("\n").pop());
+}
+
+/** Command lines of every process in BuildKit's container, build steps included. */
+async function buildkitProcesses() {
+  const { stdout } = await docker(["exec", "sys_buildkitd", "ps", "-o", "args"], {
+    allowFail: true,
+  });
+  return stdout;
 }
 
 after(() => writeArtifact("evidence.json", E));
@@ -221,7 +238,8 @@ describe("Phase 1 on the real stack", () => {
       apps_domain: APPS_DOMAIN,
       tls_mode: "off",
     });
-    assert.deepEqual(settings, { apps_domain: APPS_DOMAIN, tls_mode: "off" });
+    assert.equal(settings.apps_domain, APPS_DOMAIN);
+    assert.equal(settings.tls_mode, "off");
     writeArtifact("session.json", { ...OWNER, workspaceId: S.workspaceId });
   });
 
@@ -401,57 +419,110 @@ describe("Phase 1 on the real stack", () => {
     });
   });
 
-  step("5. zero-downtime redeploy after a variable change", async () => {
+  step("4b. environments are isolated from each other", async () => {
+    const staging = await api.post(`/v1/projects/${S.projectId}/environments`, {
+      name: "staging",
+      kind: "staging",
+      copy_from_environment_id: S.envId,
+    });
+    S.stagingId = staging.id;
+    const d = await api.post(
+      `/v1/services/${S.whoami.id}/deployments?environment_id=${S.stagingId}`,
+      {},
+    );
+    S.deployments.add(d.id);
+    log("step 4b", `staging whoami ${d.id}; probing it from the production app`);
+    await settle(d.id, ["active"], 180_000);
+
+    const [stagingWhoami] = await running(`openrail.deployment_id=${d.id}`);
+    const [prodApp] = await running(`openrail.deployment_id=${S.app.v1}`);
+    assert.ok(stagingWhoami && prodApp, "both containers run");
+    const inspect = JSON.parse((await docker(["inspect", stagingWhoami, prodApp])).stdout);
+    const nets = inspect.map((c) => Object.keys(c.NetworkSettings.Networks));
+    assert.equal(nets[0].length, 1, `staging joins one network: ${nets[0]}`);
+    assert.equal(nets[1].length, 1, `production joins one network: ${nets[1]}`);
+    assert.notEqual(nets[0][0], nets[1][0], "environments share no network");
+    assert.equal(nets[1][0], `openrail-${S.projectId}-${S.envId}`);
+    const stagingIp = inspect[0].NetworkSettings.Networks[nets[0][0]].IPAddress;
+
+    const reach = await fetchFrom(prodApp, {
+      ownName: "http://whoami.production.internal/",
+      otherName: "http://whoami.staging.internal/",
+      otherIp: `http://${stagingIp}/`,
+    });
+    log("step 4b", `from production: ${JSON.stringify(reach)}`);
+    assert.equal(reach.ownName, "ok 200", "production still reaches its own services");
+    assert.match(reach.otherName, /^fail /, "staging's private domain does not resolve");
+    assert.match(reach.otherIp, /^fail /, "staging's address is unreachable");
+    evidence("4b. environments are isolated from each other", {
+      staging_network: nets[0][0],
+      production_network: nets[1][0],
+      from_production: reach,
+    });
+  });
+
+  step("5. zero-downtime redeploys after a variable change", async () => {
     const before = await running(`openrail.deployment_id=${S.app.v1}`);
     assert.equal(before.length, 1);
     const stop = await startLoop(S.app.host);
     let summary;
-    let d;
+    const swaps = [];
     try {
       await setVariables(S.app.id, [
         // biome-ignore lint/suspicious/noTemplateCurlyInString: variable-reference syntax.
         { key: "GREETING", value: "${{whoami.GREETING_SOURCE}} v2" },
       ]);
-      d = await deploy(S.app.id, { commit_sha: stack.commits.appV2 });
-      S.app.v2 = d.id;
-      log("step 5", `redeploying as ${d.id} while requesting ${S.app.host} in a loop`);
-      await settle(d.id, ["active"], 10 * 60_000);
-      await settle(S.app.v1, ["removed"], 30_000);
-      log("step 5", "active; waiting for the old container to drain and go");
-      await waitFor(
-        "the old container to be removed after draining",
-        async () => (await containersWithLabel(`openrail.deployment_id=${S.app.v1}`)).length === 0,
-        { timeoutMs: 60_000 },
-      );
+      let previous = S.app.v1;
+      for (let i = 1; i <= SWAPS; i++) {
+        // Odd swaps deploy v2, even ones v1, so the last one serves v2.
+        const version = i % 2 ? "v2" : "v1";
+        const d = await deploy(S.app.id, {
+          commit_sha: version === "v2" ? stack.commits.appV2 : stack.commits.appV1,
+        });
+        log("step 5", `swap ${i}/${SWAPS}: ${d.id} (${version}) under the request loop`);
+        await settle(d.id, ["active"], 10 * 60_000);
+        await settle(previous, ["removed"], 30_000);
+        await waitFor(
+          "the old container to be removed after draining",
+          async () =>
+            (await containersWithLabel(`openrail.deployment_id=${previous}`)).length === 0,
+          { timeoutMs: 60_000 },
+        );
+        swaps.push({ deployment: d.id, version });
+        previous = d.id;
+      }
+      S.app.v2 = previous;
     } finally {
       summary = await stop();
     }
     log(
       "step 5",
-      `loop: ${summary.total} requests, ${summary.failed} failed, ${summary.resets.length} connection resets retried, max ${summary.max_ms}ms`,
+      `loop: ${summary.total} requests over ${swaps.length} swaps, ${summary.failed} failed, ${summary.resets.length} connection resets, max ${summary.max_ms}ms`,
     );
+    assert.equal(swaps.length, SWAPS);
     assert.equal(
       summary.failed,
       0,
-      `failed requests during the swap: ${JSON.stringify(summary.failures)}`,
+      `failed requests during the swaps: ${JSON.stringify(summary.failures)}`,
     );
+    assert.equal(summary.resets.length, 0, `connection resets: ${JSON.stringify(summary.resets)}`);
     const bodies = Object.keys(summary.bodies).map((b) => JSON.parse(b));
     assert.ok(
       bodies.some((b) => b.version === "v1"),
-      "served v1 before the swap",
+      "served v1",
     );
     assert.ok(
       bodies.some((b) => b.version === "v2"),
-      "served v2 after the swap",
+      "served v2",
     );
     const now = await viaCaddy(S.app.host);
     assert.equal(now.json.version, "v2");
     assert.equal(now.json.greeting, "hello-from-whoami v2");
-    evidence("5. zero-downtime redeploy after a variable change", {
-      deployment: d.id,
+    evidence("5. zero-downtime redeploys after a variable change", {
+      swaps,
       requests: summary.total,
       failed: summary.failed,
-      connection_resets_retried: summary.resets,
+      connection_resets: summary.resets.length,
       max_ms: summary.max_ms,
       versions_seen: [...new Set(bodies.map((b) => b.version))],
     });
@@ -572,23 +643,43 @@ describe("Phase 1 on the real stack", () => {
     assert.equal(after.build.status, "cancelled");
     assert.deepEqual(after.placements, []);
     assert.equal((await viaCaddy(S.app.host)).json?.version, "v1", "previous still serving");
+    S.app.cancelledBuild = building.build_id;
     evidence("7c. cancel mid-build: cancelled", { deployment: d.id, build: building.build_id });
   });
 
-  knownBug(
-    "7d. a cancelled build frees the builder for the next build",
-    "cancelling a deployment does not stop its build on the builder node",
-    async () => {
-      await patchService(S.app.id, {
-        source: { type: "git", repo_url: repoUrl("app"), branch: "main", root_dir: "." },
-        build: { builder: "railpack" },
-      });
-      const d = await deploy(S.app.id, { commit_sha: stack.commits.appV1 });
-      log("step 7d", `deployment ${d.id} builds right after the cancelled one`);
-      await settle(d.id, ["active"], 5 * 60_000);
-      S.app.active = d.id;
-    },
-  );
+  step("7d. a cancelled build frees the builder for the next build", async () => {
+    await patchService(S.app.id, {
+      source: { type: "git", repo_url: repoUrl("app"), branch: "main", root_dir: "." },
+      build: { builder: "railpack" },
+    });
+    const started = Date.now();
+    const d = await deploy(S.app.id, { commit_sha: stack.commits.appV1 });
+    log("step 7d", `deployment ${d.id} builds right after the cancelled one`);
+    const building = await settle(d.id, ["building", "deploying", "active"], 60_000);
+    await waitFor(
+      "the new build to start on the builder",
+      async () => {
+        const b = (await api.get(`/v1/deployments/${d.id}`)).build;
+        if (b?.status === "failed") assert.fail(`the next build was refused: ${b.error}`);
+        const page = await api.get(`/v1/builds/${building.build_id}/logs?limit=1000`);
+        return page.lines.some((l) => l.text.includes("Fetching")) ? true : null;
+      },
+      { timeoutMs: 120_000, intervalMs: 1000 },
+    );
+    const ps = await buildkitProcesses();
+    assert.ok(!ps.includes("sleep 900"), `the cancelled build still runs in BuildKit:\n${ps}`);
+    const cancelledLogs = await api.get(`/v1/builds/${S.app.cancelledBuild}/logs?limit=1000`);
+    assert.ok(
+      cancelledLogs.lines.some((l) => l.text.includes("Build was cancelled")),
+      "the builder reported the cancelled build as cancelled",
+    );
+    await settle(d.id, ["active"], 5 * 60_000);
+    S.app.active = d.id;
+    evidence("7d. a cancelled build frees the builder for the next build", {
+      deployment: d.id,
+      seconds_to_active: Math.round((Date.now() - started) / 1000),
+    });
+  });
 
   step("8. logs: stored with secrets redacted, and live over the realtime socket", async () => {
     const marker = `marker-${randomId(8)}`;
@@ -667,7 +758,10 @@ describe("Phase 1 on the real stack", () => {
 
   step("9. agent restart: workloads keep serving and desired state is resent", async () => {
     const appBefore = await running(`openrail.service_id=${S.app.id}`);
-    const whoamiBefore = await running(`openrail.service_id=${S.whoami.id}`);
+    const whoamiBefore = await running(
+      `openrail.service_id=${S.whoami.id}`,
+      `openrail.environment_id=${S.envId}`,
+    );
     assert.equal(appBefore.length, 1);
     assert.equal(whoamiBefore.length, 1);
     const stop = await startLoop(S.app.host);
@@ -701,16 +795,17 @@ describe("Phase 1 on the real stack", () => {
     }
     log(
       "step 9",
-      `loop: ${summary.total} requests, ${summary.failed} failed, ${summary.resets.length} connection resets retried`,
+      `loop: ${summary.total} requests, ${summary.failed} failed, ${summary.resets.length} connection resets`,
     );
     assert.equal(summary.failed, 0, JSON.stringify(summary.failures));
+    assert.equal(summary.resets.length, 0, JSON.stringify(summary.resets));
     assert.deepEqual(
       await running(`openrail.service_id=${S.app.id}`),
       appBefore,
       "app container kept",
     );
     assert.deepEqual(
-      await running(`openrail.service_id=${S.whoami.id}`),
+      await running(`openrail.service_id=${S.whoami.id}`, `openrail.environment_id=${S.envId}`),
       whoamiBefore,
       "whoami container kept",
     );
@@ -718,7 +813,7 @@ describe("Phase 1 on the real stack", () => {
     evidence("9. agent restart: workloads keep serving and desired state is resent", {
       requests: summary.total,
       failed: summary.failed,
-      connection_resets_retried: summary.resets,
+      connection_resets: summary.resets.length,
     });
   });
 

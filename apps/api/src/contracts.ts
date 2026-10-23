@@ -22,7 +22,10 @@
 import { createRoute, type RouteConfig, z } from "@hono/zod-openapi";
 import { type Action, type AuditAction, SERVICE_KINDS } from "@openrail/shared";
 import {
+  ApiTokenSchema,
   body,
+  CreateApiTokenSchema,
+  CreatedApiTokenSchema,
   CursorField,
   DeploymentDetailSchema,
   DeploymentSchema,
@@ -39,6 +42,8 @@ import {
   NameField,
   ProjectDetailSchema,
   ProjectSchema,
+  ProjectSummarySchema,
+  ResolvedVariablesSchema,
   RevealedVariablesSchema,
   SERVICE_CONFIG_PARTS,
   ServiceConfigPatchSchema,
@@ -48,6 +53,7 @@ import {
   ServiceSourceSchema,
   SlugField,
   sessionAuth,
+  sessionOnlyAuth,
   VariableSchema,
   VariablesPutSchema,
   VariablesRevealSchema,
@@ -63,8 +69,14 @@ export const POLICY_KEY = "x-openrail-policy";
 
 /** How a route authenticates its caller. */
 export type RouteAuth =
-  /** Better Auth session cookie; RBAC applies. */
+  /**
+   * Better Auth session cookie or an API token (`Authorization: Bearer
+   * tok_…`); RBAC applies, and a token is further limited to its workspace
+   * and scopes.
+   */
   | "session"
+  /** Better Auth session cookie only; API tokens are refused with 403. */
+  | "session_only"
   /** `X-Hub-Signature-256` over the raw body with the App's webhook secret. */
   | "github_signature";
 
@@ -111,6 +123,12 @@ const session = (action: Action, audit: readonly AuditAction[] = []): RoutePolic
   audit,
 });
 
+const sessionOnly = (action: Action, audit: readonly AuditAction[] = []): RoutePolicy => ({
+  auth: "session_only",
+  action,
+  audit,
+});
+
 // -----------------------------------------------------------------------------
 // Params and query
 // -----------------------------------------------------------------------------
@@ -144,7 +162,7 @@ export const LogQuery = z.object({ cursor: CursorField, limit: LogLimitField });
 export const CreateProjectBody = z
   .object({
     name: NameField,
-    /** Derived from `name` when omitted. */
+    /** Derived from `name` when omitted; suffixed with -2, -3, … when taken. */
     slug: SlugField.optional(),
     description: z.string().trim().max(500).optional(),
   })
@@ -160,21 +178,30 @@ export const UpdateProjectBody = z
   .refine((b) => Object.values(b).some((v) => v !== undefined), { message: "nothing to update" })
   .openapi("UpdateProject");
 
-/** Lists the live projects of a workspace. */
+/** Query of `GET /v1/workspaces/{workspaceId}/projects`. */
+export const ListProjectsQuery = z.object({
+  /** Only the live project with this exact slug: a list of one, or empty. */
+  slug: SlugField.optional(),
+});
+
+/** Lists the live projects of a workspace, or finds one by slug. */
 export const listProjects = defineRoute(session("projects:read"), {
   method: "get",
   path: "/v1/workspaces/{workspaceId}/projects",
   tags: ["projects"],
   summary: "List projects",
   security: sessionAuth,
-  request: { params: WorkspaceParams },
+  request: { params: WorkspaceParams, query: ListProjectsQuery },
   responses: {
     200: json(z.object({ projects: z.array(ProjectSchema) })),
-    ...errors(401, 403, 404),
+    ...errors(400, 401, 403, 404),
   },
 });
 
-/** Creates a project with a `production` environment. 409 when the slug is taken. */
+/**
+ * Creates a project with a `production` environment. A taken slug, requested
+ * or derived, is suffixed with -2, -3, … rather than refused.
+ */
 export const createProject = defineRoute(session("projects:manage", ["project.created"]), {
   method: "post",
   path: "/v1/workspaces/{workspaceId}/projects",
@@ -221,6 +248,41 @@ export const deleteProject = defineRoute(session("projects:manage", ["project.de
   responses: { 204: { description: "Deleted" }, ...errors(401, 403, 404) },
 });
 
+/** Query of `GET /v1/projects/{projectId}/summary`. */
+export const ProjectSummaryQuery = z.object({
+  /** Environment to summarise; the production environment when omitted. */
+  environment_id: z.string().optional(),
+});
+
+/**
+ * A project with each service's latest config version, first domain and
+ * newest deployment in one environment, in a fixed number of queries
+ * however many services there are.
+ */
+export const getProjectSummary = defineRoute(session("projects:read"), {
+  method: "get",
+  path: "/v1/projects/{projectId}/summary",
+  tags: ["projects"],
+  summary: "Summarise a project",
+  security: sessionAuth,
+  request: { params: ProjectParams, query: ProjectSummaryQuery },
+  responses: { 200: json(ProjectSummarySchema), ...errors(400, 401, 403, 404) },
+});
+
+/** Every live project of a workspace summarised in its production environment, by name. */
+export const listProjectSummaries = defineRoute(session("projects:read"), {
+  method: "get",
+  path: "/v1/workspaces/{workspaceId}/projects/summary",
+  tags: ["projects"],
+  summary: "Summarise every project",
+  security: sessionAuth,
+  request: { params: WorkspaceParams },
+  responses: {
+    200: json(z.object({ projects: z.array(ProjectSummarySchema) })),
+    ...errors(401, 403, 404),
+  },
+});
+
 // -----------------------------------------------------------------------------
 // Environments
 // -----------------------------------------------------------------------------
@@ -229,6 +291,7 @@ export const deleteProject = defineRoute(session("projects:manage", ["project.de
 export const CreateEnvironmentBody = z
   .object({
     name: NameField,
+    /** Derived from `name` when omitted; suffixed with -2, -3, … when taken. */
     slug: SlugField.optional(),
     /** A project has exactly one `production` environment, created with it. */
     kind: z.enum(["staging", "preview"]),
@@ -275,7 +338,11 @@ export const createEnvironment = defineRoute(session("projects:manage", ["projec
 export const CreateServiceBody = z
   .object({
     name: NameField,
-    /** Derived from `name` when omitted. Also the `${{slug.VAR}}` reference namespace. */
+    /**
+     * Derived from `name` when omitted. Also the `${{slug.VAR}}` reference
+     * namespace, so a taken slug or a reserved one (`shared`) is suffixed
+     * with -2, -3, … rather than refused.
+     */
     slug: ServiceSlugField.optional(),
     kind: z.enum(SERVICE_KINDS).default("app"),
     icon: z.string().max(64).optional(),
@@ -298,6 +365,8 @@ export const CreatedServiceSchema = z
  * change for one environment. Any config part requires `environment_id`;
  * with `expected_version`, the change fails with 409 unless the latest
  * version still is that one, so concurrent editors don't overwrite each other.
+ * A new `slug` that another service uses is a 409 (a rename is exact); a
+ * reserved one is suffixed like on create.
  */
 export const UpdateServiceBody = ServiceConfigPatchSchema.extend({
   environment_id: z.string().optional(),
@@ -445,6 +514,28 @@ export const revealServiceVariables = defineRoute(
   },
 );
 
+/**
+ * Resolves a service's environment the way a deployment does: built-ins,
+ * then its own variables with every `${{…}}` substituted, through the same
+ * `resolveVariables`. Deployment built-ins (`OPENRAIL_DEPLOYMENT_ID`,
+ * `OPENRAIL_GIT_COMMIT_SHA`) come from the service's live deployment, and are
+ * absent without one. Plaintext, secrets included, so it needs
+ * `variables:reveal` and is audited with the keys. Unknown references and
+ * cycles are a 400 `invalid_reference` with one detail per problem.
+ */
+export const resolveServiceVariables = defineRoute(
+  session("variables:reveal", ["variables.resolved"]),
+  {
+    method: "post",
+    path: "/v1/services/{serviceId}/variables/resolve",
+    tags: ["variables"],
+    summary: "Resolve a service's environment",
+    security: sessionAuth,
+    request: { params: ServiceParams, query: EnvironmentQuery },
+    responses: { 200: json(ResolvedVariablesSchema), ...errors(400, 401, 403, 404) },
+  },
+);
+
 /** A project environment's shared variables. */
 export const listSharedVariables = defineRoute(session("variables:read"), {
   method: "get",
@@ -546,8 +637,9 @@ export const getDeployment = defineRoute(session("services:read"), {
 
 /**
  * Creates a new deployment from this one's image digest and config version,
- * skipping the build. 409 unless this deployment's status is in
- * `ROLLBACK_SOURCE_STATUSES`.
+ * skipping the build. Variables resolve as they are now, not as this
+ * deployment had them (ADR 0003, "Rollback semantics"). 409 unless this
+ * deployment's status is in `ROLLBACK_SOURCE_STATUSES`.
  */
 export const rollbackDeployment = defineRoute(
   session("deployments:create", ["deployment.rolled_back"]),
@@ -621,28 +713,33 @@ export const listDomains = defineRoute(session("services:read"), {
 // -----------------------------------------------------------------------------
 
 /** Install-wide ingress settings. Owners only. */
-export const getInstanceSettings = defineRoute(session("instance:manage"), {
+export const getInstanceSettings = defineRoute(sessionOnly("instance:manage"), {
   method: "get",
   path: "/v1/instance/settings",
   tags: ["instance"],
   summary: "Get instance settings",
-  security: sessionAuth,
+  security: sessionOnlyAuth,
   responses: { 200: json(InstanceSettingsSchema), ...errors(401, 403) },
 });
 
 /**
- * Changes ingress settings and pushes new desired state to every node.
- * Existing generated domains keep their hostnames when `apps_domain` changes;
- * new ones use the new domain.
+ * Changes instance settings. An ingress change (`apps_domain`, `tls_mode`)
+ * pushes new desired state to every node; existing generated domains keep
+ * their hostnames when `apps_domain` changes, new ones use the new domain.
+ * `log_retention_days` applies from the next hourly retention run.
+ *
+ * Instances have no audit log of their own, so the change is recorded as
+ * `instance.settings_updated` in every workspace the caller owns: everyone
+ * who can see that workspace's log sees who changed the install under it.
  */
 export const updateInstanceSettings = defineRoute(
-  session("instance:manage", ["instance.settings_updated"]),
+  sessionOnly("instance:manage", ["instance.settings_updated"]),
   {
     method: "patch",
     path: "/v1/instance/settings",
     tags: ["instance"],
     summary: "Update instance settings",
-    security: sessionAuth,
+    security: sessionOnlyAuth,
     request: body(InstanceSettingsPatchSchema),
     responses: { 200: json(InstanceSettingsSchema), ...errors(400, 401, 403) },
   },
@@ -682,12 +779,14 @@ export const GithubManifestSchema = z
   .openapi("GithubManifest");
 
 /**
- * Query of `GET /v1/github/callback`. GitHub sends `code` after the App is
- * created (manifest flow) and `installation_id` + `setup_action` after it is
- * installed; `state` is ours in both.
+ * Query of `GET /v1/github/callback`. `state` is ours in every case. GitHub
+ * sends `code` alone after the App is created (manifest flow), and
+ * `installation_id` + `setup_action` + `code` after it is installed: the
+ * App requests user authorization during installation, so that `code` is an
+ * OAuth code for the user who installed it.
  */
 export const GithubCallbackQuery = z.object({
-  state: z.string().min(1).max(200),
+  state: z.string().min(1).max(512),
   code: z.string().min(1).max(200).optional(),
   installation_id: z.coerce.number().int().positive().optional(),
   setup_action: z.enum(["install", "update", "request"]).optional(),
@@ -705,30 +804,43 @@ export const getGithubStatus = defineRoute(session("projects:read"), {
 });
 
 /** Starts creating the instance's GitHub App. 409 when one already exists. */
-export const createGithubManifest = defineRoute(session("instance:manage"), {
+export const createGithubManifest = defineRoute(sessionOnly("instance:manage"), {
   method: "post",
   path: "/v1/github/manifest",
   tags: ["github"],
   summary: "Start creating the GitHub App",
-  security: sessionAuth,
+  security: sessionOnlyAuth,
   request: body(GithubManifestBody),
   responses: { 200: json(GithubManifestSchema), ...errors(400, 401, 403, 409) },
 });
 
 /**
- * GitHub redirects the browser here. With `code`, exchanges it for the App's
- * credentials and stores them sealed (needs `instance:manage`); with
- * `installation_id`, records the installation for the workspace bound to
- * `state` (needs `projects:manage` there). Redirects to the dashboard.
+ * GitHub redirects the browser here.
+ *
+ * - With `code` alone: exchanges it for the App's credentials and stores them
+ *   sealed (needs `instance:manage`).
+ * - With `installation_id`: records the installation for the workspace bound
+ *   to `state` (needs `projects:manage` there). The installation ID comes
+ *   from the browser, so the handler requires proof that this user can
+ *   access it: it exchanges `code` for a user-to-server token, checks that
+ *   `GET /user/installations` lists the installation, and revokes the token.
+ *   A missing code, a mismatch or a reused `state` is refused and recorded
+ *   as `github.installation_rejected`.
+ *
+ * Redirects to the dashboard.
  */
 export const githubCallback = defineRoute(
-  session("projects:manage", ["github.app_created", "github.installation_added"]),
+  sessionOnly("projects:manage", [
+    "github.app_created",
+    "github.installation_added",
+    "github.installation_rejected",
+  ]),
   {
     method: "get",
     path: "/v1/github/callback",
     tags: ["github"],
     summary: "GitHub App setup callback",
-    security: sessionAuth,
+    security: sessionOnlyAuth,
     request: { query: GithubCallbackQuery },
     responses: {
       302: { description: "Redirect to the dashboard" },
@@ -793,10 +905,27 @@ export const githubWebhook = defineRoute(
 // Realtime
 // -----------------------------------------------------------------------------
 
+/** Query of `GET /v1/projects/{projectId}/realtime`. */
+export const ProjectRealtimeQuery = z.object({
+  /**
+   * `cli` for a terminal client: it gets every message but isn't shown in
+   * presence. Sockets opened with an API token are never shown either.
+   */
+  client: z.enum(["web", "cli"]).default("web"),
+});
+
 /**
  * Upgrades to a WebSocket held by the project's `ProjectRoom` Durable Object.
  * Messages are documented as `RealtimeServerMessageSchema` (server → browser)
  * and `RealtimeClientMessageSchema` (browser → server), JSON text frames.
+ *
+ * A browser can't read the status of a refused upgrade, so a missing or
+ * expired session, a lost membership and an unknown project are reported by
+ * accepting the socket and closing it at once with `REALTIME_CLOSE_CODES`
+ * 4401, 4403 or 4404 (from `@openrail/shared`). The session (or token) and
+ * membership are re-checked every minute while connected, and the socket is
+ * closed the same way when either lapses. Only a non-upgrade request (426)
+ * and a cross-origin browser upgrade (403) are refused over HTTP.
  */
 export const projectRealtime = defineRoute(session("projects:read"), {
   method: "get",
@@ -804,11 +933,58 @@ export const projectRealtime = defineRoute(session("projects:read"), {
   tags: ["realtime"],
   summary: "Project realtime socket",
   security: sessionAuth,
-  request: { params: ProjectParams },
+  request: { params: ProjectParams, query: ProjectRealtimeQuery },
   responses: {
     101: { description: "Switching Protocols" },
-    ...errors(401, 403, 404, 426),
+    ...errors(403, 426),
   },
+});
+
+// -----------------------------------------------------------------------------
+// API tokens
+// -----------------------------------------------------------------------------
+
+/** `{workspaceId}` and `{tokenId}` path params. */
+export const ApiTokenParams = WorkspaceParams.extend({ tokenId: z.string() });
+
+/** A workspace's API tokens, newest first, revoked and expired ones included. */
+export const listApiTokens = defineRoute(session("tokens:manage"), {
+  method: "get",
+  path: "/v1/workspaces/{workspaceId}/tokens",
+  tags: ["tokens"],
+  summary: "List API tokens",
+  security: sessionAuth,
+  request: { params: WorkspaceParams },
+  responses: {
+    200: json(z.object({ tokens: z.array(ApiTokenSchema) })),
+    ...errors(401, 403, 404),
+  },
+});
+
+/**
+ * Creates an API token and returns its secret, once; only a SHA-256 hash is
+ * stored. Every scope must be granted by the caller's role; a token creating
+ * a token (it needs the `tokens:manage` scope) can only grant scopes it holds.
+ */
+export const createApiToken = defineRoute(session("tokens:manage", ["token.created"]), {
+  method: "post",
+  path: "/v1/workspaces/{workspaceId}/tokens",
+  tags: ["tokens"],
+  summary: "Create an API token",
+  security: sessionAuth,
+  request: { params: WorkspaceParams, ...body(CreateApiTokenSchema) },
+  responses: { 201: json(CreatedApiTokenSchema, "Created"), ...errors(400, 401, 403, 404) },
+});
+
+/** Revokes a token at once. Revoking a revoked token is a no-op. */
+export const revokeApiToken = defineRoute(session("tokens:manage", ["token.revoked"]), {
+  method: "delete",
+  path: "/v1/workspaces/{workspaceId}/tokens/{tokenId}",
+  tags: ["tokens"],
+  summary: "Revoke an API token",
+  security: sessionAuth,
+  request: { params: ApiTokenParams },
+  responses: { 204: { description: "Revoked" }, ...errors(401, 403, 404) },
 });
 
 // -----------------------------------------------------------------------------
@@ -822,6 +998,8 @@ export const PHASE1_ROUTES = {
   getProject,
   updateProject,
   deleteProject,
+  getProjectSummary,
+  listProjectSummaries,
   listEnvironments,
   createEnvironment,
   listServices,
@@ -833,6 +1011,7 @@ export const PHASE1_ROUTES = {
   listServiceVariables,
   putServiceVariables,
   revealServiceVariables,
+  resolveServiceVariables,
   listSharedVariables,
   putSharedVariables,
   revealSharedVariables,
@@ -852,6 +1031,9 @@ export const PHASE1_ROUTES = {
   listGithubRepositories,
   githubWebhook,
   projectRealtime,
+  listApiTokens,
+  createApiToken,
+  revokeApiToken,
 } as const;
 
 type JsonSchemaOf<T> = T extends { content: { "application/json": { schema: infer S } } }
@@ -909,6 +1091,10 @@ export type Domain = z.infer<typeof DomainSchema>;
 export type InstanceSettings = z.infer<typeof InstanceSettingsSchema>;
 /** GitHub App status. */
 export type GithubStatus = z.infer<typeof GithubStatusSchema>;
+/** A project summarised in one environment. */
+export type ProjectSummary = z.infer<typeof ProjectSummarySchema>;
+/** An API token as listed (never its secret). */
+export type ApiToken = z.infer<typeof ApiTokenSchema>;
 
 export type {
   RealtimeClientMessage,

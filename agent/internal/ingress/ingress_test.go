@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +31,8 @@ var sampleRoutes = []Route{
 	{Host: "API.example.com", PathPrefix: "/v1/", Upstreams: []string{"172.18.0.4:3000", "172.18.0.3:3000"}},
 	{Host: "web-production-x7k2.127.0.0.1.nip.io", PathPrefix: "/", Upstreams: []string{"172.19.0.2:8080"}},
 	{Host: "idle.example.com", Upstreams: nil},
+	{Host: "starting.example.com", Ports: []int{8080}},
+	{Host: "moving.example.com", Upstreams: []string{"172.20.0.2:3000"}, Ports: []int{4000}},
 }
 
 func TestBuildConfigGolden(t *testing.T) {
@@ -58,7 +64,8 @@ func TestBuildConfigGolden(t *testing.T) {
 
 func TestBuildConfigDeterministic(t *testing.T) {
 	a := BuildConfig(Config{TLSMode: protocol.TLSInternal, Routes: sampleRoutes}, BuildOptions{})
-	reversed := []Route{sampleRoutes[4], sampleRoutes[3], sampleRoutes[2], sampleRoutes[1], sampleRoutes[0]}
+	reversed := slices.Clone(sampleRoutes)
+	slices.Reverse(reversed)
 	b := BuildConfig(Config{TLSMode: protocol.TLSInternal, Routes: reversed}, BuildOptions{})
 	if Hash(a) != Hash(b) {
 		t.Fatal("route order changed the config")
@@ -229,8 +236,120 @@ func TestManagerLoadsOnlyOnChange(t *testing.T) {
 	if loads != 2 || !bytes.Equal(got, BuildConfig(cfg, m.opts.Build)) {
 		t.Fatalf("loads = %d", loads)
 	}
-	if !m.Healthy() || m.AppliedHash() != Hash(got) {
+	if !m.Healthy() || m.AppliedHash() != Hash(got) || m.Loads() != 2 {
 		t.Fatal("manager does not report the applied config")
+	}
+}
+
+// Moving a route to other containers on the same port changes only the DNS
+// answers, never Caddy's config.
+func TestUpstreamSwapNeverReloads(t *testing.T) {
+	leaktest.Check(t)
+	caddy := &fakeCaddy{}
+	srv := httptest.NewServer(caddy)
+	defer srv.Close()
+	m := New(Options{AdminURL: srv.URL})
+	ctx := context.Background()
+	route := func(ups ...string) Config {
+		return Config{TLSMode: protocol.TLSOff, Routes: []Route{{Host: "app.example.com", Upstreams: ups, Ports: []int{3000}}}}
+	}
+	name := UpstreamName("app.example.com", "", 3000)
+	for i, ups := range [][]string{
+		{"172.18.0.2:3000"},
+		{"172.18.0.2:3000", "172.18.0.3:3000"},
+		{"172.18.0.3:3000"},
+		nil,
+		{"172.18.0.4:3000"},
+	} {
+		if err := m.Apply(ctx, route(ups...)); err != nil {
+			t.Fatal(err)
+		}
+		var want []netip.Addr
+		for _, u := range ups {
+			want = append(want, netip.MustParseAddrPort(u).Addr())
+		}
+		if got := m.Upstreams()[name]; !slices.Equal(got, want) {
+			t.Fatalf("swap %d: answers %v, want %v", i, got, want)
+		}
+	}
+	if loads, _ := caddy.state(); loads != 1 {
+		t.Fatalf("upstream swaps reloaded caddy: loads = %d, want 1", loads)
+	}
+
+	// A new hostname, a port change, or a TLS change does reload.
+	cfg := route("172.18.0.4:3000")
+	cfg.Routes = append(cfg.Routes, Route{Host: "www.example.com", Ports: []int{3000}})
+	_ = m.Apply(ctx, cfg)
+	cfg.Routes[0] = Route{Host: "app.example.com", Upstreams: []string{"172.18.0.4:8080"}}
+	_ = m.Apply(ctx, cfg)
+	cfg.TLSMode = protocol.TLSInternal
+	_ = m.Apply(ctx, cfg)
+	if loads, _ := caddy.state(); loads != 4 {
+		t.Fatalf("loads = %d, want 4", loads)
+	}
+}
+
+// A restarted agent finds Caddy already running the config it wants and
+// does not reload it.
+func TestManagerAdoptsRunningConfig(t *testing.T) {
+	leaktest.Check(t)
+	caddy := &fakeCaddy{}
+	srv := httptest.NewServer(caddy)
+	defer srv.Close()
+	cfg := Config{TLSMode: protocol.TLSOff, Routes: sampleRoutes}
+	if err := New(Options{AdminURL: srv.URL}).Apply(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(Options{AdminURL: srv.URL})
+	if err := restarted.Apply(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if loads, _ := caddy.state(); loads != 1 || !restarted.Healthy() || restarted.Loads() != 0 {
+		t.Fatalf("restart reloaded caddy: loads = %d", loads)
+	}
+	cfg.Routes = sampleRoutes[:1]
+	_ = restarted.Apply(context.Background(), cfg)
+	if loads, _ := caddy.state(); loads != 2 {
+		t.Fatalf("a changed config was not loaded: loads = %d", loads)
+	}
+}
+
+// The answers survive an agent restart, so Caddy can resolve upstreams
+// before the restarted agent receives its first desired state.
+func TestUpstreamsPersistAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upstreams.json")
+	m := New(Options{AdminURL: "http://127.0.0.1:1", UpstreamsPath: path})
+	cfg := Config{TLSMode: protocol.TLSOff, Routes: sampleRoutes}
+	_ = m.Apply(context.Background(), cfg)
+	restarted := New(Options{AdminURL: "http://127.0.0.1:1", UpstreamsPath: path})
+	got, want := restarted.Upstreams(), BuildTable(cfg)
+	if len(want) == 0 || fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("restored answers %v, want %v", got, want)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if len(New(Options{UpstreamsPath: path}).Upstreams()) != 0 {
+		t.Fatal("a corrupt file produced answers")
+	}
+}
+
+func TestBuildTable(t *testing.T) {
+	table := BuildTable(Config{Routes: sampleRoutes})
+	v1 := UpstreamName("api.example.com", "/v1", 3000)
+	if got := fmt.Sprint(table[v1]); got != "[172.18.0.3 172.18.0.4]" {
+		t.Fatalf("/v1 answers %s", got)
+	}
+	if _, ok := table[UpstreamName("starting.example.com", "", 8080)]; ok {
+		t.Fatal("a route with no upstream must not resolve")
+	}
+	if got := fmt.Sprint(table[UpstreamName("moving.example.com", "", 3000)]); got != "[172.20.0.2]" {
+		t.Fatalf("moving answers %s", got)
+	}
+	for name := range table {
+		if !strings.HasSuffix(name, "."+UpstreamZone) {
+			t.Fatalf("name %s outside the zone", name)
+		}
 	}
 }
 

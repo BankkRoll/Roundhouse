@@ -7,17 +7,26 @@ import { createRoute, z } from "@hono/zod-openapi";
 import { type Db, users, workspaceMembers, workspaces } from "@openrail/db";
 import type { Role } from "@openrail/shared";
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
-import { clientIp, createRouter, requireUser, requireWorkspace } from "../context";
+import {
+  actorOf,
+  clientIp,
+  createRouter,
+  requirePrincipal,
+  requireUser,
+  requireWorkspace,
+} from "../context";
 import { recordAudit } from "../lib/audit";
 import { ApiError, notFound } from "../lib/errors";
 import { createWorkspace } from "../lib/workspaces";
 import {
+  ApiTokenScopeSchema,
   body,
   errors,
   json,
   MemberSchema,
   RoleSchema,
   sessionAuth,
+  sessionOnlyAuth,
   WorkspaceParams,
   WorkspaceSchema,
 } from "../schemas";
@@ -50,6 +59,18 @@ const me = createRoute({
             member_id: z.string(),
           }),
         ),
+        /**
+         * Present when the request authenticated with an API token: `user` is
+         * its creator and `workspaces` holds only the token's workspace.
+         */
+        token: z
+          .object({
+            id: z.string(),
+            name: z.string(),
+            workspace_id: z.string(),
+            scopes: z.array(ApiTokenScopeSchema),
+          })
+          .optional(),
       }),
     ),
     ...errors(401),
@@ -61,7 +82,7 @@ const create = createRoute({
   path: "/v1/workspaces",
   tags: ["workspaces"],
   summary: "Create a workspace",
-  security: sessionAuth,
+  security: sessionOnlyAuth,
   request: body(WorkspaceName),
   responses: { 201: json(WorkspaceSchema, "Created"), ...errors(400, 401, 403) },
 });
@@ -157,7 +178,7 @@ const ownerChanged = () =>
 /** Routes for `/v1/me` and `/v1/workspaces/*` (excluding nodes, invites, audit). */
 export const workspaceRoutes = createRouter()
   .openapi(me, async (c) => {
-    const user = await requireUser(c);
+    const { user, token } = await requirePrincipal(c);
     const rows = await c
       .get("db")
       .select({
@@ -169,9 +190,28 @@ export const workspaceRoutes = createRouter()
       })
       .from(workspaceMembers)
       .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
-      .where(and(eq(workspaceMembers.userId, user.id), isNull(workspaces.deletedAt)))
+      .where(
+        and(
+          eq(workspaceMembers.userId, user.id),
+          isNull(workspaces.deletedAt),
+          token ? eq(workspaces.id, token.workspaceId) : undefined,
+        ),
+      )
       .orderBy(asc(workspaces.name));
-    return c.json({ user, workspaces: rows }, 200);
+    if (!token) return c.json({ user, workspaces: rows }, 200);
+    return c.json(
+      {
+        user,
+        workspaces: rows,
+        token: {
+          id: token.id,
+          name: token.name,
+          workspace_id: token.workspaceId,
+          scopes: token.scopes.filter((s) => s !== "instance:manage"),
+        },
+      },
+      200,
+    );
   })
   .openapi(create, async (c) => {
     const user = await requireUser(c);
@@ -242,8 +282,7 @@ export const workspaceRoutes = createRouter()
     if (!ws) throw notFound("Workspace");
     await recordAudit(c.get("db"), {
       workspaceId,
-      actorType: "user",
-      actorId: m.user.id,
+      ...m.actor,
       action: "workspace.renamed",
       targetType: "workspace",
       targetId: workspaceId,
@@ -294,8 +333,7 @@ export const workspaceRoutes = createRouter()
     if (!updated) throw m.role === "owner" ? lastOwner() : ownerChanged();
     await recordAudit(db, {
       workspaceId,
-      actorType: "user",
-      actorId: m.user.id,
+      ...m.actor,
       action: "member.role_changed",
       targetType: "member",
       targetId: memberId,
@@ -307,12 +345,13 @@ export const workspaceRoutes = createRouter()
   })
   .openapi(removeMember, async (c) => {
     const { workspaceId, memberId } = c.req.valid("param");
-    const user = await requireUser(c);
+    const principal = await requirePrincipal(c);
     const db = c.get("db");
     const [target] = await memberQuery(db)
       .where(and(eq(workspaceMembers.id, memberId), eq(workspaceMembers.workspaceId, workspaceId)))
       .limit(1);
-    const isSelf = target?.user_id === user.id;
+    // A token never "leaves": removing its own creator needs members:manage.
+    const isSelf = !principal.token && target?.user_id === principal.user.id;
     const m = await requireWorkspace(c, workspaceId, isSelf ? "workspace:read" : "members:manage");
     if (!target) throw notFound("Member");
     if (target.role === "owner" && !isSelf && m.role !== "owner") {
@@ -332,8 +371,7 @@ export const workspaceRoutes = createRouter()
     if (!removed) throw m.role === "owner" || isSelf ? lastOwner() : ownerChanged();
     await recordAudit(db, {
       workspaceId,
-      actorType: "user",
-      actorId: user.id,
+      ...actorOf(principal),
       action: isSelf ? "member.left" : "member.removed",
       targetType: "member",
       targetId: memberId,

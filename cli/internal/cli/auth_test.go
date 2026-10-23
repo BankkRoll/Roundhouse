@@ -2,12 +2,14 @@ package cli
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/BankkRoll/Open-Rail/cli/internal/api"
 	"github.com/BankkRoll/Open-Rail/cli/internal/apitest"
 	"github.com/BankkRoll/Open-Rail/cli/internal/config"
 	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
@@ -147,16 +149,166 @@ func TestTokenEnvironment(t *testing.T) {
 	h.env[EnvToken] = apitest.SessionToken
 	r := h.expect(exitcode.Usage, "", "whoami")
 	contains(t, r.stderr, "--insecure")
+	// A value without the tok_ prefix is still a session token.
 	r = h.ok("", "whoami", "--insecure")
 	contains(t, r.stdout, "("+EnvToken+")")
-
-	// API tokens are sent as bearer tokens, ready for when the API accepts them.
-	h.env[EnvToken] = "tok_example"
-	h.expect(exitcode.Unauthenticated, "", "whoami", "--insecure")
+	notContains(t, r.stdout, "API token:")
 	reqs := h.fake.Requests()
-	last := reqs[len(reqs)-1]
-	if last.Header.Get("Authorization") != "Bearer tok_example" || last.Header.Get("Cookie") != "" {
-		t.Errorf("headers = %v", last.Header)
+	if last := reqs[len(reqs)-1]; last.Header.Get("Cookie") != apitest.CookieName+"="+apitest.SessionToken || last.Header.Get("Authorization") != "" {
+		t.Errorf("session token headers = %v", last.Header)
+	}
+
+	h.env[EnvToken] = "tok_unknown"
+	r = h.expect(exitcode.Unauthenticated, "", "whoami", "--insecure")
+	contains(t, r.stderr, "hint: "+EnvToken+" was rejected")
+	reqs = h.fake.Requests()
+	if last := reqs[len(reqs)-1]; last.Header.Get("Authorization") != "Bearer tok_unknown" || last.Header.Get("Cookie") != "" {
+		t.Errorf("bearer headers = %v", last.Header)
+	}
+}
+
+func TestBearerTokenEndToEnd(t *testing.T) {
+	h := newHarness(t)
+	h.env[EnvURL] = h.fake.URL
+	h.env[EnvToken] = h.fake.AddToken("ci", api.APITokenPresets["deploy"]...)
+	r := h.ok("", "whoami", "--insecure", "--json")
+	h.golden("whoami-token.json", r.stdout)
+	r = h.ok("", "whoami", "--insecure")
+	contains(t, r.stdout, "API token: ci (tok_0001), scopes: workspace:read")
+
+	// No login and no profile: a CI job links and deploys with the token alone.
+	h.ok("", "link", "--project", "shop", "--service", "api", "--gitignore=false", "--insecure")
+	h.ok("", "deploy", "--insecure")
+	h.ok("", "vars", "set", "FROM_CI=1", "--insecure")
+	if _, err := os.Stat(config.CredentialsPath(h.configDir)); !os.IsNotExist(err) {
+		t.Errorf("a token run wrote credentials: %v", err)
+	}
+	for _, req := range h.fake.Requests() {
+		if req.Header.Get("Authorization") != "Bearer "+h.env[EnvToken] || req.Header.Get("Cookie") != "" {
+			t.Errorf("%s %s: Authorization %q, Cookie %q", req.Method, req.Path, req.Header.Get("Authorization"), req.Header.Get("Cookie"))
+		}
+	}
+
+	// Outside its scopes: 403 with a hint about the token.
+	r = h.expect(exitcode.Forbidden, "", "vars", "--reveal", "--insecure")
+	contains(t, r.stderr, "lacks the variables:reveal scope")
+	contains(t, r.stderr, "hint: the API token lacks a scope")
+
+	// Revoked: 401 with a hint about the token, not about logging in.
+	secret := h.fake.AddToken("short-lived", "workspace:read")
+	h.env[EnvToken] = secret
+	h.ok("", "whoami", "--insecure")
+	delete(h.env, EnvToken)
+	h.login()
+	r = h.ok("", "tokens", "revoke", "short-lived", "--yes")
+	contains(t, r.stdout, "Revoked token short-lived (tok_0002)")
+	h.env[EnvToken] = secret
+	r = h.expect(exitcode.Unauthenticated, "", "whoami", "--insecure")
+	contains(t, r.stderr, EnvToken+" was rejected")
+	notContains(t, r.stderr, "roundhouse login")
+}
+
+func TestTokenOutsideItsWorkspace(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	// The link names a project the token's workspace does not hold, as when
+	// a token from another workspace is used: the API answers 404.
+	h.env[EnvToken] = h.fake.AddTokenIn("ws_other", "ci", api.APITokenPresets["read"]...)
+	r := h.expect(exitcode.NotFound, "", "status")
+	contains(t, r.stderr, "Not found")
+}
+
+// -----------------------------------------------------------------------------
+// Session refresh
+// -----------------------------------------------------------------------------
+
+func loadProfile(t *testing.T, h *harness) *config.Profile {
+	t.Helper()
+	creds, _, err := config.LoadCredentials(config.CredentialsPath(h.configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return creds.Profiles[config.DefaultProfile]
+}
+
+func TestRefreshedSessionIsSaved(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	before := loadProfile(t, h)
+	path := config.CredentialsPath(h.configDir)
+	raw, _ := os.ReadFile(path)
+
+	const rotated = "sess_rotated.NEWSIGNATURE%2Bxyz%3D"
+	h.fake.RefreshSession(rotated, 30*86400)
+	h.ok("", "whoami")
+	after := loadProfile(t, h)
+	if after.Session == nil || after.Session.Value != rotated || after.Session.CookieName != apitest.CookieName {
+		t.Fatalf("session after refresh = %+v", after.Session)
+	}
+	want := time.UnixMilli(apitest.Now).Add(30 * 24 * time.Hour).UTC()
+	if after.Session.ExpiresAt == nil || !after.Session.ExpiresAt.Equal(want) {
+		t.Errorf("expires_at = %v, want %v", after.Session.ExpiresAt, want)
+	}
+	if after.URL != before.URL || after.User == nil || *after.User != *before.User || after.Insecure != before.Insecure {
+		t.Errorf("profile changed beyond the session: %+v -> %+v", before, after)
+	}
+	// Same file format: the same keys in the same layout, only values differ.
+	newRaw, _ := os.ReadFile(path)
+	if strings.Count(string(newRaw), "\n") != strings.Count(string(raw), "\n") || !strings.Contains(string(newRaw), `"cookie_name": "better-auth.session_token"`) {
+		t.Errorf("credentials file layout changed:\n%s\n---\n%s", raw, newRaw)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+			t.Errorf("mode after refresh = %#o", fi.Mode().Perm())
+		}
+	}
+	// The next command sends the refreshed cookie.
+	h.ok("", "whoami")
+	reqs := h.fake.Requests()
+	if got := reqs[len(reqs)-1].Header.Get("Cookie"); got != apitest.CookieName+"="+rotated {
+		t.Errorf("next request Cookie = %q", got)
+	}
+}
+
+func TestClearedSessionCookieEndsSession(t *testing.T) {
+	past := time.UnixMilli(apitest.Now).Add(-time.Hour)
+	for name, clear := range map[string]*http.Cookie{
+		"max-age 0":    {Name: apitest.CookieName, Value: "", Path: "/", MaxAge: -1},
+		"past expires": {Name: apitest.CookieName, Value: "deleted", Path: "/", Expires: past},
+		"empty value":  {Name: apitest.CookieName, Value: "", Path: "/"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.login()
+			h.fake.EndSession(clear)
+			r := h.expect(exitcode.Unauthenticated, "", "whoami")
+			contains(t, r.stderr, "run `roundhouse login`")
+			prof := loadProfile(t, h)
+			if prof == nil || prof.Session != nil || prof.URL != h.fake.URL {
+				t.Fatalf("profile after the session ended = %+v", prof)
+			}
+			data, _ := os.ReadFile(config.CredentialsPath(h.configDir))
+			notContains(t, string(data), "deleted")
+			r = h.expect(exitcode.Unauthenticated, "", "whoami")
+			contains(t, r.stderr, "not signed in to "+h.fake.URL)
+			// Logging in again works as usual.
+			h.login()
+			h.ok("", "whoami")
+		})
+	}
+}
+
+func TestTokenRequestsIgnoreSetCookie(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	path := config.CredentialsPath(h.configDir)
+	before, _ := os.ReadFile(path)
+	h.env[EnvToken] = h.fake.AddToken("ci", "workspace:read")
+	h.fake.RefreshSession("sess_should_not_be_saved", 3600)
+	h.ok("", "whoami")
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Errorf("a token request changed the stored session:\n%s\n---\n%s", before, after)
 	}
 }
 

@@ -1,4 +1,3 @@
-import { toast } from "@openrail/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import {
@@ -57,8 +56,10 @@ async function sessionIsValid(): Promise<boolean> {
 /**
  * Holds one realtime socket for a project while any of its pages is open. Messages
  * update the query caches directly; log lines go to subscribers via
- * {@link useLogSubscription}. When the API refuses the socket because the session
- * ended, the user is sent to sign in.
+ * {@link useLogSubscription}. When the server closes the socket because the session
+ * ended (4401), the user is sent to sign in. When access was lost (4403) or the project
+ * is gone (4404), the socket stays closed, the status says so, and the membership and
+ * project are refetched so the page shows what changed.
  *
  * @param props - Project id, children and an optional socket factory.
  * @returns The provider.
@@ -85,15 +86,10 @@ export function RealtimeProvider({ projectId, children, createSocket }: Realtime
         },
         checkSession: sessionIsValid,
         onSessionExpired: () => endSession(latest.current.queryClient, latest.current.router),
-        onForbidden: () => {
-          const { queryClient: client, router: current } = latest.current;
-          toast({
-            title: "You no longer have access to this project",
-            description: "Your membership in its workspace was removed.",
-            tone: "error",
-          });
+        onUnavailable: () => {
+          const client = latest.current.queryClient;
           void client.invalidateQueries({ queryKey: queryKeys.me });
-          void current.navigate({ to: "/dashboard" });
+          void client.invalidateQueries({ queryKey: queryKeys.project(projectId), exact: true });
         },
       }),
     [projectId, createSocket],

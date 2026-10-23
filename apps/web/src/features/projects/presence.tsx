@@ -1,5 +1,6 @@
 import { cn } from "@openrail/ui";
 import { AvatarStack } from "@openrail/ui/controls";
+import type { RealtimeStatus } from "../../lib/realtime/client";
 import { useRealtime } from "../../lib/realtime/provider";
 
 const STATUS_COPY = {
@@ -8,7 +9,9 @@ const STATUS_COPY = {
   reconnecting: { label: "Reconnecting", dot: "bg-warning animate-pulse-dot" },
   closed: { label: "Offline", dot: "bg-subtle-foreground" },
   expired: { label: "Signed out", dot: "bg-danger" },
-} as const;
+  forbidden: { label: "No access", dot: "bg-subtle-foreground" },
+  not_found: { label: "Unavailable", dot: "bg-subtle-foreground" },
+} as const satisfies Record<RealtimeStatus, { label: string; dot: string }>;
 
 /**
  * Who else is looking at this project, from the realtime socket's presence messages,
@@ -29,7 +32,7 @@ export function ProjectPresence({ className }: { className?: string }) {
       />
       <span
         role="status"
-        className="inline-flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground"
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
       >
         <span aria-hidden="true" className={cn("size-1.5 rounded-full", copy.dot)} />
         {copy.label}

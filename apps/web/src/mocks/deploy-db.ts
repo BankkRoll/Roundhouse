@@ -1,6 +1,7 @@
 /**
  * Phase 1 tables of the mock database (projects, services, config versions, variables,
- * deployments, builds, logs, domains, instance settings, the GitHub App) and their seed.
+ * deployments, builds, logs, domains, instance settings, the GitHub App, API tokens) and
+ * their seed.
  *
  * The seed is one realistic workspace: a `storefront` project with a git-built `web`
  * service, an image-based `api` with two replicas and a `worker` mid-deploy, plus an
@@ -8,8 +9,14 @@
  *
  * @module
  */
-import { defaultServiceConfig, type ServiceSource } from "@openrail/shared";
+import {
+  API_TOKEN_PRESETS,
+  DEFAULT_LOG_RETENTION_DAYS,
+  defaultServiceConfig,
+  type ServiceSource,
+} from "@openrail/shared";
 import type {
+  ApiToken,
   Build,
   Deployment,
   DeploymentEvent,
@@ -43,11 +50,20 @@ export interface DbVariable {
 /** A deployment row; the API joins its build on read. */
 export type DbDeployment = Omit<Deployment, "build">;
 
+/** An API token row: the listed token, its workspace and the secret the mock checks. */
+export interface DbApiToken extends ApiToken {
+  workspace_id: string;
+  /** The full `tok_…` secret. The API stores only a hash; the mock keeps it for tests. */
+  secret: string;
+}
+
 /** A pending GitHub manifest flow. */
 export interface DbManifestState {
   state: string;
   workspace_id: string;
   expires_at: number;
+  /** Set once an install callback redeemed it; the API refuses a second use (`link_used`). */
+  used?: boolean;
 }
 
 /** Every Phase 1 table. */
@@ -75,6 +91,7 @@ export interface DeployDb {
   };
   /** Who the realtime mock reports as viewing a project. */
   presence: PresenceUser[];
+  tokens: DbApiToken[];
 }
 
 /** Ids of the seeded rows, for tests. */
@@ -97,6 +114,9 @@ export const SEED = {
   workerDeploying: "dep_worker_1",
   grafanaActive: "dep_grafana_1",
   installation: "ghi_acme",
+  ciToken: "tok_ci",
+  revokedToken: "tok_laptop",
+  expiredToken: "tok_old",
 } as const;
 
 const MINUTE = 60_000;
@@ -135,6 +155,7 @@ function deployment(
 ): DbDeployment {
   return {
     id,
+    project_id: serviceId === SEED.grafana ? SEED.toolsProject : SEED.project,
     service_id: serviceId,
     environment_id: environmentId,
     config_version: 1,
@@ -661,7 +682,11 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         created_at: now - 14 * DAY,
       },
     ],
-    instance: { apps_domain: "apps.example.com", tls_mode: "acme" },
+    instance: {
+      apps_domain: "apps.example.com",
+      tls_mode: "acme",
+      log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
+    },
     github: {
       app: {
         id: 912_345,
@@ -713,6 +738,47 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
       { user_id: "usr_ada", name: "Ada Lovelace", image: null },
       { user_id: "usr_bob", name: "Bob Builder", image: null },
     ],
+    tokens: [
+      {
+        id: SEED.ciToken,
+        workspace_id: workspaceId,
+        name: "github-actions",
+        scopes: [...API_TOKEN_PRESETS.deploy],
+        prefix: "tok_c1Q9",
+        secret: "tok_c1Q9mockmockmockmockmockmockmockmock",
+        created_by: { user_id: "usr_ada", name: "Ada Lovelace" },
+        last_used_at: now - 3 * HOUR,
+        expires_at: now + 80 * DAY,
+        revoked_at: null,
+        created_at: now - 10 * DAY,
+      },
+      {
+        id: SEED.revokedToken,
+        workspace_id: workspaceId,
+        name: "old laptop",
+        scopes: [...API_TOKEN_PRESETS.read],
+        prefix: "tok_Lp7x",
+        secret: "tok_Lp7xmockmockmockmockmockmockmockmock",
+        created_by: { user_id: "usr_ada", name: "Ada Lovelace" },
+        last_used_at: now - 20 * DAY,
+        expires_at: null,
+        revoked_at: now - 15 * DAY,
+        created_at: now - 40 * DAY,
+      },
+      {
+        id: SEED.expiredToken,
+        workspace_id: workspaceId,
+        name: "staging smoke test",
+        scopes: [...API_TOKEN_PRESETS.read],
+        prefix: "tok_Ex3k",
+        secret: "tok_Ex3kmockmockmockmockmockmockmockmock",
+        created_by: null,
+        last_used_at: null,
+        expires_at: now - 2 * DAY,
+        revoked_at: null,
+        created_at: now - 32 * DAY,
+      },
+    ],
   };
 }
 
@@ -734,7 +800,11 @@ export function emptyDeploy(): DeployDb {
     placements: [],
     logs: {},
     domains: [],
-    instance: { apps_domain: null, tls_mode: "acme" },
+    instance: {
+      apps_domain: null,
+      tls_mode: "acme",
+      log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
+    },
     github: {
       app: null,
       installations: [],
@@ -743,5 +813,6 @@ export function emptyDeploy(): DeployDb {
       webhookSecret: "whsec_mock",
     },
     presence: [],
+    tokens: [],
   };
 }

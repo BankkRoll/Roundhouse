@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { db, signInAs, USERS } from "../../../mocks/db";
+import { db, signInAs, USERS, WORKSPACE_ID } from "../../../mocks/db";
 import { PROJECT_PATH, SEED } from "../../../test/phase1";
 import { findPageHeading, renderApp } from "../../../test/render";
 
@@ -105,13 +105,45 @@ describe("new service flow", () => {
     expect(db.deploy.builds.at(-1)).toMatchObject({ status: "queued" });
   });
 
-  it("shows the API's conflict on the configure step", async () => {
+  it("creates a service whose name is taken, with a suffixed slug", async () => {
     const { user, dialog } = await openFlow();
     await user.type(within(dialog).getByLabelText("Image"), "ghcr.io/acme/web:1");
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
     expect(within(dialog).getByLabelText("Service name")).toHaveValue("web");
     await user.click(within(dialog).getByRole("button", { name: "Create and deploy" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(/already exists/);
+    await waitFor(() => expect(db.deploy.services.at(-1)).toMatchObject({ slug: "web-2" }));
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("accepts the reserved name shared, which the API suffixes", async () => {
+    const { user, dialog } = await openFlow();
+    await user.type(within(dialog).getByLabelText("Image"), "nginx:1.27");
+    await user.click(within(dialog).getByRole("button", { name: "Continue" }));
+    const name = within(dialog).getByLabelText("Service name");
+    await user.clear(name);
+    await user.type(name, "shared");
+    await user.click(within(dialog).getByRole("button", { name: "Create and deploy" }));
+    await waitFor(() =>
+      expect(db.deploy.services.at(-1)).toMatchObject({ name: "shared", slug: "shared-2" }),
+    );
+  });
+
+  it("deploys the first service of a project created moments ago", async () => {
+    const { user, router } = renderApp(`/w/${WORKSPACE_ID}`);
+    await findPageHeading("Home");
+    await user.click(screen.getByRole("button", { name: "New project" }));
+    const create = await screen.findByRole("dialog", { name: "New project" });
+    await user.type(within(create).getByLabelText("Project name"), "lake");
+    await user.click(within(create).getByRole("button", { name: "Create project" }));
+    await screen.findByRole("heading", { name: "No services yet" });
+    await user.click(screen.getAllByRole("button", { name: "New service" })[0]!);
+    const dialog = await screen.findByRole("dialog", { name: "New service" });
+    await user.type(within(dialog).getByLabelText("Image"), "nginx:1.27-alpine");
+    await user.click(within(dialog).getByRole("button", { name: "Continue" }));
+    await user.click(within(dialog).getByRole("button", { name: "Create and deploy" }));
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/\/deployments$/));
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.queryByText(/Missing queryFn/)).not.toBeInTheDocument();
   });
 
   it("is keyboard operable and closes with Escape", async () => {

@@ -7,8 +7,9 @@
  *   `WHERE` clause, recorded as a `status_changed` event and published.
  * - {@link createDeployment}: inserts a queued deployment, supersedes older
  *   in-flight ones, and starts its workflow.
- * - {@link cancelDeployment} / {@link retireDeployments}: stop deployments
- *   and pull their replicas off nodes.
+ * - {@link cancelDeployment} / {@link retireDeployments}: stop deployments,
+ *   stop their builds on the builder ({@link cancelBuildsOnNodes}) and pull
+ *   their replicas off nodes.
  *
  * @module
  */
@@ -115,7 +116,7 @@ export async function publishDeployment(
     : null;
   await publish(ctx.env, projectId, {
     type: "deployment.updated",
-    deployment: toApiDeployment(row, build),
+    deployment: toApiDeployment(row, build, projectId),
   });
 }
 
@@ -230,8 +231,35 @@ export async function wakeWorkflow(
 }
 
 /**
- * Cancels a deployment: marks it (and its build) cancelled, drops its
- * replicas from nodes, and wakes its workflow so it exits.
+ * Tells each build's node to stop it with a signed `build_cancel`, so the
+ * builder is free for the next build at once instead of finishing work
+ * nobody wants. Best effort: a node that is offline or too old to know the
+ * frame is skipped, and its build ends at its own timeout.
+ *
+ * @param env - Bindings with the node namespace.
+ * @param stopped - Builds just marked cancelled or failed, with their node.
+ */
+export async function cancelBuildsOnNodes(
+  env: Pick<Env, "NODE_CONNECTION">,
+  stopped: readonly { id: string; nodeId: string | null }[],
+): Promise<void> {
+  await Promise.all(
+    stopped.map(async ({ id, nodeId }) => {
+      if (!nodeId) return;
+      try {
+        const stub = env.NODE_CONNECTION.get(env.NODE_CONNECTION.idFromName(nodeId));
+        disposeRpc(await stub.sendBuildCancel(id));
+      } catch (err) {
+        console.warn("build cancel not delivered", id, err);
+      }
+    }),
+  );
+}
+
+/**
+ * Cancels a deployment: marks it (and its build) cancelled, stops the build
+ * on its builder, drops its replicas from nodes, and wakes its workflow so it
+ * exits.
  *
  * @param ctx - Database and bindings.
  * @param projectId - Owning project.
@@ -249,12 +277,14 @@ export async function cancelDeployment(
   const row = await transitionDeployment(ctx, projectId, deploymentId, "cancelled", { reason });
   const current =
     row ?? (await ctx.db.query.deployments.findFirst({ where: eq(deployments.id, deploymentId) }))!;
-  await ctx.db
+  const stopped = await ctx.db
     .update(builds)
     .set({ status: "cancelled", finishedAt: new Date(), error: reason })
     .where(
       and(eq(builds.deploymentId, deploymentId), inArray(builds.status, ["queued", "running"])),
-    );
+    )
+    .returning({ id: builds.id, nodeId: builds.nodeId });
+  await cancelBuildsOnNodes(ctx.env, stopped);
   await retireDeployments(ctx, [deploymentId]);
   await Promise.all([
     wakeWorkflow(ctx.env, current, "build", { cancelled: true }),

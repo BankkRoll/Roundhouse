@@ -20,9 +20,15 @@ import { useState } from "react";
 import { ConfirmDialog } from "../../../components/confirm-dialog";
 import { errorMessage } from "../../../lib/api/client";
 import type { Deployment } from "../../../lib/api/deploy-types";
-import { formatTimestamp } from "../../../lib/format";
+import { formatRelativeTime, formatTimestamp } from "../../../lib/format";
 import { useCancelDeployment, useDeploy, useRollback } from "../../../queries/deployments";
-import { canRollBackTo, deploymentRef, isCancellable } from "./deployment-format";
+import {
+  canRollBackTo,
+  deploymentName,
+  deploymentRef,
+  isCancellable,
+  shortDeploymentId,
+} from "./deployment-format";
 
 /** Where a deployment's links point. */
 export interface DeploymentLinkContext {
@@ -88,13 +94,23 @@ export function useDeploymentActions(context: DeploymentLinkContext) {
           rollback.reset();
         }
       }}
-      title={`Roll back to ${rollbackTarget ? deploymentRef(rollbackTarget) : ""}?`}
+      title={`Roll back to deployment ${rollbackTarget ? shortDeploymentId(rollbackTarget.id) : ""}?`}
       description={
         rollbackTarget ? (
           <>
-            A new deployment starts from the image and config (v{rollbackTarget.config_version}) of
-            the deployment created {formatTimestamp(rollbackTarget.created_at)}. It skips the build;
-            variables are read as they are now.
+            A new deployment starts from the image ({deploymentRef(rollbackTarget)}) and config v
+            {rollbackTarget.config_version} of that deployment, created{" "}
+            <time
+              dateTime={new Date(rollbackTarget.created_at).toISOString()}
+              title={formatTimestamp(rollbackTarget.created_at)}
+            >
+              {formatRelativeTime(rollbackTarget.created_at)}
+            </time>
+            , without building again.{" "}
+            <strong className="font-medium text-foreground">
+              It uses the service's current variables, not the ones it had then.
+            </strong>{" "}
+            Revert variable changes first if they caused the problem.
           </>
         ) : null
       }
@@ -150,11 +166,11 @@ export function DeploymentMenu({
   onLogs,
   showDetails = true,
 }: DeploymentMenuProps) {
-  const ref = deploymentRef(deployment);
+  const name = deploymentName(deployment);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={`Actions for deployment ${ref}`}>
+        <Button variant="ghost" size="icon-sm" aria-label={`Actions for deployment ${name}`}>
           <EllipsisIcon />
         </Button>
       </DropdownMenuTrigger>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -116,7 +117,8 @@ func (a *App) chooseService(p *api.ProjectDetail) (*api.Service, error) {
 }
 
 // findProject loads a project by ID, or by slug or name across the
-// caller's workspaces.
+// caller's workspaces. A slug is looked up exactly with the API's `slug`
+// filter; only when no workspace has it are projects listed to match a name.
 func (a *App) findProject(ctx context.Context, c *api.Client, ref string) (*api.ProjectDetail, error) {
 	if strings.HasPrefix(ref, "prj_") {
 		return c.GetProject(ctx, ref)
@@ -126,18 +128,14 @@ func (a *App) findProject(ctx context.Context, c *api.Client, ref string) (*api.
 		return nil, err
 	}
 	var matches []api.Project
-	for _, ws := range me.Workspaces {
-		projects, err := c.ListProjects(ctx, ws.ID)
-		if err != nil {
-			if api.IsStatus(err, http.StatusForbidden) {
-				continue
-			}
+	if isSlug(ref) {
+		if matches, err = projectsBySlug(ctx, c, me.Workspaces, ref); err != nil {
 			return nil, err
 		}
-		for _, p := range projects {
-			if matchRef(ref, p.ID, p.Slug, p.Name) {
-				matches = append(matches, p)
-			}
+	}
+	if len(matches) == 0 {
+		if matches, err = projectsByName(ctx, c, me.Workspaces, ref); err != nil {
+			return nil, err
 		}
 	}
 	switch len(matches) {
@@ -147,6 +145,52 @@ func (a *App) findProject(ctx context.Context, c *api.Client, ref string) (*api.
 		return c.GetProject(ctx, matches[0].ID)
 	}
 	return nil, exitcode.New(exitcode.Usage, "%q matches %d projects in different workspaces; pass the project ID", ref, len(matches))
+}
+
+// slugPattern mirrors SlugField in apps/api/src/schemas.ts; the API rejects
+// a `slug` filter that does not match it.
+var slugPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
+
+func isSlug(s string) bool {
+	return len(s) <= 40 && slugPattern.MatchString(s)
+}
+
+// projectsBySlug finds the project with slug ref in each workspace.
+func projectsBySlug(ctx context.Context, c *api.Client, workspaces []api.Membership, ref string) ([]api.Project, error) {
+	var matches []api.Project
+	for _, ws := range workspaces {
+		p, err := c.ProjectBySlug(ctx, ws.ID, ref)
+		if err != nil {
+			if api.IsStatus(err, http.StatusForbidden) {
+				continue
+			}
+			return nil, err
+		}
+		if p != nil {
+			matches = append(matches, *p)
+		}
+	}
+	return matches, nil
+}
+
+// projectsByName lists every workspace's projects to find those named ref.
+func projectsByName(ctx context.Context, c *api.Client, workspaces []api.Membership, ref string) ([]api.Project, error) {
+	var matches []api.Project
+	for _, ws := range workspaces {
+		projects, err := c.ListProjects(ctx, ws.ID)
+		if err != nil {
+			if api.IsStatus(err, http.StatusForbidden) {
+				continue
+			}
+			return nil, err
+		}
+		for _, p := range projects {
+			if strings.EqualFold(ref, p.Name) {
+				matches = append(matches, p)
+			}
+		}
+	}
+	return matches, nil
 }
 
 // pickEnvironment finds ref, or the production environment when ref is empty.

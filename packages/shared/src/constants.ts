@@ -36,3 +36,9 @@ export type NodeStatus = (typeof NODE_STATUSES)[number];
  * falls back to the latest release.
  */
 export const PINNED_AGENT_VERSION = "";
+
+/** Days runtime and build logs are kept until an owner changes the `log_retention_days` setting. */
+export const DEFAULT_LOG_RETENTION_DAYS = 7;
+
+/** Longest log retention an owner can choose, in days. */
+export const MAX_LOG_RETENTION_DAYS = 365;

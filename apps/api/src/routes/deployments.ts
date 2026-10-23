@@ -32,11 +32,15 @@ import { toApiDeployment, toApiDeploymentEvent, toApiPlacement } from "../lib/se
 
 const ID_CURSOR_RE = /^dep_[0-9A-Za-z]{1,64}$/;
 
-async function withBuild(db: import("@openrail/db").Db, row: typeof deployments.$inferSelect) {
+async function withBuild(
+  db: import("@openrail/db").Db,
+  row: typeof deployments.$inferSelect,
+  projectId: string,
+) {
   const build = row.buildId
     ? ((await db.query.builds.findFirst({ where: eq(builds.id, row.buildId) })) ?? null)
     : null;
-  return toApiDeployment(row, build);
+  return toApiDeployment(row, build, projectId);
 }
 
 /** Deployment and log routes. */
@@ -66,7 +70,7 @@ export const deploymentRoutes = createRouter()
     const page = rows.slice(0, query.limit);
     return c.json(
       {
-        deployments: page.map((r) => toApiDeployment(r.deployment, r.build)),
+        deployments: page.map((r) => toApiDeployment(r.deployment, r.build, project.id)),
         next_cursor: rows.length > query.limit ? page[page.length - 1]!.deployment.id : null,
       },
       200,
@@ -97,8 +101,7 @@ export const deploymentRoutes = createRouter()
     );
     await recordAudit(db, {
       workspaceId: project.workspaceId,
-      actorType: "user",
-      actorId: caller.user.id,
+      ...caller.actor,
       action: "deployment.created",
       targetType: "deployment",
       targetId: row.id,
@@ -110,11 +113,15 @@ export const deploymentRoutes = createRouter()
       },
       ip: clientIp(c),
     });
-    return c.json(await withBuild(db, row), 201);
+    return c.json(await withBuild(db, row, project.id), 201);
   })
   .openapi(getDeployment, async (c) => {
     const { deploymentId } = c.req.valid("param");
-    const { deployment } = await deploymentScope(c, deploymentId, policyOf(getDeployment).action!);
+    const { deployment, project } = await deploymentScope(
+      c,
+      deploymentId,
+      policyOf(getDeployment).action!,
+    );
     const db = c.get("db");
     const [events, replicas] = await Promise.all([
       db
@@ -131,7 +138,7 @@ export const deploymentRoutes = createRouter()
     ]);
     return c.json(
       {
-        ...(await withBuild(db, deployment)),
+        ...(await withBuild(db, deployment, project.id)),
         events: events.map(toApiDeploymentEvent),
         placements: replicas.map((r) => toApiPlacement(r.placement, r.nodeName)),
       },
@@ -163,15 +170,14 @@ export const deploymentRoutes = createRouter()
     );
     await recordAudit(db, {
       workspaceId: project.workspaceId,
-      actorType: "user",
-      actorId: caller.user.id,
+      ...caller.actor,
       action: "deployment.rolled_back",
       targetType: "deployment",
       targetId: row.id,
       metadata: { rollback_of: deployment.id, config_version: row.configVersion },
       ip: clientIp(c),
     });
-    return c.json(await withBuild(db, row), 201);
+    return c.json(await withBuild(db, row, project.id), 201);
   })
   .openapi(cancelDeployment, async (c) => {
     const { deploymentId } = c.req.valid("param");
@@ -200,15 +206,14 @@ export const deploymentRoutes = createRouter()
     }
     await recordAudit(db, {
       workspaceId: project.workspaceId,
-      actorType: "user",
-      actorId: caller.user.id,
+      ...caller.actor,
       action: "deployment.cancelled",
       targetType: "deployment",
       targetId: deploymentId,
       metadata: { service_id: deployment.serviceId, from: deployment.status },
       ip: clientIp(c),
     });
-    return c.json(await withBuild(db, row), 200);
+    return c.json(await withBuild(db, row, project.id), 200);
   })
   .openapi(getDeploymentLogs, async (c) => {
     const { deploymentId } = c.req.valid("param");

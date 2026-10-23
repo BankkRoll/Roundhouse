@@ -1,5 +1,6 @@
 import {
   Avatar,
+  cn,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -24,7 +25,14 @@ import { CreateWorkspaceDialog } from "./create-workspace-dialog";
  * @param props - The current workspace id.
  * @returns The switcher.
  */
-export function WorkspaceSwitcher({ workspaceId }: { workspaceId: string }) {
+export function WorkspaceSwitcher({
+  workspaceId,
+  compact = false,
+}: {
+  workspaceId: string;
+  /** In the icon rail (768-1279px) only the avatar shows; the name stays accessible. */
+  compact?: boolean;
+}) {
   const navigate = useNavigate();
   const { data: me } = useMe();
   const permissions = usePermissions(workspaceId);
@@ -41,19 +49,28 @@ export function WorkspaceSwitcher({ workspaceId }: { workspaceId: string }) {
     <>
       <DropdownMenu>
         <DropdownMenuTrigger
-          className="flex w-full items-center gap-2.5 rounded-lg border border-border bg-surface px-2.5 py-2 text-left outline-none transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label={`Workspace: ${name}. Switch workspace`}
+          className={cn(
+            "flex w-full items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring",
+            compact && "justify-center xl:justify-start",
+          )}
         >
           <Avatar name={name} seed={workspaceId} shape="square" size={26} />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium text-foreground">{name}</span>
-            <span className="block truncate font-mono text-[10px] text-muted-foreground">
-              {detail}
-            </span>
+          <span className={cn("min-w-0 flex-1", compact && "sr-only xl:not-sr-only")}>
+            <span className="block truncate text-sm font-medium text-foreground">{name}</span>{" "}
+            <span className="block truncate text-xs text-muted-foreground">{detail}</span>
+            {/* NOTE: Named by its content rather than aria-label, so the name contains the
+                visible text (WCAG 2.5.3) without counting the avatar initials. */}
+            <span className="sr-only">, switch workspace</span>
           </span>
-          <ChevronsUpDownIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+          <ChevronsUpDownIcon
+            className={cn("size-3.5 text-muted-foreground", compact && "hidden xl:block")}
+            aria-hidden="true"
+          />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
+        <DropdownMenuContent
+          align="start"
+          className="w-(--radix-dropdown-menu-trigger-width) min-w-60"
+        >
           <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={workspaceId}

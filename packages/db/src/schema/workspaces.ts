@@ -67,6 +67,8 @@ export const apiTokens = sqliteTable(
     name: text("name").notNull(),
     scopes: json<string[]>("scopes").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
+    /** First characters of the secret (`tok_` and four more), shown so people can tell tokens apart. */
+    tokenPrefix: text("token_prefix"),
     lastUsedAt: timestamp("last_used_at"),
     expiresAt: timestamp("expires_at"),
     revokedAt: timestamp("revoked_at"),

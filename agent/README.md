@@ -53,9 +53,15 @@ go vet ./...
   deployment, service, project, spec hash, generation, routes and drain time,
   so an agent restart mid-rollout loses nothing. Until the first desired
   state after a start arrives, the agent only observes and never removes.
+- **Namespace.** Every container and network the agent creates is labelled
+  `openrail.namespace=<node ID>`, and the agent manages only those, so nodes
+  sharing a Docker engine never touch each other's containers. A Phase 1
+  container without the label is adopted once its workload ID is in this
+  node's desired state, and stays managed until it is removed (adoptions are
+  recorded in `<data-dir>/adopted-containers.json`).
 - **Rollouts** are zero-downtime: the new container starts, passes its
-  health check, Caddy switches to it, the old one drains for `drain_s`,
-  then it is removed. An old deployment's replica stays until every desired
+  health check, Caddy switches to it, the old one drains for `drain_s` (at
+  least 2 s, the time Caddy may take to see the switch), then it is removed. An old deployment's replica stays until every desired
   replica of the same service on the node is healthy.
 - **Hardening:** `no-new-privileges`, all capabilities dropped except
   `CHOWN DAC_OVERRIDE FOWNER KILL NET_BIND_SERVICE SETGID SETUID` (what
@@ -67,24 +73,38 @@ go vet ./...
 - **Health** is probed by the agent from the host: `http` (GET, 2xx/3xx),
   `tcp`, or `none`, honouring `start_period_s`, `interval_s`, `timeout_s`
   and `retries` like Docker's `HEALTHCHECK`.
-- Each project gets the bridge network `openrail-<project_id>`. Unused images
-  are garbage-collected when Docker's disk is 85% full, never one a
-  container uses or a desired workload names. Env values live only in
-  Docker's container config.
+- **Networks.** Each environment gets its own bridge network,
+  `openrail-<project_id>-<environment_id>` (hashed when too long), and its
+  replicas register their private domain there only: a container reaches its
+  own environment's services by name and IP, and no other environment's.
+  Networks no longer used are removed, including Phase 1's per-project
+  network once every replica has moved off it. Unused images are
+  garbage-collected when Docker's disk is 85% full, never one a container
+  uses or a desired workload names. Env values live only in Docker's
+  container config.
 - **System workloads.** With `desired_state.registry` set, the agent runs
   `registry:3.1.2` (pinned by digest) as `sys_registry` on `127.0.0.1:5000`,
   storing blobs in `<data-dir>/registry` or S3. It is recreated if it
   disappears or its config changes, and removed only when unconfigured.
 
-**Ingress** (`internal/ingress`): the agent generates Caddy's whole JSON config
-from the routes of healthy replicas and loads it through the admin API at
-`localhost:2019`, only when it changed, retrying with backoff while Caddy is
-down and reloading it if Caddy restarts. TLS modes: `acme` (on-demand, gated
-by the agent's `127.0.0.1:2020/ask`, which approves only hostnames in the
-desired routes), `internal` (Caddy's CA) and `off` (HTTP on :80). Caddy itself
-must be installed on the node. After an agent restart, replicas that were
-already running keep their routes until their first probe result, so a
-restart never empties Caddy's config.
+**Ingress** (`internal/ingress`): the agent generates Caddy's JSON config from
+the desired routes and loads it through the admin API at `localhost:2019`,
+only when it changed, retrying with backoff while Caddy is down and reloading
+it if Caddy restarts. Upstream addresses are not in the config: each route
+resolves them (cached for 1 s) from `<hash>.upstreams.openrail.invalid`, a
+name the agent's DNS server on `127.0.0.1:2021` answers with the route's
+healthy replicas. Swapping a route to new containers therefore never reloads
+Caddy, and never resets a connection; only a new or removed route, a port
+change or a TLS change does. The answers are persisted in
+`<data-dir>/ingress-upstreams.json` and served from the agent's first
+moment, and while the agent restarts Caddy holds requests (up to 5 s) until
+it answers again. TLS modes: `acme` (on-demand, gated by the agent's
+`127.0.0.1:2020/ask`, which approves only hostnames in the desired routes),
+`internal` (Caddy's CA) and `off` (HTTP on :80). Caddy itself must be
+installed on the node. After an agent restart, replicas that were already
+running keep their routes until their first probe result, and a Caddy
+already running the wanted config is not reloaded. See ADR 0003, "Ingress
+swaps without reloads".
 
 **Logs** (`internal/logship`): every service container's stdout and stderr is
 followed, batched into `logs` frames (≤ 500 lines, ≤ 64 KiB, lines cut at
@@ -94,7 +114,10 @@ Read positions survive restarts, so no line is shipped twice.
 
 **Builds** (`internal/builds`) run one at a time on builder nodes; extra jobs
 fail at once with a `build_result`, and a running build is cancelled on
-shutdown.
+shutdown. A `build_cancel` stops a build at once (BuildKit drops the step,
+git and Railpack are killed) and answers it with a result marked
+`cancelled`; a job that arrives while a cancelled build winds down waits
+for it rather than being refused.
 
 ### Integration tests
 
@@ -111,6 +134,12 @@ agent/test/integration.sh -run Caddy -v
 The script works on Linux and from Git Bash on Windows with Docker Desktop.
 Everything it creates is labelled and removed afterwards.
 
+They include the properties the agent promises end to end: two environments
+of one project cannot reach each other by IP or private domain
+(`TestEnvironmentsAreIsolated`), and 200 back-to-back route swaps under
+request loops lose or reset no request and never reload Caddy
+(`TestSwapsNeverReloadCaddy`).
+
 ## Builder
 
 On builder nodes (`join --builder`), `internal/builder` turns a `build_job`
@@ -125,7 +154,11 @@ into an image in the local registry and answers with `build_result`.
    resolve inside it.
 2. **Plan.** Railpack builds run `railpack prepare` (CLI installed by
    `install.sh`). Build args reach it by name (`--env NAME`), values via its
-   environment, and the build as BuildKit secrets.
+   environment, and the build as BuildKit secrets. Dockerfile builds get
+   plain build args as `ARG`s, but args the job marks secret
+   (`secret_build_args`) only as BuildKit secrets with the arg's name as ID
+   (`RUN --mount=type=secret,id=NAME,env=NAME`), so they never reach the
+   image or its history.
 3. **Build.** BuildKit runs rootless as `sys_buildkitd`
    (`moby/buildkit:v0.34.1-rootless`, pinned by digest) on its own bridge
    network `openrail-build`, with its cache in the `openrail-buildkit`
@@ -141,9 +174,10 @@ into an image in the local registry and answers with `build_result`.
    build's repositories. The agent then reads the manifest digest back from
    the registry.
 
-Output streams as batched, redacted `logs` frames. One build runs at a time,
-the job's `timeout_s` (capped by `Options.Timeout`) is enforced, and errors
-are written for the person who pushed the code.
+Output streams as batched `logs` frames, with the git token, every secret
+build arg and any arg whose name looks secret redacted. One build runs at a
+time, the job's `timeout_s` (capped by `Options.Timeout`) is enforced, and
+errors are written for the person who pushed the code.
 
 ### Integration tests
 
@@ -151,8 +185,10 @@ are written for the person who pushed the code.
 against a real Docker Engine: they start `registry:3`, `sys_buildkitd` and a
 local git smart-HTTP server, then build and push a Dockerfile app from a
 private repository, a Node.js app with Railpack (and run it), and check a
-failing build, a missing Dockerfile, a timeout, a cancellation, path escapes
-and build network isolation.
+failing build, a missing Dockerfile, a timeout, a cancellation (stopped in
+milliseconds, nothing left running in BuildKit, the next build runs at once),
+secret build args (absent from the image config, its history and the logs),
+path escapes and build network isolation.
 
 ```sh
 agent/internal/builder/testdata/integration.sh -v

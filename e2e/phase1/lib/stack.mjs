@@ -14,7 +14,7 @@
  *
  * Everything is named `openrail-e2e-*` (plus what the agent itself creates:
  * `sys_registry`, `sys_buildkitd`, `openrail-build`, `openrail-buildkit` and
- * the project networks), so a teardown can find it after a crash.
+ * the environment networks), so a teardown can find it after a crash.
  *
  * @module
  */
@@ -532,13 +532,26 @@ export async function dumpDiagnostics(opts = {}) {
 }
 
 /**
+ * Whether a managed container or network belongs to a node rather than to
+ * an agent integration test: tests label theirs `openrail.test` or give
+ * them an `it…` namespace, nodes use their node ID (`node_…`), and Phase 1
+ * agents none.
+ *
+ * @param {string} namespace - The `openrail.namespace` label.
+ * @param {string} test - The `openrail.test` label.
+ */
+function nodeOwned(namespace, test) {
+  return !test && (!namespace || namespace.startsWith("node_"));
+}
+
+/**
  * Removes everything the suite and the agent it ran created: containers,
  * networks, volumes and the agent's data directory. Safe to run when
  * nothing exists, so it also runs before a suite to clear a crashed run.
  *
- * WARNING: like the agent itself, this removes unnamespaced
- * `openrail.managed=true` containers on the engine; don't point the suite at
- * an engine that runs a real node.
+ * WARNING: this removes every node's `openrail.managed=true` containers on
+ * the engine, not only the suite's node; don't point the suite at an engine
+ * that runs a real node.
  *
  * @returns {Promise<void>}
  */
@@ -563,14 +576,14 @@ export async function teardown() {
       "--filter",
       "label=openrail.managed=true",
       "--format",
-      '{{.ID}} {{.Label "openrail.namespace"}}{{.Label "openrail.test"}}',
+      '{{.ID}}|{{.Label "openrail.namespace"}}|{{.Label "openrail.test"}}',
     ],
     { allowFail: true },
   );
   const ids = managed.stdout
     .split("\n")
-    .map((l) => l.trim().split(" "))
-    .filter(([id, ns]) => id && !ns)
+    .map((l) => l.trim().split("|"))
+    .filter(([id, ns, test]) => id && nodeOwned(ns, test))
     .map(([id]) => id);
   const named = [NAMES.caddy, NAMES.git, NAMES.probe, "sys_registry", "sys_buildkitd"];
   await docker(["rm", "-f", "-v", ...named, ...ids], { allowFail: true });
@@ -582,14 +595,14 @@ export async function teardown() {
       "--filter",
       "label=openrail.managed=true",
       "--format",
-      '{{.Name}} {{.Label "openrail.namespace"}}{{.Label "openrail.test"}}',
+      '{{.Name}}|{{.Label "openrail.namespace"}}|{{.Label "openrail.test"}}',
     ],
     { allowFail: true },
   );
   const netNames = nets.stdout
     .split("\n")
-    .map((l) => l.trim().split(" "))
-    .filter(([name, ns]) => name && !ns)
+    .map((l) => l.trim().split("|"))
+    .filter(([name, ns, test]) => name && nodeOwned(ns, test))
     .map(([name]) => name);
   for (const net of [...new Set([...netNames, "openrail-build"])]) {
     await docker(["network", "rm", net], { allowFail: true });

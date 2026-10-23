@@ -1,7 +1,7 @@
 /**
- * Typed endpoint functions for the Phase 1 deploy pipeline: projects, environments,
- * services and their config versions, variables, deployments, logs, domains, instance
- * settings and the GitHub App. Every call goes through {@link request}, like `api`.
+ * Typed endpoint functions for the Phase 1 deploy pipeline: projects (and their
+ * summaries), environments, services and their config versions, variables, deployments,
+ * logs, domains, instance settings, the GitHub App and API tokens. Every call goes through {@link request}, like `api`.
  *
  * Request and response types come from the API's route contracts (see
  * `./deploy-types`), so a contract change that breaks the dashboard fails typecheck.
@@ -10,7 +10,10 @@
  */
 import { request } from "./client";
 import type {
+  ApiToken,
+  CreateApiTokenBody,
   CreateDeploymentBody,
+  CreatedApiToken,
   CreatedService,
   CreateProjectBody,
   CreateServiceBody,
@@ -28,6 +31,8 @@ import type {
   LogPage,
   Project,
   ProjectDetail,
+  ProjectSummary,
+  ResolvedVariables,
   RevealedVariables,
   Service,
   ServiceConfig,
@@ -69,7 +74,47 @@ export const deployApi = {
       signal,
     }),
   /**
-   * Creates a project with a `production` environment. 409 when the slug is taken.
+   * Finds a live project by its exact slug.
+   *
+   * @param workspaceId - Workspace id.
+   * @param slug - Project slug.
+   * @param signal - Abort signal.
+   * @returns A list of the one match, or an empty list.
+   */
+  findProjectBySlug: (workspaceId: string, slug: string, signal?: AbortSignal) =>
+    request<{ projects: Project[] }>("GET", `/v1/workspaces/${seg(workspaceId)}/projects`, {
+      query: { slug },
+      signal,
+    }),
+  /**
+   * Summarises every live project of a workspace in its production environment, by name:
+   * each service's latest config version, first domain and newest deployment.
+   *
+   * @param workspaceId - Workspace id.
+   * @param signal - Abort signal.
+   * @returns The summaries envelope.
+   */
+  listProjectSummaries: (workspaceId: string, signal?: AbortSignal) =>
+    request<{ projects: ProjectSummary[] }>(
+      "GET",
+      `/v1/workspaces/${seg(workspaceId)}/projects/summary`,
+      { signal },
+    ),
+  /**
+   * Summarises one project in an environment.
+   *
+   * @param projectId - Project id.
+   * @param environmentId - Environment to summarise; production when omitted.
+   * @param signal - Abort signal.
+   * @returns The project with every service's state in that environment.
+   */
+  getProjectSummary: (projectId: string, environmentId?: string, signal?: AbortSignal) =>
+    request<ProjectSummary>("GET", `/v1/projects/${seg(projectId)}/summary`, {
+      query: { environment_id: environmentId },
+      signal,
+    }),
+  /**
+   * Creates a project with a `production` environment. A taken slug is suffixed (-2, -3, …).
    *
    * @param workspaceId - Workspace id.
    * @param body - Name and optional slug and description.
@@ -216,6 +261,18 @@ export const deployApi = {
       body: { keys },
     }),
   /**
+   * Resolves a service's environment exactly as a deployment would get it, secrets in
+   * plaintext. Needs `variables:reveal`; the API audits every call.
+   *
+   * @param serviceId - Service id.
+   * @param environmentId - Environment id.
+   * @returns Every variable with references substituted, sorted by key.
+   */
+  resolveServiceVariables: (serviceId: string, environmentId: string) =>
+    request<ResolvedVariables>("POST", `/v1/services/${seg(serviceId)}/variables/resolve`, {
+      query: { environment_id: environmentId },
+    }),
+  /**
    * Lists a project environment's shared variables, secrets masked.
    *
    * @param projectId - Project id.
@@ -340,7 +397,7 @@ export const deployApi = {
   // ---------------------------------------------------------------------------
 
   /**
-   * Reads install-wide ingress settings. Owners only.
+   * Reads install-wide settings (ingress, log retention). Owners only.
    *
    * @param signal - Abort signal.
    * @returns The settings.
@@ -348,9 +405,10 @@ export const deployApi = {
   getInstanceSettings: (signal?: AbortSignal) =>
     request<InstanceSettings>("GET", "/v1/instance/settings", { signal }),
   /**
-   * Changes install-wide ingress settings.
+   * Changes install-wide settings. The API records the change in every workspace the
+   * caller owns.
    *
-   * @param body - Apps domain and/or TLS mode.
+   * @param body - Apps domain, TLS mode and/or log retention in days.
    * @returns The settings afterwards.
    */
   updateInstanceSettings: (body: InstanceSettingsPatch) =>
@@ -388,4 +446,38 @@ export const deployApi = {
       query: { workspace_id: workspaceId, installation_id: installationId },
       signal,
     }),
+
+  // ---------------------------------------------------------------------------
+  // API tokens
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Lists a workspace's API tokens, newest first, revoked and expired ones included.
+   *
+   * @param workspaceId - Workspace id.
+   * @param signal - Abort signal.
+   * @returns The tokens envelope; never any secret.
+   */
+  listApiTokens: (workspaceId: string, signal?: AbortSignal) =>
+    request<{ tokens: ApiToken[] }>("GET", `/v1/workspaces/${seg(workspaceId)}/tokens`, {
+      signal,
+    }),
+  /**
+   * Creates an API token. Every scope must be granted by the caller's role (else 403).
+   *
+   * @param workspaceId - Workspace id.
+   * @param body - Name, scopes and lifetime in days (`null` never expires).
+   * @returns The token and its secret, which is never shown again.
+   */
+  createApiToken: (workspaceId: string, body: CreateApiTokenBody) =>
+    request<CreatedApiToken>("POST", `/v1/workspaces/${seg(workspaceId)}/tokens`, { body }),
+  /**
+   * Revokes a token at once. Revoking a revoked token is a no-op.
+   *
+   * @param workspaceId - Workspace id.
+   * @param tokenId - Token id.
+   * @returns Resolves on 204.
+   */
+  revokeApiToken: (workspaceId: string, tokenId: string) =>
+    request<void>("DELETE", `/v1/workspaces/${seg(workspaceId)}/tokens/${seg(tokenId)}`),
 };

@@ -7,6 +7,7 @@ import {
   type ControlMessage,
   computeSpecHash,
   EnvelopeSchema,
+  environmentNetworkName,
   generateSigningKey,
   importSigningKey,
   JoinRequestSchema,
@@ -32,6 +33,7 @@ describe("shared fixtures", () => {
     ["logs-build.json", AgentMessageSchema],
     ["build-result-ok.json", AgentMessageSchema],
     ["build-result-failed.json", AgentMessageSchema],
+    ["build-result-cancelled.json", AgentMessageSchema],
     ["join-request.json", JoinRequestSchema],
     ["join-response.json", JoinResponseSchema],
   ] as const)("%s matches its schema", (file, schema) => {
@@ -42,6 +44,7 @@ describe("shared fixtures", () => {
     ["signed-envelope.json", "desired_state"],
     ["signed-desired-state.json", "desired_state"],
     ["signed-build-job.json", "build_job"],
+    ["signed-build-cancel.json", "build_cancel"],
   ])("verifies the checked-in %s", async (file, type) => {
     const f = fixture(file) as SignedFixture;
     const result = await verifyEnvelope(
@@ -69,6 +72,25 @@ describe("shared fixtures", () => {
     const f = fixture("signed-desired-state.json") as SignedFixture;
     const payload = JSON.parse(f.envelope.payload) as { workloads: unknown[] };
     for (const raw of payload.workloads) expect(() => v1Workload.parse(raw)).not.toThrow();
+  });
+
+  it("reproduces every environment network name", async () => {
+    const { cases } = fixture("network-names.json") as {
+      cases: { project_id: string; environment_id: string; network: string }[];
+    };
+    expect(cases.some((c) => c.network.startsWith("openrail-env-"))).toBe(true);
+    for (const c of cases) {
+      expect(await environmentNetworkName(c.project_id, c.environment_id)).toBe(c.network);
+    }
+  });
+
+  it("puts every signed service workload on its environment network", async () => {
+    const f = fixture("signed-desired-state.json") as SignedFixture;
+    const payload = JSON.parse(f.envelope.payload) as { workloads: unknown[] };
+    for (const raw of payload.workloads) {
+      const w = WorkloadSpecSchema.parse(raw);
+      expect(w.network).toBe(await environmentNetworkName(w.project_id!, w.environment_id!));
+    }
   });
 
   it("reproduces every spec-hash case", async () => {

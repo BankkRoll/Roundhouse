@@ -38,10 +38,12 @@ others. Keep several control planes apart with `--profile staging`.
 On Git Bash (mintty) stdin is not a console, so pipe the password with
 `--password-stdin` or run `winpty roundhouse login`.
 
-For CI, set `ROUNDHOUSE_URL` and `ROUNDHOUSE_TOKEN` instead of logging in.
-Until the API has tokens, `ROUNDHOUSE_TOKEN` is a session token (the
-`value` in `credentials.json`); values starting with `tok_` will be sent as
-bearer API tokens once the API accepts them.
+When the control plane refreshes your session, the CLI saves the new cookie
+to `credentials.json`; when it ends the session, the CLI forgets it and asks
+you to log in again.
+
+For CI and scripts, use an API token instead of logging in; see
+[API tokens](#api-tokens).
 
 ## Link a directory
 
@@ -79,9 +81,51 @@ roundhouse run -- npm run dev
 
 References (`${{service.VAR}}`, `${{shared.VAR}}`, `${{VAR}}`) are stored as
 written. Secrets stay masked unless you pass `--reveal`, and every reveal is
-recorded in the audit log. `run` resolves references the way a deployment
-does, reveals only the secrets it needs, and passes them to the child
-process alone; nothing is written to disk.
+recorded in the audit log. `run` asks the control plane for the service's
+environment exactly as a deployment gets it (references resolved, built-ins
+such as `PORT` added, secrets in plaintext); that needs the
+`variables:reveal` permission and is audited too. The values go to the
+child process alone; nothing is written to disk. A control plane too old to
+resolve variables makes `run` exit 10.
+
+## API tokens
+
+API tokens authenticate CI and scripts without a login. Each belongs to one
+workspace and carries scopes (RBAC actions such as `services:read` or
+`deployments:create`); a request outside its workspace is a 404 (exit 5),
+one outside its scopes a 403 (exit 4). Creating and revoking tokens needs
+`tokens:manage`.
+
+```sh
+roundhouse tokens create --name ci --preset deploy             # 90 days by default
+roundhouse tokens create --name grafana --preset read --expires never
+roundhouse tokens create --name audit --scope workspace:read --scope audit:read --expires 30d
+roundhouse tokens list
+roundhouse tokens revoke ci                                     # asks; --yes in scripts
+```
+
+Presets: `read` is `workspace:read`, `projects:read`, `services:read`,
+`variables:read` and `nodes:read`; `deploy` adds `services:manage`,
+`deployments:create` and `variables:manage`. `--scope` may be repeated and
+combined with a preset. `run` also needs `variables:reveal`.
+
+`create` prints the secret, alone, to stdout (or as `secret` with `--json`);
+it is shown once and cannot be retrieved later. The workspace is the linked
+one, `--workspace`, or your only one.
+
+In CI, set the control plane and the token, link with flags, and deploy:
+
+```sh
+export ROUNDHOUSE_URL=https://roundhouse.example.com
+export ROUNDHOUSE_TOKEN=tok_…        # from your CI's secret store
+roundhouse link --project shop --service api --gitignore=false
+roundhouse deploy --wait
+```
+
+`ROUNDHOUSE_TOKEN` overrides the profile's session. A value starting with
+`tok_` is sent as `Authorization: Bearer`; any other value is taken as a
+session token (the `value` in `credentials.json`) and sent as the session
+cookie. `roundhouse whoami` shows which token is in use and its scopes.
 
 ## Commands
 
@@ -100,6 +144,7 @@ process alone; nothing is written to disk.
 | `services list\|create\|delete`                     | Services; deletes need the typed slug                    |
 | `domain [--all]`                                    | The service's domains                                    |
 | `servers list\|add`                                 | Servers; `add` prints the agent install command          |
+| `tokens list\|create\|revoke`                       | Workspace API tokens for CI and scripts                  |
 | `version`, `completion`                             | Build info, shell completion                             |
 | `up`, `shell`, `db connect`                         | Not available on the control plane yet (exit 10)         |
 
@@ -139,8 +184,15 @@ names the flag to pass. Errors with `--json` are JSON on stderr.
 - The API rejects cross-origin mutations by `Origin`
   (`apps/api/src/lib/guards.ts`). The CLI sends no `Origin` on `/v1`
   requests, which that guard allows. It sends the control plane's own
-  origin where it is required: the realtime WebSocket upgrade and Better
-  Auth's sign-out.
+  origin where it is required: the realtime WebSocket upgrade with a
+  session cookie, and Better Auth's sign-out.
+- Session cookies set by a response are only ever saved for the profile's
+  own session; requests made with an API token ignore `Set-Cookie`.
+- `logs -f` follows over the realtime socket (as a CLI client, left out of
+  presence) and reconnects with backoff when it drops. It stops when the
+  control plane closes it for good: 4401 (session or token invalid or
+  expired, exit 3), 4403 (access lost, exit 4), 4404 (project not found,
+  exit 5) or a protocol error (1008/1009, exit 1).
 
 ## Development
 

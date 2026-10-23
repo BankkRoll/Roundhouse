@@ -6,7 +6,8 @@
  *
  *   node probe.mjs get <host> [path] [--https]   one request, JSON result on stdout
  *   node probe.mjs loop <host> [path] [--https]  requests back to back until stdin
- *                                               closes, then a JSON summary
+ *                                               closes, then a JSON summary; a
+ *                                               reset counts as a failure
  *   node probe.mjs admin <path>                  GET Caddy's admin API
  *   node probe.mjs url <url>                     GET any http:// URL (e.g. the registry)
  */
@@ -125,15 +126,12 @@ if (cmd === "get") {
   };
   process.stdout.write("ready\n");
   while (!stop) {
-    let r = await request(10_000);
-    // NOTE: Each Caddy config load shuts the previous server down, and Go's
-    // net/http closes, without an answer, a connection whose first request
-    // it reads after shutdown began. A connection reset is therefore retried
-    // once, as an idempotent-retrying client would, and counted in `resets`;
-    // HTTP errors (404, 502, ...) are never retried.
+    // Nothing is retried: a connection reset, a timeout or an HTTP error is a
+    // failed request. Upstream swaps never reload Caddy (the agent moves
+    // routes through DNS), so there is no reload to excuse a reset.
+    const r = await request(10_000);
     if (r.status === 0 && /socket hang up|ECONNRESET/.test(r.error ?? "")) {
       summary.resets.push({ at: new Date().toISOString(), error: r.error });
-      r = await request(10_000);
     }
     summary.total += 1;
     summary.statuses[r.status] = (summary.statuses[r.status] ?? 0) + 1;

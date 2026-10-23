@@ -17,6 +17,7 @@ import type {
   DeploymentPage,
 } from "../lib/api/deploy-types";
 import { queryKeys } from "./keys";
+import { patchSummaryDeployment } from "./projects";
 
 /** Deployments fetched per page. */
 export const DEPLOYMENTS_PAGE_SIZE = 20;
@@ -40,8 +41,9 @@ export function isInFlight(deployment: Pick<Deployment, "status">): boolean {
 
 /**
  * Writes a deployment into every cached place it appears: the service's paged list
- * (replacing it, or prepending it when new), the "newest deployment" summary, and its
- * own detail (keeping the events and placements already loaded).
+ * (replacing it, or prepending it when new), the "newest deployment" query, the project
+ * summaries that show its service, and its own detail (keeping the events and
+ * placements already loaded).
  *
  * Copies already newer than `deployment` (by `updated_at`) are kept, so a late
  * realtime message cannot undo a fresher response.
@@ -89,6 +91,7 @@ export function upsertDeployment(
   queryClient.setQueryData<DeploymentDetail>(queryKeys.deployment(deployment.id), (detail) =>
     detail && !newer(detail) ? { ...detail, ...deployment } : detail,
   );
+  patchSummaryDeployment(queryClient, deployment, options);
 }
 
 /**

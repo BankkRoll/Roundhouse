@@ -120,9 +120,11 @@ describe("AvatarStack", () => {
         ]}
       />,
     );
-    expect(
-      screen.getByRole("button", { name: "Viewing now: Ada Lovelace, Bob Builder, Cara Mel" }),
-    ).toHaveTextContent("ALBB+1");
+    const stack = screen.getByRole("button", {
+      name: "Viewing now: Ada Lovelace, Bob Builder, Cara Mel",
+    });
+    expect(stack).not.toHaveAttribute("aria-label");
+    expect(stack).toHaveTextContent(/^ALBB.*\+1$/);
   });
 
   it("renders nothing for an empty room", () => {

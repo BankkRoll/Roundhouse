@@ -80,6 +80,9 @@ describe("phase 1 contracts", () => {
       for (const audit of policy.audit) expect(AUDIT_ACTIONS, name).toContain(audit);
       if (policy.auth === "session") {
         expect(policy.action, name).not.toBeNull();
+        expect(route.security, name).toEqual([{ session: [] }, { api_token: [] }]);
+      } else if (policy.auth === "session_only") {
+        expect(policy.action, name).not.toBeNull();
         expect(route.security, name).toEqual([{ session: [] }]);
       } else {
         expect(policy.action, name).toBeNull();
@@ -120,10 +123,27 @@ describe("phase 1 request schemas", () => {
     expect(UpdateServiceBody.safeParse({}).success).toBe(false);
   });
 
-  it("reserves the shared namespace for service slugs", () => {
+  it("accepts the reserved shared slug, which the handler suffixes", () => {
     const source = { type: "image", image: "nginx:1.27" };
-    expect(CreateServiceBody.safeParse({ name: "x", slug: "shared", source }).success).toBe(false);
-    expect(CreateServiceBody.safeParse({ name: "x", slug: "web", source }).success).toBe(true);
+    expect(CreateServiceBody.safeParse({ name: "x", slug: "shared", source }).success).toBe(true);
+    expect(CreateServiceBody.safeParse({ name: "x", slug: "Not A Slug", source }).success).toBe(
+      false,
+    );
+  });
+
+  it("keeps instance settings and GitHub App setup session-only", () => {
+    const sessionOnly = routes
+      .filter(([, r]) => policyOf(r).auth === "session_only")
+      .map(([n]) => n)
+      .sort();
+    expect(sessionOnly).toEqual(
+      [
+        "createGithubManifest",
+        "getInstanceSettings",
+        "githubCallback",
+        "updateInstanceSettings",
+      ].sort(),
+    );
   });
 
   it.each([

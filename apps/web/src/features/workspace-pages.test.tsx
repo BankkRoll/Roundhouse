@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { db, makeNode, signInAs, USERS, WORKSPACE_ID } from "../mocks/db";
+import { db, makeAuditEntry, makeNode, signInAs, USERS, WORKSPACE_ID } from "../mocks/db";
 import { findPageHeading, renderApp } from "../test/render";
 
 const BASE = `/w/${WORKSPACE_ID}`;
@@ -49,8 +49,8 @@ describe("home page", () => {
       },
     );
     renderApp(BASE);
-    const fleet = await screen.findByRole("region", { name: "Fleet" });
-    await within(fleet).findByText("1 online");
+    const fleet = await screen.findByRole("region", { name: "Servers online" });
+    await waitFor(() => expect(fleet).toHaveTextContent("Servers online1 of 4"));
     expect(fleet).toHaveTextContent("2 need attention · 50% RAM used");
     expect(within(fleet).getByRole("meter", { name: "Fleet memory usage" })).toHaveAttribute(
       "aria-valuenow",
@@ -60,15 +60,14 @@ describe("home page", () => {
 
   it("never shows invented costs, and counts services from real deployments", async () => {
     renderApp(BASE);
-    const month = await screen.findByRole("region", { name: "This month" });
-    expect(month).toHaveTextContent("—");
-    expect(month.textContent).not.toMatch(/\$\d/);
     const services = await screen.findByRole("region", { name: "Services" });
     await waitFor(() => expect(services).toHaveTextContent("3 live · 1 deploying · 2 projects"));
     expect(services).toHaveTextContent(/^Services4/);
     expect(await screen.findByRole("region", { name: "Incidents" })).toHaveTextContent(
       "Nothing to report",
     );
+    expect(screen.queryByRole("region", { name: "This month" })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\$\d/);
   });
 
   it("reports failing services as incidents", async () => {
@@ -80,30 +79,57 @@ describe("home page", () => {
     expect(incidents).toHaveTextContent("api");
   });
 
-  it("lists recent activity from the audit log", async () => {
+  it("counts this week's deploys from the audit log", async () => {
+    const now = Date.now();
+    for (const [index, ago] of [60_000, 2 * 60_000, 9 * 86_400_000].entries()) {
+      db.audit.push({
+        ...makeAuditEntry({
+          id: `aud_zdeploy${index}`,
+          action: "deployment.created",
+          created_at: now - ago,
+        }),
+        workspace_id: WORKSPACE_ID,
+      });
+    }
+    renderApp(BASE);
+    const deploys = await screen.findByRole("region", { name: "Deploys, last 7 days" });
+    await waitFor(() => expect(deploys).toHaveTextContent(/^Deploys, last 7 days2last 1m ago/));
+    expect(screen.getByRole("heading", { name: "Deploys" })).toBeInTheDocument();
+    expect(screen.getByText("Today: 2 deploys")).toBeInTheDocument();
+  });
+
+  it("keeps deploy history from roles without the audit log", async () => {
+    signInAs(USERS.member.id);
+    renderApp(BASE);
+    const deploys = await screen.findByRole("region", { name: "Deploys, last 7 days" });
+    expect(deploys).toHaveTextContent("Visible to owners and admins");
+  });
+
+  it("lists recent activity from the audit log with typed tags", async () => {
     renderApp(BASE);
     await screen.findByText("connected");
     const items = screen.getAllByRole("listitem");
     const activity = items.filter((item) => item.querySelector("time"));
-    expect(activity[0]).toHaveTextContent(/^hel-1 connected\d/);
-    expect(activity[1]).toHaveTextContent("Ada Lovelace invited erin@example.com");
+    expect(activity[0]).toHaveTextContent(/^Serverhel-1 connected\d/);
+    expect(activity[1]).toHaveTextContent("MemberAda Lovelace invited erin@example.com");
     expect(activity.at(-1)).toHaveTextContent("Ada Lovelace created the workspace");
   });
 
-  it("shows per-server RAM in the fleet card", async () => {
+  it("shows per-server RAM in the fleet block", async () => {
     renderApp(BASE);
     expect(await screen.findByRole("meter", { name: "hel-1 RAM used" })).toHaveAttribute(
       "aria-valuenow",
       "71",
     );
-    expect(screen.getByRole("meter", { name: "fsn-1 RAM used" })).not.toHaveAttribute(
-      "aria-valuenow",
+    expect(screen.getByRole("meter", { name: "fsn-1 RAM used" })).toHaveAttribute(
+      "aria-valuetext",
+      expect.not.stringMatching(/%/),
     );
-    expect(screen.getByRole("link", { name: "All servers →" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "All servers" })).toHaveAttribute(
       "href",
       `${BASE}/servers`,
     );
-    expect(screen.getByText("Bars show RAM used.")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Fleet" })).toHaveTextContent("RAM used");
   });
 
   it("tells members the activity feed is for admins", async () => {
@@ -117,8 +143,9 @@ describe("home page", () => {
   it("handles an empty fleet", async () => {
     db.nodes = [];
     renderApp(BASE);
-    const fleet = await screen.findByRole("region", { name: "Fleet" });
-    expect(await within(fleet).findByText("No servers")).toBeInTheDocument();
+    const fleet = await screen.findByRole("region", { name: "Servers online" });
+    await waitFor(() => expect(fleet).toHaveTextContent("0 no servers yet"));
+    expect(fleet).toHaveTextContent("Add one to get started");
     expect(screen.getByText("No servers connected yet.")).toBeInTheDocument();
   });
 });
@@ -153,7 +180,7 @@ describe("settings page", () => {
     expect(await screen.findByText("Workspace renamed")).toBeInTheDocument();
     expect(db.workspaces[0]?.name).toBe("Acme Robotics");
     expect(
-      screen.getByRole("button", { name: "Workspace: Acme Robotics. Switch workspace" }),
+      screen.getByRole("button", { name: /^Acme Robotics .*, switch workspace$/ }),
     ).toBeInTheDocument();
   });
 

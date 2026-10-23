@@ -30,7 +30,7 @@ export function StepIndicator({
           >
             <span
               className={cn(
-                "flex size-5 shrink-0 items-center justify-center rounded-full border font-mono text-[10px]",
+                "flex size-5 shrink-0 items-center justify-center rounded-full border text-[11px] tabular-nums",
                 done && "border-accent-text bg-accent text-accent-foreground",
                 active && "border-accent-text text-accent-text",
                 !done && !active && "border-border-strong text-subtle-foreground",
@@ -40,7 +40,7 @@ export function StepIndicator({
             </span>
             <span
               className={cn(
-                "truncate font-mono text-[10px] uppercase tracking-[0.1em]",
+                "truncate text-xs font-medium",
                 active ? "text-foreground" : "text-subtle-foreground",
               )}
             >

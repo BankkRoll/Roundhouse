@@ -118,14 +118,12 @@ export function toApiBuild(b: Row<typeof builds>) {
 }
 
 /** A deployment as sent to clients. */
-export type ApiDeployment = ReturnType<typeof toApiDeployment>;
+export type ApiDeployment = ReturnType<typeof deploymentFields> & { project_id: string };
 
-/**
- * @param d - Deployment row.
- * @param build - Its build row, when it has one.
- * @returns The `Deployment` wire shape. Never includes the sealed env.
- */
-export function toApiDeployment(d: Row<typeof deployments>, build: Row<typeof builds> | null) {
+/** A deployment before its project is known; `publish` adds `project_id`. */
+export type ApiDeploymentWithoutProject = Omit<ApiDeployment, "project_id">;
+
+function deploymentFields(d: Row<typeof deployments>, build: Row<typeof builds> | null) {
   return {
     id: d.id,
     service_id: d.serviceId,
@@ -144,6 +142,34 @@ export function toApiDeployment(d: Row<typeof deployments>, build: Row<typeof bu
     created_at: +d.createdAt,
     updated_at: +d.updatedAt,
   };
+}
+
+/**
+ * Serialises a deployment. Deployment rows don't store their project, so the
+ * caller passes it; without it the result lacks `project_id`, which only
+ * `publish` accepts (it fills in the room's project).
+ *
+ * @param d - Deployment row.
+ * @param build - Its build row, when it has one.
+ * @param projectId - Project of the deployment's service.
+ * @returns The `Deployment` wire shape. Never includes the sealed env.
+ */
+export function toApiDeployment(
+  d: Row<typeof deployments>,
+  build: Row<typeof builds> | null,
+  projectId: string,
+): ApiDeployment;
+export function toApiDeployment(
+  d: Row<typeof deployments>,
+  build: Row<typeof builds> | null,
+): ApiDeploymentWithoutProject;
+export function toApiDeployment(
+  d: Row<typeof deployments>,
+  build: Row<typeof builds> | null,
+  projectId?: string,
+): ApiDeployment | ApiDeploymentWithoutProject {
+  const fields = deploymentFields(d, build);
+  return projectId === undefined ? fields : { ...fields, project_id: projectId };
 }
 
 /**

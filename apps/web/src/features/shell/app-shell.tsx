@@ -27,7 +27,7 @@ import { useMe, useSignOut } from "../../queries/me";
 import { pickEnvironment, projectQueryOptions, useProjects } from "../../queries/projects";
 import { InviteMemberDialog } from "../members/invite-member-dialog";
 import { AddServerDialog } from "../servers/add-server-dialog";
-import { SERVICE_TAB_PATHS, type ServiceTab } from "../services/tabs";
+import { SERVICE_SHORTCUTS, SERVICE_TAB_PATHS, type ServiceTab } from "../services/tabs";
 import { buildCommands } from "./commands";
 import { KEEP_FOCUS_ATTRIBUTE } from "./focus";
 import type { NavPath } from "./nav";
@@ -114,11 +114,11 @@ export function AppShell({ workspaceId }: { workspaceId: string }) {
 
   const shortcuts = useMemo<ContextShortcut[]>(() => {
     if (!projectId || !serviceId) return [];
-    return [
-      { key: "d", label: "Deployments", run: () => openService(projectId, serviceId) },
-      { key: "l", label: "Logs", run: () => openService(projectId, serviceId, "logs") },
-      { key: "v", label: "Variables", run: () => openService(projectId, serviceId, "variables") },
-    ];
+    return SERVICE_SHORTCUTS.map(({ key, tab, label }) => ({
+      key,
+      label,
+      run: () => openService(projectId, serviceId, tab),
+    }));
   }, [projectId, serviceId, openService]);
   useGoShortcuts(go, shortcuts);
   useFocusOnNavigation(main);
@@ -191,8 +191,8 @@ export function AppShell({ workspaceId }: { workspaceId: string }) {
         Skip to content
       </a>
       <div className="flex min-h-dvh bg-background">
-        <aside className="sticky top-0 hidden h-dvh w-[230px] shrink-0 border-r border-border md:block">
-          <Sidebar workspaceId={workspaceId} />
+        <aside className="sticky top-0 hidden h-dvh w-14 shrink-0 overflow-y-auto border-r border-border md:block xl:w-[232px]">
+          <Sidebar workspaceId={workspaceId} variant="responsive" />
         </aside>
         <Dialog open={menuOpen} onOpenChange={setMenuOpen}>
           <SheetContent>
@@ -210,7 +210,7 @@ export function AppShell({ workspaceId }: { workspaceId: string }) {
             id="main"
             ref={main}
             tabIndex={-1}
-            className="mx-auto w-full max-w-[1260px] flex-1 px-4 py-8 outline-none md:px-8"
+            className="mx-auto w-full max-w-[1248px] flex-1 px-4 pt-6 pb-16 outline-none sm:px-6 lg:px-8 lg:pt-8"
           >
             <Outlet />
           </main>

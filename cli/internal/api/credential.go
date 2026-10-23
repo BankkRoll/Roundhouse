@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Credential authenticates requests to the control plane. Commands never see
@@ -29,10 +30,16 @@ func (s SessionCookie) Apply(h http.Header) {
 	h.Add("Cookie", s.Name+"="+s.Value)
 }
 
-// BearerToken is an API token sent as `Authorization: Bearer`.
-//
-// TODO(api-tokens): the control plane does not accept bearer tokens yet;
-// this type exists so tokens can be wired in without touching commands.
+// APITokenPrefix starts every API token secret (API_TOKEN_PREFIX in
+// packages/shared/src/tokens.ts); the API tells tokens from other bearers by it.
+const APITokenPrefix = "tok_"
+
+// IsAPIToken reports whether s looks like an API token secret.
+func IsAPIToken(s string) bool {
+	return strings.HasPrefix(s, APITokenPrefix)
+}
+
+// BearerToken is a workspace API token, sent as `Authorization: Bearer`.
 type BearerToken string
 
 // Apply adds an Authorization header.
@@ -56,4 +63,12 @@ func DefaultSessionCookieName(https bool) string {
 // IsSessionCookie reports whether a cookie name is Better Auth's session token.
 func IsSessionCookie(name string) bool {
 	return strings.HasSuffix(name, SessionCookieSuffix)
+}
+
+// SessionCookieCleared reports whether a Set-Cookie of the session cookie
+// deletes it instead of refreshing it: an empty value, `Max-Age=0` (which
+// net/http reports as a negative MaxAge) or an `Expires` already past. Better
+// Auth sends one when it ends a session, e.g. an expired one.
+func SessionCookieCleared(ck *http.Cookie, now time.Time) bool {
+	return ck.Value == "" || ck.MaxAge < 0 || (ck.MaxAge == 0 && !ck.Expires.IsZero() && !ck.Expires.After(now))
 }

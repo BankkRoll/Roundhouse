@@ -39,7 +39,7 @@ export function CreateWorkspaceForm({ onCreated }: { onCreated?: () => void }) {
         label="Workspace name"
         value={name}
         onChange={(event) => setName(event.target.value)}
-        placeholder="Acme"
+        placeholder="Your team"
         error={error}
         autoFocus
       />

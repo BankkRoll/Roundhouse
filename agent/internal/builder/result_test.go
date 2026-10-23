@@ -12,7 +12,7 @@ import (
 
 func TestBuildResultMapping(t *testing.T) {
 	job := validJob()
-	red := newRedactor(testToken, nil)
+	red := newRedactor(testToken, nil, nil)
 	image := &protocol.BuiltImage{Repository: job.ImageRepository, Digest: "sha256:" + strings.Repeat("0", 64)}
 
 	timedOut, cancel1 := context.WithTimeoutCause(context.Background(), time.Nanosecond, errTimeout)

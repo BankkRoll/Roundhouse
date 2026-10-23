@@ -40,7 +40,7 @@ export function StatCard({ label, value, sub, children, aside, className }: Stat
       <div className="text-2xl font-semibold tracking-tight text-foreground tabular-nums">
         {value}
       </div>
-      {sub ? <div className="font-mono text-[11px] text-muted-foreground">{sub}</div> : null}
+      {sub ? <div className="text-xs text-muted-foreground">{sub}</div> : null}
       {children ? <div className="mt-auto pt-1">{children}</div> : null}
     </section>
   );

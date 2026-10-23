@@ -6,15 +6,17 @@
  *   jitter, and resubscribing to every log topic after each reconnect;
  * - reference-counted log subscriptions, so several viewers of one deployment's logs
  *   share a single `subscribe` message;
- * - detecting an expired session: a socket that closes before opening (the upgrade was
- *   refused) or with an auth close code triggers a session check, and a signed-out
- *   result stops reconnecting;
+ * - acting on the server's close codes (`REALTIME_CLOSE_CODES`): 4401 means the session
+ *   ended, 4403 that access was lost, 4404 that the project is gone; none of them is
+ *   retried. A socket that closes before opening (a proxy or an older server refusing
+ *   the upgrade) triggers a session check instead, and a signed-out result stops too;
  * - shape-checking every incoming frame before handing it on.
  *
  * Framework-free and clock-injectable, so it is tested with a fake WebSocket.
  *
  * @module
  */
+import { REALTIME_CLOSE_CODES, shouldReconnect } from "@openrail/shared";
 import type {
   RealtimeClientMessage,
   RealtimeLogLines,
@@ -33,8 +35,18 @@ export interface RealtimeSocket {
   onerror: ((event: unknown) => void) | null;
 }
 
-/** Connection state, for status indicators. */
-export type RealtimeStatus = "connecting" | "open" | "reconnecting" | "closed" | "expired";
+/**
+ * Connection state, for status indicators. `expired` (session ended), `forbidden`
+ * (access lost) and `not_found` (project gone) are final: the client stopped retrying.
+ */
+export type RealtimeStatus =
+  | "connecting"
+  | "open"
+  | "reconnecting"
+  | "closed"
+  | "expired"
+  | "forbidden"
+  | "not_found";
 
 /** Timer functions, injectable for tests. */
 export interface RealtimeTimers {
@@ -51,17 +63,20 @@ export interface RealtimeClientOptions {
   /** Called whenever the connection state changes. */
   onStatus?: (status: RealtimeStatus) => void;
   /**
-   * Resolves `false` when the session is gone (the API answers 401). Called after a
-   * refused upgrade or an auth close code; other failures just reconnect.
+   * Resolves `false` when the session is gone (the API answers 401). Called when the
+   * socket closes before it ever opened; other failures just reconnect.
    */
   checkSession?: () => Promise<boolean>;
-  /** Called once when {@link RealtimeClientOptions.checkSession} reports a dead session. */
+  /**
+   * Called once when the session is over: the server closed with 4401, or
+   * {@link RealtimeClientOptions.checkSession} reported a dead session.
+   */
   onSessionExpired?: () => void;
   /**
-   * Called once when the server closes with {@link FORBIDDEN_CLOSE_CODE}: the caller is no
-   * longer a member of the project's workspace. The client stops reconnecting.
+   * Called once when the server closes with 4403 (access lost) or 4404 (project gone).
+   * The client stops reconnecting.
    */
-  onForbidden?: () => void;
+  onUnavailable?: (reason: "forbidden" | "not_found") => void;
   /** Creates the socket. Defaults to `new WebSocket(url)`. */
   createSocket?: (url: string) => RealtimeSocket;
   /** First reconnect delay in ms. Defaults to 500. */
@@ -73,17 +88,6 @@ export interface RealtimeClientOptions {
   /** Timer functions. Default to the global ones. */
   timers?: RealtimeTimers;
 }
-
-/**
- * Close codes after which the session is checked before reconnecting. 1008 is the
- * room's policy close (bad frame, too many subscriptions); 4401 is reserved for an
- * expired session. A refused upgrade (no open first) is checked the same way, since
- * browsers hide the HTTP status of a failed handshake.
- */
-export const AUTH_CLOSE_CODES: ReadonlySet<number> = new Set([1008, 4401]);
-
-/** The room closed the socket because the user's membership was revoked. */
-export const FORBIDDEN_CLOSE_CODE = 4003;
 
 const OPEN = 1;
 const MESSAGE_TYPES = new Set([
@@ -177,6 +181,8 @@ export function realtimeUrl(projectId: string, origin = window.location.origin):
 
 type LogListener = (message: RealtimeLogLines) => void;
 
+type OptionalCallback = "onStatus" | "checkSession" | "onSessionExpired" | "onUnavailable";
+
 /**
  * One project's realtime connection. Call {@link RealtimeClient.connect} once and
  * {@link RealtimeClient.close} when the project is left.
@@ -192,10 +198,8 @@ export class RealtimeClient {
     string,
     { topic: RealtimeTopic; listeners: Set<LogListener> }
   >();
-  private readonly options: Required<
-    Omit<RealtimeClientOptions, "onStatus" | "checkSession" | "onSessionExpired" | "onForbidden">
-  > &
-    Pick<RealtimeClientOptions, "onStatus" | "checkSession" | "onSessionExpired" | "onForbidden">;
+  private readonly options: Required<Omit<RealtimeClientOptions, OptionalCallback>> &
+    Pick<RealtimeClientOptions, OptionalCallback>;
 
   /**
    * @param options - URL, callbacks, and injectable socket, timers and randomness.
@@ -330,25 +334,17 @@ export class RealtimeClient {
       if (this.socket !== socket) return;
       this.socket = null;
       if (this.stopped) return;
-      if (event.code === FORBIDDEN_CLOSE_CODE) {
-        this.stopped = true;
-        this.setStatus("closed");
-        this.options.onForbidden?.();
+      if (!shouldReconnect(event.code)) {
+        this.stopFor(event.code);
         return;
       }
-      const suspicious = !this.opened || AUTH_CLOSE_CODES.has(event.code);
-      if (suspicious && this.options.checkSession) {
+      if (!this.opened && this.options.checkSession) {
         this.setStatus("reconnecting");
         void this.options.checkSession().then(
           (valid) => {
             if (this.stopped) return;
-            if (valid) {
-              this.scheduleReconnect();
-            } else {
-              this.stopped = true;
-              this.setStatus("expired");
-              this.options.onSessionExpired?.();
-            }
+            if (valid) this.scheduleReconnect();
+            else this.stopFor(REALTIME_CLOSE_CODES.unauthorized);
           },
           () => this.scheduleReconnect(),
         );
@@ -356,6 +352,30 @@ export class RealtimeClient {
       }
       this.scheduleReconnect();
     };
+  }
+
+  /** Stops for good after a close code that would fail the same way on every retry. */
+  private stopFor(code: number) {
+    this.stopped = true;
+    this.cancelRetry();
+    switch (code) {
+      case REALTIME_CLOSE_CODES.unauthorized:
+        this.setStatus("expired");
+        this.options.onSessionExpired?.();
+        return;
+      case REALTIME_CLOSE_CODES.forbidden:
+        this.setStatus("forbidden");
+        this.options.onUnavailable?.("forbidden");
+        return;
+      case REALTIME_CLOSE_CODES.notFound:
+        this.setStatus("not_found");
+        this.options.onUnavailable?.("not_found");
+        return;
+      default:
+        // NOTE: 1008/1009 mean this client sent a frame the server refuses; resending the
+        // same subscriptions after a reconnect would only repeat it.
+        this.setStatus("closed");
+    }
   }
 
   /**

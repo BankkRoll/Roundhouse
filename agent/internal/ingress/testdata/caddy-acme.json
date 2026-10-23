@@ -15,18 +15,26 @@
             {
               "handle": [
                 {
+                  "dynamic_upstreams": {
+                    "dial_timeout": "1s",
+                    "name": "04100bf959948fa3df10b7b3ac82d6cb.upstreams.openrail.invalid.",
+                    "port": "3000",
+                    "refresh": "1s",
+                    "resolver": {
+                      "addresses": [
+                        "127.0.0.1:2021"
+                      ]
+                    },
+                    "source": "a",
+                    "versions": {
+                      "ipv4": true
+                    }
+                  },
                   "handler": "reverse_proxy",
                   "load_balancing": {
-                    "try_duration": "2s"
-                  },
-                  "upstreams": [
-                    {
-                      "dial": "172.18.0.3:3000"
-                    },
-                    {
-                      "dial": "172.18.0.4:3000"
-                    }
-                  ]
+                    "try_duration": "5s",
+                    "try_interval": "100ms"
+                  }
                 }
               ],
               "match": [
@@ -45,15 +53,26 @@
             {
               "handle": [
                 {
+                  "dynamic_upstreams": {
+                    "dial_timeout": "1s",
+                    "name": "f088d57d07b9966d4318c3020345ca32.upstreams.openrail.invalid.",
+                    "port": "3000",
+                    "refresh": "1s",
+                    "resolver": {
+                      "addresses": [
+                        "127.0.0.1:2021"
+                      ]
+                    },
+                    "source": "a",
+                    "versions": {
+                      "ipv4": true
+                    }
+                  },
                   "handler": "reverse_proxy",
                   "load_balancing": {
-                    "try_duration": "2s"
-                  },
-                  "upstreams": [
-                    {
-                      "dial": "172.18.0.2:3000"
-                    }
-                  ]
+                    "try_duration": "5s",
+                    "try_interval": "100ms"
+                  }
                 }
               ],
               "match": [
@@ -68,15 +87,114 @@
             {
               "handle": [
                 {
+                  "dynamic_upstreams": {
+                    "source": "multi",
+                    "sources": [
+                      {
+                        "dial_timeout": "1s",
+                        "name": "8c1f424936e0f3ec6ed7b9820fc79dda.upstreams.openrail.invalid.",
+                        "port": "3000",
+                        "refresh": "1s",
+                        "resolver": {
+                          "addresses": [
+                            "127.0.0.1:2021"
+                          ]
+                        },
+                        "source": "a",
+                        "versions": {
+                          "ipv4": true
+                        }
+                      },
+                      {
+                        "dial_timeout": "1s",
+                        "name": "d676242e660bae9e1f38177ebb1a401d.upstreams.openrail.invalid.",
+                        "port": "4000",
+                        "refresh": "1s",
+                        "resolver": {
+                          "addresses": [
+                            "127.0.0.1:2021"
+                          ]
+                        },
+                        "source": "a",
+                        "versions": {
+                          "ipv4": true
+                        }
+                      }
+                    ]
+                  },
                   "handler": "reverse_proxy",
                   "load_balancing": {
-                    "try_duration": "2s"
-                  },
-                  "upstreams": [
-                    {
-                      "dial": "172.19.0.2:8080"
-                    }
+                    "try_duration": "5s",
+                    "try_interval": "100ms"
+                  }
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "moving.example.com"
                   ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "dynamic_upstreams": {
+                    "dial_timeout": "1s",
+                    "name": "c60a8542eeffa1dc9bcffb556f4192c5.upstreams.openrail.invalid.",
+                    "port": "8080",
+                    "refresh": "1s",
+                    "resolver": {
+                      "addresses": [
+                        "127.0.0.1:2021"
+                      ]
+                    },
+                    "source": "a",
+                    "versions": {
+                      "ipv4": true
+                    }
+                  },
+                  "handler": "reverse_proxy",
+                  "load_balancing": {
+                    "try_duration": "5s",
+                    "try_interval": "100ms"
+                  }
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "starting.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "dynamic_upstreams": {
+                    "dial_timeout": "1s",
+                    "name": "b1242605194f48bef2a2507a21a6c227.upstreams.openrail.invalid.",
+                    "port": "8080",
+                    "refresh": "1s",
+                    "resolver": {
+                      "addresses": [
+                        "127.0.0.1:2021"
+                      ]
+                    },
+                    "source": "a",
+                    "versions": {
+                      "ipv4": true
+                    }
+                  },
+                  "handler": "reverse_proxy",
+                  "load_balancing": {
+                    "try_duration": "5s",
+                    "try_interval": "100ms"
+                  }
                 }
               ],
               "match": [

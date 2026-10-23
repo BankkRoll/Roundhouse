@@ -23,7 +23,7 @@ func validSpec() WorkloadSpec {
 		Routes:        []WorkloadRoute{{Hostname: "web.example.com", ContainerPort: 8080}},
 		Resources:     Resources{CPUMillis: 250, MemoryMB: 256, PIDs: 128},
 		Restart:       Restart{Policy: RestartAlways},
-		Network:       "openrail-prj_1",
+		Network:       "openrail-prj_1-env_1",
 		Labels:        map[string]string{},
 		DrainS:        10,
 		SpecHash:      strings.Repeat("0", 64),
@@ -71,7 +71,20 @@ func mustJSON(t *testing.T, v any) []byte {
 }
 
 func TestDecodeControlMessageRoundTrip(t *testing.T) {
-	for name, msg := range map[string]ControlMessage{"desired_state": validDesired(), "build_job": validBuildJob()} {
+	withSecret := validBuildJob()
+	withSecret.BuildArgs = map[string]string{"NPM_TOKEN": "npm_x", "NODE_ENV": "production"}
+	withSecret.SecretBuildArgs = []string{"NPM_TOKEN"}
+	cancel := &BuildCancel{
+		Type:          TypeBuildCancel,
+		ControlHeader: ControlHeader{ID: "m1", NodeID: "node_a", IssuedAt: 1000, ExpiresAt: 2000},
+		BuildID:       "bld_1",
+	}
+	for name, msg := range map[string]ControlMessage{
+		"desired_state":   validDesired(),
+		"build_job":       validBuildJob(),
+		"secret_args_job": withSecret,
+		"build_cancel":    cancel,
+	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := DecodeControlMessage(mustJSON(t, msg))
 			if err != nil {
@@ -209,6 +222,11 @@ func TestBuildJobValidate(t *testing.T) {
 		"long-lived token": func(j *BuildJob) {
 			j.Source.Token = "ghs_x"
 			j.ExpiresAt++
+		},
+		"secret arg that is not a build arg": func(j *BuildJob) { j.SecretBuildArgs = []string{"NPM_TOKEN"} },
+		"secret arg listed twice": func(j *BuildJob) {
+			j.BuildArgs = map[string]string{"NPM_TOKEN": "x"}
+			j.SecretBuildArgs = []string{"NPM_TOKEN", "NPM_TOKEN"}
 		},
 	}
 	for name, mutate := range cases {
@@ -425,6 +443,44 @@ func TestIsSafeRelativePath(t *testing.T) {
 		if IsSafeRelativePath(p) {
 			t.Errorf("%q should be unsafe", p)
 		}
+	}
+}
+
+func TestBuildCancelValidate(t *testing.T) {
+	c := &BuildCancel{Type: TypeBuildCancel, ControlHeader: ControlHeader{ID: "m", NodeID: "n", IssuedAt: 1, ExpiresAt: 2}, BuildID: "bld_1"}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.BuildID = "nope"
+	if err := c.Validate(); err == nil {
+		t.Error("expected an invalid build id to be rejected")
+	}
+	if _, err := DecodeControlMessage([]byte(`{"type":"build_cancel","id":"m","node_id":"n","iat":1,"exp":2}`)); err == nil {
+		t.Error("expected a cancel without build_id to be rejected")
+	}
+}
+
+func TestBuildResultCancelled(t *testing.T) {
+	ok := &BuildResult{Type: TypeBuildResult, BuildID: "bld_1", OK: true, Cancelled: true,
+		Image: &BuiltImage{Repository: "127.0.0.1:5000/a/b", Digest: "sha256:" + strings.Repeat("a", 64)}}
+	if err := ok.Validate(); err == nil {
+		t.Error("a successful result cannot be cancelled")
+	}
+	failed := &BuildResult{Type: TypeBuildResult, BuildID: "bld_1", Error: "Build was cancelled.", Cancelled: true}
+	if err := failed.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnvironmentNetworkName(t *testing.T) {
+	prod := EnvironmentNetworkName("prj_1", "env_prod")
+	staging := EnvironmentNetworkName("prj_1", "env_staging")
+	if prod != "openrail-prj_1-env_prod" || staging == prod {
+		t.Errorf("got %q and %q", prod, staging)
+	}
+	long := EnvironmentNetworkName("prj_"+strings.Repeat("a", 64), "env_"+strings.Repeat("b", 64))
+	if !strings.HasPrefix(long, HashedNetworkPrefix) || len(long) > MaxNetworkNameLength || !networkRE.MatchString(long) {
+		t.Errorf("long ids gave %q", long)
 	}
 }
 

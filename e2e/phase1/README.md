@@ -14,25 +14,26 @@ pnpm --filter @openrail/e2e test:phase1      # or: node e2e/phase1/run.mjs
   Desktop (Linux containers) on Windows/macOS. Host networking must work
   (`docker run --network host`); on Docker Desktop that is the Docker VM's
   network, which is all the suite needs.
-- Free on the engine host: ports 80, 443, 2019, 2020, 5000 and 18443
-  (`PHASE1_GIT_PORT`). Free on this machine: 8797 (`PHASE1_PORT`).
+- Free on the engine host: ports 80, 443, 2019, 2020, 2021 (the agent's
+  upstream DNS server, UDP and TCP), 5000 and 18443 (`PHASE1_GIT_PORT`). Free
+  on this machine: 8797 (`PHASE1_PORT`).
 - Go (to cross-compile the agent), Node 22, `pnpm install` done, and for the
   dashboard spec `pnpm --filter @openrail/e2e exec playwright install chromium`.
 - Internet access the first time: base images, the Railpack CLI and BuildKit's
   Railpack frontend are pulled. Hostnames never need DNS.
 
-WARNING: like a real agent, the suite's agent manages every
-`openrail.managed=true` container on the engine that has no
-`openrail.namespace` label, and teardown removes them. Don't run it against an
-engine that hosts a real node.
+WARNING: the suite's agent only manages its own node's containers (labelled
+`openrail.namespace=<node ID>`), but teardown removes every node's
+`openrail.managed=true` containers and networks on the engine. Don't run it
+against an engine that hosts a real node.
 
 ## How long it takes
 
-3.5 to 4.5 minutes on a 16-core Docker Desktop machine: about 25 s of setup
-(dashboard build, images, `wrangler dev`), 3 minutes of API steps (the first
-Railpack build takes about 70 s because teardown drops BuildKit's cache, and
-step 7b waits out the 60 s rollout timeout), 30 s for the dashboard spec and
-teardown. The very first run also pulls base images and the Railpack CLI. CI
+4.5 to 5.5 minutes on a 16-core Docker Desktop machine: about 25 s of setup
+(dashboard build, images, `wrangler dev`), 4 minutes of API steps (the first
+Railpack build takes about 70 s because teardown drops BuildKit's cache, the
+five redeploys of step 5 about 45 s, and step 7b waits out the 60 s rollout
+timeout), 30 s for the dashboard spec and teardown. The very first run also pulls base images and the Railpack CLI. CI
 allows 40 minutes.
 
 ## What it does
@@ -57,20 +58,28 @@ the git server and the prober. Then it runs:
    stored, the image in the registry by digest, served through Caddy, a
    `${{whoami.GREETING_SOURCE}}` reference resolved, and the app reaching
    whoami at `whoami.production.internal`;
-5. a variable change plus a new commit, redeployed while a request loop runs:
-   0 failed requests, the old container removed after draining;
+   4b. a `staging` environment copied from production, with whoami deployed
+   in it: each environment's replicas sit on their own network, and from the
+   production app `whoami.production.internal` answers while
+   `whoami.staging.internal` does not resolve and staging's IP is unreachable;
+5. a variable change plus five redeploys in a row (new commit, old commit, …)
+   under one request loop: 0 failed requests and 0 connection resets (nothing
+   is retried; upstream swaps never reload Caddy), each old container removed
+   after draining;
 6. rollback to the first deployment: active, same image digest, no new build,
    v1 code again (variables are read as they are now, by design);
 7. a failing Dockerfile build (`failed`, readable reason, previous one still
    serving), a health check on the wrong port (`failed` after the rollout
    timeout, previous one still serving), a cancel mid-build (`cancelled`), and
-   7d, a known bug reported as TODO: a cancelled build keeps running on the
-   builder;
+   7d: a deploy right after that cancel, whose build starts on the builder at
+   once and goes active, with the cancelled build's step gone from BuildKit
+   and its logs saying it was cancelled;
 8. runtime logs through the API with the secret variable `[REDACTED]`, the
    same over the realtime WebSocket (session cookie, same Origin; another
    Origin is refused);
-9. `docker restart` of the agent under a request loop: 0 failed requests,
-   containers kept, desired state received again;
+9. `docker restart` of the agent under a request loop: 0 failed requests and
+   0 resets (Caddy waits for the agent's DNS server), containers kept,
+   desired state received again;
 10. deleting whoami removes its containers and its route (404 `no route`);
 11. `tls_mode` = `internal`: HTTPS verified against Caddy's local root CA
     (fetched from its admin API), plain HTTP redirects.

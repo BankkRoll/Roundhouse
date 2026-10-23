@@ -13,6 +13,7 @@ import type {
   UpdateServiceBody,
 } from "../lib/api/deploy-types";
 import { queryKeys } from "./keys";
+import { invalidateProjectSummaries } from "./projects";
 
 /**
  * Writes one service into a cached project detail.
@@ -121,6 +122,7 @@ export function useCreateService(projectId: string) {
     mutationFn: (body: CreateServiceBody) => deployApi.createService(projectId, body),
     onSuccess: ({ service, configs }) => {
       patchProjectService(queryClient, service);
+      invalidateProjectSummaries(queryClient, projectId);
       for (const config of configs) {
         queryClient.setQueryData(
           queryKeys.serviceConfig(service.id, config.environment_id),
@@ -144,6 +146,7 @@ export function useUpdateService(serviceId: string) {
     mutationFn: (body: UpdateServiceBody) => deployApi.updateService(serviceId, body),
     onSuccess: ({ service, config }) => {
       patchProjectService(queryClient, service);
+      invalidateProjectSummaries(queryClient, service.project_id);
       if (config) {
         queryClient.setQueryData(queryKeys.serviceConfig(serviceId, config.environment_id), config);
       }
@@ -167,6 +170,7 @@ export function useDeleteService(projectId: string) {
           ? { ...project, services: project.services.filter((entry) => entry.id !== serviceId) }
           : project,
       );
+      invalidateProjectSummaries(queryClient, projectId);
     },
   });
 }

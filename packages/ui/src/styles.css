@@ -79,15 +79,15 @@
     --border-strong: #d3d5da;
     --input: #d3d5da;
     --ring: #7a9a00;
-    --accent-text: #5b7400;
+    --accent-text: #576f00;
     --accent-subtle: rgb(122 154 0 / 0.12);
     --meter-track: #e8e9ec;
     --meter-fill: #6b7079;
-    --success: #178045;
-    --warning: #9e5c00;
-    --danger: #c42f2c;
+    --success: #157640;
+    --warning: #955700;
+    --danger: #bc2d2a;
     --danger-foreground: #ffffff;
-    --info: #1f6bcf;
+    --info: #1d65c3;
     --ansi-0: #3a3e45;
     --ansi-1: #c42f2c;
     --ansi-2: #178045;
@@ -120,15 +120,15 @@
   --border-strong: #d3d5da;
   --input: #d3d5da;
   --ring: #7a9a00;
-  --accent-text: #5b7400;
+  --accent-text: #576f00;
   --accent-subtle: rgb(122 154 0 / 0.12);
   --meter-track: #e8e9ec;
   --meter-fill: #6b7079;
-  --success: #178045;
-  --warning: #9e5c00;
-  --danger: #c42f2c;
+  --success: #157640;
+  --warning: #955700;
+  --danger: #bc2d2a;
   --danger-foreground: #ffffff;
-  --info: #1f6bcf;
+  --info: #1d65c3;
   --ansi-0: #3a3e45;
   --ansi-1: #c42f2c;
   --ansi-2: #178045;
@@ -203,12 +203,16 @@
     border-color: var(--color-border);
   }
 
+  /* NOTE: The root stays at 16px so Tailwind's rem scale lands on the app sizes: text-sm is
+     14px body, text-xs 12px meta, h-8 a 32px control. Body copy is set to 14px below. */
   html {
-    font-size: 14px;
+    font-size: 16px;
     background-color: var(--color-background);
   }
 
   body {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
@@ -217,5 +221,106 @@
 
   ::selection {
     background-color: var(--color-accent-subtle);
+  }
+}
+
+/* -----------------------------------------------------------------------------
+ * Preferences applied app-wide through attributes on <html>
+ * -------------------------------------------------------------------------- */
+
+/* Table density. `data-density="compact"` on <html> tightens every table and data list
+   row; `TableCell` and `DataList` read these variables. */
+:root {
+  --cell-py: 10px;
+  --row-py: 12px;
+}
+:root[data-density="compact"] {
+  --cell-py: 5px;
+  --row-py: 7px;
+}
+
+/* Motion. `data-motion="reduce"` stops animation whatever the OS says; `"allow"` keeps it
+   even when the OS asks for less. Without the attribute the OS setting decides.
+   NOTE: Unlayered, so these win over every Tailwind utility without !important. */
+:root[data-motion="reduce"] *,
+:root[data-motion="reduce"] ::before,
+:root[data-motion="reduce"] ::after {
+  animation-duration: 0.01ms;
+  animation-iteration-count: 1;
+  transition-duration: 0.01ms;
+  scroll-behavior: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="allow"]) *,
+  :root:not([data-motion="allow"]) ::before,
+  :root:not([data-motion="allow"]) ::after {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.01ms;
+    scroll-behavior: auto;
+  }
+}
+
+/* -----------------------------------------------------------------------------
+ * Stacked tables
+ *
+ * A `<Table stack>` keeps one table in the DOM (so tests, screen readers and the desktop
+ * layout see a real table) and, below 640px, lays each row out as a two-line item: the
+ * `data-cell="primary"` cell on line 1 with the `data-cell="action"` cell beside it, every
+ * other cell on line 2 in grey. Cells marked `data-cell="hide-mobile"` drop out.
+ * -------------------------------------------------------------------------- */
+@media (max-width: 639px) {
+  .table-stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .table-stack,
+  .table-stack tbody {
+    display: block;
+  }
+  .table-stack tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 4px;
+    padding: var(--row-py) 0;
+  }
+  /* NOTE: These rules sit outside Tailwind's layers, so they win over its utilities on a
+     phone; a cell hidden with `hidden` must stay hidden. */
+  .table-stack td:not(.hidden) {
+    display: block;
+    padding: 0;
+    font-size: 13px;
+    color: var(--color-muted-foreground);
+  }
+  .table-stack td[data-cell="primary"] {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+    order: -2;
+    color: var(--color-foreground);
+    font-size: 14px;
+  }
+  .table-stack td[data-cell="action"] {
+    order: -1;
+    margin-left: auto;
+  }
+  .table-stack td:not([data-cell="primary"]):not([data-cell="action"]) {
+    order: 1;
+  }
+  .table-stack td[data-cell="hide-mobile"] {
+    display: none;
+  }
+  /* A full-width zero-height flex item between the two lines forces the wrap. */
+  .table-stack tr::after {
+    content: "";
+    order: 0;
+    flex-basis: 100%;
+    height: 0;
   }
 }

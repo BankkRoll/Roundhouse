@@ -54,7 +54,7 @@ describe("servers page", () => {
     expect(fsn.getAllByText("—")).toHaveLength(3);
     for (const meter of fsn.getAllByRole("meter")) {
       expect(meter).toHaveAttribute("aria-valuetext", "—");
-      expect(meter).not.toHaveAttribute("aria-valuenow");
+      expect(meter).toHaveAttribute("aria-valuenow", "0");
     }
     expect(fsn.getByText("0 services · agent not reporting")).toBeInTheDocument();
     expect(fsn.getByText("never connected")).toBeInTheDocument();

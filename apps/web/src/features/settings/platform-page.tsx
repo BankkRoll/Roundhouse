@@ -1,16 +1,19 @@
-import { LOCAL_APPS_DOMAIN, type TlsMode } from "@openrail/shared";
+import {
+  DEFAULT_LOG_RETENTION_DAYS,
+  LOCAL_APPS_DOMAIN,
+  MAX_LOG_RETENTION_DAYS,
+  PRODUCT_NAME,
+  type TlsMode,
+} from "@openrail/shared";
 import {
   Badge,
   Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
   EmptyState,
-  Label,
+  SaveBar,
   Select,
+  SettingsRow,
+  SettingsSection,
+  SettingsStack,
   Skeleton,
   toast,
 } from "@openrail/ui";
@@ -19,7 +22,7 @@ import { type FormEvent, useId, useState } from "react";
 import { ErrorState } from "../../components/error-state";
 import { FormField } from "../../components/form-field";
 import { GithubIcon } from "../../components/github-mark";
-import { PageHeader } from "../../components/page-header";
+import { SettingsField } from "../../components/settings-field";
 import { errorMessage } from "../../lib/api/client";
 import type { GithubStatus, InstanceSettings } from "../../lib/api/deploy-types";
 import { formatRelativeTime } from "../../lib/format";
@@ -32,13 +35,13 @@ import {
 } from "../../queries/instance";
 import { useMe } from "../../queries/me";
 import { submitGithubManifest } from "./github-manifest";
-import { SettingsTabs } from "./settings-tabs";
+import { SettingsFrame } from "./settings-frame";
 
 const HOSTNAME = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 const TLS_COPY: Record<TlsMode, { label: string; hint: string }> = {
   acme: {
-    label: "ACME (Let's Encrypt)",
+    label: "Let's Encrypt (automatic)",
     hint: "Certificates are issued on demand for each hostname. Needs public DNS pointing at your servers.",
   },
   internal: {
@@ -80,53 +83,128 @@ function IngressForm({ settings }: { settings: InstanceSettings }) {
   }
 
   return (
-    <Card>
-      <form onSubmit={onSubmit} noValidate aria-label="Ingress">
-        <CardHeader>
-          <div>
-            <CardTitle>Ingress</CardTitle>
-            <CardDescription>
-              Generated domains are{" "}
-              <span className="font-mono">service-env-xxxx.&lt;apps domain&gt;</span>. Point a
-              wildcard DNS record at your servers. Existing hostnames keep working when this
-              changes; new ones use the new domain.
-            </CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent className="grid max-w-lg gap-4">
-          <FormField
-            label="Apps domain"
-            value={domain}
-            onChange={(event) => setDomain(event.target.value)}
-            placeholder="apps.example.com"
-            error={error}
-            hint={`Empty disables generated domains. For local development use ${LOCAL_APPS_DOMAIN}.`}
-            inputClassName="font-mono"
-            spellCheck={false}
-          />
-          <div className="grid gap-1.5">
-            <Label htmlFor={modeId}>TLS mode</Label>
-            <Select
-              id={modeId}
-              value={mode}
-              onChange={(event) => setMode(event.target.value as TlsMode)}
-            >
-              {(Object.keys(TLS_COPY) as TlsMode[]).map((value) => (
-                <option key={value} value={value}>
-                  {TLS_COPY[value].label}
-                </option>
-              ))}
-            </Select>
-            <p className="text-xs text-subtle-foreground">{TLS_COPY[mode].hint}</p>
-          </div>
-        </CardContent>
-        <CardFooter className="justify-end">
-          <Button type="submit" variant="primary" disabled={!dirty} loading={update.isPending}>
-            Save
-          </Button>
-        </CardFooter>
-      </form>
-    </Card>
+    <form onSubmit={onSubmit} noValidate aria-label="Ingress">
+      <SettingsSection
+        title="Ingress"
+        description={
+          <>
+            Generated domains are{" "}
+            <span className="font-mono text-foreground">service-env-xxxx.&lt;apps domain&gt;</span>.
+            Point a wildcard DNS record at your servers. Existing hostnames keep working when this
+            changes; new ones use the new domain.
+          </>
+        }
+      >
+        <SettingsField
+          label="Apps domain"
+          description={`Empty disables generated domains. For local development use ${LOCAL_APPS_DOMAIN}.`}
+          value={domain}
+          onChange={(event) => setDomain(event.target.value)}
+          placeholder="apps.example.com"
+          error={error}
+          inputClassName="font-mono"
+          spellCheck={false}
+        />
+        <SettingsRow
+          label="TLS mode"
+          description="How hostnames under the apps domain get their certificates."
+          htmlFor={modeId}
+        >
+          <Select
+            id={modeId}
+            value={mode}
+            aria-describedby={`${modeId}-description ${modeId}-hint`}
+            onChange={(event) => setMode(event.target.value as TlsMode)}
+          >
+            {(Object.keys(TLS_COPY) as TlsMode[]).map((value) => (
+              <option key={value} value={value}>
+                {TLS_COPY[value].label}
+              </option>
+            ))}
+          </Select>
+          <p id={`${modeId}-hint`} className="mt-1.5 text-xs text-muted-foreground">
+            {TLS_COPY[mode].hint}
+          </p>
+        </SettingsRow>
+      </SettingsSection>
+      <SaveBar
+        dirty={dirty}
+        saving={update.isPending}
+        onDiscard={() => {
+          setDomain(settings.apps_domain ?? "");
+          setMode(settings.tls_mode);
+          setError(null);
+        }}
+      />
+    </form>
+  );
+}
+
+function parseRetention(value: string): number | string {
+  const days = Number(value.trim());
+  if (!value.trim() || !Number.isInteger(days) || days < 1 || days > MAX_LOG_RETENTION_DAYS) {
+    return `Enter a whole number of days from 1 to ${MAX_LOG_RETENTION_DAYS}.`;
+  }
+  return days;
+}
+
+function LogRetentionForm({ settings }: { settings: InstanceSettings }) {
+  const update = useUpdateInstanceSettings();
+  // NOTE: `null` until the user types, so the field follows the saved value.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const value = draft ?? String(settings.log_retention_days);
+  const parsed = parseRetention(value);
+  const dirty = draft !== null && parsed !== settings.log_retention_days;
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (typeof parsed === "string") {
+      setError(parsed);
+      return;
+    }
+    setError(null);
+    update.mutate(
+      { log_retention_days: parsed },
+      {
+        onSuccess: () => {
+          setDraft(null);
+          toast({ title: "Log retention saved", tone: "success" });
+        },
+        onError: (cause) => setError(errorMessage(cause)),
+      },
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} noValidate aria-label="Logs">
+      <SettingsSection
+        title="Logs"
+        description="Runtime and build logs of every workspace are kept this long, then deleted by an hourly cleanup. A shorter period takes effect at the next run."
+      >
+        <SettingsField
+          label="Keep logs for (days)"
+          description={`1 to ${MAX_LOG_RETENTION_DAYS} days. The default is ${DEFAULT_LOG_RETENTION_DAYS}.`}
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={MAX_LOG_RETENTION_DAYS}
+          step={1}
+          value={value}
+          onChange={(event) => setDraft(event.target.value)}
+          error={error}
+          inputClassName="w-28 tabular-nums"
+        />
+      </SettingsSection>
+      <SaveBar
+        dirty={dirty}
+        saving={update.isPending}
+        onDiscard={() => {
+          setDraft(null);
+          setError(null);
+        }}
+      />
+    </form>
   );
 }
 
@@ -139,7 +217,7 @@ function CreateAppForm({ workspaceId }: { workspaceId: string }) {
     event.preventDefault();
     const org = organization.trim();
     if (org && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(org)) {
-      setError("Enter a GitHub organization login, like acme.");
+      setError("Enter a GitHub organization login, like my-org.");
       return;
     }
     setError(null);
@@ -159,29 +237,30 @@ function CreateAppForm({ workspaceId }: { workspaceId: string }) {
   }
 
   return (
-    <form onSubmit={onSubmit} noValidate className="grid gap-3" aria-label="Create GitHub App">
-      <p className="text-sm text-muted-foreground">
-        OpenRail creates a private GitHub App for this instance with read access to code and push
-        events. You confirm it on GitHub, then install it on the accounts whose repositories you
-        want to deploy. Public repositories work without it.
-      </p>
-      <div className="grid max-w-sm">
-        <FormField
-          label="Organization (optional)"
-          value={organization}
-          onChange={(event) => setOrganization(event.target.value)}
-          placeholder="Your personal account"
-          hint="Create the App under an organization you administer instead of your account."
-          error={error}
-          spellCheck={false}
-        />
-      </div>
-      <div>
-        <Button type="submit" variant="primary" loading={create.isPending}>
-          <GithubIcon />
-          Create GitHub App
-        </Button>
-      </div>
+    <form onSubmit={onSubmit} noValidate aria-label="Create GitHub App">
+      <SettingsRow
+        label="Create the GitHub App"
+        description={`${PRODUCT_NAME} creates a private GitHub App for this instance with read access to code and push events. You confirm it on GitHub, then install it on the accounts whose repositories you want to deploy. Public repositories work without it.`}
+        control="wide"
+      >
+        <div className="grid max-w-sm gap-3">
+          <FormField
+            label="Organization (optional)"
+            value={organization}
+            onChange={(event) => setOrganization(event.target.value)}
+            placeholder="Your personal account"
+            hint="Create the App under an organization you administer instead of your account."
+            error={error}
+            spellCheck={false}
+          />
+          <div>
+            <Button type="submit" variant="primary" loading={create.isPending}>
+              <GithubIcon />
+              Create GitHub App
+            </Button>
+          </div>
+        </div>
+      </SettingsRow>
     </form>
   );
 }
@@ -196,88 +275,92 @@ function GithubSection({
   canCreate: boolean;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>GitHub App</CardTitle>
-          <CardDescription>Builds private repositories and deploys on push.</CardDescription>
-        </div>
+    <SettingsSection
+      title="GitHub App"
+      description="Builds private repositories and deploys on push."
+      actions={
         <Badge tone={status.configured ? "success" : "neutral"}>
-          {status.configured ? "connected" : "not set up"}
+          {status.configured ? "Connected" : "Not set up"}
         </Badge>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {!status.app ? (
-          canCreate ? (
-            <CreateAppForm workspaceId={workspaceId} />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              A workspace owner can create the GitHub App for this instance.
-            </p>
-          )
+      }
+    >
+      {!status.app ? (
+        canCreate ? (
+          <CreateAppForm workspaceId={workspaceId} />
         ) : (
-          <>
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2.5">
-              <div className="flex min-w-0 items-center gap-2.5">
+          <SettingsRow
+            label="Not created yet"
+            description="A workspace owner can create the GitHub App for this instance."
+          />
+        )
+      ) : (
+        <>
+          <SettingsRow
+            label={
+              <span className="flex items-center gap-2">
                 <GithubIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-foreground">{status.app.name}</p>
-                  <a
-                    href={status.app.html_url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="font-mono text-[11px] text-muted-foreground hover:underline"
-                  >
-                    github.com/apps/{status.app.slug}
-                  </a>
-                </div>
-              </div>
-              <Button asChild variant="primary">
+                {status.app.name}
+              </span>
+            }
+            description={
+              <a
+                href={status.app.html_url}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="font-mono text-xs hover:underline"
+              >
+                github.com/apps/{status.app.slug}
+              </a>
+            }
+          >
+            <div className="md:flex md:justify-end">
+              <Button asChild variant="secondary">
                 <a href={status.app.install_url} rel="noreferrer noopener">
                   <ExternalLinkIcon />
                   Install on GitHub
                 </a>
               </Button>
             </div>
-            <div className="grid gap-2">
-              <h4 className="font-mono text-[10px] uppercase tracking-[0.12em] text-subtle-foreground">
-                Installations in this workspace
-              </h4>
-              {status.installations.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Not installed anywhere yet. Install it on an account or organization to pick its
-                  repositories when adding a service.
-                </p>
-              ) : (
-                <ul className="rounded-md border border-border" aria-label="Installations">
-                  {status.installations.map((installation) => (
-                    <li
-                      key={installation.id}
-                      className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 last:border-0"
-                    >
-                      <span className="font-mono text-xs text-foreground">
-                        {installation.account_login}
-                      </span>
-                      <span className="font-mono text-[11px] text-muted-foreground">
-                        {installation.account_type.toLowerCase()} · added{" "}
-                        {formatRelativeTime(installation.created_at)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
+          </SettingsRow>
+          <SettingsRow
+            label="Installations in this workspace"
+            description={
+              status.installations.length === 0
+                ? "Not installed anywhere yet. Install it on an account or organization to pick its repositories when adding a service."
+                : "Accounts whose repositories this workspace can deploy."
+            }
+            control="wide"
+          >
+            {status.installations.length > 0 ? (
+              <ul aria-label="Installations" className="divide-y divide-border/70">
+                {status.installations.map((installation) => (
+                  <li
+                    key={installation.id}
+                    className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
+                  >
+                    <span className="font-mono text-sm text-foreground">
+                      {installation.account_login}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {installation.account_type.toLowerCase()} · added{" "}
+                      {formatRelativeTime(installation.created_at)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : undefined}
+          </SettingsRow>
+        </>
+      )}
+    </SettingsSection>
   );
 }
 
 /**
- * Install-wide settings: the apps domain and TLS mode for generated domains (owners),
- * and the GitHub App with its installations. Owners can create the App through GitHub's
- * manifest flow; anyone who manages projects can install it.
+ * Install-wide settings: the apps domain and TLS mode for generated domains and how
+ * long logs are kept (owners), and the GitHub App with its installations. Owners can
+ * create the App through GitHub's manifest flow; anyone who manages projects can install
+ * it.
  *
  * @param props - Workspace id (installations are per workspace).
  * @returns The page.
@@ -290,10 +373,16 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
   const github = useGithubStatus(workspaceId, can("projects:read"));
 
   return (
-    <>
-      <PageHeader title="Settings" subline="Platform: shared by every workspace on this instance" />
-      <SettingsTabs workspaceId={workspaceId} />
-      <div className="grid max-w-3xl gap-4">
+    <SettingsFrame
+      workspaceId={workspaceId}
+      title="Platform"
+      description={
+        owner
+          ? "Shared by every workspace on this instance. Each change is recorded in the audit log of every workspace you own."
+          : "Shared by every workspace on this instance."
+      }
+    >
+      <SettingsStack>
         {owner ? (
           settings.isPending ? (
             <Skeleton className="h-56 rounded-lg" />
@@ -303,13 +392,16 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
               onRetry={() => void settings.refetch()}
             />
           ) : (
-            <IngressForm settings={settings.data} />
+            <>
+              <IngressForm settings={settings.data} />
+              <LogRetentionForm settings={settings.data} />
+            </>
           )
         ) : (
           <EmptyState
             icon={<ShieldIcon />}
-            title="Ingress settings are for owners"
-            description="The apps domain and TLS mode apply to the whole instance, so only workspace owners can change them."
+            title="Instance settings are for owners"
+            description="The apps domain, TLS mode and log retention apply to the whole instance, so only workspace owners can change them."
           />
         )}
         {github.isPending ? (
@@ -319,7 +411,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
         ) : (
           <GithubSection workspaceId={workspaceId} status={github.data} canCreate={owner} />
         )}
-      </div>
-    </>
+      </SettingsStack>
+    </SettingsFrame>
   );
 }

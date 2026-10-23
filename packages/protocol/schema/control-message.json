@@ -612,6 +612,15 @@
             "minLength": 0
           }
         },
+        "secret_build_args": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 256,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          }
+        },
         "image_repository": {
           "type": "string",
           "maxLength": 512,
@@ -642,6 +651,44 @@
         "image_repository",
         "cache_key",
         "timeout_s"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "build_cancel"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "build_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "build_id"
       ],
       "additionalProperties": false
     }

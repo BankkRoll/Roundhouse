@@ -1,0 +1,3 @@
+NAME    ID         PREFIX     SCOPES    LAST USED   EXPIRES      STATUS
+audit   tok_0002   tok_k002   1 scope   never       never        active
+ci      tok_0001   tok_k001   deploy    never       2027-01-20   revoked

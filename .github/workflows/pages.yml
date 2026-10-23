@@ -1,4 +1,4 @@
-# Builds the public site in landing/ and publishes it to GitHub Pages.
+# Builds the public site in apps/landing/ and publishes it to GitHub Pages.
 #
 # One-time setup: in the repository's Settings → Pages, set Source to "GitHub Actions".
 name: Pages
@@ -7,7 +7,7 @@ on:
   push:
     branches: [main]
     paths:
-      - landing/**
+      - apps/landing/**
       - packages/ui/**
       - packages/shared/**
       - pnpm-lock.yaml
@@ -51,7 +51,7 @@ jobs:
         run: pnpm --filter @openrail/landing build
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: landing/dist
+          path: apps/landing/dist
 
   deploy:
     name: Deploy

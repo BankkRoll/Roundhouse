@@ -26,7 +26,9 @@ export type NavPath =
   | "/w/$workspaceId/settings"
   | "/w/$workspaceId/members"
   | "/w/$workspaceId/audit"
-  | "/w/$workspaceId/platform";
+  | "/w/$workspaceId/platform"
+  | "/w/$workspaceId/preferences"
+  | "/w/$workspaceId/preferences/shortcuts";
 
 /** One sidebar entry. */
 export interface NavItem {
@@ -98,7 +100,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Settings",
     to: "/w/$workspaceId/settings",
     icon: SettingsIcon,
-    segments: ["settings", "members", "audit", "platform"],
+    segments: ["settings", "members", "audit", "tokens", "platform", "preferences"],
   },
 ];
 

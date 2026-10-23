@@ -10,28 +10,42 @@
  * action, then 409 conflicts.
  *
  * Mutations broadcast the realtime messages the API would (`deployment.updated`,
- * `service.updated`) to sockets of the project.
+ * `service.updated`) to sockets of the project. Like the API, the socket is accepted and
+ * then closed with `REALTIME_CLOSE_CODES` when the caller may not have it, and new
+ * project, environment and service slugs are suffixed with `freeSlug` instead of refused.
  *
  * @module
  */
 import {
   type Action,
+  API_TOKEN_DISPLAY_PREFIX_LENGTH,
+  API_TOKEN_PREFIX,
+  type ApiTokenScope,
+  type BuiltinVariable,
   CANCELLABLE_DEPLOYMENT_STATUSES,
   can,
+  type DeploymentStatus,
   defaultServiceConfig,
+  freeSlug,
   generatedHostname,
   parseReferences,
+  REALTIME_CLOSE_CODES,
+  RESERVED_SERVICE_SLUGS,
   ROLLBACK_SOURCE_STATUSES,
+  resolveVariables,
+  scopesBeyondRole,
   slugify,
 } from "@openrail/shared";
 import { HttpResponse, http, ws } from "msw";
 import { PHASE1_ROUTES, policyOf } from "../../../api/src/contracts";
 import type {
+  ApiToken,
   Deployment,
   DeploymentDetail,
   Environment,
   Project,
   ProjectDetail,
+  ProjectSummary,
   RealtimeServerMessage,
   Service,
   ServiceConfig,
@@ -48,7 +62,7 @@ import {
   unauthorized,
 } from "./common";
 import { db, nextId } from "./db";
-import type { DbDeployment, DbVariable } from "./deploy-db";
+import type { DbApiToken, DbDeployment, DbVariable } from "./deploy-db";
 
 // -----------------------------------------------------------------------------
 // Validation with the contract's schemas
@@ -284,6 +298,117 @@ function byNewest(a: { created_at: number; id: string }, b: { created_at: number
   return b.created_at - a.created_at || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
 }
 
+function byId(a: { id: string }, b: { id: string }) {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Mirrors the API's `projectSummaries`: services by id, each with its latest config
+ * version, first domain (by id) and newest deployment in `environment`.
+ */
+function summarize(project: Project, environment: Environment | undefined): ProjectSummary {
+  const detail = projectDetail(project);
+  return {
+    ...detail,
+    environment: environment ?? null,
+    services: [...detail.services].sort(byId).map((service) => {
+      if (!environment) {
+        return {
+          service,
+          config_version: null,
+          source: null,
+          domain: null,
+          latest_deployment: null,
+        };
+      }
+      const config = latestConfig(service.id, environment.id);
+      const domain = db.deploy.domains
+        .filter((row) => row.service_id === service.id && row.environment_id === environment.id)
+        .sort(byId)[0];
+      const latest = db.deploy.deployments
+        .filter((row) => row.service_id === service.id && row.environment_id === environment.id)
+        .sort(byNewest)[0];
+      return {
+        service,
+        config_version: config?.version ?? null,
+        source: config?.source ?? null,
+        domain: domain ? { hostname: domain.hostname, url: domain.url } : null,
+        latest_deployment: latest ? toDeployment(latest) : null,
+      };
+    }),
+  };
+}
+
+function productionOf(projectId: string): Environment | undefined {
+  return db.deploy.environments.find(
+    (row) => row.project_id === projectId && row.kind === "production",
+  );
+}
+
+/** Deployments whose replicas belong on nodes; the API's `LIVE_DEPLOYMENT_STATUSES`. */
+const LIVE_STATUSES: readonly DeploymentStatus[] = ["deploying", "active", "crashed"];
+
+/** Mirrors the API's `resolveServiceEnvironment`, built-ins included. */
+function resolveEnvironment(service: Service, environment: Environment) {
+  const live = db.deploy.services.filter(
+    (row) => row.project_id === service.project_id && !row.deleted,
+  );
+  const values = (scope: DbVariable["scope"], ownerId: string) =>
+    Object.fromEntries(
+      variablesOf(scope, ownerId, environment.id).map((row) => [row.key, row.value]),
+    );
+  const services: Record<string, Record<string, string>> = {};
+  const builtins: Record<string, Partial<Record<BuiltinVariable, string>>> = {};
+  for (const entry of live) {
+    services[entry.slug] = values("service", entry.id);
+    const port = latestConfig(entry.id, environment.id)?.networking.port;
+    const host = db.deploy.domains
+      .filter((row) => row.service_id === entry.id && row.environment_id === environment.id)
+      .sort(byId)[0]?.hostname;
+    builtins[entry.slug] = {
+      ...(port ? { PORT: String(port) } : {}),
+      ...(host ? { OPENRAIL_PUBLIC_DOMAIN: host } : {}),
+      OPENRAIL_PRIVATE_DOMAIN: `${entry.slug}.${environment.slug}.internal`,
+      OPENRAIL_ENVIRONMENT: environment.slug,
+      OPENRAIL_SERVICE_NAME: entry.name,
+    };
+  }
+  const current = db.deploy.deployments
+    .filter(
+      (row) =>
+        row.service_id === service.id &&
+        row.environment_id === environment.id &&
+        LIVE_STATUSES.includes(row.status),
+    )
+    .sort(byNewest)[0];
+  const own = builtins[service.slug];
+  if (current && own) {
+    own.OPENRAIL_DEPLOYMENT_ID = current.id;
+    const sha = db.deploy.builds.find((row) => row.id === current.build_id)?.commit_sha;
+    if (sha) own.OPENRAIL_GIT_COMMIT_SHA = sha;
+  }
+  return resolveVariables({
+    service: service.slug,
+    services,
+    shared: values("shared", service.project_id),
+    builtins,
+  });
+}
+
+function toApiToken({ workspace_id: _w, secret: _s, ...token }: DbApiToken): ApiToken {
+  return token;
+}
+
+const SECRET_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+function tokenSecret(): string {
+  let out = API_TOKEN_PREFIX;
+  for (let i = 0; i < 40; i++) {
+    out += SECRET_ALPHABET[Math.floor(Math.random() * SECRET_ALPHABET.length)];
+  }
+  return out;
+}
+
 function randomHex(length: number): string {
   let out = "";
   while (out.length < length) out += Math.floor(Math.random() * 16).toString(16);
@@ -301,6 +426,7 @@ interface SocketState {
   projectId: string;
   topics: Set<string>;
   send: (data: string) => void;
+  close: (code: number, reason: string) => void;
 }
 
 const sockets = new Map<unknown, SocketState>();
@@ -346,6 +472,21 @@ export function realtimeSubscriptions(projectId: string): string[] {
     .flatMap((state) => [...state.topics]);
 }
 
+/**
+ * Closes a project's open sockets the way the API's periodic re-check does when the
+ * session lapses (4401) or membership is lost (4403).
+ *
+ * @param projectId - Project whose sockets close.
+ * @param code - One of `REALTIME_CLOSE_CODES`.
+ */
+export function closeRealtime(projectId: string, code: number): void {
+  for (const [client, state] of sockets) {
+    if (state.projectId !== projectId) continue;
+    sockets.delete(client);
+    state.close(code, "closed by server");
+  }
+}
+
 /** Closes every mock socket (between tests). */
 export function resetRealtime(): void {
   sockets.clear();
@@ -364,18 +505,29 @@ function announceDeployment(row: DbDeployment) {
 
 const realtimeHandler = realtimeLink.addEventListener("connection", ({ client }) => {
   const projectId = /\/v1\/projects\/([^/]+)\/realtime/.exec(client.url.pathname)?.[1] ?? "";
-  const user = currentUser();
   const project = liveProject(decodeURIComponent(projectId));
-  const allowed =
-    user && project && requireWorkspace(project.workspace_id, actionOf("projectRealtime")).ok;
-  if (!allowed) {
-    client.close(4401, "unauthorized");
+  // NOTE: Like the API, the upgrade is accepted and the reason reported as a close code,
+  // because a browser can't read the status of a refused upgrade.
+  if (!currentUser()) {
+    client.close(REALTIME_CLOSE_CODES.unauthorized, "unauthorized");
+    return;
+  }
+  const guard = project
+    ? requireWorkspace(project.workspace_id, actionOf("projectRealtime"))
+    : undefined;
+  if (!project || !guard || (!guard.ok && guard.response.status === 404)) {
+    client.close(REALTIME_CLOSE_CODES.notFound, "not found");
+    return;
+  }
+  if (!guard.ok) {
+    client.close(REALTIME_CLOSE_CODES.forbidden, "forbidden");
     return;
   }
   const state: SocketState = {
     projectId: project.id,
     topics: new Set(),
     send: (data) => client.send(data),
+    close: (code, reason) => client.close(code, reason),
   };
   sockets.set(client, state);
   send(state, { type: "presence", users: db.deploy.presence });
@@ -516,6 +668,7 @@ function newDeployment(
   const now = Date.now();
   return {
     id: nextId("dep"),
+    project_id: service.project_id,
     service_id: service.id,
     environment_id: environmentId,
     config_version: config.version,
@@ -601,8 +754,14 @@ export const deployHandlers = [
     if (!input.ok) return input.response;
     const access = requireWorkspace(input.params.workspaceId ?? "", actionOf("listProjects"));
     if (!access.ok) return access.response;
+    const slug = input.query.slug as string | undefined;
     const projects = db.deploy.projects
-      .filter((row) => row.workspace_id === input.params.workspaceId && !row.deleted)
+      .filter(
+        (row) =>
+          row.workspace_id === input.params.workspaceId &&
+          !row.deleted &&
+          (slug === undefined || row.slug === slug),
+      )
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
       .map(stripProject);
     return HttpResponse.json({ projects });
@@ -615,12 +774,15 @@ export const deployHandlers = [
     const access = requireWorkspace(workspaceId, actionOf("createProject"));
     if (!access.ok) return access.response;
     const name = String(input.body.name);
-    const slug =
-      typeof input.body.slug === "string" ? input.body.slug : slugify(name, 40, "project");
-    const taken = db.deploy.projects.some(
-      (row) => row.workspace_id === workspaceId && !row.deleted && row.slug === slug,
+    const taken = new Set(
+      db.deploy.projects
+        .filter((row) => row.workspace_id === workspaceId && !row.deleted)
+        .map((row) => row.slug),
     );
-    if (taken) return conflict(`A project with slug "${slug}" already exists`);
+    const slug = freeSlug(
+      taken,
+      typeof input.body.slug === "string" ? input.body.slug : slugify(name, 40, "project"),
+    );
     const now = Date.now();
     const project: Project = {
       id: nextId("prj"),
@@ -719,6 +881,31 @@ export const deployHandlers = [
     return noContent();
   }),
 
+  http.get(mswPath("getProjectSummary"), async ({ request, params }) => {
+    const input = await validate("getProjectSummary", request, params);
+    if (!input.ok) return input.response;
+    const found = projectAccess(input.params.projectId ?? "", actionOf("getProjectSummary"));
+    if (!found.ok) return found.response;
+    const requested = input.query.environment_id as string | undefined;
+    const environment =
+      requested === undefined ? productionOf(found.row.id) : environmentOf(found.row.id, requested);
+    if (!environment) return notFound("Environment");
+    return HttpResponse.json(summarize(found.row, environment));
+  }),
+
+  http.get(mswPath("listProjectSummaries"), async ({ request, params }) => {
+    const input = await validate("listProjectSummaries", request, params);
+    if (!input.ok) return input.response;
+    const workspaceId = input.params.workspaceId ?? "";
+    const access = requireWorkspace(workspaceId, actionOf("listProjectSummaries"));
+    if (!access.ok) return access.response;
+    const projects = db.deploy.projects
+      .filter((row) => row.workspace_id === workspaceId && !row.deleted)
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : byId(a, b)))
+      .map((row) => summarize(row, productionOf(row.id)));
+    return HttpResponse.json({ projects });
+  }),
+
   // ---------------------------------------------------------------------------
   // Environments
   // ---------------------------------------------------------------------------
@@ -736,12 +923,13 @@ export const deployHandlers = [
     const found = projectAccess(input.params.projectId ?? "", actionOf("createEnvironment"));
     if (!found.ok) return found.response;
     const name = String(input.body.name);
-    const slug = typeof input.body.slug === "string" ? input.body.slug : slugify(name, 40, "env");
-    if (
-      db.deploy.environments.some((row) => row.project_id === found.row.id && row.slug === slug)
-    ) {
-      return conflict(`An environment with slug "${slug}" already exists`);
-    }
+    const taken = new Set(
+      db.deploy.environments.filter((row) => row.project_id === found.row.id).map((r) => r.slug),
+    );
+    const slug = freeSlug(
+      taken,
+      typeof input.body.slug === "string" ? input.body.slug : slugify(name, 40, "env"),
+    );
     const environment: Environment = {
       id: nextId("env"),
       project_id: found.row.id,
@@ -782,16 +970,16 @@ export const deployHandlers = [
     const found = projectAccess(input.params.projectId ?? "", actionOf("createService"));
     if (!found.ok) return found.response;
     const name = String(input.body.name);
-    const slug =
-      typeof input.body.slug === "string" ? input.body.slug : slugify(name, 40, "service");
-    if (slug === "shared") return invalid("slug: reserved slugs: shared");
-    if (
-      db.deploy.services.some(
-        (row) => row.project_id === found.row.id && !row.deleted && row.slug === slug,
-      )
-    ) {
-      return conflict(`A service with slug "${slug}" already exists`);
-    }
+    const taken = new Set(
+      db.deploy.services
+        .filter((row) => row.project_id === found.row.id && !row.deleted)
+        .map((row) => row.slug),
+    );
+    const slug = freeSlug(
+      taken,
+      typeof input.body.slug === "string" ? input.body.slug : slugify(name, 40, "service"),
+      RESERVED_SERVICE_SLUGS,
+    );
     const now = Date.now();
     const service: Service = {
       id: nextId("svc"),
@@ -840,19 +1028,20 @@ export const deployHandlers = [
     if (!found.ok) return found.response;
     const service = found.row;
     const body = input.body;
-    const slug = body.slug as string | undefined;
-    if (
-      slug &&
-      db.deploy.services.some(
-        (row) =>
-          row.project_id === service.project_id &&
-          !row.deleted &&
-          row.slug === slug &&
-          row.id !== service.id,
-      )
-    ) {
-      return conflict(`A service with slug "${slug}" already exists`);
+    const others = new Set(
+      db.deploy.services
+        .filter(
+          (row) => row.project_id === service.project_id && !row.deleted && row.id !== service.id,
+        )
+        .map((row) => row.slug),
+    );
+    const requested = body.slug as string | undefined;
+    // NOTE: A rename is exact, so a taken slug is a conflict; only a reserved one is
+    // suffixed, as on create.
+    if (requested && others.has(requested)) {
+      return conflict(`A service with slug "${requested}" already exists`);
     }
+    const slug = requested && freeSlug(others, requested, RESERVED_SERVICE_SLUGS);
     let config: ServiceConfig | null = null;
     const parts = [
       "source",
@@ -1096,6 +1285,40 @@ export const deployHandlers = [
     ];
   }),
 
+  http.post(mswPath("resolveServiceVariables"), async ({ request, params }) => {
+    const input = await validate("resolveServiceVariables", request, params);
+    if (!input.ok) return input.response;
+    const found = serviceAccess(input.params.serviceId ?? "", actionOf("resolveServiceVariables"));
+    if (!found.ok) return found.response;
+    const environment = environmentOf(found.row.project_id, input.query.environment_id);
+    if (!environment) return notFound("Environment");
+    const result = resolveEnvironment(found.row, environment);
+    if (!result.ok) {
+      const details = result.errors.map((e) => ({
+        field: `${e.variable.namespace}.${e.variable.name}`,
+        code: e.code,
+        message: e.message,
+        ...(e.start !== undefined ? { start: e.start, end: e.end } : {}),
+      }));
+      const first = details[0];
+      return apiError(400, "invalid_reference", `${first?.field}: ${first?.message}`, details);
+    }
+    const variables = Object.entries(result.env)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, value]) => ({ key, value }));
+    // SECURITY: Audited with the keys only, never the values, like the API.
+    recordAudit({
+      workspaceId: liveProject(found.row.project_id)?.workspace_id ?? "",
+      actorType: "user",
+      actorId: found.guard.user.id,
+      action: "variables.resolved",
+      targetType: "service",
+      targetId: found.row.id,
+      metadata: { environment_id: environment.id, keys: variables.map((v) => v.key) },
+    });
+    return HttpResponse.json({ variables });
+  }),
+
   // ---------------------------------------------------------------------------
   // Deployments and logs
   // ---------------------------------------------------------------------------
@@ -1285,10 +1508,14 @@ export const deployHandlers = [
       db.deploy.instance.apps_domain = (input.body.apps_domain as string | null) ?? null;
     if (input.body.tls_mode !== undefined)
       db.deploy.instance.tls_mode = input.body.tls_mode as typeof db.deploy.instance.tls_mode;
-    const owned = db.memberships.find((row) => row.user_id === user?.id && row.role === "owner");
-    if (owned) {
+    if (input.body.log_retention_days !== undefined)
+      db.deploy.instance.log_retention_days = input.body.log_retention_days as number;
+    // NOTE: Instances have no audit log of their own; like the API, the change is recorded
+    // in every workspace the caller owns.
+    const owned = db.memberships.filter((row) => row.user_id === user?.id && row.role === "owner");
+    for (const membership of owned) {
       recordAudit({
-        workspaceId: owned.workspace_id,
+        workspaceId: membership.workspace_id,
         actorType: "user",
         actorId: user?.id ?? null,
         action: "instance.settings_updated",
@@ -1373,7 +1600,7 @@ export const deployHandlers = [
       new HttpResponse(null, { status: 302, headers: { location } });
     const back = (params: Record<string, string>) =>
       redirect(`/settings/github?${new URLSearchParams(params)}`);
-    if (code) {
+    if (installationId === undefined && code) {
       const denied = ownerOfAnyWorkspace();
       if (denied) return denied;
       db.deploy.github.states = db.deploy.github.states.filter((row) => row !== pending);
@@ -1401,6 +1628,28 @@ export const deployHandlers = [
         return access.response.status === 404
           ? apiError(403, "forbidden", "Not a member of this workspace")
           : access.response;
+      const setupAction = (input.query as { setup_action?: string }).setup_action;
+      if (setupAction === "request") return back({ status: "requested" });
+      const reject = (reason: string) => {
+        recordAudit({
+          workspaceId: pending.workspace_id,
+          actorType: "user",
+          actorId: user.id,
+          action: "github.installation_rejected",
+          targetType: "github_installation",
+          targetId: String(installationId),
+          metadata: { installation_id: installationId, reason },
+        });
+        return back({ error: reason });
+      };
+      // NOTE: Like the API, the link is spent before the OAuth code is checked. The mock's
+      // stand-ins for GitHub's answers: code "denied" can't see the installation, code
+      // "invalid" fails the exchange.
+      if (pending.used) return reject("link_used");
+      pending.used = true;
+      if (!code) return reject("authorization_required");
+      if (code === "invalid") return reject("authorization_failed");
+      if (code === "denied") return reject("installation_not_accessible");
       db.deploy.github.installations.push({
         id: nextId("ghi"),
         installation_id: installationId,
@@ -1486,9 +1735,93 @@ export const deployHandlers = [
   http.get(mswPath("projectRealtime"), async ({ request, params }) => {
     const input = await validate("projectRealtime", request, params);
     if (!input.ok) return input.response;
-    const found = projectAccess(input.params.projectId ?? "", actionOf("projectRealtime"));
-    if (!found.ok) return found.response;
+    // NOTE: Identity is checked only after an upgrade, so a plain request is always 426.
     return apiError(426, "upgrade_required", "Expected a WebSocket upgrade");
+  }),
+
+  // ---------------------------------------------------------------------------
+  // API tokens
+  // ---------------------------------------------------------------------------
+  http.get(mswPath("listApiTokens"), async ({ request, params }) => {
+    const input = await validate("listApiTokens", request, params);
+    if (!input.ok) return input.response;
+    const workspaceId = input.params.workspaceId ?? "";
+    const access = requireWorkspace(workspaceId, actionOf("listApiTokens"));
+    if (!access.ok) return access.response;
+    const tokens = db.deploy.tokens
+      .filter((row) => row.workspace_id === workspaceId)
+      .sort(byNewest)
+      .map(toApiToken);
+    return HttpResponse.json({ tokens });
+  }),
+
+  http.post(mswPath("createApiToken"), async ({ request, params }) => {
+    const input = await validate("createApiToken", request, params);
+    if (!input.ok) return input.response;
+    const workspaceId = input.params.workspaceId ?? "";
+    const access = requireWorkspace(workspaceId, actionOf("createApiToken"));
+    if (!access.ok) return access.response;
+    const scopes = input.body.scopes as ApiTokenScope[];
+    const beyond = scopesBeyondRole(access.membership.role, scopes);
+    if (beyond.length > 0) {
+      return apiError(
+        403,
+        "forbidden",
+        `Your role (${access.membership.role}) cannot grant ${beyond.join(", ")}`,
+      );
+    }
+    const now = Date.now();
+    const days = input.body.expires_in_days as number | null;
+    const secret = tokenSecret();
+    const row: DbApiToken = {
+      id: nextId("tok"),
+      workspace_id: workspaceId,
+      name: String(input.body.name),
+      scopes,
+      prefix: secret.slice(0, API_TOKEN_DISPLAY_PREFIX_LENGTH),
+      secret,
+      created_by: { user_id: access.user.id, name: access.user.name },
+      last_used_at: null,
+      expires_at: days === null ? null : now + days * 24 * 60 * 60 * 1000,
+      revoked_at: null,
+      created_at: now,
+    };
+    db.deploy.tokens.push(row);
+    recordAudit({
+      workspaceId,
+      actorType: "user",
+      actorId: access.user.id,
+      action: "token.created",
+      targetType: "api_token",
+      targetId: row.id,
+      metadata: { name: row.name, scopes, expires_at: row.expires_at },
+    });
+    return HttpResponse.json({ token: toApiToken(row), secret }, { status: 201 });
+  }),
+
+  http.delete(mswPath("revokeApiToken"), async ({ request, params }) => {
+    const input = await validate("revokeApiToken", request, params);
+    if (!input.ok) return input.response;
+    const workspaceId = input.params.workspaceId ?? "";
+    const access = requireWorkspace(workspaceId, actionOf("revokeApiToken"));
+    if (!access.ok) return access.response;
+    const token = db.deploy.tokens.find(
+      (row) => row.id === input.params.tokenId && row.workspace_id === workspaceId,
+    );
+    if (!token) return notFound("Token");
+    if (token.revoked_at === null) {
+      token.revoked_at = Date.now();
+      recordAudit({
+        workspaceId,
+        actorType: "user",
+        actorId: access.user.id,
+        action: "token.revoked",
+        targetType: "api_token",
+        targetId: token.id,
+        metadata: { name: token.name },
+      });
+    }
+    return noContent();
   }),
 ];
 

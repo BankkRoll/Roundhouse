@@ -55,7 +55,7 @@ export function SegmentedControl<T extends string>({
           key={option.value}
           value={option.value}
           aria-label={option.ariaLabel}
-          className="inline-flex h-full items-center gap-1 rounded-sm px-2 font-mono text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=on]:bg-muted data-[state=on]:text-foreground [&_svg]:size-3"
+          className="inline-flex h-full items-center gap-1 rounded-sm px-2 text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=on]:bg-muted data-[state=on]:text-foreground [&_svg]:size-3"
         >
           {option.label}
         </ToggleGroup.Item>

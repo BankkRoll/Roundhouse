@@ -270,7 +270,7 @@ export function NewServiceDialog({
                 label="Image"
                 value={image}
                 onChange={(event) => setImage(event.target.value)}
-                placeholder="ghcr.io/acme/api:1.4.2"
+                placeholder="ghcr.io/owner/api:1.4.2"
                 error={errors.image}
                 hint="Docker Hub names like nginx:1.27 work too."
                 inputClassName="font-mono"
@@ -320,7 +320,7 @@ export function NewServiceDialog({
                     label="Repository URL"
                     value={repoUrl}
                     onChange={(event) => setRepoUrl(event.target.value)}
-                    placeholder="https://github.com/acme/app.git"
+                    placeholder="https://github.com/owner/app.git"
                     error={errors.repoUrl}
                     spellCheck={false}
                     autoComplete="off"

@@ -1,0 +1,25 @@
+{
+  "unauthorized": {
+    "errors": [
+      {
+        "reason": "Invalid Token"
+      }
+    ]
+  },
+  "page_size": {
+    "errors": [
+      {
+        "reason": "Must be 25-500",
+        "field": "page_size"
+      }
+    ]
+  },
+  "filter": {
+    "errors": [
+      {
+        "reason": "Cannot filter on id",
+        "field": "X-Filter"
+      }
+    ]
+  }
+}

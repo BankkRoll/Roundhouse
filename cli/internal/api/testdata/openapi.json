@@ -2,6 +2,113 @@
   "components": {
     "parameters": {},
     "schemas": {
+      "ApiToken": {
+        "properties": {
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          },
+          "created_by": {
+            "description": "`null` once the creator's account is deleted",
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id",
+              "name"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revoked_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ApiTokenScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "scopes",
+          "prefix",
+          "created_by",
+          "last_used_at",
+          "expires_at",
+          "revoked_at",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "ApiTokenScope": {
+        "enum": [
+          "workspace:read",
+          "workspace:update",
+          "workspace:delete",
+          "members:read",
+          "members:manage",
+          "tokens:manage",
+          "nodes:read",
+          "nodes:manage",
+          "audit:read",
+          "projects:read",
+          "projects:manage",
+          "services:read",
+          "services:manage",
+          "deployments:create",
+          "variables:read",
+          "variables:reveal",
+          "variables:manage"
+        ],
+        "type": "string"
+      },
       "AuditLog": {
         "properties": {
           "action": {
@@ -27,6 +134,7 @@
               "service.deleted",
               "variables.updated",
               "variables.revealed",
+              "variables.resolved",
               "deployment.created",
               "deployment.rolled_back",
               "deployment.cancelled",
@@ -34,7 +142,10 @@
               "deployment.failed",
               "github.app_created",
               "github.installation_added",
-              "instance.settings_updated"
+              "github.installation_rejected",
+              "instance.settings_updated",
+              "token.created",
+              "token.revoked"
             ],
             "type": "string"
           },
@@ -231,6 +342,37 @@
         "required": [
           "builder",
           "build_args"
+        ],
+        "type": "object"
+      },
+      "CreateApiToken": {
+        "properties": {
+          "expires_in_days": {
+            "maximum": 366,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ApiTokenScope"
+            },
+            "maxItems": 17,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes",
+          "expires_in_days"
         ],
         "type": "object"
       },
@@ -438,6 +580,7 @@
             "type": "string"
           },
           "slug": {
+            "description": "Suffixed with -2, -3, … when taken or reserved (shared)",
             "example": "api",
             "maxLength": 40,
             "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
@@ -450,6 +593,21 @@
         "required": [
           "name",
           "source"
+        ],
+        "type": "object"
+      },
+      "CreatedApiToken": {
+        "properties": {
+          "secret": {
+            "type": "string"
+          },
+          "token": {
+            "$ref": "#/components/schemas/ApiToken"
+          }
+        },
+        "required": [
+          "token",
+          "secret"
         ],
         "type": "object"
       },
@@ -561,6 +719,9 @@
               "null"
             ]
           },
+          "project_id": {
+            "type": "string"
+          },
           "rollback_of": {
             "type": [
               "string",
@@ -616,6 +777,7 @@
         },
         "required": [
           "id",
+          "project_id",
           "service_id",
           "environment_id",
           "config_version",
@@ -632,7 +794,10 @@
           "created_at",
           "updated_at"
         ],
-        "type": "object"
+        "type": [
+          "object",
+          "null"
+        ]
       },
       "DeploymentDetail": {
         "allOf": [
@@ -795,6 +960,24 @@
         ],
         "type": "object"
       },
+      "DomainLink": {
+        "properties": {
+          "hostname": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostname",
+          "url"
+        ],
+        "type": [
+          "object",
+          "null"
+        ]
+      },
       "Environment": {
         "properties": {
           "created_at": {
@@ -845,7 +1028,10 @@
           "source_branch",
           "created_at"
         ],
-        "type": "object"
+        "type": [
+          "object",
+          "null"
+        ]
       },
       "Error": {
         "properties": {
@@ -1114,13 +1300,19 @@
               "null"
             ]
           },
+          "log_retention_days": {
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
+          },
           "tls_mode": {
             "$ref": "#/components/schemas/TlsMode"
           }
         },
         "required": [
           "apps_domain",
-          "tls_mode"
+          "tls_mode",
+          "log_retention_days"
         ],
         "type": "object"
       },
@@ -1134,6 +1326,11 @@
               "string",
               "null"
             ]
+          },
+          "log_retention_days": {
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
           },
           "tls_mode": {
             "$ref": "#/components/schemas/TlsMode"
@@ -1607,6 +1804,64 @@
           }
         ]
       },
+      "ProjectSummary": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Project"
+          },
+          {
+            "properties": {
+              "environment": {
+                "$ref": "#/components/schemas/Environment"
+              },
+              "environments": {
+                "items": {
+                  "$ref": "#/components/schemas/Environment"
+                },
+                "type": "array"
+              },
+              "services": {
+                "items": {
+                  "$ref": "#/components/schemas/ServiceSummary"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "environment",
+              "environments",
+              "services"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ResolvedVariables": {
+        "properties": {
+          "variables": {
+            "items": {
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "variables"
+        ],
+        "type": "object"
+      },
       "ResourcesConfig": {
         "properties": {
           "cpu_millis": {
@@ -1948,8 +2203,42 @@
               "root_dir"
             ],
             "type": "object"
+          },
+          {
+            "type": "null"
           }
         ]
+      },
+      "ServiceSummary": {
+        "properties": {
+          "config_version": {
+            "exclusiveMinimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "domain": {
+            "$ref": "#/components/schemas/DomainLink"
+          },
+          "latest_deployment": {
+            "$ref": "#/components/schemas/Deployment"
+          },
+          "service": {
+            "$ref": "#/components/schemas/Service"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ServiceSource"
+          }
+        },
+        "required": [
+          "service",
+          "config_version",
+          "source",
+          "domain",
+          "latest_deployment"
+        ],
+        "type": "object"
       },
       "TlsMode": {
         "enum": [
@@ -2009,6 +2298,7 @@
                 "type": "string"
               },
               "slug": {
+                "description": "Suffixed with -2, -3, … when taken or reserved (shared)",
                 "example": "api",
                 "maxLength": 40,
                 "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
@@ -2186,6 +2476,11 @@
       }
     },
     "securitySchemes": {
+      "api_token": {
+        "description": "Workspace API token (`tok_…`) created under Settings → API tokens. Limited to its workspace and scopes; cookies are ignored when it is sent.",
+        "scheme": "bearer",
+        "type": "http"
+      },
       "session": {
         "description": "Better Auth session cookie, set by sign-in, setup, and invite acceptance. Named `better-auth.session_token` (no `__Secure-` prefix) over plain HTTP in local dev.",
         "in": "cookie",
@@ -2288,6 +2583,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Get build logs",
@@ -2358,6 +2656,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Get a deployment",
@@ -2438,6 +2739,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Cancel a deployment",
@@ -2541,6 +2845,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Get deployment logs",
@@ -2621,6 +2928,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Roll back to a deployment",
@@ -2644,7 +2954,7 @@
             "name": "state",
             "required": true,
             "schema": {
-              "maxLength": 200,
+              "maxLength": 512,
               "minLength": 1,
               "type": "string"
             }
@@ -2730,9 +3040,10 @@
           "action": "projects:manage",
           "audit": [
             "github.app_created",
-            "github.installation_added"
+            "github.installation_added",
+            "github.installation_rejected"
           ],
-          "auth": "session"
+          "auth": "session_only"
         }
       }
     },
@@ -2812,7 +3123,7 @@
         "x-openrail-policy": {
           "action": "instance:manage",
           "audit": [],
-          "auth": "session"
+          "auth": "session_only"
         }
       }
     },
@@ -2902,6 +3213,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List repositories",
@@ -2982,6 +3296,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "GitHub App status",
@@ -3041,7 +3358,7 @@
         "x-openrail-policy": {
           "action": "instance:manage",
           "audit": [],
-          "auth": "session"
+          "auth": "session_only"
         }
       },
       "patch": {
@@ -3111,7 +3428,7 @@
           "audit": [
             "instance.settings_updated"
           ],
-          "auth": "session"
+          "auth": "session_only"
         }
       }
     },
@@ -3299,6 +3616,32 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "token": {
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "scopes": {
+                          "items": {
+                            "$ref": "#/components/schemas/ApiTokenScope"
+                          },
+                          "type": "array"
+                        },
+                        "workspace_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "workspace_id",
+                        "scopes"
+                      ],
+                      "type": "object"
+                    },
                     "user": {
                       "properties": {
                         "email": {
@@ -3380,6 +3723,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Current user and their workspaces",
@@ -3631,6 +3977,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Delete a project",
@@ -3701,6 +4050,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Get a project",
@@ -3799,6 +4151,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Update a project",
@@ -3882,6 +4237,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List environments",
@@ -3980,6 +4338,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Create an environment",
@@ -4005,33 +4366,26 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "client",
+            "required": false,
+            "schema": {
+              "default": "web",
+              "enum": [
+                "web",
+                "cli"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "101": {
             "description": "Switching Protocols"
           },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          },
           "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          },
-          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4055,6 +4409,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Project realtime socket",
@@ -4136,6 +4493,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List services",
@@ -4234,6 +4594,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Create a service",
@@ -4245,6 +4608,97 @@
           "audit": [
             "service.created"
           ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/projects/{projectId}/summary": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSummary"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Summarise a project",
+        "tags": [
+          "projects"
+        ],
+        "x-openrail-policy": {
+          "action": "projects:read",
+          "audit": [],
           "auth": "session"
         }
       }
@@ -4324,6 +4778,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List shared variables",
@@ -4420,6 +4877,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Set and delete shared variables",
@@ -4520,6 +4980,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Reveal shared secret values",
@@ -4585,6 +5048,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Delete a service",
@@ -4655,6 +5121,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Get a service",
@@ -4753,6 +5222,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Update a service or its config",
@@ -4852,6 +5324,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Get a service's config in an environment",
@@ -4961,6 +5436,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List deployments",
@@ -5067,6 +5545,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Deploy a service",
@@ -5158,6 +5639,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List a service's domains",
@@ -5246,6 +5730,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List a service's variables",
@@ -5342,6 +5829,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Set and delete a service's variables",
@@ -5352,6 +5842,99 @@
           "action": "variables:manage",
           "audit": [
             "variables.updated"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/services/{serviceId}/variables/resolve": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolvedVariables"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Resolve a service's environment",
+        "tags": [
+          "variables"
+        ],
+        "x-openrail-policy": {
+          "action": "variables:reveal",
+          "audit": [
+            "variables.resolved"
           ],
           "auth": "session"
         }
@@ -5442,6 +6025,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Reveal a service's secret values",
@@ -5803,6 +6389,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Get a workspace",
@@ -5896,6 +6485,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Rename a workspace",
@@ -6008,6 +6600,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List audit log entries, newest first",
@@ -6084,6 +6679,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List pending invites",
@@ -6203,6 +6801,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Invite someone by email",
@@ -6269,6 +6870,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Revoke a pending invite",
@@ -6345,6 +6949,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List members",
@@ -6421,6 +7028,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Remove a member (or leave, when removing yourself)",
@@ -6530,6 +7140,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Change a member's role",
@@ -6606,6 +7219,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List servers",
@@ -6689,6 +7305,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Create a single-use join token and install command",
@@ -6755,6 +7374,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Remove a server and revoke its credential",
@@ -6826,6 +7448,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Get a server",
@@ -6842,6 +7467,17 @@
             "name": "workspaceId",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "slug",
+            "required": false,
+            "schema": {
+              "example": "api",
+              "maxLength": 40,
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
               "type": "string"
             }
           }
@@ -6902,6 +7538,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "List projects",
@@ -7000,6 +7639,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "api_token": []
           }
         ],
         "summary": "Create a project",
@@ -7010,6 +7652,343 @@
           "action": "projects:manage",
           "audit": [
             "project.created"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/projects/summary": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "projects": {
+                      "items": {
+                        "$ref": "#/components/schemas/ProjectSummary"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "projects"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Summarise every project",
+        "tags": [
+          "projects"
+        ],
+        "x-openrail-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/tokens": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "tokens": {
+                      "items": {
+                        "$ref": "#/components/schemas/ApiToken"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "tokens"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List API tokens",
+        "tags": [
+          "tokens"
+        ],
+        "x-openrail-policy": {
+          "action": "tokens:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedApiToken"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Create an API token",
+        "tags": [
+          "tokens"
+        ],
+        "x-openrail-policy": {
+          "action": "tokens:manage",
+          "audit": [
+            "token.created"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/tokens/{tokenId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tokenId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Revoke an API token",
+        "tags": [
+          "tokens"
+        ],
+        "x-openrail-policy": {
+          "action": "tokens:manage",
+          "audit": [
+            "token.revoked"
           ],
           "auth": "session"
         }

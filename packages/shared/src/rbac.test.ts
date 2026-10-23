@@ -41,6 +41,7 @@ describe("rbac", () => {
     ["projects:manage", { owner: true, admin: true, member: false, viewer: false }],
     ["variables:reveal", { owner: true, admin: true, member: false, viewer: false }],
     ["instance:manage", { owner: true, admin: false, member: false, viewer: false }],
+    ["tokens:manage", { owner: true, admin: true, member: false, viewer: false }],
   ])("grants %s as expected", (action, expected) => {
     for (const role of ROLES) expect(can(role, action), role).toBe(expected[role]);
   });

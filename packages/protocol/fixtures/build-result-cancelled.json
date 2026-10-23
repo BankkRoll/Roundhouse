@@ -1,0 +1,8 @@
+{
+  "type": "build_result",
+  "build_id": "bld_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  "ok": false,
+  "error": "Build was cancelled.",
+  "cancelled": true,
+  "duration_ms": 2310
+}

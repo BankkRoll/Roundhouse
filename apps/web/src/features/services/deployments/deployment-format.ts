@@ -30,6 +30,33 @@ export function deploymentRef(deployment: Deployment): string {
 }
 
 /**
+ * A deployment id short enough for a label but still unique in practice: the type
+ * prefix and the last six characters of a long id.
+ *
+ * @param id - Deployment id.
+ * @returns E.g. `dep_…7XK2QM`, or the id itself when it is already short.
+ * @example
+ * shortDeploymentId("dep_01JB9ZK8M4V7Q2R5T6Y8W7XK2QM"); // "dep_…7XK2QM"
+ */
+export function shortDeploymentId(id: string): string {
+  const split = id.indexOf("_") + 1;
+  const rest = id.slice(split);
+  return rest.length <= 8 ? id : `${id.slice(0, split)}…${rest.slice(-6)}`;
+}
+
+/**
+ * Accessible name of a deployment: its ref plus its short id, because two deployments
+ * often run the same commit or image (a redeploy, a rollback) and screen reader users
+ * need to tell their rows and actions apart.
+ *
+ * @param deployment - A deployment.
+ * @returns E.g. `3f9c2b1 (dep_…7XK2QM)`.
+ */
+export function deploymentName(deployment: Deployment): string {
+  return `${deploymentRef(deployment)} (${shortDeploymentId(deployment.id)})`;
+}
+
+/**
  * How long a deployment took, or has been running.
  *
  * @param deployment - A deployment.

@@ -1,26 +1,24 @@
 import {
   Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
   CodeBlock,
+  DangerZone,
+  SaveBar,
+  SettingsRow,
+  SettingsSection,
+  SettingsStack,
   Skeleton,
   toast,
 } from "@openrail/ui";
 import { type FormEvent, useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
 import { ErrorState } from "../../components/error-state";
-import { FormField } from "../../components/form-field";
-import { PageHeader } from "../../components/page-header";
+import { SettingsField } from "../../components/settings-field";
 import { errorMessage } from "../../lib/api/client";
 import { usePermissions } from "../../lib/permissions";
 import { useMe } from "../../queries/me";
 import { useLeaveWorkspace } from "../../queries/members";
 import { useRenameWorkspace, useWorkspace } from "../../queries/workspaces";
-import { SettingsTabs } from "./settings-tabs";
+import { SettingsFrame } from "./settings-frame";
 
 function RenameForm({ workspaceId, currentName }: { workspaceId: string; currentName: string }) {
   const { can } = usePermissions(workspaceId);
@@ -52,58 +50,56 @@ function RenameForm({ workspaceId, currentName }: { workspaceId: string; current
   }
 
   return (
-    <Card>
-      <form onSubmit={onSubmit} noValidate>
-        <CardHeader>
-          <div>
-            <CardTitle>Workspace name</CardTitle>
-            <CardDescription>Shown in the sidebar and to everyone you invite.</CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <FormField
-            label="Name"
-            value={name}
-            onChange={(event) => setDraft(event.target.value)}
-            disabled={!allowed}
-            error={error}
-            hint={allowed ? undefined : "Only owners and admins can rename the workspace."}
-            className="grid max-w-sm gap-1.5"
-          />
-        </CardContent>
-        {allowed ? (
-          <CardFooter className="justify-end">
-            <Button type="submit" variant="primary" disabled={!dirty} loading={rename.isPending}>
-              Save
-            </Button>
-          </CardFooter>
-        ) : null}
-      </form>
-    </Card>
+    <form onSubmit={onSubmit} noValidate aria-label="Workspace">
+      <SettingsSection title="Workspace" description="How this workspace appears to its members.">
+        <SettingsField
+          label="Name"
+          description="Shown in the sidebar and to everyone you invite."
+          value={name}
+          onChange={(event) => setDraft(event.target.value)}
+          disabled={!allowed}
+          error={error}
+          hint={allowed ? undefined : "Only owners and admins can rename the workspace."}
+        />
+      </SettingsSection>
+      {allowed ? (
+        <SaveBar
+          dirty={dirty}
+          saving={rename.isPending}
+          onDiscard={() => {
+            setDraft(null);
+            setError(null);
+          }}
+        />
+      ) : null}
+    </form>
   );
 }
 
-function LeaveCard({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
+function LeaveSection({
+  workspaceId,
+  workspaceName,
+}: {
+  workspaceId: string;
+  workspaceName: string;
+}) {
   const { data: me } = useMe();
   const leave = useLeaveWorkspace(workspaceId);
   const [confirming, setConfirming] = useState(false);
   const memberId = me?.workspaces.find((w) => w.id === workspaceId)?.member_id;
 
   return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>Leave workspace</CardTitle>
-          <CardDescription>
-            You lose access straight away. Someone will have to invite you again to come back.
-          </CardDescription>
+    <DangerZone>
+      <SettingsRow
+        label="Leave workspace"
+        description="You lose access straight away. Someone will have to invite you again to come back."
+      >
+        <div className="md:flex md:justify-end">
+          <Button variant="danger-outline" disabled={!memberId} onClick={() => setConfirming(true)}>
+            Leave workspace
+          </Button>
         </div>
-      </CardHeader>
-      <CardFooter className="justify-end">
-        <Button variant="secondary" disabled={!memberId} onClick={() => setConfirming(true)}>
-          Leave workspace
-        </Button>
-      </CardFooter>
+      </SettingsRow>
       <ConfirmDialog
         open={confirming}
         onOpenChange={(open) => {
@@ -119,7 +115,7 @@ function LeaveCard({ workspaceId, workspaceName }: { workspaceId: string; worksp
           if (memberId) leave.mutate(memberId);
         }}
       />
-    </Card>
+    </DangerZone>
   );
 }
 
@@ -133,12 +129,11 @@ export function SettingsPage({ workspaceId }: { workspaceId: string }) {
   const workspace = useWorkspace(workspaceId);
 
   return (
-    <>
-      <PageHeader
-        title="Settings"
-        subline={workspace.data ? `/${workspace.data.slug}` : undefined}
-      />
-      <SettingsTabs workspaceId={workspaceId} />
+    <SettingsFrame
+      workspaceId={workspaceId}
+      title="General"
+      description={workspace.data ? `Settings for ${workspace.data.name}.` : undefined}
+    >
       {workspace.isPending ? (
         <Skeleton className="h-40" />
       ) : workspace.isError ? (
@@ -147,24 +142,22 @@ export function SettingsPage({ workspaceId }: { workspaceId: string }) {
           onRetry={() => void workspace.refetch()}
         />
       ) : (
-        <div className="grid max-w-3xl gap-4">
+        <SettingsStack>
           <RenameForm workspaceId={workspaceId} currentName={workspace.data.name} />
-          <Card>
-            <CardHeader>
-              <div>
-                <CardTitle>Workspace ID</CardTitle>
-                <CardDescription>
-                  Use this when talking to the API or filing an issue.
-                </CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <CodeBlock code={workspace.data.id} />
-            </CardContent>
-          </Card>
-          <LeaveCard workspaceId={workspaceId} workspaceName={workspace.data.name} />
-        </div>
+          <SettingsSection
+            title="Identifiers"
+            description="Use these when talking to the API or filing an issue."
+          >
+            <SettingsRow label="Workspace ID">
+              <CodeBlock dense code={workspace.data.id} />
+            </SettingsRow>
+            <SettingsRow label="Slug" description="Part of the workspace's URLs.">
+              <CodeBlock dense code={`/${workspace.data.slug}`} />
+            </SettingsRow>
+          </SettingsSection>
+          <LeaveSection workspaceId={workspaceId} workspaceName={workspace.data.name} />
+        </SettingsStack>
       )}
-    </>
+    </SettingsFrame>
   );
 }

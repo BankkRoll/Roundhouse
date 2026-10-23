@@ -1,0 +1,35 @@
+{
+  "plans": [
+    {
+      "id": "vhf-8c-32gb",
+      "vcpu_count": 8,
+      "ram": 32768,
+      "disk": 512,
+      "disk_count": 1,
+      "bandwidth": 6144,
+      "invoice_type": "monthly",
+      "monthly_cost": 192,
+      "hourly_cost": 0.26,
+      "monthly_cost_preemptible": 192,
+      "hourly_cost_preemptible": 0.26,
+      "type": "vhf",
+      "locations": ["sea"],
+      "location_cost": {
+        "sea": {
+          "monthly_cost": 192,
+          "hourly_cost": 0.26,
+          "monthly_cost_preemptible": 192,
+          "hourly_cost_preemptible": 0.26
+        }
+      },
+      "gpu_brand": "none"
+    }
+  ],
+  "meta": {
+    "total": 1,
+    "links": {
+      "next": "",
+      "prev": ""
+    }
+  }
+}

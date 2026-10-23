@@ -1,13 +1,17 @@
 import { cn } from "../lib/cn";
 
-const PALETTE = [
+/**
+ * Avatar backgrounds, each dark enough for white initials to reach 4.5:1 (checked by the
+ * component tests). Literal classes, so Tailwind generates them.
+ */
+export const AVATAR_PALETTE = [
   "bg-[#3b4cca] text-white",
-  "bg-[#0f8b8d] text-white",
+  "bg-[#0e7c7e] text-white",
   "bg-[#b4446c] text-white",
-  "bg-[#c77a0a] text-white",
+  "bg-[#a35f08] text-white",
   "bg-[#5b7400] text-white",
   "bg-[#6d4fc2] text-white",
-  "bg-[#2f7de1] text-white",
+  "bg-[#2a6fd0] text-white",
   "bg-[#a33f2f] text-white",
 ] as const;
 
@@ -40,7 +44,7 @@ export function initials(name: string): string {
 export function avatarColorIndex(seed: string): number {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-  return hash % PALETTE.length;
+  return hash % AVATAR_PALETTE.length;
 }
 
 /** Props for {@link Avatar}. */
@@ -71,10 +75,10 @@ export function Avatar({ name, seed, shape = "round", size = 24, className }: Av
       className={cn(
         "inline-flex shrink-0 items-center justify-center font-mono font-semibold select-none",
         shape === "round" ? "rounded-full" : "rounded-md",
-        PALETTE[avatarColorIndex(seed ?? name)],
+        AVATAR_PALETTE[avatarColorIndex(seed ?? name)],
         className,
       )}
-      style={{ width: size, height: size, fontSize: Math.max(9, Math.round(size * 0.38)) }}
+      style={{ width: size, height: size, fontSize: Math.max(11, Math.round(size * 0.38)) }}
     >
       {initials(name)}
     </span>

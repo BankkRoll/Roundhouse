@@ -43,6 +43,26 @@ func TestSolveSpecs(t *testing.T) {
 	}
 }
 
+// A build arg marked secret never becomes a Dockerfile build arg, which
+// would record its value in the image history; it is a BuildKit secret.
+func TestDockerfileSecretArgs(t *testing.T) {
+	job := validJob()
+	job.BuildArgs = map[string]string{"LICENSE_KEY": "lk-value", "NODE_ENV": "production"}
+	job.SecretBuildArgs = []string{"LICENSE_KEY"}
+	df := dockerfileSolve(&job, buildPaths{context: "/w/src", dockerfileDir: "/w/src", dockerfileName: "Dockerfile"})
+	if _, ok := df.attrs["build-arg:LICENSE_KEY"]; ok {
+		t.Fatal("secret build arg passed as a build arg")
+	}
+	for k, v := range df.attrs {
+		if strings.Contains(v, "lk-value") {
+			t.Fatalf("secret value in frontend attr %s", k)
+		}
+	}
+	if string(df.secrets["LICENSE_KEY"]) != "lk-value" || df.attrs["build-arg:NODE_ENV"] != "production" {
+		t.Fatalf("dockerfile spec %+v", df)
+	}
+}
+
 func TestSecretsHash(t *testing.T) {
 	a := secretsHash(map[string]string{"A": "1", "B": "2"})
 	if a != secretsHash(map[string]string{"B": "2", "A": "1"}) {
@@ -58,7 +78,7 @@ func TestSecretsHash(t *testing.T) {
 
 func TestProgressPrinter(t *testing.T) {
 	sink := newFrameSink()
-	b := newLogBatcher("bld_1", sink.emit, newRedactor("", map[string]string{"API_TOKEN": "hunter2-secret"}),
+	b := newLogBatcher("bld_1", sink.emit, newRedactor("", map[string]string{"API_TOKEN": "hunter2-secret"}, nil),
 		&fakeTicker{ch: make(chan time.Time)})
 	p := newProgressPrinter(b)
 	t0 := time.Unix(100, 0)

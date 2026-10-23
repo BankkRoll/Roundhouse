@@ -6,6 +6,10 @@
 //   - answer every job with exactly one build_result: a job that arrives
 //     while another runs, or on a node that is not a builder, fails at once;
 //     a job re-sent after its result was produced gets the same result again;
+//   - cancel a build on build_cancel: the builder stops at once and the job
+//     is answered with a failed result marked cancelled; a job arriving
+//     while a cancelled build winds down waits for it instead of failing, so
+//     a redeploy right after a cancel builds at once;
 //   - deliver results reliably, retrying while the connection is down, and
 //     cancel the running build on shutdown.
 package builds
@@ -13,6 +17,7 @@ package builds
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +37,12 @@ const (
 	sendTimeout   = 10 * time.Second
 	maxPending    = 64
 	recentResults = 32
+	// earlyCancels bounds the cancels remembered for builds not seen yet.
+	earlyCancels = 64
 )
+
+// cancelledMessage is the error of a result for a cancelled build.
+const cancelledMessage = "Build was cancelled."
 
 // Options configures a [Dispatcher].
 type Options struct {
@@ -63,10 +73,16 @@ type Dispatcher struct {
 	mu      sync.Mutex
 	running string // build ID of the running job, "" if idle
 	cancel  context.CancelFunc
-	pending []*protocol.BuildResult
-	recent  []*protocol.BuildResult
-	stopped bool
-	wg      sync.WaitGroup
+	// cancelling is set when the running build was cancelled and is winding
+	// down; next is the job that runs as soon as it has.
+	cancelling bool
+	next       *protocol.BuildJob
+	// cancelled holds IDs cancelled before their job arrived, oldest first.
+	cancelled []string
+	pending   []*protocol.BuildResult
+	recent    []*protocol.BuildResult
+	stopped   bool
+	wg        sync.WaitGroup
 }
 
 // New returns a dispatcher.
@@ -82,14 +98,15 @@ func New(opts Options) *Dispatcher {
 }
 
 // Start accepts a job without blocking. Jobs are answered with a failed
-// result when the node is not a builder or already building.
+// result when the node is not a builder or already building, unless the
+// running build was cancelled: then the job runs as soon as it has stopped.
 func (d *Dispatcher) Start(job *protocol.BuildJob) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	switch {
 	case d.stopped:
 		return
-	case job.BuildID == d.running:
+	case job.BuildID == d.running || (d.next != nil && job.BuildID == d.next.BuildID):
 		d.log.Info("ignoring duplicate build job; it is already running", "build_id", job.BuildID)
 		return
 	}
@@ -100,20 +117,65 @@ func (d *Dispatcher) Start(job *protocol.BuildJob) {
 			return
 		}
 	}
+	if i := slices.Index(d.cancelled, job.BuildID); i >= 0 {
+		d.cancelled = slices.Delete(d.cancelled, i, i+1)
+		d.log.Info("build job arrived after its cancel; not running it", "build_id", job.BuildID)
+		d.finishLocked(d.cancelledResult(job.BuildID, 0))
+		return
+	}
 	switch {
 	case d.opts.Builder == nil:
 		d.finishLocked(d.failed(job.BuildID, "this node is not a builder", 0))
+	case d.running != "" && d.cancelling && d.next == nil:
+		d.log.Info("build job waits for the cancelled build to stop", "build_id", job.BuildID, "cancelled", d.running)
+		d.next = job
 	case d.running != "":
 		d.finishLocked(d.failed(job.BuildID, "another build ("+d.running+") is running on this node; retry later", 0))
 	default:
-		if d.opts.Ready != nil {
-			if err := d.opts.Ready(); err != nil {
-				d.finishLocked(d.failed(job.BuildID, err.Error(), 0))
-				return
+		d.dispatchLocked(job)
+	}
+}
+
+// dispatchLocked hands job to the run loop, or fails it if the node is not
+// ready. Caller holds d.mu and the dispatcher is idle.
+func (d *Dispatcher) dispatchLocked(job *protocol.BuildJob) {
+	if d.opts.Ready != nil {
+		if err := d.opts.Ready(); err != nil {
+			d.finishLocked(d.failed(job.BuildID, err.Error(), 0))
+			return
+		}
+	}
+	d.running = job.BuildID
+	d.jobs <- job
+}
+
+// Cancel stops a build. A running build is cancelled at once and its result
+// says so; a job not seen yet is answered as cancelled when it arrives; a
+// finished build is left alone.
+func (d *Dispatcher) Cancel(buildID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch {
+	case d.stopped:
+	case buildID == d.running:
+		if !d.cancelling {
+			d.log.Info("cancelling build", "build_id", buildID)
+			d.cancelling = true
+			if d.cancel != nil {
+				d.cancel()
 			}
 		}
-		d.running = job.BuildID
-		d.jobs <- job
+	case d.next != nil && buildID == d.next.BuildID:
+		d.log.Info("cancelling queued build", "build_id", buildID)
+		d.next = nil
+		d.finishLocked(d.cancelledResult(buildID, 0))
+	case slices.ContainsFunc(d.recent, func(r *protocol.BuildResult) bool { return r.BuildID == buildID }):
+		d.log.Debug("ignoring cancel for a finished build", "build_id", buildID)
+	case !slices.Contains(d.cancelled, buildID):
+		d.cancelled = append(d.cancelled, buildID)
+		if len(d.cancelled) > earlyCancels {
+			d.cancelled = d.cancelled[len(d.cancelled)-earlyCancels:]
+		}
 	}
 }
 
@@ -156,6 +218,11 @@ func (d *Dispatcher) run(ctx context.Context, job *protocol.BuildJob) {
 	bctx, cancel := context.WithTimeout(ctx, limit)
 	d.mu.Lock()
 	d.cancel = cancel
+	// NOTE: a cancel that raced the hand-off from Start to here set
+	// cancelling but found no cancel func to call yet.
+	if d.cancelling {
+		cancel()
+	}
 	d.mu.Unlock()
 	d.wg.Add(1)
 	go func() {
@@ -171,7 +238,10 @@ func (d *Dispatcher) run(ctx context.Context, job *protocol.BuildJob) {
 				l.Type = protocol.TypeLogs
 			}
 			if d.opts.Logs != nil {
-				if err := d.opts.Logs(bctx, l); err != nil && bctx.Err() == nil {
+				// NOTE: submitted under the dispatcher's context, not the
+				// build's: the lines explaining a cancel or a timeout come
+				// after the build's context ended and must not be dropped.
+				if err := d.opts.Logs(ctx, l); err != nil && ctx.Err() == nil {
 					d.log.Debug("drop build log frame", "build_id", job.BuildID, "err", err)
 				}
 			}
@@ -179,14 +249,25 @@ func (d *Dispatcher) run(ctx context.Context, job *protocol.BuildJob) {
 		res := d.opts.Builder.Run(bctx, *job, emit)
 		elapsed := d.opts.Now().Sub(started)
 		r := d.normalize(job.BuildID, res, elapsed)
-		if bctx.Err() != nil && ctx.Err() == nil && r.OK {
+		d.mu.Lock()
+		cancelled := d.cancelling
+		d.mu.Unlock()
+		switch {
+		case cancelled && !r.OK:
+			r = d.cancelledResult(job.BuildID, elapsed)
+		case bctx.Err() != nil && ctx.Err() == nil && r.OK && !cancelled:
 			r = d.failed(job.BuildID, "build exceeded its deadline", elapsed)
 		}
-		d.log.Info("build finished", "build_id", job.BuildID, "ok", r.OK, "error", r.Error, "duration", elapsed.Round(time.Millisecond))
+		d.log.Info("build finished", "build_id", job.BuildID, "ok", r.OK, "cancelled", r.Cancelled,
+			"error", r.Error, "duration", elapsed.Round(time.Millisecond))
 		d.mu.Lock()
-		d.running, d.cancel = "", nil
+		d.running, d.cancel, d.cancelling = "", nil, false
 		if ctx.Err() == nil {
 			d.finishLocked(r)
+			if next := d.next; next != nil {
+				d.next = nil
+				d.dispatchLocked(next)
+			}
 		}
 		d.mu.Unlock()
 		d.Connected()
@@ -210,6 +291,13 @@ func (d *Dispatcher) normalize(buildID string, res protocol.BuildResult, elapsed
 		return d.failed(buildID, "builder returned an invalid result: "+err.Error(), elapsed)
 	}
 	return &res
+}
+
+// cancelledResult answers a cancelled build.
+func (d *Dispatcher) cancelledResult(buildID string, elapsed time.Duration) *protocol.BuildResult {
+	r := d.failed(buildID, cancelledMessage, elapsed)
+	r.Cancelled = true
+	return r
 }
 
 func (d *Dispatcher) failed(buildID, msg string, elapsed time.Duration) *protocol.BuildResult {

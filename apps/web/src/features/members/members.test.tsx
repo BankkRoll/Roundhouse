@@ -58,7 +58,7 @@ describe("members page permission gating", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
     expect(screen.queryByText("Pending invites")).not.toBeInTheDocument();
-    expect(rowFor("Ada Lovelace").getByText("owner")).toBeInTheDocument();
+    expect(rowFor("Ada Lovelace").getByText("Owner")).toBeInTheDocument();
   });
 
   it("hides the list from viewers without requesting it", async () => {

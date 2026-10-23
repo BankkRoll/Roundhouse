@@ -108,7 +108,7 @@ export function AccountStep({
           {...bind("confirmPassword")}
         />
       </div>
-      <FormField label="Workspace name" placeholder="Acme" {...bind("workspaceName")} />
+      <FormField label="Workspace name" placeholder="Your team" {...bind("workspaceName")} />
       {formError ? (
         <p role="alert" className="text-sm text-danger">
           {formError}

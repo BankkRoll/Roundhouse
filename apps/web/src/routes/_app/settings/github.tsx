@@ -5,7 +5,11 @@ import { GithubCallbackPage } from "../../../features/settings/github-callback-p
 export interface GithubSetupSearch {
   /** `installed`, or `requested` when an organization owner must approve the install. */
   status?: string;
-  /** `exchange_failed`, `installation_not_found` or `installation_claimed`. */
+  /**
+   * `exchange_failed`, `installation_not_found`, `installation_claimed`, or why an
+   * installation was refused: `authorization_required`, `authorization_failed`,
+   * `installation_not_accessible` or `link_used`.
+   */
   error?: string;
 }
 

@@ -1,0 +1,25 @@
+{
+  "regions": [
+    {
+      "id": "ams",
+      "city": "Amsterdam",
+      "country": "NL",
+      "continent": "Europe",
+      "options": [
+        "ddos_protection",
+        "block_storage_high_perf",
+        "block_storage_storage_opt",
+        "kubernetes",
+        "load_balancers"
+      ],
+      "connectivity": ["public_ip", "nat_gateway"]
+    }
+  ],
+  "meta": {
+    "total": 1,
+    "links": {
+      "next": "",
+      "prev": ""
+    }
+  }
+}

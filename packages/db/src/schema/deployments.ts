@@ -201,5 +201,7 @@ export const logChunks = sqliteTable(
     index("log_chunks_service_ts_idx").on(t.serviceId, t.firstTs),
     index("log_chunks_deployment_ts_idx").on(t.deploymentId, t.firstTs),
     index("log_chunks_build_ts_idx").on(t.buildId, t.firstTs),
+    // Retention deletes chunks whose newest line is older than the cutoff.
+    index("log_chunks_last_ts_idx").on(t.lastTs),
   ],
 );

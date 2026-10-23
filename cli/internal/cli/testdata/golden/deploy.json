@@ -1,5 +1,6 @@
 {
   "id": "dep_0004",
+  "project_id": "prj_shop",
   "service_id": "svc_api",
   "environment_id": "env_prod",
   "config_version": 1,

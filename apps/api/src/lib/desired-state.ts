@@ -25,9 +25,9 @@ import {
 import {
   computeSpecHash,
   type DesiredState,
+  environmentNetworkName,
   type Healthcheck,
   MAX_WORKLOADS_PER_NODE,
-  projectNetworkName,
   REGISTRY_LISTEN,
   type RegistryConfig,
   WORKLOADS_PROTOCOL_VERSION,
@@ -64,8 +64,12 @@ export type DesiredStateBody = Omit<DesiredState, "id" | "node_id" | "iat" | "ex
  * `OPENRAIL_PRIVATE_DOMAIN` and carried on each replica as
  * {@link PRIVATE_DOMAIN_LABEL} for the agent to register as a network alias.
  *
+ * The agent registers it as an alias on the environment's own network only
+ * (see `environmentNetworkName`), so it resolves only inside that
+ * environment.
+ *
  * @param serviceSlug - Service slug.
- * @param environmentSlug - Environment slug; one project network spans every environment.
+ * @param environmentSlug - Environment slug.
  * @returns E.g. `api.production.internal`.
  */
 export function privateDomain(serviceSlug: string, environmentSlug: string): string {
@@ -160,7 +164,10 @@ export async function workloadSpec(w: WorkloadInput): Promise<WorkloadSpec> {
       pids: DEFAULT_PIDS_LIMIT,
     },
     restart: restartSpec(w.config.deploy),
-    network: projectNetworkName(w.projectId),
+    // SECURITY: one network per environment, so staging can never reach
+    // production by IP or by private domain. A change of network changes
+    // the spec hash, which moves existing replicas onto it.
+    network: await environmentNetworkName(w.projectId, w.environmentId),
     labels: { [PRIVATE_DOMAIN_LABEL]: w.privateDomain },
     drain_s: w.config.deploy.drain_s,
   };

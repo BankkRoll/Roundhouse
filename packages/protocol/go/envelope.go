@@ -130,7 +130,7 @@ func SignEnvelope(msg ControlMessage, priv ed25519.PrivateKey, kid string) (Enve
 }
 
 // DecodeControlMessage parses and validates a control payload, returning a
-// [*Welcome], [*DesiredState] or [*BuildJob].
+// [*Welcome], [*DesiredState], [*BuildJob] or [*BuildCancel].
 //
 // Like the zod schemas it mirrors, unknown fields are ignored so that the
 // control plane can add optional fields without breaking older agents, but
@@ -155,6 +155,8 @@ func DecodeControlMessage(data []byte) (ControlMessage, error) {
 		msg = &DesiredState{}
 	case TypeBuildJob:
 		msg = &BuildJob{}
+	case TypeBuildCancel:
+		msg = &BuildCancel{}
 	default:
 		return nil, fmt.Errorf("unknown control message type %q", probe.Type)
 	}

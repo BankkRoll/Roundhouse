@@ -1,4 +1,5 @@
 import {
+  Badge,
   Button,
   EmptyState,
   Skeleton,
@@ -25,6 +26,7 @@ import { DeploymentMenu, useDeploymentActions } from "./deployment-actions";
 import {
   currentDeploymentId,
   deploymentDuration,
+  deploymentName,
   deploymentRef,
   TRIGGER_LABELS,
 } from "./deployment-format";
@@ -38,11 +40,11 @@ function What({ deployment }: { deployment: Deployment }) {
           {deploymentRef(deployment)}
         </span>
         {message ? (
-          <span className="min-w-0 truncate text-xs text-muted-foreground">{message}</span>
+          <span className="min-w-0 truncate text-sm text-muted-foreground">{message}</span>
         ) : null}
       </div>
       {deployment.failure_reason ? (
-        <p className="truncate text-xs text-danger">{deployment.failure_reason}</p>
+        <p className="mt-0.5 truncate text-xs text-danger">{deployment.failure_reason}</p>
       ) : null}
     </div>
   );
@@ -114,68 +116,66 @@ export function DeploymentsTab({ workspaceId, projectId, serviceId }: ServicePag
 
   return (
     <section aria-label="Deployments">
-      <div className="rounded-lg border border-border bg-surface">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead className="w-32">Status</TableHead>
-              <TableHead>Deployed</TableHead>
-              <TableHead className="hidden w-28 md:table-cell">Trigger</TableHead>
-              <TableHead className="hidden w-24 sm:table-cell">Duration</TableHead>
-              <TableHead className="w-24">Created</TableHead>
-              <TableHead className="w-10">
-                <span className="sr-only">Actions</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((deployment) => (
-              <TableRow key={deployment.id} data-status={deployment.status}>
-                <TableCell>
+      <Table stack>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-36">Status</TableHead>
+            <TableHead>Deployed</TableHead>
+            <TableHead className="hidden w-28 md:table-cell">Trigger</TableHead>
+            <TableHead className="hidden w-24 text-right sm:table-cell">Duration</TableHead>
+            <TableHead className="w-24 text-right">Created</TableHead>
+            <TableHead className="w-10">
+              <span className="sr-only">Actions</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((deployment) => (
+            <TableRow key={deployment.id} data-status={deployment.status}>
+              <TableCell>
+                <span className="flex items-center gap-2">
                   <Link
                     to="/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId"
                     params={{ workspaceId, projectId, serviceId, deploymentId: deployment.id }}
                     search={{ env: envParam }}
                     className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    aria-label={`Deployment ${deploymentRef(deployment)}, ${deployment.status.replace("_", " ")}`}
+                    aria-label={`Deployment ${deploymentName(deployment)}, ${deployment.status.replace("_", " ")}`}
                   >
                     <StatusBadge status={deployment.status} kind="deployment" />
                   </Link>
-                  {deployment.id === currentId ? (
-                    <span className="ml-2 font-mono text-[10px] text-accent-text">current</span>
-                  ) : null}
-                </TableCell>
-                <TableCell className="max-w-0">
-                  <What deployment={deployment} />
-                </TableCell>
-                <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">
-                  {TRIGGER_LABELS[deployment.trigger]}
-                </TableCell>
-                <TableCell className="hidden font-mono text-xs text-muted-foreground tabular-nums sm:table-cell">
-                  {deploymentDuration(deployment, now)}
-                </TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">
-                  <time
-                    dateTime={new Date(deployment.created_at).toISOString()}
-                    title={formatTimestamp(deployment.created_at)}
-                  >
-                    {formatRelativeTime(deployment.created_at, now)}
-                  </time>
-                </TableCell>
-                <TableCell className="text-right">
-                  <DeploymentMenu
-                    deployment={deployment}
-                    currentId={currentId}
-                    canDeploy={can("deployments:create")}
-                    actions={actions}
-                    onLogs={openLogs}
-                  />
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+                  {deployment.id === currentId ? <Badge tone="accent">Current</Badge> : null}
+                </span>
+              </TableCell>
+              <TableCell cell="primary" className="max-w-0">
+                <What deployment={deployment} />
+              </TableCell>
+              <TableCell className="hidden text-xs text-muted-foreground md:table-cell">
+                {TRIGGER_LABELS[deployment.trigger]}
+              </TableCell>
+              <TableCell className="hidden text-right text-xs text-muted-foreground tabular-nums sm:table-cell">
+                {deploymentDuration(deployment, now)}
+              </TableCell>
+              <TableCell className="text-right text-xs text-muted-foreground tabular-nums">
+                <time
+                  dateTime={new Date(deployment.created_at).toISOString()}
+                  title={formatTimestamp(deployment.created_at)}
+                >
+                  {formatRelativeTime(deployment.created_at, now)}
+                </time>
+              </TableCell>
+              <TableCell cell="action" className="text-right">
+                <DeploymentMenu
+                  deployment={deployment}
+                  currentId={currentId}
+                  canDeploy={can("deployments:create")}
+                  actions={actions}
+                  onLogs={openLogs}
+                />
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
       {deployments.hasNextPage ? (
         <div className="mt-4 flex justify-center">
           <Button

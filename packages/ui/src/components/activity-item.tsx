@@ -51,7 +51,7 @@ export function ActivityItem({
         ) : null}
       </p>
       <time
-        className="shrink-0 font-mono text-[11px] text-subtle-foreground"
+        className="shrink-0 text-xs text-subtle-foreground tabular-nums"
         dateTime={timestamp}
         title={timestamp}
       >

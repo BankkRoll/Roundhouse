@@ -1,22 +1,11 @@
-import {
-  Badge,
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  EmptyState,
-  MeterRow,
-  Skeleton,
-  StatusBadge,
-  toast,
-} from "@openrail/ui";
+import { Badge, Button, EmptyState, MeterRow, Skeleton, StatusBadge, toast } from "@openrail/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon, ServerOffIcon, Trash2Icon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
 import { ErrorState } from "../../components/error-state";
+import { SectionHeader } from "../../components/section-header";
 import { errorMessage, isApiError } from "../../lib/api/client";
 import type { Node } from "../../lib/api/types";
 import {
@@ -37,7 +26,7 @@ function BackLink({ workspaceId }: { workspaceId: string }) {
     <Link
       to="/w/$workspaceId/servers"
       params={{ workspaceId }}
-      className="mb-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
+      className="mb-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
     >
       <ArrowLeftIcon className="size-3.5" aria-hidden="true" />
       Servers
@@ -47,9 +36,9 @@ function BackLink({ workspaceId }: { workspaceId: string }) {
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[9rem_1fr] gap-3 border-b border-border py-2 last:border-0">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate font-mono text-xs text-foreground">{children}</dd>
+    <div className="grid grid-cols-[8rem_minmax(0,1fr)] gap-3 border-b border-border/70 py-2.5">
+      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate text-sm text-foreground tabular-nums">{children}</dd>
     </div>
   );
 }
@@ -66,13 +55,19 @@ function Capability({ name, enabled }: { name: string; enabled: boolean | undefi
 
 function NodeFacts({ node, now }: { node: Node; now: number }) {
   return (
-    <dl>
-      <Fact label="Hostname">{node.hostname ?? EMPTY}</Fact>
-      <Fact label="Public IP">{node.public_ip ?? EMPTY}</Fact>
+    <dl className="grid border-t border-border/70 md:grid-cols-2 md:gap-x-10">
+      <Fact label="Hostname">
+        <span className="font-mono">{node.hostname ?? EMPTY}</span>
+      </Fact>
+      <Fact label="Public IP">
+        <span className="font-mono">{node.public_ip ?? EMPTY}</span>
+      </Fact>
       <Fact label="Provider">{node.provider}</Fact>
       <Fact label="Region">{node.region ?? EMPTY}</Fact>
       <Fact label="Platform">{formatPlatform(node.os, node.arch)}</Fact>
-      <Fact label="Kernel">{node.kernel ?? EMPTY}</Fact>
+      <Fact label="Kernel">
+        <span className="font-mono">{node.kernel ?? EMPTY}</span>
+      </Fact>
       <Fact label="Docker">{node.docker_version ?? EMPTY}</Fact>
       <Fact label="Agent">{formatAgentVersion(node.agent_version) ?? EMPTY}</Fact>
       <Fact label="CPU">{node.cpu_total ? `${node.cpu_total} vCPU` : EMPTY}</Fact>
@@ -112,8 +107,8 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
       <>
         <BackLink workspaceId={workspaceId} />
         <Skeleton className="mb-6 h-10 w-64" />
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Skeleton className="h-64" />
+        <div className="grid gap-6">
+          <Skeleton className="h-20" />
           <Skeleton className="h-64" />
         </div>
       </>
@@ -155,67 +150,58 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
   return (
     <>
       <BackLink workspaceId={workspaceId} />
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-3">
-            <h1 className="truncate font-mono text-xl font-semibold text-foreground">
+            <h1 className="truncate text-xl font-semibold tracking-tight text-foreground">
               {data.name}
             </h1>
             <StatusBadge status={data.status} />
           </div>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">{nodeSubtitle(data)}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{nodeSubtitle(data)}</p>
         </div>
         {can("nodes:manage") ? (
-          <Button variant="secondary" onClick={() => setConfirming(true)}>
+          <Button variant="danger-outline" onClick={() => setConfirming(true)}>
             <Trash2Icon />
             Remove server
           </Button>
         ) : null}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Usage</CardTitle>
-            <span className="font-mono text-[11px] text-muted-foreground">
-              load {data.load1 === null ? EMPTY : data.load1.toFixed(2)}
-            </span>
-          </CardHeader>
-          <CardContent className="grid gap-4">
+      <div className="grid gap-12">
+        <section aria-labelledby="usage-heading">
+          <SectionHeader
+            id="usage-heading"
+            title="Usage"
+            meta={`load ${data.load1 === null ? EMPTY : data.load1.toFixed(2)}`}
+          />
+          <div className="grid gap-x-10 gap-y-5 border-y border-border/70 py-5 sm:grid-cols-3">
             {nodeMeterRows(data).map((row) => (
               <MeterRow key={row.label} {...row} />
             ))}
-            {data.last_heartbeat_at === null ? (
-              <p className="text-xs text-muted-foreground">
-                Waiting for the first heartbeat from the agent.
-              </p>
-            ) : null}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Details</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <NodeFacts node={data} now={now} />
-          </CardContent>
-        </Card>
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Capabilities</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
+          </div>
+          {data.last_heartbeat_at === null ? (
+            <p className="mt-3 text-sm text-muted-foreground">
+              Waiting for the first heartbeat from the agent.
+            </p>
+          ) : null}
+        </section>
+        <section aria-labelledby="details-heading">
+          <SectionHeader id="details-heading" title="Details" />
+          <NodeFacts node={data} now={now} />
+          <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <h3 className="text-sm text-muted-foreground">Capabilities</h3>
             {data.capabilities ? (
-              <>
+              <div className="flex flex-wrap gap-2">
                 <Capability name="docker" enabled={data.capabilities.docker} />
                 <Capability name="gvisor" enabled={data.capabilities.gvisor} />
                 <Capability name="builder" enabled={data.capabilities.builder} />
-              </>
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground">Not reported yet.</p>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       </div>
 
       <ConfirmDialog

@@ -36,6 +36,7 @@ func TestFixturesRoundTrip(t *testing.T) {
 		{"logs-build.json", &Logs{}},
 		{"build-result-ok.json", &BuildResult{}},
 		{"build-result-failed.json", &BuildResult{}},
+		{"build-result-cancelled.json", &BuildResult{}},
 		{"join-request.json", &JoinRequest{}},
 		{"join-response.json", &JoinResponse{}},
 	}
@@ -67,14 +68,15 @@ func TestFixturesRoundTrip(t *testing.T) {
 
 func TestDecodeAgentMessageFixtures(t *testing.T) {
 	cases := map[string]AgentMessage{
-		"hello.json":               &Hello{},
-		"hello-statuses.json":      &Hello{},
-		"heartbeat.json":           &Heartbeat{},
-		"workload-status.json":     &WorkloadStatus{},
-		"logs-runtime.json":        &Logs{},
-		"logs-build.json":          &Logs{},
-		"build-result-ok.json":     &BuildResult{},
-		"build-result-failed.json": &BuildResult{},
+		"hello.json":                  &Hello{},
+		"hello-statuses.json":         &Hello{},
+		"heartbeat.json":              &Heartbeat{},
+		"workload-status.json":        &WorkloadStatus{},
+		"logs-runtime.json":           &Logs{},
+		"logs-build.json":             &Logs{},
+		"build-result-ok.json":        &BuildResult{},
+		"build-result-failed.json":    &BuildResult{},
+		"build-result-cancelled.json": &BuildResult{},
 	}
 	for file, want := range cases {
 		t.Run(file, func(t *testing.T) {
@@ -232,6 +234,9 @@ func TestVerifySignedDesiredStateFixture(t *testing.T) {
 		t.Fatalf("fixture is missing parts: %+v", ds)
 	}
 	for _, w := range ds.Workloads {
+		if want := EnvironmentNetworkName(*w.ProjectID, *w.EnvironmentID); w.Network != want {
+			t.Errorf("%s: network %s, want %s", w.ID, w.Network, want)
+		}
 		got, err := ComputeSpecHash(w)
 		if err != nil {
 			t.Fatal(err)
@@ -252,7 +257,74 @@ func TestVerifySignedBuildJobFixture(t *testing.T) {
 	if job.Source.Token == "" || !CarriesCredentials(job) {
 		t.Error("fixture should carry a git token")
 	}
+	if len(job.SecretBuildArgs) == 0 {
+		t.Fatal("fixture should mark a build arg secret")
+	}
+	for _, name := range job.SecretBuildArgs {
+		if _, ok := job.BuildArgs[name]; !ok || !job.IsSecretArg(name) {
+			t.Errorf("secret build arg %s is not a build arg", name)
+		}
+	}
+	if job.IsSecretArg("NODE_ENV") {
+		t.Error("NODE_ENV is not secret")
+	}
 	assertRoundTrip(t, job, payload)
+}
+
+func TestVerifySignedBuildCancelFixture(t *testing.T) {
+	var f signedFixture
+	if err := json.Unmarshal(readFixture(t, "signed-build-cancel.json"), &f); err != nil {
+		t.Fatal(err)
+	}
+	env, err := ParseEnvelope(f.Envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := ParsePublicKey(f.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := VerifyEnvelope(env, pub, f.NodeID, fixtureIAT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok := msg.(*BuildCancel)
+	if !ok {
+		t.Fatalf("got %T, want *BuildCancel", msg)
+	}
+	if c.BuildID != "bld_01JAAAAAAAAAAAAAAAAAAAAAAA" || CarriesCredentials(c) {
+		t.Errorf("unexpected cancel %+v", c)
+	}
+	assertRoundTrip(t, c, env.Payload)
+}
+
+// TestNetworkNamesFixture is the Go half of the network-name agreement
+// check: the TypeScript suite recomputes the same cases.
+func TestNetworkNamesFixture(t *testing.T) {
+	var f struct {
+		Cases []struct {
+			ProjectID     string `json:"project_id"`
+			EnvironmentID string `json:"environment_id"`
+			Network       string `json:"network"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(readFixture(t, "network-names.json"), &f); err != nil {
+		t.Fatal(err)
+	}
+	hashed := false
+	for _, c := range f.Cases {
+		got := EnvironmentNetworkName(c.ProjectID, c.EnvironmentID)
+		if got != c.Network {
+			t.Errorf("EnvironmentNetworkName(%s, %s) = %s, want %s", c.ProjectID, c.EnvironmentID, got, c.Network)
+		}
+		if !networkRE.MatchString(got) {
+			t.Errorf("%s is not a valid network name", got)
+		}
+		hashed = hashed || strings.HasPrefix(got, HashedNetworkPrefix)
+	}
+	if !hashed {
+		t.Error("fixture has no hashed case")
+	}
 }
 
 // TestSpecHashFixture is the Go half of the spec-hash agreement check: the

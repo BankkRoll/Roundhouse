@@ -209,7 +209,7 @@ describe("sign out", () => {
     server.use(http.post("*/api/auth/sign-out", () => apiError(500, "internal", "D1 is down")));
     const { router, user } = renderApp(`/w/${WORKSPACE_ID}`);
     await findPageHeading("Home");
-    await user.click(screen.getByRole("button", { name: "Account menu for Ada Lovelace" }));
+    await user.click(screen.getByRole("button", { name: /^Ada Lovelace, account menu$/ }));
     await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
     expect(await screen.findByText("Could not sign out")).toBeInTheDocument();
     expect(screen.getByText("D1 is down")).toBeInTheDocument();

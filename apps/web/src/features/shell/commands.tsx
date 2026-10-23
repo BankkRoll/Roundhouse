@@ -5,12 +5,14 @@ import {
   FolderKanbanIcon,
   FolderPlusIcon,
   HistoryIcon,
+  KeyboardIcon,
   LogOutIcon,
   PlusIcon,
   RocketIcon,
   ScrollTextIcon,
   ServerIcon,
   SettingsIcon,
+  SlidersHorizontalIcon,
   SunMoonIcon,
   UserPlusIcon,
   UsersIcon,
@@ -206,6 +208,22 @@ export function buildCommands(deps: CommandDeps): PaletteCommand[] {
   });
 
   const account: PaletteCommand[] = [
+    {
+      id: "account:preferences",
+      label: "Preferences",
+      group: "Account",
+      icon: <SlidersHorizontalIcon />,
+      keywords: ["appearance", "theme", "density", "motion", "accessibility"],
+      onSelect: () => deps.navigate("/w/$workspaceId/preferences"),
+    },
+    {
+      id: "account:shortcuts",
+      label: "Keyboard shortcuts",
+      group: "Account",
+      icon: <KeyboardIcon />,
+      keywords: ["keys", "hotkeys", "help"],
+      onSelect: () => deps.navigate("/w/$workspaceId/preferences/shortcuts"),
+    },
     {
       id: "account:sign-out",
       label: "Sign out",
