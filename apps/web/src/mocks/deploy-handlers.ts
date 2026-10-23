@@ -33,6 +33,7 @@ import {
   ROLLBACK_SOURCE_STATUSES,
   resolveVariables,
   scopesBeyondRole,
+  secretBuildArgsValid,
   secretDerivedVariables,
   slugify,
 } from "@roundhouse/shared";
@@ -275,18 +276,31 @@ function latestConfig(serviceId: string, environmentId: string): ServiceConfig |
     .sort((a, b) => b.version - a.version)[0];
 }
 
-function toVariable({ key, value, is_secret, version, updated_at }: DbVariable): Variable {
+/**
+ * Stand-in for the API's per-project HMAC fingerprint: 8 hex of FNV-1a, so equal values
+ * still match in the mock without it holding a key.
+ */
+function mockFingerprint(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function toVariable(row: DbVariable): Variable {
   return {
-    key,
-    tier: is_secret ? "secret" : "plain",
-    locked: false,
-    value: is_secret ? null : value,
-    fingerprint: null,
-    available_at_build: false,
-    mount_as_file: false,
-    version,
-    updated_at,
-    updated_by: null,
+    key: row.key,
+    tier: row.tier,
+    locked: row.locked,
+    value: row.tier === "secret" ? null : row.value,
+    fingerprint: mockFingerprint(row.value),
+    available_at_build: row.available_at_build,
+    mount_as_file: row.mount_as_file,
+    version: row.version,
+    updated_at: row.updated_at,
+    updated_by: row.updated_by,
   };
 }
 
@@ -416,7 +430,7 @@ function localKeys(service: Service, environment: Environment): string[] {
   );
   const raw = (rows: DbVariable[]) => Object.fromEntries(rows.map((row) => [row.key, row.value]));
   const secretKeys = (rows: DbVariable[]) =>
-    rows.filter((row) => row.is_secret).map((row) => row.key);
+    rows.filter((row) => row.tier === "secret").map((row) => row.key);
   const services: Record<string, Record<string, string>> = {};
   const secretServiceKeys: Record<string, string[]> = {};
   for (const entry of live) {
@@ -1110,6 +1124,14 @@ export const deployHandlers = [
             ? value
             : { ...(latest[part] as object), ...(value as object) };
       }
+      // Mirrors the API's mergeConfig: cross-field rules are checked after the merge.
+      if (!secretBuildArgsValid(next.build as ServiceConfig["build"])) {
+        return apiError(
+          400,
+          "invalid_request",
+          "build.secret_build_args: secret_build_args must name distinct keys of build_args",
+        );
+      }
       config = {
         ...(next as ServiceConfig),
         id: nextId("cfg"),
@@ -1228,7 +1250,13 @@ export const deployHandlers = [
         if (!found.ok) return found.response;
         const environment = environmentOf(found.projectId, input.query.environment_id);
         if (!environment) return notFound("Environment");
-        const set = input.body.set as { key: string; value?: string; tier?: "plain" | "secret" }[];
+        const set = input.body.set as {
+          key: string;
+          value?: string;
+          tier?: DbVariable["tier"];
+          available_at_build?: boolean;
+          mount_as_file?: boolean;
+        }[];
         const remove = input.body.delete as string[];
         // Mirrors the API's assertValidReferences: every malformed reference, by key.
         const details = set.flatMap(({ key, value }) =>
@@ -1256,9 +1284,12 @@ export const deployHandlers = [
           );
           if (existing) {
             existing.value = entry.value ?? existing.value;
-            existing.is_secret = entry.tier ? entry.tier === "secret" : existing.is_secret;
+            existing.tier = entry.tier ?? existing.tier;
+            existing.available_at_build = entry.available_at_build ?? existing.available_at_build;
+            existing.mount_as_file = entry.mount_as_file ?? existing.mount_as_file;
             existing.version += 1;
             existing.updated_at = now;
+            existing.updated_by = found.guard.user.id;
           } else {
             db.deploy.variables.push({
               scope,
@@ -1266,9 +1297,13 @@ export const deployHandlers = [
               environment_id: environment.id,
               key: entry.key,
               value: entry.value ?? "",
-              is_secret: entry.tier === "secret",
+              tier: entry.tier ?? "plain",
+              locked: false,
+              available_at_build: entry.available_at_build ?? false,
+              mount_as_file: entry.mount_as_file ?? false,
               version: 1,
               updated_at: now,
+              updated_by: found.guard.user.id,
             });
           }
         }

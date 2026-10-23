@@ -85,6 +85,77 @@ describe("service settings", () => {
         builder: "dockerfile",
         dockerfile_path: "docker/Dockerfile.web",
         build_args: { NODE_VERSION: "22" },
+        secret_build_args: [],
+      }),
+    );
+  });
+
+  it("marks a build arg secret and masks it once saved", async () => {
+    const { user, section } = await openSettings();
+    const build = section("Build");
+    await user.click(within(build).getByRole("button", { name: "Add" }));
+    await user.type(within(build).getByLabelText("Build arguments 1 key"), "NPM_TOKEN");
+    await user.click(within(build).getByRole("switch", { name: "Build arguments 1 secret" }));
+    const value = within(build).getByLabelText("Build arguments 1 value");
+    expect(value).toHaveAttribute("type", "password");
+    await user.type(value, "npm_s3cr3t");
+    await user.click(within(build).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(latest(SEED.web).build).toMatchObject({
+        build_args: { NPM_TOKEN: "npm_s3cr3t" },
+        secret_build_args: ["NPM_TOKEN"],
+      }),
+    );
+    await waitFor(() =>
+      expect(within(build).getByLabelText("Build arguments 1 value")).toHaveValue(""),
+    );
+    expect(within(build).getByLabelText("Build arguments 1 value")).toHaveAttribute(
+      "placeholder",
+      expect.stringMatching(/saved; type to replace/),
+    );
+    expect(build).not.toHaveTextContent("npm_s3cr3t");
+    expect(within(build).getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("keeps a masked secret build arg when left blank and clears it when unmarked", async () => {
+    const current = latest(SEED.web);
+    db.deploy.configs.push({
+      ...current,
+      id: "cfg_web_secret_arg",
+      version: current.version + 1,
+      build: {
+        ...current.build,
+        build_args: { NPM_TOKEN: "npm_s3cr3t", NODE_VERSION: "22" },
+        secret_build_args: ["NPM_TOKEN"],
+      },
+    });
+    const { user, section } = await openSettings();
+    const build = section("Build");
+    const token = within(build).getByLabelText("Build arguments 2 value");
+    expect(token).toHaveValue("");
+    expect(build).not.toHaveTextContent("npm_s3cr3t");
+    expect(within(build).getByLabelText("Build arguments 1 value")).toHaveValue("22");
+
+    await user.clear(within(build).getByLabelText("Build arguments 1 value"));
+    await user.type(within(build).getByLabelText("Build arguments 1 value"), "24");
+    await user.click(within(build).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(latest(SEED.web).build).toMatchObject({
+        build_args: { NPM_TOKEN: "npm_s3cr3t", NODE_VERSION: "24" },
+        secret_build_args: ["NPM_TOKEN"],
+      }),
+    );
+
+    await user.click(within(build).getByRole("switch", { name: "Build arguments 2 secret" }));
+    const cleared = within(build).getByLabelText("Build arguments 2 value");
+    expect(cleared).toHaveValue("");
+    expect(cleared).toHaveAttribute("type", "text");
+    await user.type(cleared, "public");
+    await user.click(within(build).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(latest(SEED.web).build).toMatchObject({
+        build_args: { NPM_TOKEN: "public", NODE_VERSION: "24" },
+        secret_build_args: [],
       }),
     );
   });

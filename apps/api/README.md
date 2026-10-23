@@ -11,7 +11,9 @@ pnpm dev                          # http://127.0.0.1:8787
 ```
 
 Run `pnpm --filter @roundhouse/web build` first if you want the dashboard
-served from here instead of from Vite.
+served from here instead of from Vite. Otherwise `dev` and `db:migrate:local`
+create an empty `../web/dist`, since wrangler won't start without the assets
+directory it is configured with.
 
 ## Test
 

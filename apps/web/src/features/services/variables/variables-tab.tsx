@@ -508,6 +508,14 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
                             <>
                               <span aria-hidden="true">{MASK}</span>
                               <span className="sr-only">value hidden</span>
+                              {row.fingerprint ? (
+                                <span
+                                  className="ml-2 tracking-normal text-muted-foreground"
+                                  title="Fingerprint: equal values share it; the value can't be read back"
+                                >
+                                  fp {row.fingerprint}
+                                </span>
+                              ) : null}
                             </>
                           ) : (
                             plain || <span className="italic">empty</span>

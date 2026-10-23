@@ -29,6 +29,8 @@ describe("variables editor", () => {
     expect(secret).not.toHaveTextContent("hunter2");
     expect(secret).toHaveTextContent("••••");
     expect(within(secret).getByText("value hidden")).toHaveClass("sr-only");
+    expect(secret).toHaveTextContent(/fp [a-f0-9]{8}/);
+    expect(rowOf("NODE_ENV")).not.toHaveTextContent(/fp [a-f0-9]{8}/);
   });
 
   it("never offers to reveal a secret (ADR 0014: write-only)", async () => {
@@ -102,7 +104,7 @@ describe("variables editor", () => {
     expect(rowOf("CACHE_TTL")).toHaveTextContent("secret");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() =>
-      expect(serviceVariable("CACHE_TTL")).toMatchObject({ value: "60", is_secret: true }),
+      expect(serviceVariable("CACHE_TTL")).toMatchObject({ value: "60", tier: "secret" }),
     );
   });
 

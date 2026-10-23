@@ -14,6 +14,7 @@ import {
   DEFAULT_LOG_RETENTION_DAYS,
   defaultServiceConfig,
   type ServiceSource,
+  type VariableTier,
 } from "@roundhouse/shared";
 import type {
   ApiToken,
@@ -41,10 +42,15 @@ export interface DbVariable {
   owner_id: string;
   environment_id: string;
   key: string;
+  /** Kept for secrets too, so the mock can resolve them; never returned for a secret. */
   value: string;
-  is_secret: boolean;
+  tier: VariableTier;
+  locked: boolean;
+  available_at_build: boolean;
+  mount_as_file: boolean;
   version: number;
   updated_at: number;
+  updated_by: string | null;
 }
 
 /** A deployment row; the API joins its build on read. */
@@ -442,13 +448,19 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
     last_status_at: at,
   });
 
-  const webVariables: [string, string, boolean][] = [
-    ["DATABASE_URL", "postgres://store:hunter2@db.internal:5432/store", true],
-    ["NODE_ENV", "production", false],
-    ["API_URL", `http://\${{api.ROUNDHOUSE_PRIVATE_DOMAIN}}:8080`, false],
-    ["SESSION_SECRET", "s3cr3t-session-key-0123456789", true],
-    ["REGION", `\${{shared.REGION}}`, false],
+  const webVariables: [string, string, VariableTier][] = [
+    ["DATABASE_URL", "postgres://store:hunter2@db.internal:5432/store", "secret"],
+    ["NODE_ENV", "production", "plain"],
+    ["API_URL", `http://\${{api.ROUNDHOUSE_PRIVATE_DOMAIN}}:8080`, "plain"],
+    ["SESSION_SECRET", "s3cr3t-session-key-0123456789", "secret"],
+    ["REGION", `\${{shared.REGION}}`, "plain"],
   ];
+  const flags = {
+    locked: false,
+    available_at_build: false,
+    mount_as_file: false,
+    updated_by: "usr_ada",
+  };
 
   return {
     projects: [
@@ -579,13 +591,14 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
       }),
     ],
     variables: [
-      ...webVariables.map(([key, value, is_secret], index) => ({
+      ...webVariables.map(([key, value, tier], index) => ({
         scope: "service" as const,
         owner_id: SEED.web,
         environment_id: P,
         key,
         value,
-        is_secret,
+        tier,
+        ...flags,
         version: 1 + (index % 2),
         updated_at: now - (index + 1) * HOUR,
       })),
@@ -595,7 +608,8 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         environment_id: P,
         key: "LOG_LEVEL",
         value: "info",
-        is_secret: false,
+        tier: "plain",
+        ...flags,
         version: 1,
         updated_at: now - DAY,
       },
@@ -605,7 +619,9 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         environment_id: P,
         key: "STRIPE_KEY",
         value: "sk_live_0123456789",
-        is_secret: true,
+        tier: "secret",
+        ...flags,
+        locked: true,
         version: 1,
         updated_at: now - DAY,
       },
@@ -615,7 +631,8 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         environment_id: P,
         key: "REGION",
         value: "hel1",
-        is_secret: false,
+        tier: "plain",
+        ...flags,
         version: 1,
         updated_at: now - 3 * DAY,
       },

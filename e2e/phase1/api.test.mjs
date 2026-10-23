@@ -138,7 +138,10 @@ async function deploy(serviceId, body = {}) {
 }
 
 async function setVariables(serviceId, set) {
-  return api.put(`/v1/services/${serviceId}/variables?environment_id=${S.envId}`, { set });
+  return api.put(`/v1/services/${serviceId}/variables?environment_id=${S.envId}`, {
+    set,
+    confirm_write_only: true,
+  });
 }
 
 async function patchService(serviceId, patch) {
@@ -358,7 +361,7 @@ describe("Phase 1 on the real stack", () => {
       { key: "GREETING", value: "${{whoami.GREETING_SOURCE}} v1" },
       // biome-ignore lint/suspicious/noTemplateCurlyInString: variable-reference syntax.
       { key: "PEER_URL", value: "http://${{whoami.ROUNDHOUSE_PRIVATE_DOMAIN}}:80/" },
-      { key: "API_TOKEN", value: SECRET, is_secret: true },
+      { key: "API_TOKEN", value: SECRET, tier: "secret" },
     ]);
 
     const started = Date.now();

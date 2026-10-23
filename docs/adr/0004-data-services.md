@@ -95,7 +95,8 @@ following.
 **Volume.** One volume at the engine's mount path, default `size_mb:
 5120`.
 
-**Generated credentials**, set with `variable.set` as `is_secret: true`.
+**Generated credentials**, set with `variable.set` as `tier: "secret"` (ADR
+0014), so they are write-only from the moment they exist.
 Values are 32 random bytes, base64url (43 characters), minted in the
 Worker with `crypto.getRandomValues`.
 

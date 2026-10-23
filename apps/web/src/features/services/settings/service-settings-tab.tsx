@@ -49,7 +49,15 @@ import {
 } from "../../projects/new-service/source";
 import { findService, useProjectEnvironment } from "../../projects/use-project-environment";
 import type { ServicePageProps } from "../service-layout";
-import { fromPairs, KeyValueEditor, type KeyValuePair, toPairs } from "./key-value-editor";
+import {
+  fromBuildArgPairs,
+  fromPairs,
+  KeyValueEditor,
+  type KeyValuePair,
+  maskSavedSecrets,
+  toBuildArgPairs,
+  toPairs,
+} from "./key-value-editor";
 
 /** Slider bounds: the API accepts more, but these cover real services with useful steps. */
 export const CPU_SLIDER = { min: 100, max: 8000, step: 100 } as const;
@@ -311,7 +319,14 @@ function BuildSection({ config, context }: { config: ServiceConfig; context: Sav
   const build = config.build;
   const [builder, setBuilder] = useState(build.builder);
   const [dockerfile, setDockerfile] = useState(build.dockerfile_path ?? "");
-  const [args, setArgs] = useState<KeyValuePair[]>(toPairs(build.build_args));
+  const [args, setArgs] = useState<KeyValuePair[]>(() => toBuildArgPairs(build));
+  // NOTE: Sections keep their state across saves, so a secret typed in would stay
+  // visible after it is saved; re-mask once the saved config catches up.
+  const [syncedBuild, setSyncedBuild] = useState(build);
+  if (syncedBuild !== build) {
+    setSyncedBuild(build);
+    setArgs((current) => maskSavedSecrets(current, build));
+  }
   const argErrors = Object.fromEntries(
     args.flatMap((pair, index) =>
       pair.key && !VAR_NAME.test(pair.key) ? [[index, "Use letters, digits and _."]] : [],
@@ -322,12 +337,13 @@ function BuildSection({ config, context }: { config: ServiceConfig; context: Sav
     ...(builder === "dockerfile" && dockerfile.trim()
       ? { dockerfile_path: dockerfile.trim() }
       : {}),
-    build_args: fromPairs(args),
+    ...fromBuildArgPairs(args),
   };
   const current = {
     builder: build.builder,
     ...(build.dockerfile_path ? { dockerfile_path: build.dockerfile_path } : {}),
     build_args: build.build_args,
+    secret_build_args: [...(build.secret_build_args ?? [])].sort(),
   };
   const dirty = JSON.stringify(next) !== JSON.stringify(current);
   const isGit = config.source.type === "git";
@@ -347,7 +363,7 @@ function BuildSection({ config, context }: { config: ServiceConfig; context: Sav
       onReset={() => {
         setBuilder(build.builder);
         setDockerfile(build.dockerfile_path ?? "");
-        setArgs(toPairs(build.build_args));
+        setArgs(toBuildArgPairs(build));
       }}
       onSubmit={() => {
         if (Object.keys(argErrors).length > 0) return;
@@ -355,7 +371,7 @@ function BuildSection({ config, context }: { config: ServiceConfig; context: Sav
           builder,
           dockerfile_path:
             builder === "dockerfile" && dockerfile.trim() ? dockerfile.trim() : undefined,
-          build_args: fromPairs(args),
+          ...fromBuildArgPairs(args),
         });
       }}
     >
@@ -380,12 +396,23 @@ function BuildSection({ config, context }: { config: ServiceConfig; context: Sav
       ) : null}
       <SettingsRow
         label="Build arguments"
-        description="Passed to the build as --build-arg. Not available at runtime; use variables for that."
+        description={
+          <>
+            Passed to the build as --build-arg. Not available at runtime; use variables for that.
+            Secret ones are passed as BuildKit secrets instead, kept out of the image and its
+            history: read them with{" "}
+            <code className="font-mono text-xs text-foreground">
+              RUN --mount=type=secret,id=NAME,env=NAME
+            </code>
+            .
+          </>
+        }
         control="wide"
       >
         <KeyValueEditor
           label="Build arguments"
           hideLegend
+          secrets
           pairs={args}
           onChange={setArgs}
           keyPlaceholder="NODE_VERSION"

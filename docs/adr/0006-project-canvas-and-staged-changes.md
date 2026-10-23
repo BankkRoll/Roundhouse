@@ -142,7 +142,7 @@ renderer all import it. Services created in the same set are addressed by
 | `service.update`     | `service_id`, `name?`, `slug?`, `icon?`                                                                               | `service:<id>`            | `services:manage`    |
 | `service.delete`     | `service_id`                                                                                                          | `service:<id>`            | `services:manage`    |
 | `config.patch`       | `service` (id or ref), `patch` (ServiceConfigPatch)                                                                   | `config:<svc>`            | `services:manage`    |
-| `variable.set`       | `scope`, `service?`, `key`, `value` (sealed), `is_secret`                                                             | `var:<svc\|shared>:<KEY>` | `variables:manage`   |
+| `variable.set`       | `scope`, `service?`, `key`, `value` (sealed), `tier` (0014)                                                           | `var:<svc\|shared>:<KEY>` | `variables:manage`   |
 | `variable.delete`    | `scope`, `service?`, `key`                                                                                            | `var:<svc\|shared>:<KEY>` | `variables:manage`   |
 | `volume.set`         | `service`, `mount_path`, `size_mb` (0004)                                                                             | `volume:<svc>`            | `services:manage`    |
 | `volume.delete`      | `service`                                                                                                             | `volume:<svc>`            | `services:manage`    |

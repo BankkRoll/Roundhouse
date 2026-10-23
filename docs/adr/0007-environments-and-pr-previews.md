@@ -267,8 +267,10 @@ from a fork never receives a secret that exists outside that preview.**
   are cloned as in a normal clone. Their authors already have write access
   to the repository and its deploy pipeline.
 - **Fork PRs**, and same-repo PRs when `same_repo_secrets: "omit"`:
-  - Every `is_secret` variable, service and shared, is replaced by an
-    empty placeholder marked `withheld: true`. References still resolve,
+  - Every `tier: "secret"` variable (ADR 0014), service and shared, is
+    replaced by an empty placeholder marked `withheld: true`. Plain
+    variables that resolve through a secret count as secret here too
+    (ADR 0014 section 14). References still resolve,
     to `""`, so a deployment doesn't fail on an unknown reference. The
     dashboard shows "withheld from preview".
     `variables.withheld INTEGER NOT NULL DEFAULT 0` is the new column.

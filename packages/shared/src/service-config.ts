@@ -45,6 +45,33 @@ export interface BuildConfig {
   dockerfile_path?: string;
   /** Build-time arguments; may contain variable references. */
   build_args: Record<string, string>;
+  /**
+   * Names of `build_args` whose values are secret: passed as BuildKit secrets
+   * (`RUN --mount=type=secret,id=NAME,env=NAME`) instead of build args, so they stay
+   * out of the image and its history. Each must be a distinct key of `build_args`
+   * (see {@link secretBuildArgsValid}).
+   */
+  secret_build_args?: string[];
+}
+
+/**
+ * Whether `build.secret_build_args` names only distinct keys of `build.build_args`,
+ * the rule the API enforces on every config write.
+ *
+ * @param build - The build config to check.
+ * @returns `true` when absent or valid.
+ * @example
+ * secretBuildArgsValid({ builder: "dockerfile", build_args: { NPM_TOKEN: "x" }, secret_build_args: ["NPM_TOKEN"] }); // true
+ */
+export function secretBuildArgsValid(
+  build: Pick<BuildConfig, "build_args" | "secret_build_args">,
+): boolean {
+  const names = build.secret_build_args;
+  if (!names) return true;
+  return (
+    new Set(names).size === names.length &&
+    names.every((name) => Object.hasOwn(build.build_args, name))
+  );
 }
 
 /** Container restart policies. */

@@ -60,6 +60,7 @@ import {
   ROLES,
   SERVICE_KINDS,
   type ServiceSource,
+  secretBuildArgsValid,
   TLS_MODES,
   type TlsMode,
 } from "@roundhouse/shared";
@@ -398,16 +399,10 @@ const BuildConfigFields = z.object({
 });
 
 /** How a git source is built. */
-export const BuildConfigSchema = BuildConfigFields.refine(
-  (b) =>
-    !b.secret_build_args ||
-    (new Set(b.secret_build_args).size === b.secret_build_args.length &&
-      b.secret_build_args.every((name) => Object.hasOwn(b.build_args, name))),
-  {
-    message: "secret_build_args must name distinct keys of build_args",
-    path: ["secret_build_args"],
-  },
-).openapi("BuildConfig") satisfies z.ZodType<BuildConfig>;
+export const BuildConfigSchema = BuildConfigFields.refine(secretBuildArgsValid, {
+  message: "secret_build_args must name distinct keys of build_args",
+  path: ["secret_build_args"],
+}).openapi("BuildConfig") satisfies z.ZodType<BuildConfig>;
 
 const CommandField = z.string().min(1).max(4096);
 

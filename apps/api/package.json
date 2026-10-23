@@ -5,9 +5,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "node scripts/ensure-assets-dir.mjs && wrangler dev",
     "deploy": "pnpm --filter @roundhouse/web build && wrangler deploy && wrangler d1 migrations apply DB --remote",
-    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:local": "node scripts/ensure-assets-dir.mjs && wrangler d1 migrations apply DB --local",
     "typecheck": "tsc -p .",
     "test": "vitest run"
   },

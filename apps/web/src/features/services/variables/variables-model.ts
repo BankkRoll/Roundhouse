@@ -30,6 +30,11 @@ export interface VariableRow {
   /** Plain value; `null` for a saved secret (write-only) unless re-entered. */
   value: string | null;
   isSecret: boolean;
+  /**
+   * Saved value's fingerprint (ADR 0014), the only trace of a secret the dashboard
+   * gets; `null` once a new value is staged or for rows not yet backfilled.
+   */
+  fingerprint: string | null;
   change: "none" | "added" | "changed" | "deleted";
   /** Saved version, when the key exists on the server. */
   version?: number;
@@ -107,13 +112,20 @@ export function mergeRows(saved: readonly Variable[], draft: VariablesDraft): Va
       key: variable.key,
       value: staged ? staged.value : variable.value,
       isSecret: staged ? staged.isSecret : variable.tier === "secret",
+      fingerprint: staged ? null : variable.fingerprint,
       change: draft.remove.has(variable.key) ? "deleted" : staged ? "changed" : "none",
       version: variable.version,
     });
   }
   for (const [key, staged] of draft.set) {
     if (rows.has(key)) continue;
-    rows.set(key, { key, value: staged.value, isSecret: staged.isSecret, change: "added" });
+    rows.set(key, {
+      key,
+      value: staged.value,
+      isSecret: staged.isSecret,
+      fingerprint: null,
+      change: "added",
+    });
   }
   return [...rows.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }

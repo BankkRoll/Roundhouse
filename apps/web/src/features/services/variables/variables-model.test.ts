@@ -77,12 +77,20 @@ describe("staging", () => {
       version: 2,
       updated_at: 0,
       locked: false,
-      fingerprint: null,
+      fingerprint: "0a1b2c3d",
       available_at_build: false,
       mount_as_file: false,
       updated_by: null,
     },
   ];
+
+  it("keeps a saved secret's fingerprint until a new value is staged", () => {
+    expect(mergeRows(saved, EMPTY_DRAFT).find((row) => row.key === "S")?.fingerprint).toBe(
+      "0a1b2c3d",
+    );
+    const draft = stageSet(EMPTY_DRAFT, "S", { value: "new", isSecret: true });
+    expect(mergeRows(saved, draft).find((row) => row.key === "S")?.fingerprint).toBeNull();
+  });
 
   it("merges staged sets and deletes into rows", () => {
     let draft = stageSet(EMPTY_DRAFT, "A", { value: "2", isSecret: false });
