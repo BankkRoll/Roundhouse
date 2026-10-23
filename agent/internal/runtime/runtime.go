@@ -18,6 +18,10 @@
 //     and refuse (leave pending, with the reason) workloads whose box
 //     doesn't open or that name a network or local image outside their own
 //     project, environment and service;
+//   - bind each workload's volumes, never letting two containers mount one
+//     volume, with stop_first rollouts, exec health probes and holds that
+//     keep a workload stopped for a backup or restore (ADR 0004); refuse
+//     published ports until the TCP proxy's allowlist is enforced;
 //   - keep one bridge network per environment, remove the ones no longer
 //     used, serve no route that two projects claim, report workload_status
 //     on every state change, and garbage-collect unused images under disk
@@ -81,6 +85,10 @@ type Container struct {
 	Running      bool
 	// StartedAt changes every time the container is (re)started.
 	StartedAt time.Time
+	// PID is the container's init process on the host, 0 when not running.
+	PID int
+	// Restarts counts the runtime's restarts of this container.
+	Restarts int
 }
 
 // Default intervals.
@@ -153,6 +161,11 @@ type Options struct {
 	// container joins it: the agent installs its firewall rules for the
 	// network's bridge there.
 	OnNetwork func(ctx context.Context, n docker.Network)
+	// Volumes resolves workload mounts (ADR 0004); nil refuses workloads
+	// that mount volumes.
+	Volumes VolumeSource
+	// Exec runs exec health probes; nil refuses workloads that use them.
+	Exec ExecRunner
 }
 
 // Runtime is the reconciler. Create it with [New], feed it desired states
@@ -194,6 +207,10 @@ type Runtime struct {
 	adopted map[string]bool
 	// networksCheckedAt is when unused networks were last looked for.
 	networksCheckedAt time.Time
+	// holds keep workloads and volumes stopped for backups and restores.
+	holds map[*hold]bool
+	// heldStops are the IDs of containers a hold stopped ([heldStopsFile]).
+	heldStops map[string]bool
 }
 
 // instance is one managed container.
@@ -212,6 +229,7 @@ type instance struct {
 	finishedAt time.Time
 	ips        map[string]string
 	created    time.Time
+	pid        int
 
 	// Agent-managed.
 	health      health
@@ -228,14 +246,18 @@ type instance struct {
 	// process started. Caddy still routes to it from before the restart, so
 	// it keeps its routes until its first probe decides its health instead
 	// of dropping out of the config for a probe interval.
-	adopted    bool
+	adopted bool
+	// heldStop marks a container a hold stopped, started again on release.
+	heldStop   bool
 	doneSeq    uint64 // listSeq when the last operation finished
 	inspectSeq uint64 // listSeq of the pass that last inspected it
 }
 
 // workState tracks a desired workload that has no container yet.
 type workState struct {
-	busy     bool
+	busy bool
+	// volumes are the volumes a create in flight mounts.
+	volumes  []string
 	phase    protocol.WorkloadState
 	message  string
 	failures int
@@ -273,6 +295,7 @@ func New(opts Options) *Runtime {
 	if opts.AdoptUnlabelled {
 		r.adopted = loadAdopted(r.adoptedPath(), log)
 	}
+	r.heldStops = loadAdopted(r.heldStopsPath(), log)
 	return r
 }
 
@@ -289,10 +312,17 @@ func (r *Runtime) Apply(ds *protocol.DesiredState) bool {
 	if stale {
 		return false
 	}
+	volumes := make(map[string]*protocol.VolumeSpec, len(ds.Volumes))
+	for i := range ds.Volumes {
+		volumes[ds.Volumes[i].ID] = &ds.Volumes[i]
+	}
 	blocked := map[string]string{}
 	for i := range ds.Workloads {
 		w := &ds.Workloads[i]
 		reason := admit(w)
+		if reason == "" {
+			reason = r.admitData(w, volumes)
+		}
 		if reason == "" && r.opts.OpenEnv != nil {
 			if err := r.opts.OpenEnv(ds.Generation, w); err != nil {
 				reason = envFailure(err)
@@ -485,8 +515,12 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 	r.mu.Lock()
 	assignLabelAliases(specs)
 	conflicts := r.markRouteConflicts(specs)
+	wanted := make(map[string]*wantSpec, len(specs))
 	for _, s := range specs {
-		if d := r.reconcileWorkload(s, now); d > 0 {
+		wanted[s.ID] = s
+	}
+	for _, s := range specs {
+		if d := r.reconcileWorkload(s, wanted, now); d > 0 {
 			next = min(next, d)
 		}
 	}
@@ -527,6 +561,7 @@ func (r *Runtime) wantSpecs(ds *protocol.DesiredState) []*wantSpec {
 	for i := range ds.Workloads {
 		specs = append(specs, &wantSpec{
 			WorkloadSpec: ds.Workloads[i], generation: ds.Generation, blocked: r.blocked[ds.Workloads[i].ID],
+			stopFirst: ds.Workloads[i].Rollout == protocol.RolloutStopFirst || len(ds.Workloads[i].Mounts) > 0,
 		})
 	}
 	if ds.Registry != nil {
@@ -572,6 +607,7 @@ func (r *Runtime) refresh(ctx context.Context, list []docker.ContainerSummary, s
 		inst.observe(info)
 		if !ok {
 			inst.adopted = inst.running && inst.startedAt.Before(r.started)
+			inst.heldStop = r.heldStops[c.ID]
 		}
 		inst.inspectSeq = seq
 		if !inst.running {
@@ -586,6 +622,7 @@ func (inst *instance) observe(info docker.ContainerInfo) {
 	inst.name = strings.TrimPrefix(info.Name, "/")
 	inst.created = info.Created
 	inst.status = info.State.Status
+	inst.pid = info.State.Pid
 	inst.running = info.State.Running && !info.State.Restarting
 	inst.exitCode = info.State.ExitCode
 	inst.oomKilled = info.State.OOMKilled
@@ -612,6 +649,7 @@ func (inst *instance) settled() bool {
 // forget drops a container that no longer exists. Caller holds r.mu.
 func (r *Runtime) forget(inst *instance) {
 	r.stopProbe(inst)
+	r.setHeldStop(inst.id, false)
 	delete(r.instances, inst.id)
 }
 
@@ -630,7 +668,7 @@ func (r *Runtime) current(s *wantSpec) *instance {
 
 // reconcileWorkload converges one desired workload and returns when it next
 // needs attention (0 for no particular time). Caller holds r.mu.
-func (r *Runtime) reconcileWorkload(s *wantSpec, now time.Time) time.Duration {
+func (r *Runtime) reconcileWorkload(s *wantSpec, wanted map[string]*wantSpec, now time.Time) time.Duration {
 	ws := r.workloads[s.ID]
 	if ws == nil {
 		ws = &workState{phase: protocol.StatePending}
@@ -648,19 +686,42 @@ func (r *Runtime) reconcileWorkload(s *wantSpec, now time.Time) time.Duration {
 			ws.phase, ws.message = protocol.StatePending, s.blocked
 			return 0
 		}
+		if why := r.heldReason(s.ID, mountedVolumes(&s.WorkloadSpec)); why != "" {
+			ws.phase, ws.message = protocol.StatePending, why
+			return 0
+		}
 		if s.exclusive && r.hasObsolete(s) {
+			return 0
+		}
+		if why := r.predecessorWait(s, wanted); why != "" {
+			ws.phase, ws.message = protocol.StatePending, why
 			return 0
 		}
 		if now.Before(ws.retryAt) {
 			return ws.retryAt.Sub(now)
 		}
 		ws.busy = true
+		ws.volumes = mountedVolumes(&s.WorkloadSpec)
 		r.goTask(func() { r.create(s) })
 		return 0
 	}
 	ws.phase, ws.message, ws.failures = "", "", 0
 	if cur.busy || !cur.settled() {
 		return 0
+	}
+	if r.heldReason(s.ID, cur.meta.volumes) != "" {
+		if cur.running {
+			r.stopAsync(cur)
+		}
+		return 0
+	}
+	if cur.heldStop {
+		cur.heldStop = false
+		r.setHeldStop(cur.id, false)
+		if !cur.running {
+			r.startAsync(cur, false)
+			return 0
+		}
 	}
 
 	if cur.running {
@@ -733,8 +794,12 @@ func (r *Runtime) reconcileObsolete(specs []*wantSpec, now time.Time) ([]*instan
 			}
 			continue
 		}
+		if inst.running && r.heldReason(inst.meta.workloadID, inst.meta.volumes) != "" {
+			r.removeAsync(inst, "held for a backup or restore")
+			continue
+		}
 		switch {
-		case !inst.running, s != nil && s.exclusive:
+		case !inst.running, s != nil && (s.exclusive || s.stopFirst):
 			r.removeAsync(inst, "replaced")
 		case !inst.drainAt.IsZero():
 			end := inst.drainAt.Add(r.drainFor(inst, specs))
@@ -935,6 +1000,7 @@ func (r *Runtime) create(s *wantSpec) {
 	ws := r.workloads[s.ID]
 	if ws != nil {
 		ws.busy = false
+		ws.volumes = nil
 		ws.doneSeq = r.listSeq
 		if err != nil && ctx.Err() == nil {
 			ws.failures++
@@ -963,6 +1029,9 @@ func (r *Runtime) setPhase(s *wantSpec, phase protocol.WorkloadState) {
 func (r *Runtime) createContainer(ctx context.Context, s *wantSpec) error {
 	r.setPhase(s, protocol.StatePulling)
 	if err := r.ensureImage(ctx, s); err != nil {
+		return err
+	}
+	if err := r.resolveMounts(ctx, s); err != nil {
 		return err
 	}
 	r.setPhase(s, protocol.StateStarting)
@@ -1069,7 +1138,7 @@ func (r *Runtime) removeAsync(inst *instance, why string) {
 		ctx := r.ctx
 		var err error
 		if inst.running {
-			err = r.d.StopContainer(ctx, inst.id, stopGrace*time.Second)
+			err = r.d.StopContainer(ctx, inst.id, inst.meta.stopGrace())
 		}
 		if err == nil || docker.IsNotFound(err) {
 			err = r.d.RemoveContainer(ctx, inst.id)
@@ -1100,6 +1169,7 @@ func (r *Runtime) startProbe(inst *instance, s *wantSpec) {
 	inst.probeFor = inst.startedAt
 	hc := *s.Healthcheck
 	ip := inst.ips[s.Network]
+	id := inst.id
 	tracker := newHealthTracker(hc, inst.startedAt)
 	r.goTask(func() {
 		wait := tracker.firstDelay() - time.Since(tracker.started)
@@ -1108,7 +1178,12 @@ func (r *Runtime) startProbe(inst *instance, s *wantSpec) {
 				return
 			}
 			pctx, pcancel := context.WithTimeout(ctx, tracker.timeout())
-			err := r.opts.Prober(pctx, hc, ip)
+			var err error
+			if hc.Type == protocol.HealthcheckExec {
+				err = r.execProbe(pctx, id, hc.Command)
+			} else {
+				err = r.opts.Prober(pctx, hc, ip)
+			}
 			pcancel()
 			if ctx.Err() != nil {
 				return
@@ -1244,6 +1319,7 @@ func (r *Runtime) publish(specs []*wantSpec) {
 		containers = append(containers, Container{
 			ID: inst.id, WorkloadID: inst.meta.workloadID, DeploymentID: inst.meta.deploymentID,
 			Running: inst.running, StartedAt: inst.startedAt,
+			PID: inst.pid, Restarts: inst.restarts,
 		})
 	}
 	r.mu.Unlock()
@@ -1280,6 +1356,10 @@ func (r *Runtime) statusOf(s *wantSpec) protocol.WorkloadStatusReport {
 	}
 	rep.ContainerID = cur.id
 	rep.Restarts = cur.restarts
+	if why := r.heldReason(s.ID, cur.meta.volumes); why != "" && !cur.running {
+		rep.State, rep.Message = protocol.StatePending, why
+		return rep
+	}
 	switch {
 	case cur.running && cur.health == healthHealthy:
 		rep.State = protocol.StateHealthy

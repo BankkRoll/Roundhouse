@@ -85,8 +85,10 @@ type Service struct {
 	Slug      string  `json:"slug"`
 	Kind      string  `json:"kind"`
 	Icon      *string `json:"icon"`
-	CreatedAt int64   `json:"created_at"`
-	UpdatedAt int64   `json:"updated_at"`
+	// Database is set for a database service; nil for any other.
+	Database  *ServiceDatabase `json:"database,omitempty"`
+	CreatedAt int64            `json:"created_at"`
+	UpdatedAt int64            `json:"updated_at"`
 }
 
 // ServiceSource says where a service's code comes from: an image, or a git
@@ -467,6 +469,7 @@ var APITokenScopes = []string{
 	"projects:read", "projects:manage", "access:manage",
 	"services:read", "services:manage", "deployments:create",
 	"variables:read", "variables:read_plain", "variables:manage",
+	"data:read", "data:write", "backups:manage", "backups:restore",
 }
 
 // APITokenPresets are the named scope sets of API_TOKEN_PRESETS.

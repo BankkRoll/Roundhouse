@@ -14,7 +14,7 @@ import { type Db, deployments, logChunks, projects, services } from "@roundhouse
 import type { LogStream } from "@roundhouse/protocol";
 import { redactionNeedles } from "@roundhouse/shared";
 import { and, desc, eq, lte } from "drizzle-orm";
-import type { Sealed } from "./crypto";
+import type { KeyEnv, Sealed } from "./crypto";
 import { openDeploymentBuild, openDeploymentEnv } from "./desired-state";
 import { ApiError } from "./errors";
 import { loadEnvironmentVariables, projectKey } from "./variables";
@@ -51,14 +51,14 @@ export interface DeploymentRedaction {
  * secret variables.
  *
  * @param db - Database client.
- * @param masterKey - Base64 master key, to open the deployment's inputs.
+ * @param keys - The keyring bindings, to open the deployment's inputs.
  * @param deploymentId - The deployment (for build logs, the build's).
  * @param build - Whether the lines are build output.
  * @returns Needles for `redact`; none when the deployment is gone.
  */
 export async function deploymentRedaction(
   db: Db,
-  masterKey: string,
+  keys: KeyEnv,
   deploymentId: string,
   build: boolean,
 ): Promise<DeploymentRedaction> {
@@ -78,7 +78,7 @@ export async function deploymentRedaction(
     .where(eq(deployments.id, deploymentId))
     .limit(1);
   if (!row) return { needles: [], frozen: false };
-  const key = await projectKey(db, masterKey, row.projectId);
+  const key = await projectKey(db, keys, row.projectId);
   const ref = { workspaceId: row.workspaceId, projectId: row.projectId, deploymentId };
 
   if (row.secretKeys === null) {

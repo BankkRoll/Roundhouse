@@ -16,8 +16,10 @@
  *    classifier's rules against the current values, and every reference of
  *    every service the set affects.
  * 5. **Commit**: services and config versions in one `db.batch` (one D1
- *    transaction) with their audit rows; then variables through
- *    `putVariables`, the normal write path, one batch per scope.
+ *    transaction) with their audit rows (a database also gets its volume
+ *    and generated credentials in every environment in that batch, so it
+ *    never exists without them); then variables through `putVariables`,
+ *    the normal write path, one batch per scope.
  * 6. **Deploy** the affected services with `createDeployment`.
  *
  * Steps 5's two phases are separate transactions because variables must go
@@ -42,6 +44,8 @@ import {
   type StagedConflict,
   services,
   stagedChanges,
+  variables,
+  volumes,
 } from "@roundhouse/db";
 import {
   affectedServices,
@@ -67,10 +71,11 @@ import {
   type VariableSetOp,
 } from "@roundhouse/shared";
 import { and, asc, eq, inArray } from "drizzle-orm";
-import { type AppContext, clientIp, originOf, requireMasterKey } from "../../context";
+import { type AppContext, clientIp, originOf, requireKeys } from "../../context";
 import type { Env } from "../../env";
 import { auditInsert, recordAudit } from "../audit";
-import type { Sealed } from "../crypto";
+import type { KeyEnv, Sealed } from "../crypto";
+import { databaseVariableRows, databaseVariables, resolveDatabaseVersion } from "../databases";
 import { createDeployment } from "../deployments";
 import { ApiError, conflict, type ErrorDetail, isUniqueViolation } from "../errors";
 import { assertSourceInstallation } from "../github";
@@ -94,6 +99,7 @@ import {
   type VariableSetEntry,
   type VariableTarget,
 } from "../variables";
+import { assertSingleReplica, volumeRowsFor } from "../volumes";
 import { openStagedValue } from "./secrets";
 import {
   checkVariableWrite,
@@ -153,7 +159,7 @@ async function serviceRow(db: Db, id: string) {
  * @returns Rebases, conflicts and cleared conflicts.
  */
 export async function checkDrift(
-  ctx: Pick<ApplyContext, "db" | "project" | "environment"> & { masterKey: string },
+  ctx: Pick<ApplyContext, "db" | "project" | "environment"> & { keys: KeyEnv },
   rows: readonly StagedRow[],
 ): Promise<Drift> {
   const { db, environment } = ctx;
@@ -280,6 +286,8 @@ interface PlannedCreate {
   id: string;
   slug: string;
   spec: ServiceConfigSpec;
+  /** A database's generated variables, per environment ID. */
+  credentials?: Map<string, VariableSetEntry[]>;
 }
 
 interface PlannedPatch {
@@ -344,7 +352,7 @@ async function buildPlan(
   options: { strict: boolean },
 ): Promise<Plan> {
   const { db, project, environment } = ctx;
-  const masterKey = requireMasterKey(ctx.c);
+  const keys = requireKeys(ctx.c);
   const pending = rows.filter((r) => r.status !== "applied");
   const refs = resolveRefs(rows);
   const live = await db.query.services.findMany({
@@ -362,6 +370,13 @@ async function buildPlan(
     slugOf: new Map(live.map((s) => [s.id, s.slug])),
     affected: [],
   };
+
+  const envIds = (
+    await db
+      .select({ id: environments.id })
+      .from(environments)
+      .where(eq(environments.projectId, project.id))
+  ).map((e) => e.id);
 
   // Services: deletions, renames, then creations take the slugs left over.
   for (const row of pending) {
@@ -409,7 +424,12 @@ async function buildPlan(
     const id = newId("service");
     refs.set(op.ref, id);
     plan.slugOf.set(id, slug);
-    plan.creates.push({ row, op, id, slug, spec });
+    const credentials = op.database
+      ? new Map(
+          envIds.map((e) => [e, databaseVariables(op.database!.engine, op.database!.version)]),
+        )
+      : undefined;
+    plan.creates.push({ row, op, id, slug, spec, ...(credentials ? { credentials } : {}) });
   }
   const resolve = (ref: string) => (isNewServiceRef(ref) ? refs.get(ref) : ref);
 
@@ -421,23 +441,30 @@ async function buildPlan(
     if (!service || deleted.has(service.id)) continue;
     const latest = await configAt(db, service.id, environment.id);
     if (!latest) continue;
+    const merged = mergeConfig(specOf(latest), row.op.patch);
+    if (options.strict) await assertSingleReplica(db, service, merged.deploy.replicas);
     plan.patches.push({
       row,
       op: row.op,
       service,
       version: latest.version + 1,
-      spec: mergeConfig(specOf(latest), row.op.patch),
+      spec: merged,
     });
   }
 
   // Variables: the environment as it is, moved to the final slugs, with the staged ops on top.
-  const dek = await projectKey(db, masterKey, project.id);
+  const dek = await projectKey(db, keys, project.id);
   const current = await loadEnvironmentVariables(db, dek, project.id, environment.id);
   const slugNow = new Map(live.map((s) => [s.id, s.slug]));
   const after: Record<string, Record<string, string>> = {};
   for (const [id, slug] of plan.slugOf) {
     const was = slugNow.get(id);
     after[slug] = { ...(was ? (current.services[was] ?? {}) : {}) };
+  }
+  for (const create of plan.creates) {
+    for (const v of create.credentials?.get(environment.id) ?? []) {
+      after[create.slug]![v.key] = v.value!;
+    }
   }
   const shared = { ...current.shared };
   const changedVariables: string[] = [];
@@ -568,9 +595,9 @@ async function buildPlan(
  * @returns Its ops, which would rebase or conflict, and what an apply would deploy.
  */
 export async function reviewSet(ctx: ApplyContext, set: ChangeSetRow) {
-  const masterKey = requireMasterKey(ctx.c);
+  const keys = requireKeys(ctx.c);
   const rows = await loadOps(ctx.db, set.id);
-  const drift = await checkDrift({ ...ctx, masterKey }, rows);
+  const drift = await checkDrift({ ...ctx, keys }, rows);
   let deploys: { service: string; name: string; reason: Plan["affected"][number]["reason"] }[] = [];
   try {
     const plan = await buildPlan(ctx, rows, { strict: false });
@@ -673,7 +700,7 @@ async function authorizeApply(ctx: ApplyContext, rows: readonly StagedRow[]): Pr
 
 async function checkSource(ctx: ApplyContext, source: ServiceSource): Promise<void> {
   if (source.type !== "git" || !source.github_installation_id) return;
-  requireMasterKey(ctx.c);
+  requireKeys(ctx.c);
   await assertSourceInstallation(ctx.db, ctx.c.env, ctx.project.workspaceId, source);
 }
 
@@ -707,7 +734,7 @@ export async function applySet(
   options: ApplyOptions,
 ): Promise<ApplyResult> {
   const { c, db, project, environment } = ctx;
-  const masterKey = requireMasterKey(c);
+  const keys = requireKeys(c);
   if (set.status !== "open") throw notOpen(set);
   if (set.revision !== options.expectedRevision) throw changeSetChanged(set.revision);
   const rows = await loadOps(db, set.id);
@@ -746,7 +773,7 @@ export async function applySet(
   let plan: Plan;
   try {
     // Rebase.
-    const drift = await checkDrift({ ...ctx, masterKey }, rows);
+    const drift = await checkDrift({ ...ctx, keys }, rows);
     if (drift.conflicts.size) {
       await recordConflicts(db, drift.conflicts);
       const details = [...drift.conflicts].map(([id, conflictOf]) => {
@@ -820,6 +847,8 @@ export async function applySet(
           slug: create.slug,
           kind: create.op.kind,
           icon: create.op.icon ?? null,
+          databaseEngine: create.op.database?.engine ?? null,
+          databaseVersion: create.op.database?.version ?? null,
         }),
         ...envs.map((e) =>
           configInsert(db, {
@@ -840,9 +869,48 @@ export async function applySet(
             name: create.op.name,
             slug: create.slug,
             source: create.op.source.type,
+            ...(create.op.database
+              ? { engine: create.op.database.engine, version: create.op.database.version }
+              : {}),
           },
         }),
       );
+      if (create.op.database && create.credentials) {
+        const db0 = create.op.database;
+        statements.push(
+          ...volumeRowsFor({
+            projectId: project.id,
+            serviceId: create.id,
+            environmentIds: envs.map((e) => e.id),
+            mountPath: resolveDatabaseVersion(db0.engine, db0.version).mountPath,
+            sizeMb: db0.size_mb,
+          }).map((v) => db.insert(volumes).values(v)),
+        );
+        const dek = await projectKey(db, keys, project.id);
+        for (const e of envs) {
+          const entries = create.credentials.get(e.id) ?? [];
+          const rows = await databaseVariableRows(
+            dek,
+            { projectId: project.id, environmentId: e.id, scope: "service", serviceId: create.id },
+            entries,
+            caller.user.id,
+          );
+          statements.push(
+            ...rows.map((r) => db.insert(variables).values(r)),
+            audit({
+              action: "variables.updated",
+              targetType: "service",
+              targetId: create.id,
+              metadata: {
+                environment_id: e.id,
+                set: entries.map((v) => v.key),
+                deleted: [],
+                generated: true,
+              },
+            }),
+          );
+        }
+      }
     }
     for (const update of plan.updates) {
       statements.push(
@@ -918,7 +986,7 @@ export async function applySet(
     }
 
     // Variables, through the normal write path: one atomic call per scope.
-    const dek = await projectKey(db, masterKey, project.id);
+    const dek = await projectKey(db, keys, project.id);
     const groups = new Map<string, PlannedVariable[]>();
     for (const v of plan.vars) {
       const key = v.serviceId ?? SHARED_NAMESPACE;

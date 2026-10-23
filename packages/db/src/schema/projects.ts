@@ -13,6 +13,7 @@ import type {
   PlacementConfig,
   ProtectionRules,
   ResourcesConfig,
+  ServiceDatabaseEngine,
   ServiceKind,
   ServiceSource,
   VariableScope,
@@ -119,6 +120,10 @@ export const services = sqliteTable(
     slug: text("slug").notNull(),
     kind: text("kind").$type<ServiceKind>().notNull().default("app"),
     icon: text("icon"),
+    /** Set for database services (ADR 0004): the registry engine it runs. */
+    databaseEngine: text("database_engine").$type<ServiceDatabaseEngine>(),
+    /** Registry version of {@link services.databaseEngine}, e.g. `18`. */
+    databaseVersion: text("database_version"),
     ...timestamps,
     deletedAt: timestamp("deleted_at"),
   },
@@ -241,6 +246,10 @@ export const projectKeys = sqliteTable(
     kekKid: text("kek_kid"),
     /** First 8 hex of SHA-256 of the raw DEK; the `kid` of values sealed under it. */
     dekId: text("dek_id"),
+    /** The project's age X25519 recipient backups are encrypted to (ADR 0004). */
+    backupRecipient: text("backup_recipient"),
+    /** Its identity, sealed under the project DEK; AAD `backupIdentityAad` in the API. */
+    backupIdentitySealed: json<SealedValue>("backup_identity_sealed"),
     ...timestamps,
   },
   (t) => [index("project_keys_kek_kid_idx").on(t.kekKid)],

@@ -20,15 +20,15 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | Cron jobs                       | Run a service on a schedule                                    | In progress                                                  |
 | Cloud servers                   | Create servers on Hetzner, DigitalOcean, Vultr or Linode       | Available                                                    |
 | **Data**                        |                                                                |                                                              |
-| Databases                       | Postgres, MySQL, Valkey/Redis and MongoDB as services          | In progress                                                  |
-| Volumes                         | Persistent storage mounted into a service                      | In progress                                                  |
-| Backups                         | Scheduled database backups to R2 in your account               | In progress                                                  |
+| Databases                       | Postgres, MySQL, Valkey/Redis and MongoDB as services          | Available                                                    |
+| Volumes                         | Persistent storage mounted into a service                      | Available                                                    |
+| Backups                         | Scheduled database backups to R2 in your account               | Available                                                    |
 | **Networking**                  |                                                                |                                                              |
 | Private networking              | WireGuard mesh; services reach each other at `.internal` names | Partial — single server today; cross-server mesh in progress |
 | Domains & HTTPS                 | A generated domain or your own, certificates by Caddy          | Available                                                    |
 | **Observability**               |                                                                |                                                              |
 | Logs                            | Build and runtime logs, streamed live                          | Available                                                    |
-| Metrics                         | CPU, memory and requests per service                           | In progress                                                  |
+| Metrics                         | CPU, memory and requests per service                           | Available                                                    |
 | Servers & live usage            | Join a Linux box with one command, watch CPU, RAM and disk     | Available                                                    |
 | **Developer tools**             |                                                                |                                                              |
 | Project canvas & staged changes | See every service, stage changes, review, deploy               | Available                                                    |

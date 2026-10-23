@@ -58,7 +58,7 @@ async function row(key: string): Promise<Row> {
 }
 
 function open(s: Awaited<ReturnType<typeof setup>>, r: Row) {
-  return projectKey(createDb(env.DB), env.MASTER_KEY!, s.project.id).then((key) =>
+  return projectKey(createDb(env.DB), env, s.project.id).then((key) =>
     openVariable(key, {
       id: r.id,
       projectId: r.project_id,
@@ -184,7 +184,7 @@ describe("format 2 variables", () => {
   it("never opens format 2 under the short format 1 AAD", async () => {
     const s = await setup();
     await s.owner.json(s.path, { method: "PUT", json: { set: [{ key: "A", value: "x" }] } });
-    const key = await projectKey(createDb(env.DB), env.MASTER_KEY!, s.project.id);
+    const key = await projectKey(createDb(env.DB), env, s.project.id);
     const legacy = await sealWith(
       key,
       "legacy",

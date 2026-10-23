@@ -17,6 +17,7 @@ import type {
   Workspace,
 } from "../lib/api/types";
 import { type ChangesDb, emptyChanges } from "./changes-db";
+import { type DataDb, emptyData, seedData } from "./data-db";
 import { type DeployDb, emptyDeploy, seedDeploy } from "./deploy-db";
 import { emptyProviders, type ProvidersDb } from "./providers-db";
 import { type SecurityDb, seedSecurity } from "./security-db";
@@ -85,6 +86,8 @@ export interface MockDb {
   providers: ProvidersDb;
   /** Staged change sets and canvas layouts. */
   changes: ChangesDb;
+  /** Volumes, backups, backup storage and the data browser's rows. */
+  data: DataDb;
   /** Two-factor, sessions and lockouts. */
   security: SecurityDb;
   signingKeys: DbSigningKeys;
@@ -218,6 +221,7 @@ export function makeAuditEntry(overrides: Partial<AuditLogEntry> = {}): AuditLog
 function seed(): MockDb {
   const now = Date.now();
   const users: DbUser[] = Object.values(USERS).map((user) => ({ ...user, password: PASSWORD }));
+  const deploy = seedDeploy(WORKSPACE_ID, now);
   const byOwner = {
     actor_type: "user",
     actor_id: USERS.owner.id,
@@ -277,7 +281,8 @@ function seed(): MockDb {
         created_at: now - 86_400_000,
       }),
     ].map((entry) => ({ ...entry, workspace_id: WORKSPACE_ID })),
-    deploy: seedDeploy(WORKSPACE_ID, now),
+    deploy,
+    data: seedData(deploy, now),
     providers: emptyProviders(),
     changes: emptyChanges(),
     security: seedSecurity(USERS.owner.id, now),
@@ -320,6 +325,7 @@ export function seedFreshInstall(masterKeyConfigured = true): void {
     nodes: [],
     audit: [],
     deploy: emptyDeploy(),
+    data: emptyData(),
   };
 }
 

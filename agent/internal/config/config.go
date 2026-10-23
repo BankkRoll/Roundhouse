@@ -59,6 +59,18 @@ type Config struct {
 	// Builder makes this node a builder: it runs the local registry and
 	// accepts build jobs. Set by `join --builder`.
 	Builder bool `yaml:"builder,omitempty"`
+	// Volumes configures where and how the node keeps volumes.
+	Volumes VolumesConfig `yaml:"volumes,omitempty"`
+}
+
+// VolumesConfig is the volumes section of the config (ADR 0004, "Volumes").
+type VolumesConfig struct {
+	// Root is the volumes root; empty means /var/lib/roundhouse/volumes on
+	// Linux and a "volumes" directory in the data directory elsewhere.
+	Root string `yaml:"root,omitempty"`
+	// Quota is how volume sizes are enforced: auto, xfs, ext4, loop or none;
+	// empty means auto.
+	Quota string `yaml:"quota,omitempty"`
 }
 
 // DefaultPath returns the config path used when --config is not given:

@@ -27,8 +27,9 @@ const (
 	logMaxFiles = "3"
 )
 
-// stopGrace is how long a container gets between SIGTERM and SIGKILL.
-const stopGrace = 10
+// defaultStopGrace is the SIGTERM → SIGKILL grace, in seconds, of containers
+// whose labels predate [LabelStopGrace].
+const defaultStopGrace = 10
 
 // wantSpec is a workload the node should run: a service workload from the
 // desired state, or a system workload the agent derived itself.
@@ -40,6 +41,12 @@ type wantSpec struct {
 	hostPorts map[string][]docker.PortBinding
 	// binds are host bind mounts; system workloads only.
 	binds []string
+	// mounts are the bind mounts of the workload's volumes, resolved just
+	// before the container is created.
+	mounts []docker.Mount
+	// stopFirst means no container of the same service and environment may
+	// run while this one is created: rollout stop_first, or a volume.
+	stopFirst bool
 	// exclusive means old and new containers cannot run side by side (they
 	// would fight over a host port), so the old one is removed before the
 	// new one is created.
@@ -78,7 +85,7 @@ func containerCreate(s *wantSpec) docker.ContainerCreate {
 	}
 	mem := int64(s.Resources.MemoryMB) << 20
 	pids := int64(s.Resources.PIDs)
-	grace := stopGrace
+	grace := s.StopGrace()
 	return docker.ContainerCreate{
 		Image:        s.Image,
 		Cmd:          s.Command,
@@ -94,6 +101,7 @@ func containerCreate(s *wantSpec) docker.ContainerCreate {
 			// crash, reports it and applies its own backoff.
 			RestartPolicy: docker.RestartPolicy{Name: "no"},
 			Binds:         s.binds,
+			Mounts:        s.mounts,
 			// SECURITY: no seccomp or apparmor option, so the engine applies its
 			// default seccomp profile and docker-default AppArmor profile wherever
 			// the host supports them; workloads are never unconfined (ADR 0014 H4).

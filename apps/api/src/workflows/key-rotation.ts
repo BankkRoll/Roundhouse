@@ -98,10 +98,16 @@ interface InstanceSecretField {
  */
 export const INSTANCE_SECRET_FIELDS: readonly InstanceSecretField[] = [
   { setting: SettingKey.signingKey, property: "private_key" },
+  { setting: SettingKey.fingerprintSecret, property: "secret" },
   { setting: SettingKey.signingKeyNext, property: "private_key" },
   { setting: SettingKey.githubApp, property: "client_secret", field: "client_secret" },
   { setting: SettingKey.githubApp, property: "webhook_secret", field: "webhook_secret" },
   { setting: SettingKey.githubApp, property: "private_key", field: "private_key" },
+  {
+    setting: SettingKey.backupStorage,
+    property: "secret_access_key",
+    field: "secret_access_key",
+  },
 ];
 
 // Mirrors `lib/cloud-providers.ts`, which seals every provider token through

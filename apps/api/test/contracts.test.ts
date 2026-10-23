@@ -9,6 +9,9 @@ import { ACTIONS, AUDIT_ACTIONS, TLS_MODES } from "@roundhouse/shared";
 import { describe, expect, it } from "vitest";
 import {
   CreateServiceBody,
+  DATA_BROWSER_ROUTES,
+  DATABASE_ROUTES,
+  DatabaseQueryBody,
   PHASE1_ROUTES,
   POLICY_KEY,
   policyOf,
@@ -273,5 +276,58 @@ describe("phase 1 request schemas", () => {
       }).success,
     ).toBe(true);
     expect(RealtimeClientMessageSchema.safeParse({ type: "subscribe" }).success).toBe(false);
+  });
+});
+
+describe("data browser contracts", () => {
+  const data = Object.entries(DATA_BROWSER_ROUTES) as [
+    string,
+    RouteConfig & { [POLICY_KEY]: RoutePolicy },
+  ][];
+
+  it("is served by the app with its policy, and needs data:read", () => {
+    const live = app.getOpenAPI31Document({ openapi: "3.1.0", info: { title: "t", version: "0" } });
+    const taken = new Set(routes.map(([, r]) => `${r.method} ${r.path}`));
+    for (const [name, route] of data) {
+      expect(taken.has(`${route.method} ${route.path}`), name).toBe(false);
+      const op = (live.paths?.[route.path] as Record<string, Record<string, unknown>>)?.[
+        route.method
+      ];
+      expect(op?.[POLICY_KEY], name).toEqual(policyOf(route));
+      expect(policyOf(route).action, name).toBe("data:read");
+    }
+    expect(policyOf(DATA_BROWSER_ROUTES.runDatabaseQuery).audit).toEqual([
+      "database.query_executed",
+    ]);
+    expect(policyOf(DATA_BROWSER_ROUTES.getDatabaseSchema).audit).toEqual([
+      "database.browser_opened",
+    ]);
+  });
+
+  it("refuses provision_readonly and out-of-range limits", () => {
+    const ok = { environment_id: "env_1", op: { type: "list_namespaces" } };
+    expect(DatabaseQueryBody.safeParse(ok).success).toBe(true);
+    expect(DatabaseQueryBody.parse(ok).mode).toBe("read");
+    expect(DatabaseQueryBody.safeParse({ ...ok, op: { type: "provision_readonly" } }).success).toBe(
+      false,
+    );
+    expect(DatabaseQueryBody.safeParse({ ...ok, max_rows: 1001 }).success).toBe(false);
+    expect(DatabaseQueryBody.safeParse({ ...ok, timeout_ms: 30_001 }).success).toBe(false);
+  });
+});
+
+describe("database and volume contracts (ADR 0004)", () => {
+  it("is served by the app with its policy, audits every mutation, and reads nothing it audits", () => {
+    const live = app.getOpenAPI31Document({ openapi: "3.1.0", info: { title: "t", version: "0" } });
+    for (const [name, route] of Object.entries(DATABASE_ROUTES)) {
+      const op = (live.paths?.[route.path] as Record<string, Record<string, unknown>>)?.[
+        route.method
+      ];
+      expect(op?.[POLICY_KEY], name).toEqual(policyOf(route));
+      const { action, audit } = policyOf(route);
+      expect(action, name).toBe(route.method === "get" ? "services:read" : "services:manage");
+      if (route.method === "get") expect(audit, name).toEqual([]);
+      else expect(audit.length, name).toBeGreaterThan(0);
+    }
   });
 });

@@ -3,6 +3,8 @@ package runtime
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
+	"time"
 
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
@@ -24,6 +26,10 @@ const (
 	LabelRoutes        = "roundhouse.routes"
 	LabelDrainS        = "roundhouse.drain_s"
 	LabelNamespace     = "roundhouse.namespace"
+	// LabelVolumes lists the volume IDs a container mounts, comma-separated.
+	LabelVolumes = "roundhouse.volumes"
+	// LabelStopGrace is the container's SIGTERM → SIGKILL grace in seconds.
+	LabelStopGrace = "roundhouse.stop_grace_s"
 )
 
 // ManagedFilter selects the agent's containers and networks.
@@ -42,6 +48,9 @@ type meta struct {
 	network       string
 	routes        []protocol.WorkloadRoute
 	drainS        int
+	volumes       []string
+	// stopGraceS is -1 for containers created before the label existed.
+	stopGraceS int
 }
 
 // containerLabels returns spec's labels with the agent's own on top, so a
@@ -60,6 +69,12 @@ func containerLabels(s *wantSpec) map[string]string {
 	l[LabelNetwork] = s.Network
 	l[LabelRoutes] = string(routes)
 	l[LabelDrainS] = strconv.Itoa(s.DrainS)
+	l[LabelStopGrace] = strconv.Itoa(s.StopGrace())
+	if ids := mountedVolumes(&s.WorkloadSpec); len(ids) > 0 {
+		l[LabelVolumes] = strings.Join(ids, ",")
+	} else {
+		delete(l, LabelVolumes)
+	}
 	for k, v := range map[string]*string{
 		LabelDeploymentID:  s.DeploymentID,
 		LabelServiceID:     s.ServiceID,
@@ -90,6 +105,30 @@ func parseMeta(l map[string]string) meta {
 	}
 	m.generation, _ = strconv.ParseInt(l[LabelGeneration], 10, 64)
 	m.drainS, _ = strconv.Atoi(l[LabelDrainS])
+	m.stopGraceS = -1
+	if g, err := strconv.Atoi(l[LabelStopGrace]); err == nil && g >= 0 {
+		m.stopGraceS = g
+	}
+	if v := l[LabelVolumes]; v != "" {
+		m.volumes = strings.Split(v, ",")
+	}
 	_ = json.Unmarshal([]byte(l[LabelRoutes]), &m.routes)
 	return m
+}
+
+// mountedVolumes returns the IDs of the volumes w mounts.
+func mountedVolumes(w *protocol.WorkloadSpec) []string {
+	ids := make([]string, 0, len(w.Mounts))
+	for _, m := range w.Mounts {
+		ids = append(ids, m.VolumeID)
+	}
+	return ids
+}
+
+// stopGrace is how long to give the container between SIGTERM and SIGKILL.
+func (m meta) stopGrace() time.Duration {
+	if m.stopGraceS < 0 {
+		return defaultStopGrace * time.Second
+	}
+	return time.Duration(m.stopGraceS) * time.Second
 }

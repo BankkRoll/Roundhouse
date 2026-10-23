@@ -55,7 +55,9 @@
       "name": "roundhouse-provision",
       "binding": "PROVISION_WORKFLOW",
       "class_name": "ProvisionWorkflow"
-    }
+    },
+    { "name": "roundhouse-backup", "binding": "BACKUP_WORKFLOW", "class_name": "BackupWorkflow" },
+    { "name": "roundhouse-restore", "binding": "RESTORE_WORKFLOW", "class_name": "RestoreWorkflow" }
   ],
   // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
   // a small number like the docs' "1001" can collide with another project's
@@ -80,6 +82,10 @@
       "simple": { "limit": 60, "period": 60 }
     }
   ],
+  // Container and node metrics (ADR 0008). Reading them back needs the
+  // CF_ACCOUNT_ID variable and the CF_ANALYTICS_TOKEN secret ("Account
+  // Analytics Read"); without both, the short-retention D1 fallback
+  // (`metrics_samples`) answers instead. METRICS_BACKEND=d1 forces it.
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "roundhouse_metrics" }],
   // Hourly retention: expired log chunks (R2 and D1), GitHub delivery IDs,
   // join tokens, sessions, invites, verifications. See src/lib/retention.ts.

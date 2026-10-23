@@ -75,12 +75,14 @@ type harness struct {
 	st      *statuses
 	gen     int64
 	http    *http.Client
+	// volumes are listed in every desired state apply sends.
+	volumes []protocol.VolumeSpec
 }
 
 // newHarness starts a runtime scoped to a fresh namespace and project, with
 // a real Caddy the runtime's ingress manager configures. The test container
 // joins the environment network, so it can probe replicas and reach Caddy.
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T, tweaks ...func(*runtime.Options)) *harness {
 	c := dockertest.Client(t)
 	ns := dockertest.Unique("it")
 	h := &harness{
@@ -109,7 +111,7 @@ func newHarness(t *testing.T) *harness {
 		Build:      ingress.BuildOptions{AdminListen: "0.0.0.0:2019", Resolver: pc.LocalAddr().String()},
 		MinBackoff: 100 * time.Millisecond, MaxBackoff: time.Second,
 	})
-	h.rt = runtime.New(runtime.Options{
+	opts := runtime.Options{
 		Docker:            c,
 		Ingress:           ing,
 		DataDir:           "/tmp/roundhouse-it-" + ns,
@@ -120,7 +122,11 @@ func newHarness(t *testing.T) *harness {
 		Namespace:         ns,
 		MinDrain:          ingress.SwitchDelay,
 		OpenEnv:           sealtest.Opener(sealtest.Key(), itNode),
-	})
+	}
+	for _, tweak := range tweaks {
+		tweak(&opts)
+	}
+	h.rt = runtime.New(opts)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -170,6 +176,7 @@ func rehash(w protocol.WorkloadSpec) protocol.WorkloadSpec {
 func (h *harness) apply(ws ...protocol.WorkloadSpec) {
 	h.gen++
 	ds := &protocol.DesiredState{Type: protocol.TypeDesiredState, Generation: h.gen, Workloads: ws, TLSMode: protocol.TLSOff}
+	ds.Volumes = h.volumes
 	for i := range ws {
 		sealtest.SealWorkload(h.t, sealtest.Key().PublicKey(), itNode, h.gen, &ws[i], ws[i].Env, nil)
 		if err := ws[i].Validate(); err != nil {

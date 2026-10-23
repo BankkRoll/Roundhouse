@@ -40,6 +40,7 @@ import {
   clientIp,
   createRouter,
   originOf,
+  requireKeys,
   requireMasterKey,
   requireUser,
   requireWorkspace,
@@ -124,7 +125,7 @@ async function startClaim(c: AppContext, htmlUrl: string, workspaceId: string, u
     .get("db")
     .insert(githubClaimStates)
     .values({ id, workspaceId, userId, expiresAt: new Date(expiresAt) });
-  const state = await signState(requireMasterKey(c), CLAIM_STATE, { c: id }, CLAIM_TTL_MS);
+  const state = await signState(requireKeys(c), CLAIM_STATE, { c: id }, CLAIM_TTL_MS);
   return `${htmlUrl}/installations/new?state=${encodeURIComponent(state)}`;
 }
 
@@ -313,14 +314,14 @@ export const githubRoutes = createRouter()
   .openapi(createGithubManifest, async (c) => {
     const body = c.req.valid("json");
     const m = await requireWorkspace(c, body.workspace_id, policyOf(createGithubManifest).action!);
-    const masterKey = requireMasterKey(c);
+    const keys = requireKeys(c);
     const db = c.get("db");
     if (await githubAppInfo(db)) throw conflict("A GitHub App already exists for this instance");
 
     const origin = originOf(c);
     const state = crypto.randomUUID();
     const stored: StoredManifestState = {
-      state: await seal(masterKey, state, manifestStateAad),
+      state: await seal(keys, state, manifestStateAad),
       workspace_id: body.workspace_id,
       user_id: m.user.id,
       expires_at: Date.now() + MANIFEST_STATE_TTL_MS,
@@ -347,7 +348,7 @@ export const githubRoutes = createRouter()
   .openapi(githubCallback, async (c) => {
     const query = c.req.valid("query");
     const user = await requireUser(c);
-    const masterKey = requireMasterKey(c);
+    const keys = requireKeys(c);
     const db = c.get("db");
 
     if (query.installation_id === undefined && query.code) {
@@ -355,7 +356,7 @@ export const githubRoutes = createRouter()
       if (!stored || stored.expires_at < Date.now()) {
         throw new ApiError(400, "invalid_token", "The GitHub setup link expired; start again");
       }
-      const expected = await unseal(masterKey, stored.state, manifestStateAad);
+      const expected = await unseal(keys, stored.state, manifestStateAad);
       if (!(await constantTimeEqual(query.state, expected))) {
         throw new ApiError(400, "invalid_token", "The GitHub setup state does not match");
       }
@@ -384,7 +385,7 @@ export const githubRoutes = createRouter()
     }
 
     if (query.installation_id !== undefined) {
-      const state = await verifyState(masterKey, CLAIM_STATE, query.state);
+      const state = await verifyState(keys, CLAIM_STATE, query.state);
       const claimId = typeof state?.c === "string" ? state.c : null;
       const [claim] = claimId
         ? await db

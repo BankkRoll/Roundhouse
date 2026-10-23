@@ -5,12 +5,17 @@ go 1.26.8
 toolchain go1.26.10
 
 require (
+	filippo.io/age v1.3.2
 	github.com/BankkRoll/Roundhouse/packages/protocol/go v0.0.0
 	github.com/coder/websocket v1.8.15
+	github.com/go-sql-driver/mysql v1.10.1
+	github.com/jackc/pgx/v5 v5.11.0
+	github.com/klauspost/compress v1.20.1
 	github.com/moby/buildkit v0.34.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/tonistiigi/fsutil v0.0.0-20260819142231-83cac42c1c52
+	go.mongodb.org/mongo-driver/v2 v2.9.2
 	golang.org/x/net v0.61.0
 	golang.org/x/sys v0.49.0
 	google.golang.org/grpc v1.84.0
@@ -18,6 +23,8 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/Microsoft/go-winio v0.6.3-0.20251027160822-ad3df93bed29 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/containerd/api v1.12.0 // indirect
@@ -42,7 +49,8 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/in-toto/attestation v1.2.0 // indirect
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect
-	github.com/klauspost/compress v1.20.1 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/moby/locker v1.0.1 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
@@ -57,6 +65,10 @@ require (
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea // indirect
+	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
+	github.com/xdg-go/scram v1.2.0 // indirect
+	github.com/xdg-go/stringprep v1.0.4 // indirect
+	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.71.0 // indirect

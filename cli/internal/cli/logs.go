@@ -374,23 +374,32 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // parseSince accepts a duration (with a `d` suffix for days), an RFC 3339
 // time, or a date.
 func parseSince(s string, now time.Time) (time.Time, error) {
+	if t, ok := parseMoment(s, now); ok {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("invalid --since %q: use a duration like 10m or 2h, or a time like 2026-10-21T09:00:00Z", s)
+}
+
+// parseMoment reads a time given as a duration ago (with a `d` suffix for
+// days), an RFC 3339 time, or a local date and time.
+func parseMoment(s string, now time.Time) (time.Time, bool) {
 	if days, ok := strings.CutSuffix(s, "d"); ok {
 		if n, err := strconv.Atoi(days); err == nil && n >= 0 {
-			return now.Add(-time.Duration(n) * 24 * time.Hour), nil
+			return now.Add(-time.Duration(n) * 24 * time.Hour), true
 		}
 	}
 	if d, err := time.ParseDuration(s); err == nil {
 		if d < 0 {
 			d = -d
 		}
-		return now.Add(-d), nil
+		return now.Add(-d), true
 	}
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02"} {
 		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
-			return t, nil
+			return t, true
 		}
 	}
-	return time.Time{}, fmt.Errorf("invalid --since %q: use a duration like 10m or 2h, or a time like 2026-10-21T09:00:00Z", s)
+	return time.Time{}, false
 }
 
 // -----------------------------------------------------------------------------

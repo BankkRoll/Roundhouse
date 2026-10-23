@@ -28,6 +28,8 @@ type harness struct {
 	configDir string
 	// transport, when set, carries every HTTP request.
 	transport http.RoundTripper
+	// tty makes stdout a terminal, with colour when ttyColor is set.
+	tty, ttyColor bool
 
 	mu       sync.Mutex
 	opened   []string
@@ -53,6 +55,9 @@ func (h *harness) envFor(stdin string, stdout, stderr *bytes.Buffer, interactive
 	io := ui.Test(stdin, stdout, stderr)
 	if interactive {
 		io.ForceInteractive()
+	}
+	if h.tty {
+		io.ForceStdoutTTY(h.ttyColor)
 	}
 	return Env{
 		IO:           io,

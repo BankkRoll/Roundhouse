@@ -1,6 +1,6 @@
 // Package docker is a small Docker Engine API client covering only what the
-// agent needs: ping and version, images, containers, networks, logs and
-// events.
+// agent needs: ping and version, images, containers, networks, volumes,
+// archives, exec, logs and events.
 //
 // It speaks the raw HTTP API instead of importing github.com/docker/docker,
 // whose client drags in hundreds of packages (and their CVE churn) for the
@@ -50,6 +50,10 @@ type Client struct {
 	// its whole life, so pooling would only keep idle sockets around after
 	// it ends.
 	stream *http.Client
+	// dial opens a raw connection to the engine, for hijacked exec streams.
+	dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// hostAddr is the address dial is called with.
+	hostAddr string
 }
 
 // FromEnv returns a client for DOCKER_HOST, or [DefaultHost] when it is unset.
@@ -99,10 +103,16 @@ func New(host string) (*Client, error) {
 		IdleConnTimeout:     30 * time.Second,
 	}
 	streamTransport := &http.Transport{DialContext: dial, DisableKeepAlives: true}
+	hostAddr := "docker:80"
+	if u.Scheme != "unix" {
+		hostAddr = u.Host
+	}
 	return &Client{
-		base:   base + "/" + APIVersion,
-		rpc:    &http.Client{Transport: rpcTransport},
-		stream: &http.Client{Transport: streamTransport},
+		base:     base + "/" + APIVersion,
+		rpc:      &http.Client{Transport: rpcTransport},
+		stream:   &http.Client{Transport: streamTransport},
+		dial:     dial,
+		hostAddr: hostAddr,
 	}, nil
 }
 

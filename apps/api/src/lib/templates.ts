@@ -9,7 +9,8 @@
  *
  * Writes happen in one D1 batch: the project (when new), every service, its
  * config version 1 in every environment, the target environment's variables,
- * and the audit records. First deployments start afterwards, one per
+ * each volume in every environment, each database's generated credentials
+ * in every environment (ADR 0004), and the audit records. First deployments start afterwards, one per
  * service; one that can't start is reported, not fatal, since the services
  * already exist.
  *
@@ -17,7 +18,15 @@
  */
 
 import type { z } from "@hono/zod-openapi";
-import { type Db, environments, projectKeys, projects, services, variables } from "@roundhouse/db";
+import {
+  type Db,
+  environments,
+  projectKeys,
+  projects,
+  services,
+  variables,
+  volumes,
+} from "@roundhouse/db";
 import {
   classifyVariable,
   DEFAULT_ENVIRONMENT,
@@ -25,6 +34,7 @@ import {
   defaultServiceConfig,
   newId,
   parseReferences,
+  type ServiceDatabaseEngine,
   type ServiceSource,
   secretLengthWarnings,
   type VariableTier,
@@ -49,7 +59,13 @@ import type {
   TemplateSummarySchema,
 } from "../schemas/templates";
 import { type AuditEntry, auditInsert, recordAudit } from "./audit";
-import { type KeySource, openDataKey } from "./crypto";
+import { type KeyEnv, openDataKey } from "./crypto";
+import {
+  databaseCreateOp,
+  databaseVariableRows,
+  databaseVariables,
+  resolveDatabaseVersion,
+} from "./databases";
 import { createDeployment } from "./deployments";
 import { ApiError, type ErrorDetail, isUniqueViolation, notFound } from "./errors";
 import {
@@ -73,12 +89,13 @@ import {
   type VariableTarget,
   type VariableWriteWarning,
 } from "./variables";
+import { singleReplicaError, volumeRowsFor } from "./volumes";
 
-/**
- * Requirements this control plane can satisfy. Databases and volumes
- * (ADR 0004) join this list when they ship.
- */
-export const SUPPORTED_TEMPLATE_REQUIREMENTS: readonly TemplateRequirement[] = [];
+/** Requirements this control plane can satisfy: every one, since ADR 0004 shipped. */
+export const SUPPORTED_TEMPLATE_REQUIREMENTS: readonly TemplateRequirement[] = [
+  "databases",
+  "volumes",
+];
 
 // -----------------------------------------------------------------------------
 // Catalogue and views
@@ -263,7 +280,7 @@ function render(template: Template, inputs: Record<string, string>, existingSlug
   }
 }
 
-function sourceOf(source: TemplateSource): ServiceSource {
+function sourceOf(source: Exclude<TemplateSource, { type: "database" }>): ServiceSource {
   switch (source.type) {
     case "image":
       return { type: "image", image: source.image };
@@ -274,9 +291,6 @@ function sourceOf(source: TemplateSource): ServiceSource {
         branch: source.branch,
         root_dir: source.root_dir,
       };
-    case "database":
-      // Unreachable while `assertSupported` refuses database templates.
-      throw new ApiError(409, "conflict", "Database services aren't supported yet");
   }
 }
 
@@ -416,23 +430,90 @@ interface Plan {
   specs: Map<string, ReturnType<typeof mergeConfig>>;
   planned: PlannedVariable[];
   warnings: VariableWriteWarning[];
+  /** Every service's volume, in every environment. */
+  volumeRows: (typeof volumes.$inferInsert)[];
+  /** Databases, whose credentials are generated per environment. */
+  databases: {
+    serviceId: string;
+    engine: ServiceDatabaseEngine;
+    version: string;
+    /** Keys the template sets itself. */
+    keep: Set<string>;
+  }[];
 }
 
 function plan(
   template: Template,
   projectId: string,
   environmentId: string,
+  envIds: readonly string[],
   existingSlugs: string[],
   options: TemplateDeployOptions,
 ): Plan {
   const rendered = render(template, options.inputs, existingSlugs);
   const serviceRows: Plan["serviceRows"] = [];
   const specs: Plan["specs"] = new Map();
+  const volumeRows: Plan["volumeRows"] = [];
+  const databases: Plan["databases"] = [];
   const entries: { target: VariableTarget; variables: RenderedVariable[] }[] = [];
   for (const s of rendered.services) {
     const id = newId("service");
-    serviceRows.push({ id, projectId, name: s.name, slug: s.slug, kind: s.kind, icon: s.icon });
-    specs.set(id, mergeConfig(defaultServiceConfig(sourceOf(s.source)), s.config));
+    const declared = template.services.find((t) => t.ref === s.ref)?.volume;
+    if (s.source.type === "database") {
+      const op = databaseCreateOp({
+        ref: "new:1",
+        name: s.name,
+        database: {
+          engine: s.source.engine,
+          version: s.source.version,
+          ...(declared ? { size_mb: declared.size_mb } : {}),
+        },
+        config: s.config,
+      });
+      const database = op.database!;
+      serviceRows.push({
+        id,
+        projectId,
+        name: s.name,
+        slug: s.slug,
+        kind: "database",
+        icon: s.icon ?? op.icon ?? null,
+        databaseEngine: database.engine,
+        databaseVersion: database.version,
+      });
+      specs.set(id, mergeConfig(defaultServiceConfig(op.source), op.config ?? {}));
+      volumeRows.push(
+        ...volumeRowsFor({
+          projectId,
+          serviceId: id,
+          environmentIds: envIds,
+          mountPath: resolveDatabaseVersion(database.engine, database.version).mountPath,
+          sizeMb: database.size_mb,
+        }),
+      );
+      databases.push({
+        serviceId: id,
+        engine: database.engine,
+        version: database.version,
+        keep: new Set(s.variables.map((v) => v.key)),
+      });
+    } else {
+      serviceRows.push({ id, projectId, name: s.name, slug: s.slug, kind: s.kind, icon: s.icon });
+      const spec = mergeConfig(defaultServiceConfig(sourceOf(s.source)), s.config);
+      if (declared && spec.deploy.replicas > 1) throw singleReplicaError();
+      specs.set(id, spec);
+      if (declared) {
+        volumeRows.push(
+          ...volumeRowsFor({
+            projectId,
+            serviceId: id,
+            environmentIds: envIds,
+            mountPath: declared.mount_path,
+            sizeMb: declared.size_mb,
+          }),
+        );
+      }
+    }
     entries.push({
       target: { projectId, environmentId, scope: "service", serviceId: id },
       variables: s.variables,
@@ -442,7 +523,46 @@ function plan(
     target: { projectId, environmentId, scope: "shared", serviceId: null },
     variables: rendered.sharedVariables,
   });
-  return { rendered, serviceRows, specs, ...planVariables(entries, options) };
+  return {
+    rendered,
+    serviceRows,
+    specs,
+    volumeRows,
+    databases,
+    ...planVariables(entries, options),
+  };
+}
+
+/**
+ * Generated credentials of every database in every environment, as rows. A
+ * key the template sets itself is left to the template in the target
+ * environment, where its value is written.
+ */
+async function databaseRows(
+  key: CryptoKey,
+  p: Plan,
+  projectId: string,
+  environmentId: string,
+  envIds: readonly string[],
+  actorId: string,
+) {
+  const out: Awaited<ReturnType<typeof databaseVariableRows>> = [];
+  for (const d of p.databases) {
+    for (const envId of envIds) {
+      const entries = databaseVariables(d.engine, d.version).filter(
+        (v) => envId !== environmentId || !d.keep.has(v.key),
+      );
+      out.push(
+        ...(await databaseVariableRows(
+          key,
+          { projectId, environmentId: envId, scope: "service", serviceId: d.serviceId },
+          entries,
+          actorId,
+        )),
+      );
+    }
+  }
+  return out;
 }
 
 /**
@@ -452,7 +572,7 @@ function plan(
  */
 async function checkBuildArgs(
   db: Db,
-  keys: KeySource,
+  keys: KeyEnv,
   projectId: string,
   environmentId: string,
   p: Plan,
@@ -481,7 +601,7 @@ function writeStatements(
   p: Plan,
   envIds: readonly string[],
   actorId: string,
-  rows: Awaited<ReturnType<typeof variableRows>>,
+  rows: readonly (typeof variables.$inferInsert)[],
 ) {
   return [
     ...p.serviceRows.map((row) => db.insert(services).values(row)),
@@ -497,6 +617,7 @@ function writeStatements(
       ),
     ),
     ...rows.map((row) => db.insert(variables).values(row)),
+    ...p.volumeRows.map((row) => db.insert(volumes).values(row)),
   ];
 }
 
@@ -654,7 +775,7 @@ const SLUG_ATTEMPTS = 4;
  *
  * @param c - Request context.
  * @param caller - From `requireWorkspace(…, "projects:create")`.
- * @param keys - The keyring bindings, or `MASTER_KEY` alone, for the new project's data key.
+ * @param keys - The keyring bindings, for the new project's data key.
  * @param template - The template.
  * @param project - Name, optional slug and description.
  * @param options - Inputs, deploy flag, confirmations and audit extras.
@@ -663,7 +784,7 @@ const SLUG_ATTEMPTS = 4;
 export async function createProjectFromTemplate(
   c: AppContext,
   caller: Caller,
-  keys: KeySource,
+  keys: KeyEnv,
   template: Template,
   project: { name?: string; slug?: string; description?: string },
   options: TemplateDeployOptions,
@@ -677,9 +798,12 @@ export async function createProjectFromTemplate(
   const envId = newId("environment");
   const keyRow = await newProjectKeyRow(keys, id, workspaceId);
   const key = await openDataKey(keys, keyRow.dekSealed, workspaceId, id);
-  const p = plan(template, id, envId, [], options);
+  const p = plan(template, id, envId, [envId], [], options);
   await checkBuildArgs(db, keys, id, envId, p, false);
-  const rows = await variableRows(key, p.planned, caller.user.id);
+  const rows = [
+    ...(await variableRows(key, p.planned, caller.user.id)),
+    ...(await databaseRows(key, p, id, envId, [envId], caller.user.id)),
+  ];
   const ip = clientIp(c);
 
   await insertWithFreeSlug({
@@ -766,7 +890,7 @@ export async function createProjectFromTemplate(
  *
  * @param c - Request context.
  * @param caller - From `projectScope(…, "services:manage", environmentId)`.
- * @param keys - The keyring bindings, or `MASTER_KEY` alone.
+ * @param keys - The keyring bindings.
  * @param template - The template.
  * @param project - The live project.
  * @param environment - The target environment of the project.
@@ -777,7 +901,7 @@ export async function createProjectFromTemplate(
 export async function deployTemplateIntoProject(
   c: AppContext,
   caller: Caller,
-  keys: KeySource,
+  keys: KeyEnv,
   template: Template,
   project: typeof projects.$inferSelect,
   environment: typeof environments.$inferSelect,
@@ -802,9 +926,13 @@ export async function deployTemplateIntoProject(
         .from(services)
         .where(and(eq(services.projectId, project.id), isNull(services.deletedAt)))
     ).map((r) => r.slug);
-    const candidate = plan(template, project.id, environment.id, taken, options);
+    const envIds = envs.map((e) => e.id);
+    const candidate = plan(template, project.id, environment.id, envIds, taken, options);
     await checkBuildArgs(db, keys, project.id, environment.id, candidate, true);
-    const rows = await variableRows(key, candidate.planned, caller.user.id);
+    const rows = [
+      ...(await variableRows(key, candidate.planned, caller.user.id)),
+      ...(await databaseRows(key, candidate, project.id, environment.id, envIds, caller.user.id)),
+    ];
     try {
       const statements = [
         ...writeStatements(

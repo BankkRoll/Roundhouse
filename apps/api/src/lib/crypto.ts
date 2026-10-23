@@ -16,8 +16,8 @@ import {
   dekId,
   deriveKeyV2,
   fingerprintKey,
+  type KeyEnv,
   type Keyring,
-  type KeySource,
   keyByKid,
   keyringOf,
   type MasterKey,
@@ -25,7 +25,7 @@ import {
   variableFingerprint,
 } from "./keyring";
 
-export { isValidMasterKey, type KeyEnv, type KeySource } from "./keyring";
+export { isValidMasterKey, type KeyEnv } from "./keyring";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -128,13 +128,13 @@ function kek(key: MasterKey, format: 1 | 2): Promise<CryptoKey> {
  * Encrypts a string with AES-256-GCM under the current master key's KEK,
  * format 2.
  *
- * @param keys - The keyring bindings, or `MASTER_KEY` alone.
+ * @param keys - The keyring bindings.
  * @param plaintext - Value to protect.
  * @param aad - Context the ciphertext is bound to (e.g. the settings key), so
  *   a value can't be swapped into another row undetected.
  * @returns Sealed value safe to persist.
  */
-export async function seal(keys: KeySource, plaintext: string, aad: string): Promise<SealedV2> {
+export async function seal(keys: KeyEnv, plaintext: string, aad: string): Promise<SealedV2> {
   const ring = await keyringOf(keys);
   return {
     v: 2,
@@ -147,13 +147,13 @@ export async function seal(keys: KeySource, plaintext: string, aad: string): Pro
  * Decrypts a value produced by {@link seal}: format 2 under the key its
  * `kid` names, format 1 under each key of the keyring in turn.
  *
- * @param keys - The keyring bindings, or `MASTER_KEY` alone.
+ * @param keys - The keyring bindings.
  * @param sealed - Stored ciphertext.
  * @param aad - Must equal the `aad` used when sealing.
  * @returns The plaintext.
  * @throws When no key of the keyring opens it with this AAD.
  */
-export async function unseal(keys: KeySource, sealed: Sealed, aad: string): Promise<string> {
+export async function unseal(keys: KeyEnv, sealed: Sealed, aad: string): Promise<string> {
   return unsealWithRing(await keyringOf(keys), sealed, aad);
 }
 
@@ -181,7 +181,7 @@ async function unsealWithRing(ring: Keyring, sealed: Sealed, aad: string): Promi
  * @param sealed - Stored ciphertext.
  * @returns `true` when nothing needs re-wrapping.
  */
-export async function isCurrentKek(keys: KeySource, sealed: Sealed): Promise<boolean> {
+export async function isCurrentKek(keys: KeyEnv, sealed: Sealed): Promise<boolean> {
   return sealed.v === 2 && sealed.kid === (await keyringOf(keys)).current.kid;
 }
 
@@ -282,14 +282,14 @@ export function dataKeyInfo(key: CryptoKey): DataKeyInfo {
 /**
  * Seals a raw DEK under the current KEK, format 2.
  *
- * @param keys - The keyring bindings, or `MASTER_KEY` alone.
+ * @param keys - The keyring bindings.
  * @param rawDek - The DEK, base64.
  * @param workspaceId - Owning workspace; part of the AAD.
  * @param projectId - Owning project; part of the AAD.
  * @returns The sealed DEK and the ids `project_keys` mirrors.
  */
 export async function sealDataKey(
-  keys: KeySource,
+  keys: KeyEnv,
   rawDek: string,
   workspaceId: string,
   projectId: string,
@@ -301,14 +301,14 @@ export async function sealDataKey(
 /**
  * Unseals a project's DEK, whichever format and master key sealed it.
  *
- * @param keys - The keyring bindings, or `MASTER_KEY` alone.
+ * @param keys - The keyring bindings.
  * @param sealed - `project_keys.dek_sealed`.
  * @param workspaceId - Owning workspace.
  * @param projectId - Owning project.
  * @returns The raw DEK, base64. Never store or return it.
  */
 export function unsealDataKey(
-  keys: KeySource,
+  keys: KeyEnv,
   sealed: Sealed,
   workspaceId: string,
   projectId: string,
@@ -324,14 +324,14 @@ export function unsealDataKey(
  * Unseals a project's DEK and imports it for AES-256-GCM, recording its id,
  * project and fingerprint key for {@link sealWith} and {@link valueFingerprint}.
  *
- * @param keys - The keyring bindings, or `MASTER_KEY` alone.
+ * @param keys - The keyring bindings.
  * @param sealed - `project_keys.dek_sealed`.
  * @param workspaceId - Owning workspace.
  * @param projectId - Owning project.
  * @returns A non-extractable AES-GCM key.
  */
 export async function openDataKey(
-  keys: KeySource,
+  keys: KeyEnv,
   sealed: Sealed,
   workspaceId: string,
   projectId: string,
@@ -429,15 +429,15 @@ function stateKey(key: MasterKey, format: 1 | 2): Promise<CryptoKey> {
  * Signs a small JSON payload into a URL-safe token with an expiry, for state
  * that round-trips through a third party (e.g. GitHub's install redirect).
  *
- * @param keys - The keyring bindings, or `MASTER_KEY` alone; signs with the
- *   current key's format 2 state key.
+ * @param keys - The keyring bindings; signs with the current key's format 2
+ *   state key.
  * @param purpose - Bound into the signature so tokens can't be reused elsewhere.
  * @param payload - Data to carry; not encrypted, so never put secrets in it.
  * @param ttlMs - Lifetime.
  * @returns `<payload>.<signature>`, base64url.
  */
 export async function signState(
-  keys: KeySource,
+  keys: KeyEnv,
   purpose: string,
   payload: Record<string, unknown>,
   ttlMs: number,
@@ -458,13 +458,13 @@ export async function signState(
  * Verifies a token from {@link signState} under every key of the keyring
  * (format 2, then format 1), so tokens in flight survive a key change.
  *
- * @param keys - The keyring bindings, or `MASTER_KEY` alone.
+ * @param keys - The keyring bindings.
  * @param purpose - Must match the purpose it was signed for.
  * @param token - Untrusted token.
  * @returns The payload, or `null` when forged, expired, or for another purpose.
  */
 export async function verifyState(
-  keys: KeySource,
+  keys: KeyEnv,
   purpose: string,
   token: string,
 ): Promise<Record<string, unknown> | null> {

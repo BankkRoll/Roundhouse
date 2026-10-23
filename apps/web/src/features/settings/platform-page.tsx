@@ -37,6 +37,7 @@ import {
   useUpdateInstanceSettings,
 } from "../../queries/instance";
 import { useMe } from "../../queries/me";
+import { BackupStorageSection } from "./backup-storage-section";
 import { submitGithubManifest } from "./github-manifest";
 import { SettingsFrame } from "./settings-frame";
 import { SigningKeysSection } from "./signing-keys-section";
@@ -506,6 +507,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
               <IngressForm settings={settings.data} />
               <LogRetentionForm settings={settings.data} />
               <McpSection settings={settings.data} />
+              <BackupStorageSection />
               <SigningKeysSection />
             </>
           )

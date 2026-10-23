@@ -16,7 +16,7 @@ import {
   type AppContext,
   clientIp,
   createRouter,
-  requireMasterKey,
+  requireKeys,
   requirePrincipal,
 } from "../../context";
 import {
@@ -108,7 +108,7 @@ export const oauthConsentRoutes = createRouter()
     const params = c.req.valid("query");
     const request = await validated(c, params);
     const { ticket, expiresAt } = await signConsentTicket(
-      requireMasterKey(c),
+      requireKeys(c),
       {
         userId: holder.user.id,
         sessionId: holder.sessionId,
@@ -148,7 +148,7 @@ export const oauthConsentRoutes = createRouter()
     const input = c.req.valid("json");
     const request = await validated(c, input.request);
     const ok = await verifyConsentTicket(
-      requireMasterKey(c),
+      requireKeys(c),
       input.consent_token,
       { userId: holder.user.id, sessionId: holder.sessionId },
       input.request,

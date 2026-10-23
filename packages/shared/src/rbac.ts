@@ -101,6 +101,13 @@ export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
  * - `variables:read`: keys, tiers, fingerprints and metadata; never values.
  * - `variables:read_plain`: plain values. Secret values are never readable.
  * - `access:manage`: project grants and environment protection.
+ * - `data:read`: browse a database service and run read-only queries.
+ * - `data:write`: run writing queries as the database's admin principal.
+ * - `backups:manage`: backup policies, manual backups and backup deletion.
+ * - `backups:restore`: restore a backup or download its encrypted object.
+ *
+ * Viewers get no data action: a database's rows can be as sensitive as its
+ * secrets (ADR 0004).
  */
 export const PROJECT_ACTIONS = [
   "projects:read",
@@ -112,6 +119,10 @@ export const PROJECT_ACTIONS = [
   "variables:read",
   "variables:read_plain",
   "variables:manage",
+  "data:read",
+  "data:write",
+  "backups:manage",
+  "backups:restore",
 ] as const;
 
 /** A project-level action; see {@link PROJECT_ACTIONS}. */
@@ -196,7 +207,13 @@ const WORKSPACE_GRANTS: Record<Role, ReadonlySet<WorkspaceAction>> = {
 
 const VIEW: ProjectAction[] = ["projects:read", "services:read", "variables:read"];
 const DEPLOY: ProjectAction[] = [...VIEW, "deployments:create", "variables:read_plain"];
-const DEVELOP: ProjectAction[] = [...DEPLOY, "services:manage", "variables:manage"];
+const DEVELOP: ProjectAction[] = [
+  ...DEPLOY,
+  "services:manage",
+  "variables:manage",
+  "data:read",
+  "backups:manage",
+];
 
 const PROJECT_GRANTS: Record<ProjectRole, ReadonlySet<ProjectAction>> = {
   project_admin: new Set(PROJECT_ACTIONS),

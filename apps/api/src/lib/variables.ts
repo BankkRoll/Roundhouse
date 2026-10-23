@@ -38,7 +38,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   dataKeyInfo,
   generateDataKey,
-  type KeySource,
+  type KeyEnv,
   openDataKey,
   type Sealed,
   type SealedV2,
@@ -155,12 +155,12 @@ export function deploymentEnvAad(deploymentId: string): string {
  * NOTE: Returns the row, not the insert: an async function returning a
  * Drizzle query would run it, because queries are thenables.
  *
- * @param keys - The keyring bindings, or `MASTER_KEY` alone.
+ * @param keys - The keyring bindings.
  * @param projectId - New project's ID.
  * @param workspaceId - Its workspace; part of the DEK's AAD.
  * @returns The row to insert.
  */
-export async function newProjectKeyRow(keys: KeySource, projectId: string, workspaceId: string) {
+export async function newProjectKeyRow(keys: KeyEnv, projectId: string, workspaceId: string) {
   const sealed = await sealDataKey(keys, generateDataKey(), workspaceId, projectId);
   return { projectId, ...sealed } satisfies typeof projectKeys.$inferInsert;
 }
@@ -177,13 +177,12 @@ const keyCache = new Map<string, Promise<CryptoKey>>();
  * Loads (and caches) a project's DEK.
  *
  * @param db - Database client.
- * @param keys - The keyring bindings, or `MASTER_KEY` alone (previous keys
- *   then come from the Worker's bindings).
+ * @param keys - The keyring bindings.
  * @param projectId - The project.
  * @returns The usable AES-GCM key.
  * @throws {ApiError} 404 when the project has no key.
  */
-export function projectKey(db: Db, keys: KeySource, projectId: string): Promise<CryptoKey> {
+export function projectKey(db: Db, keys: KeyEnv, projectId: string): Promise<CryptoKey> {
   const cached = keyCache.get(projectId);
   if (cached) return cached;
   const loading = (async () => {
@@ -605,8 +604,8 @@ export interface BuildArgsCheck {
  *   deploy.
  *
  * @param db - Database client.
- * @param keys - The keyring bindings, or `MASTER_KEY` alone, to read the
- *   environment's variables when an arg has references.
+ * @param keys - The keyring bindings, to read the environment's variables
+ *   when an arg has references.
  * @param input - The args and where they are saved.
  * @throws {ApiError} 400 `invalid_request` or `build_arg_secret`, with one detail per arg.
  * @example
@@ -616,7 +615,7 @@ export interface BuildArgsCheck {
  */
 export async function assertPlainBuildArgs(
   db: Db,
-  keys: KeySource,
+  keys: KeyEnv,
   input: BuildArgsCheck,
 ): Promise<void> {
   const args = Object.entries(input.build.build_args ?? {});

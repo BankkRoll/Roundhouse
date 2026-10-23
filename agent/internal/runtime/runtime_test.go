@@ -520,7 +520,12 @@ func TestUnhealthyAfterRetries(t *testing.T) {
 	h.waitState("wl_a", protocol.StateHealthy)
 	h.probes.set(c.ip, false)
 	h.waitState("wl_a", protocol.StateUnhealthy)
-	r, _ := h.status.lastOf("wl_a")
+	// NOTE: reports reach the status log asynchronously, after Statuses() changes.
+	var r protocol.WorkloadStatusReport
+	eventually(t, "an unhealthy report", func() bool {
+		r, _ = h.status.lastOf("wl_a")
+		return r.State == protocol.StateUnhealthy
+	})
 	if !strings.Contains(r.Message, "probe") {
 		t.Fatalf("message %q", r.Message)
 	}

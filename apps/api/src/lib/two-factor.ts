@@ -20,7 +20,7 @@ import { type Db, twoFactors, users } from "@roundhouse/db";
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { type AuthSecretConfig, authSecretsFor } from "./auth-secrets";
-import type { KeySource } from "./keyring";
+import type { KeyEnv } from "./keyring";
 import { matchTotpStep } from "./totp";
 
 const encoder = new TextEncoder();
@@ -111,7 +111,7 @@ export interface TwoFactorState {
  */
 export async function twoFactorState(
   db: Db,
-  keys: KeySource,
+  keys: KeyEnv,
   userId: string,
 ): Promise<TwoFactorState> {
   const [row] = await db
@@ -163,7 +163,7 @@ export async function claimTotpStep(db: Db, userId: string, step: number): Promi
  */
 export async function totpStepFor(
   db: Db,
-  keys: KeySource,
+  keys: KeyEnv,
   userId: string,
   code: string,
   now = Date.now(),
@@ -210,7 +210,7 @@ export interface SecondFactor {
  */
 export async function verifySecondFactor(
   db: Db,
-  keys: KeySource,
+  keys: KeyEnv,
   userId: string,
   code: string,
   now = Date.now(),
@@ -264,7 +264,7 @@ export async function verifySecondFactor(
  */
 export async function backupCodesRemaining(
   db: Db,
-  keys: KeySource,
+  keys: KeyEnv,
   userId: string,
 ): Promise<number | null> {
   const [row] = await db
@@ -308,7 +308,7 @@ export function staleTwoFactorCondition(currentVersion: number) {
  * @param keys - The keyring bindings.
  * @returns How many rows needed work; `0` when none are left.
  */
-export async function rewrapTwoFactorBatch(db: Db, keys: KeySource): Promise<number> {
+export async function rewrapTwoFactorBatch(db: Db, keys: KeyEnv): Promise<number> {
   const { config } = await authSecretsFor(keys);
   const rows = await db
     .select({ id: twoFactors.id, secret: twoFactors.secret, backupCodes: twoFactors.backupCodes })

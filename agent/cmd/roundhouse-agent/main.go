@@ -229,6 +229,7 @@ func cmdRun(args []string, logger *slog.Logger, stderr io.Writer) error {
 	client.Hello = func(ctx context.Context, observed int64) protocol.Hello {
 		h := f.Hello(ctx, cfg.NodeID, version, observed)
 		h.Statuses = a.runtime.Statuses()
+		h.VolumeQuota = a.volumes.Mode()
 		h.EncryptionKey = &encryptionKey
 		return h
 	}

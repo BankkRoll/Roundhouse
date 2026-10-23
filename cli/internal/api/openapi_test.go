@@ -156,6 +156,25 @@ func TestWireTypesMatchSchemas(t *testing.T) {
 		"TemplateDeployment":        TemplateDeployment{},
 		"CreateProjectFromTemplate": CreateProjectFromTemplateInput{},
 		"DeployTemplate":            DeployTemplateInput{},
+		"ServiceMetrics":            ServiceMetrics{},
+		"NodeMetrics":               NodeMetrics{},
+		"MetricSeries":              MetricSeries{},
+		"MetricsSummary":            MetricsSummary{},
+		"ServiceMetricsSummary":     ServiceMetricsSummary{},
+		"CreateDatabase":            CreateDatabaseInput{},
+		"Volume":                    Volume{},
+		"CreatedDatabase":           CreatedDatabase{},
+		"DatabaseQuery":             DatabaseQueryInput{},
+		"DatabaseQueryResult":       DatabaseQueryResult{},
+		"DatabaseSchema":            DatabaseSchema{},
+		"Backup":                    Backup{},
+		"BackupPage":                BackupPage{},
+		"BackupPolicy":              BackupPolicy{},
+		"PutBackupPolicy":           PutBackupPolicyInput{},
+		"BackupDownload":            BackupDownload{},
+		"BackupDecryptionKey":       BackupDecryptionKey{},
+		"RestoreBackup":             RestoreBackupInput{},
+		"Restore":                   Restore{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
@@ -244,7 +263,13 @@ func TestQueryParamsExist(t *testing.T) {
 		route Route
 		param string
 	}{{RouteListProjects, "slug"}, {RouteRealtime, "client"}, {RouteResolveVars, "environment_id"},
-		{RouteProviderOffers, "role"}, {RouteProviderOffers, "region"}} {
+		{RouteProviderOffers, "role"}, {RouteProviderOffers, "region"},
+		{RouteServiceMetrics, "environment_id"}, {RouteServiceMetrics, "from"}, {RouteServiceMetrics, "to"},
+		{RouteServiceMetrics, "metrics"}, {RouteServiceMetrics, "group"}, {RouteMetricsSummary, "environment_id"},
+		{RouteNodeMetrics, "from"}, {RouteNodeMetrics, "to"}, {RouteNodeMetrics, "metrics"},
+		{RouteServiceVolume, "environment_id"}, {RouteDatabaseSchema, "environment_id"},
+		{RouteBackupPolicy, "environment_id"}, {RouteListBackups, "environment_id"},
+		{RouteListBackups, "cursor"}, {RouteListBackups, "limit"}} {
 		op := doc.Paths[c.route.Path][strings.ToLower(c.route.Method)]
 		if !slices.Contains(op.Parameters, param{In: "query", Name: c.param}) {
 			t.Errorf("%s: no query parameter %q", c.route, c.param)
@@ -326,5 +351,67 @@ func TestTemplateInputTypesMatchAPI(t *testing.T) {
 	}
 	if !slices.Equal(s.Properties["type"].Enum, TemplateInputTypes) {
 		t.Errorf("TemplateInputTypes = %v\nAPI enum           = %v", TemplateInputTypes, s.Properties["type"].Enum)
+	}
+}
+
+// TestMetricNamesMatchAPI keeps the metrics `roundhouse metrics` and
+// `servers metrics` accept in step with the API, which lists them in the
+// `metrics` query parameter's description.
+func TestMetricNamesMatchAPI(t *testing.T) {
+	data, err := os.ReadFile("testdata/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				In          string `json:"in"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			} `json:"parameters"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for route, want := range map[Route][]string{RouteServiceMetrics: ServiceMetricNames, RouteNodeMetrics: NodeMetricNames} {
+		var desc string
+		for _, p := range doc.Paths[route.Path]["get"].Parameters {
+			if p.In == "query" && p.Name == "metrics" {
+				desc = p.Description
+			}
+		}
+		_, list, ok := strings.Cut(desc, "subset of: ")
+		if !ok {
+			t.Errorf("%s: metrics parameter description %q does not list the metrics", route, desc)
+			continue
+		}
+		if got := strings.Split(strings.TrimSuffix(list, "."), ", "); !slices.Equal(got, want) {
+			t.Errorf("%s: CLI metrics = %v\nAPI metrics = %v", route, want, got)
+		}
+	}
+}
+
+// TestDataEnumsMatchAPI keeps the engines, statuses and restore modes the
+// db commands accept and recognise in step with the API.
+func TestDataEnumsMatchAPI(t *testing.T) {
+	doc := loadOpenAPI(t)
+	for _, c := range []struct {
+		schema, prop string
+		want         []string
+	}{
+		{"DatabaseChoice", "engine", DatabaseEngines},
+		{"Volume", "status", VolumeStatuses},
+		{"Backup", "status", BackupStatuses},
+		{"RestoreBackup", "mode", RestoreModes},
+	} {
+		s := doc.Components.Schemas[c.schema]
+		if s == nil || s.Properties[c.prop] == nil {
+			t.Errorf("%s.%s missing from the OpenAPI document", c.schema, c.prop)
+			continue
+		}
+		if got := s.Properties[c.prop].Enum; !slices.Equal(got, c.want) {
+			t.Errorf("%s.%s: CLI = %v\nAPI enum = %v", c.schema, c.prop, c.want, got)
+		}
 	}
 }

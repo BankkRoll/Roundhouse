@@ -177,6 +177,9 @@ describe("expired records", () => {
       invites: 1,
       verifications: 1,
       nonces: 1,
+      metricsSamples: 0,
+      backups: 0,
+      stuckBackups: 0,
       loginAttempts: 1,
       githubClaims: 1,
     });

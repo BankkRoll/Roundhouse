@@ -40,6 +40,8 @@ import {
   useServiceConfig,
   useUpdateService,
 } from "../../../queries/services";
+import { DatabaseSection } from "../../databases/database-section";
+import { VolumeSection } from "../../databases/volume-section";
 import {
   branchError,
   gitUrlError,
@@ -1030,11 +1032,18 @@ function DeleteServiceSection({
   );
 }
 
-function SectionNav({ canDelete }: { canDelete: boolean }) {
+/** Sections a database service adds after General. */
+const DATABASE_SECTIONS = [
+  { id: "database", label: "Database" },
+  { id: "volume", label: "Volume" },
+] as const;
+
+function SectionNav({ canDelete, database }: { canDelete: boolean; database: boolean }) {
+  const sections = database ? [SECTIONS[0], ...DATABASE_SECTIONS, ...SECTIONS.slice(1)] : SECTIONS;
   return (
     <SettingsNav label="Service settings" className="hidden lg:block">
       <SettingsNavGroup label="On this page">
-        {SECTIONS.map((section) => (
+        {sections.map((section) => (
           <SettingsNavItem key={section.id} href={`#${section.id}`}>
             {section.label}
           </SettingsNavItem>
@@ -1119,7 +1128,7 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
   const canDelete = can("services:manage");
 
   return (
-    <SettingsLayout nav={<SectionNav canDelete={canDelete} />}>
+    <SettingsLayout nav={<SectionNav canDelete={canDelete} database={Boolean(service.database)} />}>
       <div className="mb-8 grid gap-3">
         <p className="text-sm text-muted-foreground">
           Each save is a new config version and applies on the next deploy.{" "}
@@ -1162,6 +1171,16 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
       </div>
       <SettingsStack>
         <GeneralSection service={service} serviceId={serviceId} canEdit={context.canEdit} />
+        {service.database ? (
+          <>
+            <DatabaseSection
+              workspaceId={workspaceId}
+              service={{ ...service, database: service.database }}
+              environment={environment}
+            />
+            <VolumeSection workspaceId={workspaceId} service={service} environment={environment} />
+          </>
+        ) : null}
         <SourceSection config={current} context={context} />
         <BuildSection config={current} context={context} />
         <DeploySection config={current} context={context} />

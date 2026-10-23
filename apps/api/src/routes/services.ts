@@ -58,6 +58,7 @@ import { environmentOf, projectScope, serviceScope } from "../lib/scope";
 import { toApiConfig, toApiService } from "../lib/serialize";
 import { getIngressSettings } from "../lib/settings";
 import { assertPlainBuildArgs } from "../lib/variables";
+import { assertSingleReplica } from "../lib/volumes";
 import { SERVICE_CONFIG_PARTS } from "../schemas";
 
 async function liveSlugs(db: Db, projectId: string): Promise<string[]> {
@@ -199,6 +200,7 @@ export const serviceRoutes = createRouter()
         );
       }
       const spec = mergeConfig(specOf(latest), patch);
+      if (patch.deploy) await assertSingleReplica(db, service, spec.deploy.replicas);
       if (patch.source) await checkSource(c, project.workspaceId, spec.source);
       if (patch.build) {
         await assertPlainBuildArgs(db, c.env, {

@@ -332,6 +332,9 @@ describe("tools/list", () => {
       "list_changes",
       "apply_changes",
       "list_nodes",
+      "list_databases",
+      "list_backups",
+      "get_metrics",
       "list_templates",
       "deploy_template",
     ]);
@@ -788,5 +791,77 @@ describe("tool registry", () => {
         expect(t.scopes.some((s) => s.endsWith(":manage") || s.endsWith(":create"))).toBe(false);
       }
     }
+  });
+});
+
+describe("data tools", () => {
+  it("lists databases, backups and metrics read-only, with no credential or key in sight", async () => {
+    const { owner, workspaceId } = await install();
+    const project = await createProject(owner, workspaceId);
+    const envId = project.environments[0]!.id;
+    const created = await owner.json<{ service: { id: string }; volumes: { id: string }[] }>(
+      `/v1/projects/${project.id}/databases`,
+      { method: "POST", json: { environment_id: envId, engine: "postgres", deploy: false } },
+    );
+    expect(created.status).toBe(201);
+    const serviceId = created.body.service.id;
+    await env.DB.prepare(
+      `INSERT INTO backups (id, project_id, service_id, environment_id, volume_id, trigger, method,
+         engine, status, object_key, upload_id, sha256, bytes_stored, created_at, updated_at)
+       VALUES ('bak_1', ?, ?, ?, ?, 'manual', 'dump', 'postgres', 'succeeded',
+         'backups/secret-object-key', 'upload-secret', ?, 1234, ?, ?)`,
+    )
+      .bind(project.id, serviceId, envId, created.body.volumes[0]!.id, "a".repeat(64), 1, 1)
+      .run();
+
+    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.read));
+    const dbs = await tool<{ databases: { engine: string; volume: { size_mb: number } }[] }>(
+      client,
+      "list_databases",
+      { project_id: project.id },
+    );
+    expect(dbs.isError).toBe(false);
+    expect(dbs.body.databases).toEqual([
+      expect.objectContaining({
+        engine: "postgres",
+        version: "18",
+        volume: expect.objectContaining({ size_mb: 5120, status: "pending" }),
+      }),
+    ]);
+    expect(dbs.text).not.toMatch(/PASSWORD|postgresql:\/\//);
+
+    const backups = await tool<{ backups: { id: string; bytes_stored: number }[] }>(
+      client,
+      "list_backups",
+      { service_id: serviceId },
+    );
+    expect(backups.body.backups).toEqual([
+      expect.objectContaining({ id: "bak_1", status: "succeeded", bytes_stored: 1234 }),
+    ]);
+    expect(backups.text).not.toMatch(/secret-object-key|upload-secret|aaaaaaaa/);
+
+    const metrics = await tool<{ series: unknown[]; step_s: number }>(client, "get_metrics", {
+      service_id: serviceId,
+      metrics: ["cpu"],
+    });
+    expect(metrics.isError).toBe(false);
+    expect(metrics.body.step_s).toBeGreaterThan(0);
+    await client.close();
+  });
+
+  it("checks the same access as REST", async () => {
+    const { owner, workspaceId } = await install();
+    const other = await owner.json<{ id: string }>("/v1/workspaces", {
+      method: "POST",
+      json: { name: "Elsewhere" },
+    });
+    const project = await createProject(owner, other.body.id);
+    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.read));
+    const res = await tool<{ error: { status: number } }>(client, "list_databases", {
+      project_id: project.id,
+    });
+    expect(res.body.error.status).toBe(404);
+    expect(MCP_TOOLS.some((t) => /query|sql/.test(t.name))).toBe(false);
+    await client.close();
   });
 });

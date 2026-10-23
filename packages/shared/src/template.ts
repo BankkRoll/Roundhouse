@@ -22,6 +22,7 @@
  * @module
  */
 import { z } from "zod";
+import { databaseVersion, renderDatabaseService, type ServiceDatabaseEngine } from "./databases";
 import { RESERVED_SERVICE_SLUGS, SERVICE_KINDS, type ServiceKind } from "./projects";
 import { BUILDERS, HEALTHCHECK_TYPES, RESTART_POLICIES } from "./service-config";
 import { freeSlug } from "./slug";
@@ -358,6 +359,16 @@ function specOf(v: TemplateVariable): Exclude<TemplateVariable, string> {
 
 const PLACEHOLDER = "x";
 
+function databasePlaceholders(
+  engine: ServiceDatabaseEngine,
+  version: string | undefined,
+): Record<string, string> {
+  const v = databaseVersion(engine, version);
+  if (!v) return {};
+  const rendered = renderDatabaseService(engine, v.version, (n) => new Uint8Array(n));
+  return Object.fromEntries(rendered.variables.map((r) => [r.key, PLACEHOLDER]));
+}
+
 /**
  * Cross-field rules of a manifest, run after the shape is valid:
  * 1. refs and input keys are unique; `connects_to` names other refs;
@@ -439,7 +450,17 @@ function checkTemplate(template: Template, ctx: z.RefinementCtx): void {
     }
   };
   template.services.forEach((s, i) => {
-    placeholderServices[s.ref] = {};
+    // A database gets generated variables (DATABASE_URL, …) on deploy, so
+    // other services may reference them although the manifest never sets them.
+    placeholderServices[s.ref] =
+      s.source.type === "database" ? databasePlaceholders(s.source.engine, s.source.version) : {};
+    if (s.source.type === "database" && !databaseVersion(s.source.engine, s.source.version)) {
+      ctx.addIssue({
+        code: "custom",
+        message: `${s.source.engine} has no version ${s.source.version}`,
+        path: ["services", i, "source", "version"],
+      });
+    }
     checkValues(s.variables, ["services", i, "variables"], placeholderServices[s.ref]!);
   });
   checkValues(template.shared_variables, ["shared_variables"], placeholderShared);

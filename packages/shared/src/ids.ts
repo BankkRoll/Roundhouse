@@ -54,6 +54,20 @@ export const ID_PREFIXES = {
   changeSet: "chs",
   /** One operation staged in a change set. */
   stagedChange: "stg",
+  /** A service's persistent volume in one environment (ADR 0004). */
+  volume: "vol",
+  /** One backup of a volume; also its workflow instance ID. */
+  backup: "bak",
+  /** A service's backup schedule and retention in one environment. */
+  backupPolicy: "bpl",
+  /** One restore of a backup; also its workflow instance ID. */
+  restore: "rst",
+  /** One move of a volume between nodes; also its workflow instance ID. */
+  volumeMigration: "mig",
+  /** One data-browser query, correlating `db_query` with its result. */
+  dbQuery: "dbq",
+  /** A published TCP port of a single-replica service (ADR 0004). */
+  tcpProxy: "tcp",
 } as const;
 
 /** An entity kind that has an ID prefix. */

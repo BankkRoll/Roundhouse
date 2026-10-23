@@ -129,26 +129,38 @@ func build(h dnsmessage.Header, q *dnsmessage.Question, answers []netip.Addr) []
 }
 
 // ListenDNS opens the UDP socket and TCP listener the upstream DNS server
-// serves on. addr must be a loopback address: the answers describe the
-// node's containers and only the local Caddy needs them.
+// serves on, both on the same port. addr must be a loopback address: the
+// answers describe the node's containers and only the local Caddy needs
+// them. Port 0 picks a port free for both protocols.
 func ListenDNS(addr string) (net.PacketConn, net.Listener, error) {
-	host, _, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, nil, err
 	}
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		return nil, nil, errors.New("upstream DNS must listen on a loopback IP, got " + addr)
 	}
-	pc, err := net.ListenPacket("udp", addr)
-	if err != nil {
-		return nil, nil, err
+	// NOTE: the OS picks a UDP port free for UDP only; the same number can be
+	// taken, or reserved (Windows excludes whole TCP port ranges for
+	// Hyper-V), for TCP. An ephemeral request therefore tries a few ports.
+	attempts := 1
+	if port == "0" {
+		attempts = 16
 	}
-	ln, err := net.Listen("tcp", pc.LocalAddr().String())
-	if err != nil {
+	for i := 1; ; i++ {
+		pc, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return nil, nil, err
+		}
+		ln, err := net.Listen("tcp", pc.LocalAddr().String())
+		if err == nil {
+			return pc, ln, nil
+		}
 		pc.Close()
-		return nil, nil, err
+		if i >= attempts {
+			return nil, nil, err
+		}
 	}
-	return pc, ln, nil
 }
 
 // ServeDNSOn answers upstream lookups on pc (UDP) and ln (TCP, either may be

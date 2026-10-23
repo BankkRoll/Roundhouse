@@ -5,8 +5,11 @@ import {
   formatAgo,
   formatBytes,
   formatBytesPair,
+  formatBytesPerSecond,
+  formatCount,
   formatCountdown,
   formatDuration,
+  formatMillicores,
   formatPercent,
   formatPlatform,
   formatRelativeTime,
@@ -254,5 +257,44 @@ describe("formatAgentVersion", () => {
     [null, null],
   ])("%j → %j", (input, expected) => {
     expect(formatAgentVersion(input)).toBe(expected);
+  });
+});
+
+describe("formatBytesPerSecond", () => {
+  it.each([
+    [0, "0 B/s"],
+    [512, "512 B/s"],
+    [1.5 * MiB, "1.5 MB/s"],
+    [null, EMPTY],
+    [-1, EMPTY],
+  ])("%j → %j", (input, expected) => {
+    expect(formatBytesPerSecond(input)).toBe(expected);
+  });
+});
+
+describe("formatMillicores", () => {
+  it.each([
+    [0, "0m"],
+    [0.46, "0.5m"],
+    [120.4, "120m"],
+    [999, "999m"],
+    [1000, "1 vCPU"],
+    [1500, "1.5 vCPU"],
+    [null, EMPTY],
+    [Number.NaN, EMPTY],
+  ])("%j → %j", (input, expected) => {
+    expect(formatMillicores(input)).toBe(expected);
+  });
+});
+
+describe("formatCount", () => {
+  it.each([
+    [0, "0"],
+    [3, "3"],
+    [0.25, "0.3"],
+    [1234, "1.2k"],
+    [undefined, EMPTY],
+  ])("%j → %j", (input, expected) => {
+    expect(formatCount(input)).toBe(expected);
   });
 });

@@ -315,6 +315,68 @@ const MANIFESTS: TemplateManifest[] = [
       },
     ],
   },
+  {
+    schema_version: 1,
+    id: "n8n-postgres",
+    version: 1,
+    name: "n8n with PostgreSQL",
+    description:
+      "n8n workflow automation backed by PostgreSQL 18 on a persistent volume, so workflows, " +
+      "credentials and executions survive redeploys. The database password and n8n's " +
+      "encryption key are generated on deploy and stored as secrets.",
+    icon: "builtin:workflow",
+    category: "automation",
+    tags: ["automation", "workflows", "postgres", "database", "image"],
+    docs_url: "https://docs.n8n.io/hosting/configuration/supported-databases-settings/",
+    inputs: [
+      {
+        key: "TIMEZONE",
+        label: "Timezone",
+        description: "IANA name used by schedule triggers, e.g. Europe/Berlin.",
+        type: "string",
+        required: false,
+        default: "UTC",
+      },
+    ],
+    services: [
+      {
+        ref: "postgres",
+        name: "PostgreSQL",
+        kind: "database",
+        source: { type: "database", engine: "postgres", version: "18" },
+        volume: { mount_path: "/var/lib/postgresql", size_mb: 5120 },
+      },
+      {
+        ref: "n8n",
+        name: "n8n",
+        source: { type: "image", image: "n8nio/n8n:stable" },
+        config: {
+          deploy: { drain_s: 0 },
+          resources: { memory_mb: 1024 },
+          healthcheck: httpCheck("/healthz", 60),
+          networking: PUBLIC_WEB(5678),
+        },
+        variables: {
+          N8N_ENCRYPTION_KEY: {
+            generate: { bytes: 32, encoding: "hex" },
+            description: "Encrypts stored credentials. Changing it makes them unreadable.",
+          },
+          // n8n's documented database settings (docs.n8n.io, "Supported databases").
+          DB_TYPE: "postgresdb",
+          DB_POSTGRESDB_HOST: "${{postgres.PGHOST}}",
+          DB_POSTGRESDB_PORT: "${{postgres.PGPORT}}",
+          DB_POSTGRESDB_DATABASE: "${{postgres.POSTGRES_DB}}",
+          DB_POSTGRESDB_USER: "${{postgres.POSTGRES_USER}}",
+          DB_POSTGRESDB_PASSWORD: { value: "${{postgres.POSTGRES_PASSWORD}}", secret: true },
+          GENERIC_TIMEZONE: "${{input.TIMEZONE}}",
+          TZ: "${{input.TIMEZONE}}",
+          N8N_PROXY_HOPS: "1",
+          N8N_DIAGNOSTICS_ENABLED: "false",
+        },
+        connects_to: ["postgres"],
+      },
+    ],
+  },
 ];
 
 /**

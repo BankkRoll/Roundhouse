@@ -298,3 +298,46 @@ describe("schedule properties", () => {
     }
   });
 });
+
+describe("schedule with volumes (ADR 0004)", () => {
+  it("places a pinned replica only on its node", () => {
+    const result = schedule(request({ pinnedNodeId: "node_b" }), [node("node_a"), node("node_b")]);
+    expect(result).toEqual({ ok: true, placements: [{ replica: 0, nodeId: "node_b" }] });
+  });
+
+  it("fails with pinned_elsewhere when the pinned node is offline", () => {
+    const result = schedule(request({ pinnedNodeId: "node_b" }), [
+      node("node_a"),
+      node("node_b", { status: "offline" }),
+    ]);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "pinned_elsewhere",
+      rejected: [
+        { nodeId: "node_a", reason: "pinned_elsewhere" },
+        { nodeId: "node_b", reason: "offline" },
+      ],
+    });
+  });
+
+  it("keeps volume services off agents below the minimum protocol", () => {
+    const nodes = [node("node_a", { protocolVersion: 4 }), node("node_b", { protocolVersion: 5 })];
+    expect(schedule(request({ minProtocolVersion: 5 }), nodes)).toEqual({
+      ok: true,
+      placements: [{ replica: 0, nodeId: "node_b" }],
+    });
+    expect(schedule(request({ minProtocolVersion: 6 }), nodes)).toMatchObject({
+      ok: false,
+      reason: "agent_outdated",
+    });
+  });
+
+  it("checks the new volume's quota against the node's disk", () => {
+    const nodes = [node("node_a", { diskMb: 10_000, allocatedDiskMb: 8000 })];
+    expect(schedule(request({ diskMb: 2000 }), nodes).ok).toBe(true);
+    expect(schedule(request({ diskMb: 2001 }), nodes)).toMatchObject({
+      ok: false,
+      reason: "insufficient_disk",
+    });
+  });
+});

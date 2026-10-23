@@ -12,15 +12,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BankkRoll/Roundhouse/agent/internal/backup"
 	"github.com/BankkRoll/Roundhouse/agent/internal/builder"
 	"github.com/BankkRoll/Roundhouse/agent/internal/builds"
 	"github.com/BankkRoll/Roundhouse/agent/internal/config"
 	"github.com/BankkRoll/Roundhouse/agent/internal/conn"
+	"github.com/BankkRoll/Roundhouse/agent/internal/dataplane"
+	"github.com/BankkRoll/Roundhouse/agent/internal/dbquery"
 	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
 	"github.com/BankkRoll/Roundhouse/agent/internal/firewall"
 	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
 	"github.com/BankkRoll/Roundhouse/agent/internal/logship"
+	"github.com/BankkRoll/Roundhouse/agent/internal/metrics"
 	agentruntime "github.com/BankkRoll/Roundhouse/agent/internal/runtime"
+	"github.com/BankkRoll/Roundhouse/agent/internal/volumes"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
@@ -38,6 +43,13 @@ type agent struct {
 	ingress *ingress.Manager
 	logs    *logship.Shipper
 	builds  *builds.Dispatcher
+	metrics *metrics.Collector
+	// volumes holds the node's persistent volumes.
+	volumes *volumes.Manager
+	// data routes volume, backup, restore, copy and query frames.
+	data *dataplane.Handler
+	// backups runs backup, restore and copy tasks.
+	backups *backup.Runner
 	// refusal is why workloads and builds are refused on this connection
 	// ([conn.PlaintextRefusal]), "" when they run.
 	refusal string
@@ -74,6 +86,21 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	if err != nil {
 		return nil, err
 	}
+	a.volumes, err = volumes.New(volumes.Options{
+		Root:      volumesRoot(cfg, dataDir),
+		Quota:     cfg.Volumes.Quota,
+		StatePath: filepath.Join(dataDir, "volumes.json"),
+		Logger:    log.With("component", "volumes"),
+		Send:      func(ctx context.Context, m *protocol.VolumeStatus) error { return client.Send(ctx, m) },
+		Enabled: func() bool {
+			return client.PeerProtocolVersion() >= protocol.VolumesProtocolVersion
+		},
+		OnChange: func() { a.runtime.Poke() },
+		InUse:    func(id string) bool { return a.runtime.VolumeInUse(id) },
+	})
+	if err != nil {
+		return nil, fmt.Errorf("volumes: %w", err)
+	}
 	a.runtime = agentruntime.New(agentruntime.Options{
 		Docker:     dc,
 		Ingress:    a.ingress,
@@ -103,6 +130,8 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 			}
 			go func() { _ = a.logs.Submit(context.Background(), line) }()
 		},
+		Volumes: a.volumes,
+		Exec:    dc,
 	})
 
 	var b builder.Builder
@@ -142,8 +171,106 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 		a.logs.Connected()
 		a.builds.Connected()
 	}
+	a.metrics = metrics.New(metrics.Options{
+		Send: func(ctx context.Context, m *protocol.Metrics) error {
+			if err := client.Send(ctx, m); !errors.Is(err, conn.ErrNotConnected) {
+				return err
+			}
+			return nil
+		},
+		Stats:  dc,
+		Logger: log.With("component", "metrics"),
+	})
+	client.MetricsInterval = a.metrics.SetInterval
+	client.OnPeerProtocol = func(v int) {
+		if v >= protocol.VolumesProtocolVersion {
+			a.volumes.Connected()
+		}
+	}
+	a.backups = backup.New(backup.Options{
+		Docker:    dc,
+		Workloads: taskWorkloads{a.runtime},
+		Volumes:   taskVolumes{a.volumes},
+		Key:       encryption,
+		NodeID:    cfg.NodeID,
+		Send:      client.Send,
+		Log:       a.taskLog,
+		Logger:    log.With("component", "backup"),
+	})
+	a.data = dataplane.New(dataplane.Options{
+		NodeID:    cfg.NodeID,
+		Key:       encryption,
+		Volumes:   a.volumes,
+		Backups:   a.backups,
+		Workloads: a.runtime,
+		Docker:    dc,
+		Query:     queryRunner{dbquery.New(dbquery.Options{})},
+		Send:      client.Send,
+		Logger:    log.With("component", "data"),
+	})
+	client.Data = a.data
 	return a, nil
 }
+
+// volumesRoot is the configured volumes root, or the default: the node
+// path on Linux, a directory in the data directory elsewhere (local
+// development only).
+func volumesRoot(cfg config.Config, dataDir string) string {
+	if cfg.Volumes.Root != "" {
+		return cfg.Volumes.Root
+	}
+	if goruntime.GOOS == "linux" {
+		return volumes.DefaultRoot
+	}
+	return filepath.Join(dataDir, "volumes")
+}
+
+// taskLog ships a line of a backup, restore or copy task's output under the
+// task log source (ADR 0004). Only a control plane at
+// [protocol.BackupsProtocolVersion] sends tasks, so it accepts the source.
+func (a *agent) taskLog(taskID string, stream protocol.LogStream, text string) {
+	line := protocol.Logs{
+		Type:   protocol.TypeLogs,
+		Source: protocol.LogSource{Type: protocol.LogSourceTask, TaskID: taskID},
+		Lines:  []protocol.LogLine{{TS: time.Now().UnixMilli(), Stream: stream, Text: protocol.TruncateLogLine(text)}},
+	}
+	go func() { _ = a.logs.Submit(context.Background(), line) }()
+}
+
+// taskWorkloads adapts the runtime to the backup runner's view of
+// workloads.
+type taskWorkloads struct{ rt *agentruntime.Runtime }
+
+// Container returns the workload's current container and whether it runs.
+func (w taskWorkloads) Container(workloadID string) (string, bool, bool) {
+	return w.rt.Container(workloadID)
+}
+
+// Hold stops the workload and keeps it stopped until release.
+func (w taskWorkloads) Hold(ctx context.Context, workloadID, reason string) (func(), error) {
+	return w.rt.Hold(ctx, workloadID, "", reason)
+}
+
+// WaitHealthy waits until the workload's container is healthy.
+func (w taskWorkloads) WaitHealthy(ctx context.Context, workloadID string) error {
+	return w.rt.WaitHealthy(ctx, workloadID)
+}
+
+// taskVolumes adapts the volume manager to the backup runner's view of
+// volumes.
+type taskVolumes struct{ m *volumes.Manager }
+
+// Use pins a volume against deletion and returns its data directory.
+func (v taskVolumes) Use(volumeID string) (string, func(), error) {
+	vol, release, err := v.m.Use(volumeID)
+	if err != nil {
+		return "", nil, err
+	}
+	return vol.DataPath, release, nil
+}
+
+// TempDir is scratch space on the volumes' filesystem.
+func (v taskVolumes) TempDir() (string, error) { return v.m.TempDir() }
 
 // run serves until ctx ends. Every component stops before it returns;
 // containers keep running.
@@ -176,10 +303,17 @@ func (a *agent) run(ctx context.Context) error {
 		goRun("dns", func(ctx context.Context) error { return a.ingress.ServeDNSOn(ctx, pc, ln) })
 	}
 	a.protectBridges(ctx)
+	// Every volume is mounted before the runtime starts a workload, so none
+	// starts on an empty mount point (ADR 0004).
+	a.volumes.Start(ctx)
+	goRun("volumes", a.volumes.Run)
 	goRun("runtime", a.runtime.Run)
+	goRun("data", a.data.Run)
+	goRun("backups", a.backups.Run)
 	goRun("ingress", a.ingress.Run)
 	goRun("logs", a.logs.Run)
 	goRun("builds", a.builds.Run)
+	goRun("metrics", a.metrics.Run)
 	if ln, err := ingress.ListenAsk(ingress.DefaultAskListen); err != nil {
 		// NOTE: only on-demand ACME certificates depend on this endpoint;
 		// everything else keeps working without it.
@@ -211,6 +345,20 @@ func (a *agent) followContainers(cs []agentruntime.Container) {
 		}
 	}
 	a.logs.Sync(targets)
+
+	sampled := make([]metrics.Target, 0, len(cs))
+	for _, c := range cs {
+		// System workloads belong to no service, so their samples would
+		// have no owner to be written under.
+		if c.DeploymentID == "" {
+			continue
+		}
+		sampled = append(sampled, metrics.Target{
+			ID: c.ID, WorkloadID: c.WorkloadID, PID: c.PID, Running: c.Running,
+			StartedAt: c.StartedAt, Restarts: c.Restarts,
+		})
+	}
+	a.metrics.Sync(sampled)
 }
 
 // handler routes verified control messages to the runtime and builds.
@@ -224,6 +372,9 @@ func (h handler) ApplyDesiredState(m *protocol.DesiredState) bool {
 		go h.a.reportRefused(m.Workloads)
 		return false
 	}
+	// Volumes first, so the runtime's first pass over this state finds them.
+	// Both ignore a generation they have seen.
+	h.a.volumes.Apply(m.Generation, m.Volumes)
 	return h.a.runtime.Apply(m)
 }
 
@@ -272,4 +423,14 @@ func (a *agent) protectBridges(ctx context.Context) {
 			_ = a.firewall.Protect(ctx, iface)
 		}
 	}
+}
+
+// queryRunner adapts dbquery to the data plane's query interface; the two
+// packages' target and credential types have the same fields.
+type queryRunner struct{ r *dbquery.Runner }
+
+// Run runs one data-browser operation.
+func (q queryRunner) Run(ctx context.Context, t dataplane.QueryTarget, c dataplane.QueryCredential,
+	m *protocol.DBQuery) *protocol.DBQueryResult {
+	return q.r.Run(ctx, dbquery.Target(t), dbquery.Credential(c), m)
 }

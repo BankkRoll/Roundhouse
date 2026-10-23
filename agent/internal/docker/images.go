@@ -141,6 +141,14 @@ type Image struct {
 	Created     string            `json:"Created"`
 	Size        int64             `json:"Size"`
 	Labels      map[string]string `json:"Labels"`
+	// Config is the image's run configuration; nil when the engine omits it.
+	Config *ImageConfig `json:"Config"`
+}
+
+// ImageConfig is the subset of an image's run configuration the agent reads.
+type ImageConfig struct {
+	// User is the image's USER, "" for root.
+	User string `json:"User"`
 }
 
 // InspectImage returns the local image ref resolves to. It fails with an

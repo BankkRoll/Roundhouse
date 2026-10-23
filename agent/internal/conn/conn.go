@@ -8,7 +8,10 @@
 //   - verify every inbound signed envelope against the trusted control-plane
 //     keys ([KeyStore]), follow signing-key rollovers announced in welcome
 //     and key_announce, act on welcome, and dispatch desired_state (in
-//     generation order), build_job and build_cancel to a [Handler];
+//     generation order), build_job and build_cancel to a [Handler], and the
+//     volume, backup, restore, copy and query frames to a [DataHandler];
+//   - infer the control plane's protocol version from what it sends
+//     ([Client.PeerProtocolVersion]), so frames it can't parse are never sent;
 //   - carry workload_status, logs and build_result frames from the rest of
 //     the agent through that same writer ([Client.Send]), within the
 //     protocol's frame size limit.
@@ -105,6 +108,22 @@ type Handler interface {
 	CancelBuild(m *protocol.BuildCancel)
 }
 
+// DataHandler receives the Phase 2 data-plane frames (ADR 0004, ADR 0015):
+// volume deletes, backups, restores, volume copies and data-browser
+// queries. Every one but volume_delete is credential-bearing, and reaches it
+// only after [protocol.VerifyEnvelope] has checked its 60 s lifetime. Its
+// methods are called from the connection's read loop and must return
+// quickly.
+type DataHandler interface {
+	DeleteVolume(m *protocol.VolumeDelete)
+	StartBackup(m *protocol.BackupJob)
+	AddBackupParts(m *protocol.BackupParts)
+	StartRestore(m *protocol.RestoreJob)
+	StartCopyOut(m *protocol.VolumeCopyOut)
+	StartCopyIn(m *protocol.VolumeCopyIn)
+	RunQuery(m *protocol.DBQuery)
+}
+
 // Client is a long-lived connection to the control plane. Configure the
 // exported fields, then call [Client.Run].
 type Client struct {
@@ -137,9 +156,19 @@ type Client struct {
 	// Handler receives desired states and build jobs; nil only records the
 	// observed generation.
 	Handler Handler
+	// Data receives the data-plane frames; nil drops them.
+	Data DataHandler
+	// OnPeerProtocol is called with the control plane's protocol version
+	// each time [Client.PeerProtocolVersion] rises. It must not block.
+	OnPeerProtocol func(version int)
 	// OnConnect is called after hello is sent on each new connection, when
 	// [Client.Send] starts to succeed. It must not block.
 	OnConnect func()
+	// MetricsInterval is called with the metrics sampling interval each
+	// welcome asks for, clamped to the protocol's bounds, or 0 when it asks
+	// for none; and with 0 when the connection ends, so no frame goes to a
+	// control plane that has not asked for one. It must not block.
+	MetricsInterval func(d time.Duration)
 	// Logger receives connection and message logs; nil discards them.
 	Logger *slog.Logger
 
@@ -156,6 +185,9 @@ type Client struct {
 	// clockOffset is how far the control plane's clock is ahead of ours, in
 	// nanoseconds, as of the latest handshake.
 	clockOffset atomic.Int64
+	// peer is the lowest protocol version the control plane has shown it
+	// speaks on the current connection; 0 while disconnected.
+	peer atomic.Int64
 	// cur is the session whose writer accepts [Client.Send] frames, nil
 	// while disconnected.
 	cur atomic.Pointer[session]
@@ -265,6 +297,8 @@ func (c *Client) session(ctx context.Context) (connected bool, err error) {
 		return false, err
 	}
 	defer ws.CloseNow()
+	c.peer.Store(0)
+	defer c.peer.Store(0)
 	ws.SetReadLimit(maxFrameBytes)
 	c.Logger.Info("connected to control plane", "url", c.ConnectURL)
 
@@ -298,6 +332,9 @@ func (c *Client) session(ctx context.Context) (connected bool, err error) {
 	readErr := s.readLoop(ioCtx)
 	stop()
 	<-closed
+	if c.MetricsInterval != nil {
+		c.MetricsInterval(0)
+	}
 	return true, errors.Join(readErr, <-writeErr)
 }
 
@@ -565,9 +602,15 @@ func (s *session) apply(kid string, msg protocol.ControlMessage) {
 		}
 		s.interval <- d
 		s.Logger.Info("welcomed by control plane", "msg_id", m.ID, "heartbeat_interval", d)
+		if s.MetricsInterval != nil {
+			s.MetricsInterval(clampMetricsInterval(m.MetricsIntervalMS))
+		}
+		s.raisePeer(welcomeVersion(m))
 	case *protocol.KeyAnnounce:
 		s.announce(kid, m.Keys)
+		s.raisePeer(protocol.KeyRolloverProtocolVersion)
 	case *protocol.DesiredState:
+		s.raisePeer(desiredStateVersion(m))
 		s.applyDesiredState(m)
 	case *protocol.BuildJob:
 		if s.Handler == nil {
@@ -582,6 +625,20 @@ func (s *session) apply(kid string, msg protocol.ControlMessage) {
 		}
 		s.Logger.Info("received build cancel", "msg_id", m.ID, "build_id", m.BuildID)
 		s.Handler.CancelBuild(m)
+	case *protocol.VolumeDelete:
+		s.data(protocol.VolumesProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.DeleteVolume(m) })
+	case *protocol.BackupJob:
+		s.data(protocol.BackupsProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.StartBackup(m) })
+	case *protocol.BackupParts:
+		s.data(protocol.BackupsProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.AddBackupParts(m) })
+	case *protocol.RestoreJob:
+		s.data(protocol.BackupsProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.StartRestore(m) })
+	case *protocol.VolumeCopyOut:
+		s.data(protocol.BackupsProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.StartCopyOut(m) })
+	case *protocol.VolumeCopyIn:
+		s.data(protocol.BackupsProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.StartCopyIn(m) })
+	case *protocol.DBQuery:
+		s.data(protocol.DBQueryProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.RunQuery(m) })
 	}
 }
 
@@ -628,6 +685,16 @@ func clampHeartbeatInterval(ms int64) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
+// clampMetricsInterval converts a welcome's metrics_interval_ms to a
+// duration within the protocol's bounds; absent or non-positive is 0 (no
+// metrics).
+func clampMetricsInterval(ms *int64) time.Duration {
+	if ms == nil || *ms <= 0 {
+		return 0
+	}
+	return time.Duration(min(max(*ms, protocol.MinMetricsIntervalMS), protocol.MaxMetricsIntervalMS)) * time.Millisecond
+}
+
 // fitHello keeps hello within the frame limit. Status messages go first,
 // then statuses from the end: hello must always get through, and the
 // control plane learns the rest from workload_status frames.
@@ -647,4 +714,71 @@ func fitHello(h protocol.Hello) protocol.Hello {
 		h.Statuses = h.Statuses[:len(h.Statuses)/2]
 	}
 	return h
+}
+
+// PeerProtocolVersion returns the lowest protocol version the control plane
+// has shown it speaks on the current connection, 0 while disconnected. Frames
+// gated above it must not be sent: a control plane rejects frame types it
+// doesn't know by closing the connection.
+//
+// NOTE: welcome carries no protocol version, so it is inferred from what the
+// control plane sends, which it never sends above the agent's version: a
+// welcome is at least [protocol.MinProtocolVersion], one with next_keys at
+// least [protocol.KeyRolloverProtocolVersion] and one with
+// metrics_interval_ms at least [protocol.MetricsProtocolVersion]; a desired
+// state or a frame using a gated feature at least that feature's version.
+func (c *Client) PeerProtocolVersion() int { return int(c.peer.Load()) }
+
+// raisePeer records that the control plane speaks at least version v.
+func (c *Client) raisePeer(v int) {
+	for {
+		cur := c.peer.Load()
+		if int64(v) <= cur {
+			return
+		}
+		if c.peer.CompareAndSwap(cur, int64(v)) {
+			if c.OnPeerProtocol != nil {
+				c.OnPeerProtocol(v)
+			}
+			return
+		}
+	}
+}
+
+func welcomeVersion(m *protocol.Welcome) int {
+	v := protocol.MinProtocolVersion
+	if len(m.NextKeys) > 0 {
+		v = max(v, protocol.KeyRolloverProtocolVersion)
+	}
+	if m.MetricsIntervalMS != nil {
+		v = max(v, protocol.MetricsProtocolVersion)
+	}
+	return v
+}
+
+func desiredStateVersion(m *protocol.DesiredState) int {
+	v := protocol.MinProtocolVersion
+	if m.Volumes != nil || m.Mesh != nil {
+		v = max(v, protocol.VolumesProtocolVersion)
+	}
+	if m.Ingress != nil || m.Certificates != nil {
+		v = max(v, protocol.CertsProtocolVersion)
+	}
+	return v
+}
+
+// data dispatches a data-plane frame gated at version gate.
+func (s *session) data(gate int, typ, msgID string, fn func(DataHandler)) {
+	// A verified frame of a gated type proves the control plane speaks the
+	// gate's version: it sends nothing above the agent's.
+	s.raisePeer(gate)
+	if s.PeerProtocolVersion() < gate {
+		return
+	}
+	if s.Data == nil {
+		s.Logger.Warn("dropping control frame", "reason", "no_handler", "type", typ, "msg_id", msgID)
+		return
+	}
+	s.Logger.Debug("received data-plane frame", "type", typ, "msg_id", msgID)
+	fn(s.Data)
 }

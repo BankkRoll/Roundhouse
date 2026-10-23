@@ -62,6 +62,7 @@ import {
   RESTART_POLICIES,
   type ResourcesConfig,
   ROLES,
+  SERVICE_DATABASE_ENGINES,
   SERVICE_KINDS,
   type ServiceSource,
   secretBuildArgsValid,
@@ -348,6 +349,11 @@ export const ServiceSchema = z
     slug: z.string(),
     kind: z.enum(SERVICE_KINDS),
     icon: z.string().nullable(),
+    /** Set for database services: the registry engine and version it runs. */
+    database: z
+      .object({ engine: z.enum(SERVICE_DATABASE_ENGINES), version: z.string() })
+      .nullable()
+      .optional(),
     created_at: Millis,
     updated_at: Millis,
   })

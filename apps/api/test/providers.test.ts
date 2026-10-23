@@ -10,13 +10,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeHetzner } from "../../../packages/providers/test/fakes/hetzner";
 import { PROVIDER_ROUTES, policyOf } from "../src/contracts";
 import { app } from "../src/index";
-import { setProviderTransport } from "../src/lib/cloud-providers";
+import { providerTokenFingerprint, setProviderTransport } from "../src/lib/cloud-providers";
+import { masterKeyId } from "../src/lib/keyring";
 import { reconcileProviders } from "../src/lib/provisioning";
+import { rewrapInstanceBatch } from "../src/workflows/key-rotation";
 import { addMember, type Client, call, eventually, install, joinBody, joinNode } from "./helpers";
 
 const RW = "hz-rw-0123456789abcdefWXYZ";
 const RO = "hz-ro-0123456789abcdefRDNL";
 const BAD = "hz-bad-0123456789abcdefBAD";
+const MASTER_KEY = env.MASTER_KEY!;
 
 let fake: FakeHetzner;
 let introspector: Awaited<ReturnType<typeof introspectWorkflow>> | undefined;
@@ -29,6 +32,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  env.MASTER_KEY = MASTER_KEY;
+  env.MASTER_KEYS_PREVIOUS = undefined;
   setProviderTransport(null);
   await introspector?.dispose();
   introspector = undefined;
@@ -163,6 +168,41 @@ describe("integrations", () => {
       `/v1/workspaces/${workspaceId}/providers/hetzner/offers?role=builder`,
     );
     expect(offers.status).toBe(500);
+  });
+
+  it("fingerprints under a per-workspace key that survives a master key rotation", async () => {
+    const { owner, workspaceId } = await install();
+    const ok = await connect(owner, workspaceId);
+    const fingerprint = ok.body.token_fingerprint as string;
+    const db = createDb(env.DB);
+    expect(await providerTokenFingerprint(db, env, workspaceId, RW)).toBe(fingerprint);
+    expect(await providerTokenFingerprint(db, env, "ws_other", RW)).not.toBe(fingerprint);
+    expect(await providerTokenFingerprint(db, env, workspaceId, RO)).not.toBe(fingerprint);
+    const audit = await env.DB.prepare(
+      "SELECT metadata FROM audit_logs WHERE action = 'provider.connected'",
+    ).first<{ metadata: string }>();
+    expect(JSON.parse(audit!.metadata).fingerprint).toBe(fingerprint);
+
+    const secret = async () =>
+      JSON.parse(
+        (await env.DB.prepare(
+          "SELECT value FROM instance_settings WHERE key = 'fingerprint_secret'",
+        ).first<{ value: string }>())!.value,
+      ).secret;
+    expect(await secret()).toMatchObject({ v: 2, kid: await masterKeyId(MASTER_KEY) });
+
+    const next = btoa("f".repeat(32));
+    env.MASTER_KEY = next;
+    env.MASTER_KEYS_PREVIOUS = MASTER_KEY;
+    expect(await providerTokenFingerprint(db, env, workspaceId, RW)).toBe(fingerprint);
+
+    // Once rotation re-wraps the secret, the new key alone derives the same key.
+    let pending = await rewrapInstanceBatch(db, env);
+    while (pending > 0) pending = await rewrapInstanceBatch(db, env);
+    expect(await secret()).toMatchObject({ v: 2, kid: await masterKeyId(next) });
+    expect(await providerTokenFingerprint(db, { MASTER_KEY: next }, workspaceId, RW)).toBe(
+      fingerprint,
+    );
   });
 
   it("is limited to owners and admins, and connecting to browser sessions", async () => {

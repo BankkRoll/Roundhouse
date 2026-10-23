@@ -41,6 +41,7 @@ import {
   VariableTierSchema,
   VariableValueField,
 } from "../schemas";
+import { DatabaseChoiceSchema } from "./databases";
 import { EnvironmentParams, ProjectParams } from "./params";
 import { defineRoute, session } from "./policy";
 
@@ -85,16 +86,24 @@ const scopeMatchesService = (v: { scope: string; service?: string | undefined })
   (v.scope === "service") === (v.service !== undefined);
 const SCOPE_RULE = { message: "service is required for scope service and only allowed for it" };
 
-const ServiceCreateOp = z.object({
-  type: z.literal("service.create"),
-  ref: NewRef,
-  name: NameField,
-  slug: ServiceSlugField.optional(),
-  kind: z.enum(SERVICE_KINDS).default("app"),
-  icon: z.string().max(64).optional(),
-  source: ServiceSourceSchema,
-  config: ServiceConfigPatchSchema.omit({ source: true }).optional(),
-});
+const ServiceCreateOp = z
+  .object({
+    type: z.literal("service.create"),
+    ref: NewRef,
+    name: NameField,
+    slug: ServiceSlugField.optional(),
+    kind: z.enum(SERVICE_KINDS).default("app"),
+    icon: z.string().max(64).optional(),
+    /** Required, except for a database, whose pinned image the registry picks. */
+    source: ServiceSourceSchema.optional(),
+    config: ServiceConfigPatchSchema.omit({ source: true }).optional(),
+    /** Creates a database service (ADR 0004); see `POST /v1/projects/{projectId}/databases`. */
+    database: DatabaseChoiceSchema.optional(),
+  })
+  .refine((op) => (op.source === undefined) !== (op.database === undefined), {
+    message: "give exactly one of source and database",
+    path: ["source"],
+  });
 
 const ServiceUpdateOp = z.object({
   type: z.literal("service.update"),

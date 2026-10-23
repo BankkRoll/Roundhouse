@@ -290,6 +290,8 @@ function prepare(
   const live = (id: string) => liveServices(environment.project_id).find((s) => s.id === id);
   switch (input.type) {
     case "service.create": {
+      // NOTE: the mock API doesn't render database services from the registry.
+      if (!input.source) return apiError(400, "invalid_request", "Databases aren't mocked");
       const op = { ...input, kind: input.kind ?? "app" } as StagedOp;
       const spec = merge(
         defaultServiceConfig(input.source),

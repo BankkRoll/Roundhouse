@@ -250,3 +250,44 @@ export function formatMemoryMb(mb: number | null | undefined): string {
 export function formatLogTime(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(11, 23);
 }
+
+/**
+ * Formats a byte rate, as network and disk charts plot it.
+ *
+ * @param bytesPerSecond - Bytes per second.
+ * @returns e.g. `"1.2 MB/s"`, `"0 B/s"`, or {@link EMPTY}.
+ * @example
+ * formatBytesPerSecond(1.5 * 1024 * 1024); // "1.5 MB/s"
+ */
+export function formatBytesPerSecond(bytesPerSecond: number | null | undefined): string {
+  const bytes = formatBytes(bytesPerSecond);
+  return bytes === EMPTY ? EMPTY : `${bytes}/s`;
+}
+
+/**
+ * Formats CPU usage given in millicores: millicores below one core, cores above, the
+ * way container dashboards and Kubernetes write it.
+ *
+ * @param millis - Thousandths of a core, e.g. `120` or `1500`.
+ * @returns e.g. `"120m"`, `"0.5m"`, `"1.5 vCPU"`, or {@link EMPTY}.
+ * @example
+ * formatMillicores(120); // "120m"
+ * formatMillicores(2000); // "2 vCPU"
+ */
+export function formatMillicores(millis: number | null | undefined): string {
+  if (!isNumber(millis) || millis < 0) return EMPTY;
+  if (millis >= 1000) return formatCpu(millis);
+  return `${trimFixed(millis, millis < 10 ? 1 : 0)}m`;
+}
+
+/**
+ * Formats a count compactly for chart axes and tooltips.
+ *
+ * @param value - A count; fractions keep one digit.
+ * @returns e.g. `"3"`, `"0.5"`, `"1.2k"`, or {@link EMPTY}.
+ */
+export function formatCount(value: number | null | undefined): string {
+  if (!isNumber(value)) return EMPTY;
+  if (Math.abs(value) >= 1000) return `${trimFixed(value / 1000, 1)}k`;
+  return trimFixed(value, 1);
+}

@@ -17,9 +17,18 @@ packages=(
 	./agent/internal/runtime/...
 	./agent/internal/ingress/...
 	./agent/internal/logship/...
+	./agent/internal/volumes/...
+	./agent/internal/dataplane/...
+	./agent/internal/backup/...
+	./agent/internal/dbquery/...
 )
 
 src="$repo"
+# Bind-mount sources name paths on the daemon's host. Tests that bind
+# directories they create (volumes) create them under this path, mounted at
+# the same path in the test container; with Docker Desktop it lives in the
+# Linux VM.
+scratch="/var/lib/roundhouse-it"
 socket="/var/run/docker.sock"
 case "$(uname -s)" in
 MINGW* | MSYS* | CYGWIN*)
@@ -40,6 +49,7 @@ fi
 exec docker run --rm \
 	-v "${socket}:/var/run/docker.sock" \
 	-v "${src}:/src" \
+	-v "${scratch}:${scratch}" \
 	-v roundhouse-it-gomod:/go/pkg/mod \
 	-v roundhouse-it-gocache:/root/.cache/go-build \
 	-w /src \

@@ -11,11 +11,14 @@
  * - The project realtime socket (`ProjectRoom`), the audit chain sealer
  *   (`AuditChain`), and the deploy and key rotation workflows
  *   (`DeployWorkflow`, `KeyRotationWorkflow`), and one-click server
- *   provisioning (`ProvisionWorkflow`), exported for their bindings
+ *   provisioning (`ProvisionWorkflow`), and backups and restores
+ *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), exported for their bindings
  * - `Cache-Control: no-store` on every API and auth response, and the
  *   two-factor gate in front of `/v1/*` mutations (ADR 0014)
- * - Custom-domain checks and audit-chain sealing every minute (Cron
- *   Trigger), see `lib/domains/check.ts` and `durable/audit-chain.ts`
+ * - Service, project and node metrics (`routes/metrics.ts`, ADR 0008)
+ * - The minute tick (Cron Trigger): audit-chain sealing (`durable/audit-chain.ts`),
+ *   custom-domain checks, volume deletions and the other scheduled claimers,
+ *   see `lib/dispatch.ts`
  * - The hourly retention job (Cron Trigger), see `lib/retention.ts`, and the
  *   cloud provider reconcile, see `lib/provisioning.ts`
  * - Static SPA assets (served by the platform for everything else)
@@ -29,7 +32,7 @@ import { authFor, createRouter, withDb } from "./context";
 import type { Env } from "./env";
 import { AUDIT_CHAIN_NAME } from "./lib/audit-chain";
 import { noStore } from "./lib/cache-control";
-import { DOMAIN_CHECK_CRON, runDomainChecks } from "./lib/domains/check";
+import { MINUTE_CRON, runMinuteTick } from "./lib/dispatch";
 import { ApiError, errorBody, errorCodeForStatus } from "./lib/errors";
 import { rateLimitSecrets, sameOriginMutations } from "./lib/guards";
 import { reconcileProviders } from "./lib/provisioning";
@@ -42,7 +45,10 @@ import { accessRoutes } from "./routes/access";
 import { agentRoutes } from "./routes/agent";
 import { auditRoutes } from "./routes/audit";
 import { authSecurityRoutes } from "./routes/auth-security";
+import { backupRoutes } from "./routes/backups";
 import { changeRoutes } from "./routes/changes";
+import { dataBrowserRoutes } from "./routes/data-browser";
+import { databaseRoutes } from "./routes/databases";
 import { deploymentRoutes } from "./routes/deployments";
 import { domainRoutes } from "./routes/domains";
 import { githubRoutes } from "./routes/github";
@@ -50,6 +56,7 @@ import { instanceRoutes } from "./routes/instance";
 import { instanceAdminRoutes } from "./routes/instance-admin";
 import { inviteRoutes } from "./routes/invites";
 import { keyRoutes } from "./routes/keys";
+import { metricsRoutes } from "./routes/metrics";
 import { nodeRoutes } from "./routes/nodes";
 import { projectRoutes } from "./routes/projects";
 import { providerRoutes } from "./routes/providers";
@@ -66,9 +73,11 @@ import { SESSION_SCHEME, TOKEN_SCHEME } from "./schemas";
 export { AuditChain } from "./durable/audit-chain";
 export { NodeConnection } from "./durable/node-connection";
 export { ProjectRoom } from "./durable/project-room";
+export { BackupWorkflow } from "./workflows/backup";
 export { DeployWorkflow } from "./workflows/deploy";
 export { KeyRotationWorkflow } from "./workflows/key-rotation";
 export { ProvisionWorkflow } from "./workflows/provision";
+export { RestoreWorkflow } from "./workflows/restore";
 
 /** Version of the REST API advertised in the OpenAPI document. */
 const API_VERSION = "0.1.0";
@@ -107,7 +116,10 @@ app
   .route("/", agentRoutes)
   .route("/", projectRoutes)
   .route("/", serviceRoutes)
+  .route("/", metricsRoutes)
+  .route("/", dataBrowserRoutes)
   .route("/", changeRoutes)
+  .route("/", databaseRoutes)
   .route("/", domainRoutes)
   .route("/", variableRoutes)
   .route("/", deploymentRoutes)
@@ -122,6 +134,7 @@ app
   .route("/", signingKeyRoutes)
   .route("/", providerRoutes)
   .route("/", templateRoutes)
+  .route("/", backupRoutes)
   .route("/", mcpRoutes)
   .route("/", oauthRoutes)
   .route("/", oauthConsentRoutes);
@@ -168,17 +181,15 @@ export { app };
 export default {
   fetch: app.fetch,
   async scheduled(controller, env) {
-    if (controller.cron === DOMAIN_CHECK_CRON) {
+    if (controller.cron === MINUTE_CRON) {
       try {
         await env.AUDIT_CHAIN.get(env.AUDIT_CHAIN.idFromName(AUDIT_CHAIN_NAME)).seal();
       } catch (err) {
         console.error("audit chain seal failed", err instanceof Error ? err.name : "error");
       }
-      try {
-        const checks = await runDomainChecks(env, controller.scheduledTime);
-        if (checks.checked) console.log("domain checks", JSON.stringify(checks));
-      } catch (err) {
-        console.error("domain checks failed", err instanceof Error ? err.name : "error");
+      const ticked = await runMinuteTick(env, controller.scheduledTime);
+      if (Object.values(ticked).some((n) => n !== 0)) {
+        console.log("minute tick", JSON.stringify(ticked));
       }
       return;
     }

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 )
 
@@ -58,6 +59,35 @@ func TestWriteFailureKeepsOldContents(t *testing.T) {
 	for _, e := range entries {
 		if e.Name() != "file" && e.Name() != "blocked" {
 			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestWriteSurvivesConcurrentReaders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := Write(path, []byte("0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = os.ReadFile(path)
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-done
+	}()
+	for i := range 100 {
+		if err := Write(path, []byte(strconv.Itoa(i)), 0o600); err != nil {
+			t.Fatalf("write %d: %v", i, err)
 		}
 	}
 }

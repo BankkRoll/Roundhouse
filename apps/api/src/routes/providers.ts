@@ -22,7 +22,7 @@ import {
   clientIp,
   createRouter,
   originOf,
-  requireMasterKey,
+  requireKeys,
   requireUser,
   requireWorkspace,
 } from "../context";
@@ -105,7 +105,7 @@ export const providerRoutes = createRouter()
     const { workspaceId, provider } = c.req.valid("param");
     await requireUser(c);
     const m = await requireWorkspace(c, workspaceId, policyOf(connectIntegration).action!);
-    const masterKey = requireMasterKey(c);
+    const keys = requireKeys(c);
     const { token } = c.req.valid("json");
     const name = PROVIDERS[provider].displayName;
 
@@ -132,8 +132,8 @@ export const providerRoutes = createRouter()
     const id = existing?.id ?? newId("providerCredential");
     const now = new Date();
     const values = {
-      tokenSealed: await sealProviderToken(c.env, token, { workspaceId, provider, rowId: id }),
-      fingerprint: await providerTokenFingerprint(masterKey, workspaceId, token),
+      tokenSealed: await sealProviderToken(keys, token, { workspaceId, provider, rowId: id }),
+      fingerprint: await providerTokenFingerprint(db, keys, workspaceId, token),
       tokenLast4: token.slice(-4),
       accountLabel: (check.account?.name || check.account?.email || null)?.slice(0, 200) ?? null,
       validatedAt: now,

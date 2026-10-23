@@ -7,6 +7,10 @@
  * - GitHub delivery IDs past the redelivery window.
  * - Expired node join tokens, sessions, invites, Better Auth verifications,
  *   GitHub installation claims, and redeemed single-use nonces.
+ * - Metrics samples of the D1 fallback older than 48 hours (ADR 0008).
+ * - Backups past their policy (ADR 0004): the S3 object first, then the
+ *   row; and backups and restores stuck far past their timeout, failed and
+ *   their uploads aborted. See `./backups/schedule.ts`.
  * - Sign-in failure counters past their window and no longer locked.
  *
  * Every deletion runs in bounded batches with a per-run cap, so one run
@@ -28,10 +32,12 @@ import {
   sessions,
   verifications,
 } from "@roundhouse/db";
-import { LOGIN_FAILURE_WINDOW_MS } from "@roundhouse/shared";
+import { D1_METRICS_RETENTION_MS, LOGIN_FAILURE_WINDOW_MS } from "@roundhouse/shared";
 import { and, inArray, isNull, lt, or, type SQL } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Env } from "../env";
+import { runBackupMaintenance } from "./backups/schedule";
+import type { KeyEnv } from "./keyring";
 import { getLogRetentionDays } from "./settings";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -56,6 +62,13 @@ export const DELIVERY_RETENTION_MS = 14 * DAY_MS;
  * stale link is told it expired rather than that it never existed.
  */
 export const EXPIRED_GRACE_MS = 7 * DAY_MS;
+
+/**
+ * Metrics samples deleted per statement. Far larger than {@link ROW_BATCH}:
+ * a busy install writes tens of thousands of samples an hour, and these
+ * rows are tiny and deleted by `rowid` without binding their keys.
+ */
+export const METRICS_ROW_BATCH = 5000;
 
 /** D1 binds at most 100 parameters per statement. */
 const MAX_BOUND_IDS = 90;
@@ -82,6 +95,11 @@ export interface RetentionReport {
   invites: number;
   verifications: number;
   nonces: number;
+  metricsSamples: number;
+  /** Backups deleted by their policy. */
+  backups: number;
+  /** Backups and restores failed for running far past their timeout. */
+  stuckBackups: number;
   loginAttempts: number;
   githubClaims: number;
 }
@@ -150,16 +168,37 @@ async function pruneRows(
   return deleted;
 }
 
+/** Deletes D1 metrics samples older than `cutoff` (unix ms). */
+async function pruneMetricsSamples(
+  d1: D1Database,
+  cutoff: number,
+  limits: RetentionLimits,
+): Promise<number> {
+  const batch = Math.max(limits.rowBatch, METRICS_ROW_BATCH);
+  let deleted = 0;
+  for (let i = 0; i < limits.maxBatches; i++) {
+    const { meta } = await d1
+      .prepare(
+        "DELETE FROM metrics_samples WHERE rowid IN (SELECT rowid FROM metrics_samples WHERE timestamp < ? LIMIT ?)",
+      )
+      .bind(cutoff, batch)
+      .run();
+    deleted += meta.changes;
+    if (meta.changes < batch) break;
+  }
+  return deleted;
+}
+
 /**
  * Runs every retention rule once.
  *
- * @param env - Worker bindings (`DB`, `LOGS`).
+ * @param env - Worker bindings (`DB`, `LOGS`) and the keyring (backup storage credentials).
  * @param now - The run's notion of now, unix ms; the Cron Trigger's scheduled time.
  * @param limits - Batch sizes and the per-run cap.
  * @returns How many rows of each kind were deleted.
  */
 export async function runRetention(
-  env: Pick<Env, "DB" | "LOGS">,
+  env: Pick<Env, "DB" | "LOGS"> & KeyEnv,
   now = Date.now(),
   limits: RetentionLimits = DEFAULT_LIMITS,
 ): Promise<RetentionReport> {
@@ -168,7 +207,14 @@ export async function runRetention(
   const at = (ms: number) => new Date(now - ms);
   const prune = (table: SQLiteTable, key: SQLiteColumn, where: SQL) =>
     pruneRows(db, limits, table, key, where);
+  // NOTE: backup maintenance talks to S3; its failure must not stop the rest.
+  const backups = await runBackupMaintenance(env, now).catch((err) => {
+    console.error("backup maintenance failed", err instanceof Error ? err.name : "error");
+    return { expired: 0, stuck: 0 };
+  });
   return {
+    backups: backups.expired,
+    stuckBackups: backups.stuck,
     logChunks: await pruneLogChunks(db, env.LOGS, at(logDays * DAY_MS), limits),
     githubDeliveries: await prune(
       githubDeliveries,
@@ -184,6 +230,7 @@ export async function runRetention(
     invites: await prune(invites, invites.id, lt(invites.expiresAt, at(EXPIRED_GRACE_MS))),
     verifications: await prune(verifications, verifications.id, lt(verifications.expiresAt, at(0))),
     nonces: await prune(consumedNonces, consumedNonces.id, lt(consumedNonces.expiresAt, at(0))),
+    metricsSamples: await pruneMetricsSamples(env.DB, now - D1_METRICS_RETENTION_MS, limits),
     loginAttempts: await prune(
       loginAttempts,
       loginAttempts.id,

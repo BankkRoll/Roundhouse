@@ -1,0 +1,6 @@
+{
+  "meta": [{ "name": "t", "type": "UInt32" }, { "name": "m0", "type": "Float64" }],
+  "data": [{ "t": 1792735200, "m0": 41.25 }, { "t": null, "m0": 12 }],
+  "rows": 2,
+  "rows_before_limit_at_least": 2
+}

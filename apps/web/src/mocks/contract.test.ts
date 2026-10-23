@@ -29,6 +29,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PHASE1_ROUTES } from "../../../api/src/contracts";
 import { RealtimeServerMessageSchema } from "../../../api/src/schemas";
+import { DATA_SEED } from "./data-db";
 import {
   db,
   INVITE_TOKEN,
@@ -84,6 +85,10 @@ const ROUTE_MODULES = [
   "providers",
   "templates",
   "changes",
+  "metrics",
+  "databases",
+  "data-browser",
+  "backups",
   "signing-keys",
   "instance-admin",
   "auth-security",
@@ -499,6 +504,26 @@ describe("MSW mocks match the API contract", () => {
       as("admin");
       expect((await call("DELETE", `${WS}/nodes/node_nope`)).status).toBe(404);
       expect((await call("DELETE", `${WS}/nodes/node_hel1`)).status).toBe(204);
+    });
+  });
+
+  it("metrics: service series, project summary, node series", async () => {
+    await fresh(async () => {
+      const env = `environment_id=${SEED.production}`;
+      const service = await call("GET", `/v1/services/${SEED.web}/metrics?${env}&group=replica`);
+      expect(service.status).toBe(200);
+      expect((service.body as { step_s: number }).step_s).toBeGreaterThan(0);
+      expect((await call("GET", `/v1/services/${SEED.web}/metrics`)).status).toBe(400);
+      expect((await call("GET", `/v1/services/svc_nope/metrics?${env}`)).status).toBe(404);
+
+      const summary = await call("GET", `/v1/projects/${SEED.project}/metrics/summary?${env}`);
+      expect(summary).toMatchObject({ status: 200, body: { environment_id: SEED.production } });
+
+      expect((await call("GET", `${WS}/nodes/node_hel1/metrics`)).status).toBe(200);
+      expect((await call("GET", `${WS}/nodes/node_nope/metrics`)).status).toBe(404);
+
+      as(null);
+      expect((await call("GET", `/v1/services/${SEED.web}/metrics?${env}`)).status).toBe(401);
     });
   });
 
@@ -1619,6 +1644,7 @@ describe("MSW mocks match the API contract", () => {
               domain: { hostname: expect.stringMatching(/^api-production/) },
               latest_deployment: { id: SEED.apiActive, project_id: SEED.project },
             },
+            { service: { id: DATA_SEED.database, kind: "database" }, domain: null },
             {
               service: { id: SEED.web },
               config_version: 3,
@@ -1640,7 +1666,7 @@ describe("MSW mocks match the API contract", () => {
       const projects = (all.body as { projects: { name: string; services: unknown[] }[] }).projects;
       expect(projects.map((project) => [project.name, project.services.length])).toEqual([
         ["internal-tools", 1],
-        ["storefront", 3],
+        ["storefront", 4],
       ]);
       expect((await call("GET", `${OTHER_WS}/projects/summary`)).status).toBe(404);
 
@@ -2251,6 +2277,392 @@ describe("MSW mocks match the API contract", () => {
       expect((await call("POST", `${ENV}/draft/ops`, { op: patch })).status).toBe(403);
       as(null);
       expect((await call("GET", `${ENV}/draft`)).status).toBe(401);
+    });
+  });
+
+  it("databases: add one, then read, grow, delete and undelete its volume", async () => {
+    await fresh(async () => {
+      const add = `/v1/projects/${SEED.project}/databases`;
+      const body = { engine: "postgres", environment_id: SEED.production };
+      expect((await call("POST", add, { ...body, engine: "oracle" })).status).toBe(400);
+      expect((await call("POST", add, { ...body, size_mb: 10 })).status).toBe(400);
+      as(null);
+      expect((await call("POST", add, body)).status).toBe(401);
+      as("viewer");
+      expect((await call("POST", add, body)).status).toBe(403);
+      as("owner");
+      expect((await call("POST", "/v1/projects/prj_nope/databases", body)).status).toBe(404);
+      expect((await call("POST", add, { ...body, environment_id: "env_nope" })).status).toBe(404);
+      expect((await call("POST", add, { ...body, version: "9" })).status).toBe(404);
+      const created = await call("POST", add, { ...body, engine: "redis", size_mb: 1024 });
+      expect(created).toMatchObject({
+        status: 201,
+        body: {
+          service: {
+            kind: "database",
+            slug: "valkey",
+            database: { engine: "redis", version: "valkey-9" },
+          },
+          version: "valkey-9",
+          volumes: [{ size_mb: 1024, status: "pending", mount_path: "/data" }],
+          variables: expect.arrayContaining([{ key: "REDIS_URL", secret: true }]),
+        },
+      });
+      expect((created.body as { deployment_ids: string[] }).deployment_ids).toHaveLength(1);
+      const quiet = await call("POST", add, { ...body, name: "Cache", deploy: false });
+      expect(quiet.body).toMatchObject({ service: { slug: "cache" }, deployment_ids: [] });
+
+      const env = `environment_id=${SEED.production}`;
+      const volumeUrl = `/v1/services/${DATA_SEED.database}/volume?${env}`;
+      expect((await call("GET", volumeUrl)).body).toMatchObject({
+        id: DATA_SEED.volume,
+        status: "ready",
+        quota_mode: "xfs_project",
+      });
+      expect((await call("GET", `/v1/services/${SEED.web}/volume?${env}`)).status).toBe(404);
+      expect((await call("GET", `/v1/services/svc_nope/volume?${env}`)).status).toBe(404);
+      const otherEnv = `/v1/services/${DATA_SEED.database}/volume?environment_id=env_nope`;
+      expect((await call("GET", otherEnv)).status).toBe(404);
+
+      const volume = `/v1/volumes/${DATA_SEED.volume}`;
+      expect((await call("PATCH", volume, { size_mb: 1 })).status).toBe(400);
+      expect(await call("PATCH", volume, { size_mb: 4096 })).toMatchObject({
+        status: 422,
+        body: { error: { code: "volume_shrink_unsupported" } },
+      });
+      expect((await call("PATCH", "/v1/volumes/vol_nope", { size_mb: 8192 })).status).toBe(404);
+      as("viewer");
+      expect((await call("PATCH", volume, { size_mb: 8192 })).status).toBe(403);
+      expect((await call("DELETE", volume)).status).toBe(403);
+      expect((await call("POST", `${volume}/undelete`)).status).toBe(403);
+      as("member");
+      expect(await call("PATCH", volume, { size_mb: 8192 })).toMatchObject({
+        status: 200,
+        body: { size_mb: 8192 },
+      });
+      expect((await call("POST", `${volume}/undelete`)).status).toBe(409);
+      expect(await call("DELETE", volume)).toMatchObject({
+        status: 409,
+        body: { error: { message: expect.stringContaining("still runs") } },
+      });
+      for (const row of db.deploy.deployments) {
+        if (row.service_id === DATA_SEED.database) row.status = "removed";
+      }
+      expect(await call("DELETE", volume)).toMatchObject({
+        status: 200,
+        body: { status: "pending_deletion", delete_after: expect.any(Number) },
+      });
+      expect((await call("GET", volumeUrl)).body).toMatchObject({ status: "pending_deletion" });
+      expect((await call("PATCH", volume, { size_mb: 9000 })).status).toBe(409);
+      expect((await call("DELETE", volume)).status).toBe(409);
+      expect(await call("POST", `${volume}/undelete`)).toMatchObject({
+        status: 200,
+        body: { status: "ready", delete_after: null },
+      });
+      expect((await call("POST", "/v1/volumes/vol_nope/undelete")).status).toBe(404);
+      expect((await call("DELETE", "/v1/volumes/vol_nope")).status).toBe(404);
+      as(null);
+      expect((await call("GET", volumeUrl)).status).toBe(401);
+      expect((await call("DELETE", volume)).status).toBe(401);
+      expect(db.audit.map((row) => row.action)).toEqual(
+        expect.arrayContaining(["volume.resized", "volume.deleted", "volume.undeleted"]),
+      );
+    });
+  });
+
+  it("data browser: schema, rows, raw reads, and its refusals", async () => {
+    await fresh(async () => {
+      const env = `environment_id=${SEED.production}`;
+      const schema = `/v1/services/${DATA_SEED.database}/database/schema?${env}`;
+      expect(await call("GET", schema)).toMatchObject({
+        status: 200,
+        body: {
+          engine: "postgres",
+          version: "18",
+          namespaces: {
+            ok: true,
+            rows: [
+              ["audit", "postgres"],
+              ["public", "postgres"],
+            ],
+          },
+        },
+      });
+      const notDb = `/v1/services/${SEED.web}/database/schema?${env}`;
+      expect((await call("GET", notDb)).status).toBe(409);
+      const query = `/v1/services/${DATA_SEED.database}/database/query`;
+      const base = { environment_id: SEED.production };
+      const run = (op: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+        call("POST", query, { ...base, op, ...extra });
+      expect((await run({ type: "drop" })).status).toBe(400);
+      expect((await run({ type: "provision_readonly" })).status).toBe(400);
+      expect((await run({ type: "raw", statement: "x", argv: ["x"] })).status).toBe(400);
+      expect((await run({ type: "list_tables", namespace: "public" })).body).toMatchObject({
+        ok: true,
+        rows: [
+          ["customers", "table", "240"],
+          ["orders", "table", "12"],
+        ],
+      });
+      const offset200 = { type: "rows", namespace: "public", table: "customers", offset: 200 };
+      expect((await run(offset200)).body).toMatchObject({
+        ok: true,
+        row_count: 40,
+        truncated: false,
+      });
+      expect((await run({ type: "rows", table: "customers", offset: 0 })).body).toMatchObject({
+        row_count: 100,
+        truncated: true,
+      });
+      expect(
+        (await run({ type: "describe", namespace: "public", table: "orders" })).body,
+      ).toMatchObject({ ok: true, row_count: 4 });
+      expect((await run({ type: "rows", table: "nope", offset: 0 })).body).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("does not exist"),
+      });
+      const raw = await run(
+        { type: "raw", statement: "SELECT * FROM public.orders" },
+        {
+          max_rows: 5,
+        },
+      );
+      expect(raw.body).toMatchObject({ ok: true, row_count: 5, truncated: true });
+      expect((await run({ type: "raw", statement: "DELETE FROM orders" })).body).toMatchObject({
+        ok: false,
+        error: "cannot execute DELETE in a read-only transaction",
+      });
+      expect(db.audit.filter((row) => row.action === "database.query_executed")).toHaveLength(2);
+      expect(db.audit.some((row) => row.action === "database.browser_opened")).toBe(true);
+
+      as("member");
+      expect((await run({ type: "list_namespaces" }, { mode: "write" })).status).toBe(403);
+      as("admin");
+      db.data.knobs.reauthRequired = true;
+      expect(await run({ type: "list_namespaces" }, { mode: "write" })).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.data.knobs.reauthRequired = false;
+      as("viewer");
+      expect((await call("GET", schema)).status).toBe(403);
+      expect((await run({ type: "list_namespaces" })).status).toBe(403);
+      as("owner");
+      db.data.knobs.offline.add(DATA_SEED.database);
+      expect(await call("GET", schema)).toMatchObject({
+        status: 503,
+        body: { error: { code: "node_offline" } },
+      });
+      db.data.knobs.offline.clear();
+      for (const row of db.deploy.deployments) {
+        if (row.service_id === DATA_SEED.database) row.status = "removed";
+      }
+      expect((await run({ type: "list_namespaces" })).status).toBe(409);
+      expect((await call("GET", `/v1/services/svc_nope/database/schema?${env}`)).status).toBe(404);
+      expect(
+        (await call("POST", query, { environment_id: "env_nope", op: { type: "list_namespaces" } }))
+          .status,
+      ).toBe(404);
+      as(null);
+      expect((await call("GET", schema)).status).toBe(401);
+      expect((await run({ type: "list_namespaces" })).status).toBe(401);
+    });
+  });
+
+  it("backups: policy, list, back up now, download, key, delete", async () => {
+    await fresh(async () => {
+      const env = `environment_id=${SEED.production}`;
+      const svc = `/v1/services/${DATA_SEED.database}`;
+      expect(await call("GET", `${svc}/backup-policy?${env}`)).toMatchObject({
+        status: 200,
+        body: {
+          enabled: true,
+          schedule: "0 3 * * *",
+          method: "dump",
+          next_runs: [expect.any(Number), expect.any(Number), expect.any(Number)],
+        },
+      });
+      const appPolicy = await call("GET", `/v1/services/${SEED.web}/backup-policy?${env}`);
+      expect(appPolicy.body).toMatchObject({
+        id: null,
+        enabled: false,
+        method: "snapshot",
+        next_runs: [],
+      });
+      expect((await call("GET", `${svc}/backup-policy?environment_id=env_nope`)).status).toBe(404);
+      const put = (body: Record<string, unknown>, service = svc) =>
+        call("PUT", `${service}/backup-policy`, { environment_id: SEED.production, ...body });
+      expect((await put({ schedule: "every day" })).status).toBe(400);
+      expect((await put({ keep_last: 0 })).status).toBe(400);
+      expect((await put({ quiesce: "stop" })).status).toBe(422);
+      expect((await put({ enabled: true }, `/v1/services/${SEED.web}`)).status).toBe(409);
+      expect(
+        await put({ schedule: "30 2 * * 1", keep_last: 14, max_age_days: null }),
+      ).toMatchObject({
+        status: 200,
+        body: { schedule: "30 2 * * 1", keep_last: 14, max_age_days: null },
+      });
+      const backUp = (service = svc) =>
+        call("POST", `${service}/backups`, { environment_id: SEED.production });
+      as("viewer");
+      expect((await put({ enabled: false })).status).toBe(403);
+      expect((await backUp()).status).toBe(403);
+      as("owner");
+
+      const list = await call("GET", `${svc}/backups?${env}`);
+      const backups = (list.body as { backups: { id: string }[] }).backups;
+      expect(backups.map((row) => row.id)).toEqual([
+        DATA_SEED.manualBackup,
+        DATA_SEED.failedBackup,
+        DATA_SEED.scheduledBackup,
+        DATA_SEED.oldBackup,
+      ]);
+      expect((await call("GET", `${svc}/backups?${env}&limit=2`)).body).toMatchObject({
+        next_cursor: DATA_SEED.failedBackup,
+      });
+      const next = `${svc}/backups?${env}&limit=2&cursor=${DATA_SEED.failedBackup}`;
+      expect((await call("GET", next)).body).toMatchObject({
+        backups: [{ id: DATA_SEED.scheduledBackup }, { id: DATA_SEED.oldBackup }],
+        next_cursor: null,
+      });
+      expect((await call("GET", `${svc}/backups?environment_id=env_nope`)).status).toBe(404);
+
+      const now = await backUp();
+      expect(now).toMatchObject({
+        status: 202,
+        body: { status: "queued", trigger: "manual", pinned: true },
+      });
+      const id = (now.body as { id: string }).id;
+      expect((await call("GET", `/v1/backups/${id}`)).body).toMatchObject({ status: "running" });
+      expect((await call("DELETE", `/v1/backups/${id}`)).status).toBe(409);
+      expect((await call("GET", `/v1/backups/${id}/download`)).status).toBe(409);
+      expect((await call("GET", `/v1/backups/${id}`)).body).toMatchObject({ status: "succeeded" });
+      expect((await call("GET", "/v1/backups/bak_nope")).status).toBe(404);
+      expect((await backUp(`/v1/services/${SEED.web}`)).status).toBe(409);
+
+      const download = `/v1/backups/${DATA_SEED.manualBackup}/download`;
+      const key = `/v1/backups/${DATA_SEED.manualBackup}/decryption-key`;
+      expect(await call("GET", download)).toMatchObject({
+        status: 200,
+        body: { filename: `${DATA_SEED.manualBackup}.rhbk.zst.age` },
+      });
+      as("member");
+      expect((await call("GET", download)).status).toBe(403);
+      expect((await call("POST", key)).status).toBe(403);
+      as("owner");
+      db.data.knobs.reauthRequired = true;
+      expect(await call("POST", key)).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.data.knobs.reauthRequired = false;
+      expect(await call("POST", key)).toMatchObject({
+        status: 200,
+        body: {
+          identity: expect.stringMatching(/^AGE-SECRET-KEY-1/),
+          recipient: expect.stringMatching(/^age1/),
+        },
+      });
+      expect((await call("POST", "/v1/backups/bak_nope/decryption-key")).status).toBe(404);
+
+      expect((await call("DELETE", `/v1/backups/${DATA_SEED.oldBackup}`)).status).toBe(204);
+      expect((await call("DELETE", `/v1/backups/${DATA_SEED.oldBackup}`)).status).toBe(204);
+      expect((await call("DELETE", "/v1/backups/bak_nope")).status).toBe(404);
+
+      db.data.storage = null;
+      expect(await backUp()).toMatchObject({
+        status: 409,
+        body: { error: { code: "backup_storage_not_configured" } },
+      });
+      expect((await put({ enabled: true })).status).toBe(409);
+      expect((await put({ enabled: false })).status).toBe(200);
+      expect((await call("GET", download)).status).toBe(409);
+      as(null);
+      expect((await call("GET", `${svc}/backups?${env}`)).status).toBe(401);
+      expect((await call("GET", `${svc}/backup-policy?${env}`)).status).toBe(401);
+      expect((await call("GET", `/v1/backups/${DATA_SEED.manualBackup}`)).status).toBe(401);
+    });
+  });
+
+  it("restores: typed slug, fresh session, in place with a safety backup", async () => {
+    await fresh(async () => {
+      const restore = (backupId: string, body: Record<string, unknown>) =>
+        call("POST", `/v1/backups/${backupId}/restore`, body);
+      const inPlace = { mode: "in_place", confirm: DATA_SEED.databaseSlug };
+      const good = DATA_SEED.scheduledBackup;
+      expect((await restore(good, { mode: "elsewhere", confirm: "x" })).status).toBe(400);
+      expect((await restore(good, { ...inPlace, confirm: "web" })).status).toBe(400);
+      expect(await restore(good, { ...inPlace, mode: "new_service" })).toMatchObject({
+        status: 501,
+        body: { error: { code: "restore_mode_unsupported" } },
+      });
+      expect((await restore(DATA_SEED.failedBackup, inPlace)).status).toBe(409);
+      expect((await restore("bak_nope", inPlace)).status).toBe(404);
+      as("member");
+      expect((await restore(good, inPlace)).status).toBe(403);
+      as("owner");
+      db.data.knobs.reauthRequired = true;
+      expect(await restore(good, inPlace)).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.data.knobs.reauthRequired = false;
+      const started = await restore(good, inPlace);
+      expect(started).toMatchObject({
+        status: 202,
+        body: { mode: "in_place", status: "queued", safety_backup_id: expect.any(String) },
+      });
+      const restoreId = (started.body as { id: string }).id;
+      expect((await restore(good, inPlace)).status).toBe(409);
+      expect((await call("DELETE", `/v1/backups/${good}`)).status).toBe(409);
+      const read = () => call("GET", `/v1/restores/${restoreId}`);
+      expect((await read()).body).toMatchObject({ status: "running" });
+      expect((await read()).body).toMatchObject({ status: "succeeded" });
+      expect((await call("GET", "/v1/restores/rst_nope")).status).toBe(404);
+      as(null);
+      expect((await read()).status).toBe(401);
+      expect((await restore(good, inPlace)).status).toBe(401);
+    });
+  });
+
+  it("backup storage: instance admins only, write-only secret, reachability", async () => {
+    await fresh(async () => {
+      const storage = "/v1/instance/backup-storage";
+      const view = await call("GET", storage);
+      expect(view).toMatchObject({
+        status: 200,
+        body: { configured: true, bucket: "roundhouse-backups", secret_access_key_set: true },
+      });
+      expect(JSON.stringify(view.body)).not.toContain("mock-secret-access-key");
+      const body = {
+        endpoint: "https://s3.example.com",
+        bucket: "acme-backups",
+        access_key_id: "AKIANEW",
+      };
+      expect((await call("PUT", storage, { ...body, bucket: "Bad_Bucket" })).status).toBe(400);
+      const plain = { ...body, endpoint: "http://s3.example.com" };
+      expect((await call("PUT", storage, plain)).status).toBe(400);
+      expect(await call("PUT", storage, { ...body, bucket: "unreachable-bucket" })).toMatchObject({
+        status: 422,
+        body: { error: { code: "backup_storage_unreachable" } },
+      });
+      db.data.knobs.reauthRequired = true;
+      expect((await call("PUT", storage, body)).status).toBe(403);
+      db.data.knobs.reauthRequired = false;
+      expect(await call("PUT", storage, body)).toMatchObject({
+        status: 200,
+        body: { bucket: "acme-backups", region: "auto", secret_access_key_set: true },
+      });
+      expect(db.data.storage?.secret_access_key).toBe("mock-secret-access-key");
+      db.data.storage = null;
+      expect((await call("PUT", storage, body)).status).toBe(400);
+      const withSecret = { ...body, secret_access_key: "s3cr3t" };
+      expect((await call("PUT", storage, withSecret)).status).toBe(200);
+      as("admin");
+      expect((await call("GET", storage)).status).toBe(403);
+      expect((await call("PUT", storage, body)).status).toBe(403);
+      as(null);
+      expect((await call("GET", storage)).status).toBe(401);
     });
   });
 

@@ -80,10 +80,14 @@ import {
 
 export * from "./contracts/access";
 export * from "./contracts/auth";
+export * from "./contracts/backups";
 export * from "./contracts/changes";
+export * from "./contracts/data-browser";
+export * from "./contracts/databases";
 export * from "./contracts/domains";
 export * from "./contracts/instance";
 export * from "./contracts/keys";
+export * from "./contracts/metrics";
 export * from "./contracts/oauth";
 export * from "./contracts/params";
 export * from "./contracts/policy";

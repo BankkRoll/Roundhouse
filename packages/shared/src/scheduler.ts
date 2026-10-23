@@ -2,9 +2,10 @@
  * Replica placement: a pure, deterministic function from a request and a
  * snapshot of the cluster to a node per replica, or a typed reason why not.
  *
- * Filters, in order: node online, Docker available, node selector matches,
- * the node can pull from the builder's registry (git-built images), memory
- * fits, CPU fits. Memory is never overcommitted; CPU limits may add up to
+ * Filters, in order: node online, the pinned node (a service whose volume
+ * lives there), agent protocol recent enough, Docker available, node
+ * selector matches, the node can pull from the builder's registry
+ * (git-built images), volume disk fits, memory fits, CPU fits. Memory is never overcommitted; CPU limits may add up to
  * {@link CPU_OVERCOMMIT_RATIO} times a node's cores.
  *
  * Scoring, for each replica in turn: fewest replicas of the same service on
@@ -46,6 +47,12 @@ export interface SchedulerNode {
    * itself until the Phase 2 mesh exposes the registry to every node.
    */
   reachesRegistry: boolean;
+  /** `hello.protocol_version` of the node's agent; unchecked when absent. */
+  protocolVersion?: number;
+  /** Disk available to volumes, in MiB; unchecked when absent (not reported yet). */
+  diskMb?: number;
+  /** Sum of the quotas of the volumes the node already holds (ADR 0004). */
+  allocatedDiskMb?: number;
 }
 
 /** What to place. */
@@ -60,6 +67,12 @@ export interface ScheduleRequest {
   nodeSelector: Readonly<Record<string, string>>;
   /** The image lives in the builder's local registry (git sources). */
   requiresRegistry: boolean;
+  /** Oldest agent protocol that can run the replica, e.g. `VOLUMES_PROTOCOL_VERSION`. */
+  minProtocolVersion?: number;
+  /** The only node the replica may run on: where its volume's data lives (ADR 0004). */
+  pinnedNodeId?: string | null;
+  /** Quota of a volume created with this placement, in MiB; 0 when none. */
+  diskMb?: number;
 }
 
 /** One replica's node. */
@@ -72,9 +85,12 @@ export interface Placement {
 export const SCHEDULE_FAILURE_REASONS = [
   "no_nodes",
   "offline",
+  "pinned_elsewhere",
+  "agent_outdated",
   "no_docker",
   "selector_mismatch",
   "registry_unreachable",
+  "insufficient_disk",
   "insufficient_memory",
   "insufficient_cpu",
 ] as const;
@@ -107,11 +123,26 @@ function rejection(
   alloc: { cpu: number; mem: number },
 ): NodeRejection | null {
   if (node.status !== "online") return "offline";
+  if (req.pinnedNodeId && node.id !== req.pinnedNodeId) return "pinned_elsewhere";
+  if (
+    req.minProtocolVersion !== undefined &&
+    node.protocolVersion !== undefined &&
+    node.protocolVersion < req.minProtocolVersion
+  ) {
+    return "agent_outdated";
+  }
   if (!node.docker) return "no_docker";
   for (const [key, value] of Object.entries(req.nodeSelector)) {
     if (!Object.hasOwn(node.labels, key) || node.labels[key] !== value) return "selector_mismatch";
   }
   if (req.requiresRegistry && !node.reachesRegistry) return "registry_unreachable";
+  if (
+    req.diskMb &&
+    node.diskMb !== undefined &&
+    (node.allocatedDiskMb ?? 0) + req.diskMb > node.diskMb
+  ) {
+    return "insufficient_disk";
+  }
   if (alloc.mem + req.memoryMb > node.memoryMb) return "insufficient_memory";
   if (alloc.cpu + req.cpuMillis > node.cpuMillis * CPU_OVERCOMMIT_RATIO) return "insufficient_cpu";
   return null;

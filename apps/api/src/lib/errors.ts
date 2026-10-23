@@ -44,6 +44,13 @@ export type ErrorCode =
   | "change_set_changed"
   | "change_set_conflict"
   | "invalid_references"
+  | "backup_storage_not_configured"
+  | "backup_storage_unreachable"
+  | "restore_mode_unsupported"
+  | "volume_requires_single_replica"
+  | "volume_shrink_unsupported"
+  | "node_offline"
+  | "query_timeout"
   | "internal";
 
 /**

@@ -55,6 +55,7 @@ type Client struct {
 	base            *url.URL
 	http            *http.Client
 	stream          *http.Client
+	objects         *http.Client
 	cred            Credential
 	userAgent       string
 	onSessionCookie func(*http.Cookie)
@@ -72,6 +73,9 @@ func New(opts Options) (*Client, error) {
 		// deliberately no option to change it.
 		transport = http.DefaultTransport.(*http.Transport).Clone()
 	}
+	// SECURITY: object downloads bypass tracing: a presigned URL is a bearer
+	// credential in its query string, which a trace would log.
+	objects := transport
 	if opts.Logger != nil {
 		transport = &tracingTransport{next: transport, log: opts.Logger}
 	}
@@ -86,6 +90,7 @@ func New(opts Options) (*Client, error) {
 		// never be replayed to another host.
 		http:            &http.Client{Transport: transport, Timeout: 60 * time.Second, CheckRedirect: noRedirect},
 		stream:          &http.Client{Transport: transport, CheckRedirect: noRedirect},
+		objects:         &http.Client{Transport: objects, CheckRedirect: noRedirect},
 		cred:            opts.Credential,
 		userAgent:       opts.UserAgent,
 		onSessionCookie: onSessionCookie,

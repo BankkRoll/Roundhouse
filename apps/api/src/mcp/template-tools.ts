@@ -12,7 +12,7 @@
  */
 import type { ApiTokenScope } from "@roundhouse/shared";
 import { z } from "zod";
-import { requireMasterKey, requireWorkspace } from "../context";
+import { requireKeys, requireWorkspace } from "../context";
 import { policyOf } from "../contracts/policy";
 import {
   deployTemplate as deployTemplateRoute,
@@ -106,7 +106,7 @@ export const deployTemplateTool: McpTool<typeof DeployTemplateInput> = {
     const result = await deployTemplateIntoProject(
       c,
       caller,
-      requireMasterKey(c),
+      requireKeys(c),
       findTemplate(input.template_id),
       project,
       environment,

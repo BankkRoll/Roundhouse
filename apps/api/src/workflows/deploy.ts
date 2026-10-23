@@ -21,7 +21,11 @@
  *    `build_secrets_sealed`, secret build args marked so the builder never
  *    bakes them into the image), then wait for the `build` event the node's
  *    Durable Object sends on `build_result`, up to `BUILD_TIMEOUT_S`.
- * 4. `schedule`: place replicas with `schedule()` and write placements.
+ * 4. `schedule`: place replicas with `schedule()` and write placements. A
+ *    volume service (ADR 0004) runs one replica on agent protocol
+ *    `VOLUMES_PROTOCOL_VERSION` or later: its first deployment places it
+ *    with the volume's quota as disk and pins the volume to that node in the
+ *    same batch; later ones are pinned there, and fail while it is offline.
  * 5. `rollout`: bump every target node's generation and push desired state.
  * 6. Wait for the `health` event until every replica is `healthy`, up to
  *    `ROLLOUT_TIMEOUT_MS` (or `ROLLOUT_TIMEOUT_S`; see {@link rolloutTimeoutMs}).
@@ -51,6 +55,7 @@ import {
   serviceConfigs,
   services,
   variables,
+  volumes,
 } from "@roundhouse/db";
 import {
   buildCacheKey,
@@ -63,12 +68,14 @@ import {
   SealedBuildSecretsSchema,
   SealedWorkloadEnvSchema,
   sealBox,
+  VOLUMES_PROTOCOL_VERSION,
 } from "@roundhouse/protocol";
 import {
   BUILD_TIMEOUT_S,
   type BuildConfig,
   canTransition,
   type DeploymentStatus,
+  LIVE_VOLUME_STATUSES,
   newId,
   ROLLOUT_TIMEOUT_MS,
   type SchedulerNode,
@@ -76,10 +83,10 @@ import {
   secretBuildArgsValid,
   secretDerivedVariables,
 } from "@roundhouse/shared";
-import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, ne, sum } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
-import type { Sealed } from "../lib/crypto";
+import type { KeyEnv, Sealed } from "../lib/crypto";
 import {
   addDeploymentEvent,
   cancelBuildsOnNodes,
@@ -100,6 +107,7 @@ import {
   sealDeploymentBuild,
   sealDeploymentEnv,
 } from "../lib/desired-state";
+import { ApiError } from "../lib/errors";
 import { resolveBranch } from "../lib/git";
 import {
   type CommitState,
@@ -111,6 +119,7 @@ import {
 import { effectiveStatus } from "../lib/nodes";
 import { resolveServiceEnvironment } from "../lib/resolve-env";
 import { loadEnvironmentVariables, projectKey } from "../lib/variables";
+import { ensureVolume, type VolumeRow } from "../lib/volumes";
 
 /** Parameters a deploy workflow instance is created with. */
 export interface DeployParams {
@@ -495,7 +504,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     const { db } = this.lifecycle();
     const stopped = await this.stopped(db, plan, ["queued"]);
     if (stopped) return stopped;
-    const key = await projectKey(db, this.masterKey(), plan.projectId);
+    const key = await projectKey(db, this.keys(), plan.projectId);
     const environment = await db.query.environments.findFirst({
       where: eq(environments.id, plan.environmentId),
     });
@@ -763,7 +772,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         ),
       )
       .limit(1);
-    const key = await projectKey(db, this.masterKey(), plan.projectId);
+    const key = await projectKey(db, this.keys(), plan.projectId);
     const inputs: DeploymentBuildInputs = await openDeploymentBuild(
       key,
       deployment.buildEnvSealed as Sealed,
@@ -924,6 +933,19 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       .limit(1);
     if (!config) return fail(`Config version ${plan.configVersion} no longer exists`);
 
+    const service = await db.query.services.findFirst({ where: eq(services.id, plan.serviceId) });
+    if (!service) return fail("The service was deleted");
+    let volume: VolumeRow | null;
+    try {
+      volume = await ensureVolume(db, service, plan.environmentId);
+    } catch (err) {
+      if (err instanceof ApiError) return fail(err.message);
+      throw err;
+    }
+    if (volume && config.deploy.replicas > 1) {
+      return fail("A service with a volume runs at most one replica");
+    }
+
     const workspaceNodes = (
       await db
         .select()
@@ -952,6 +974,12 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
           ne(deployments.id, plan.deploymentId),
         ),
       );
+    const volumeQuotas = await db
+      .select({ nodeId: volumes.nodeId, total: sum(volumes.sizeMb) })
+      .from(volumes)
+      .where(and(isNotNull(volumes.nodeId), inArray(volumes.status, [...LIVE_VOLUME_STATUSES])))
+      .groupBy(volumes.nodeId);
+    const quotaOf = new Map(volumeQuotas.map((q) => [q.nodeId, Number(q.total ?? 0)]));
     const schedulerNodes: SchedulerNode[] = workspaceNodes.map((n) => {
       const mine = allocations.filter((a) => a.nodeId === n.id);
       const serviceReplicas: Record<string, number> = {};
@@ -972,6 +1000,9 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         serviceReplicas,
         // Until the Phase 2 mesh, only the builder itself can pull from its registry.
         reachesRegistry: registryNodeId !== null && n.id === registryNodeId,
+        protocolVersion: n.protocolVersion,
+        ...(n.diskTotal ? { diskMb: Math.floor(n.diskTotal / 2 ** 20) } : {}),
+        allocatedDiskMb: quotaOf.get(n.id) ?? 0,
       };
     });
     const result = schedule(
@@ -982,14 +1013,29 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         memoryMb: config.resources.memory_mb,
         nodeSelector: config.placement.node_selector,
         requiresRegistry: image.startsWith(`${REGISTRY_LISTEN}/`),
+        ...(volume
+          ? {
+              minProtocolVersion: VOLUMES_PROTOCOL_VERSION,
+              pinnedNodeId: volume.nodeId,
+              diskMb: volume.nodeId ? 0 : volume.sizeMb,
+            }
+          : {}),
       },
       schedulerNodes,
     );
     if (!result.ok) {
-      const reason =
+      let reason =
         result.reason === "no_nodes"
           ? `No nodes run agent protocol ${SEALED_ENV_PROTOCOL_VERSION} or later with a registered encryption key`
           : `Could not place replica ${result.replica}: ${result.reason.replace(/_/g, " ")}`;
+      if (
+        volume?.nodeId &&
+        (result.reason === "pinned_elsewhere" || result.reason === "no_nodes")
+      ) {
+        const holder = await db.query.nodes.findFirst({ where: eq(nodes.id, volume.nodeId) });
+        const state = holder ? (holder.deletedAt ? "removed" : effectiveStatus(holder)) : "removed";
+        reason = `Could not place replica ${result.replica}: volume lives on node ${holder?.name ?? volume.nodeId} (${state})`;
+      }
       await addDeploymentEvent(ctx, plan.projectId, plan.deploymentId, "schedule_failed", reason, {
         reason: result.reason,
         replica: result.replica,
@@ -997,6 +1043,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       });
       return fail(reason);
     }
+    const placed = result.placements[0];
     await db.batch([
       db.insert(placements).values(
         result.placements.map((p) => ({
@@ -1007,6 +1054,15 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
           workloadId: newId("workload"),
         })),
       ),
+      // The first placement decides where the volume's data lives, for good.
+      ...(volume && !volume.nodeId && placed
+        ? [
+            db
+              .update(volumes)
+              .set({ nodeId: placed.nodeId, updatedAt: new Date() })
+              .where(and(eq(volumes.id, volume.id), isNull(volumes.nodeId))),
+          ]
+        : []),
     ]);
     const nodeIds = [...new Set(result.placements.map((p) => p.nodeId))];
     await addDeploymentEvent(
@@ -1208,10 +1264,9 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     };
   }
 
-  private masterKey(): string {
-    const key = this.env.MASTER_KEY?.trim();
-    if (!key) throw new Error("MASTER_KEY is not configured");
-    return key;
+  private keys(): KeyEnv {
+    if (!this.env.MASTER_KEY?.trim()) throw new Error("MASTER_KEY is not configured");
+    return this.env;
   }
 
   /** `stop` when the deployment left the statuses this step runs in (e.g. cancelled). */

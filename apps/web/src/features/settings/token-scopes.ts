@@ -33,6 +33,10 @@ export const SCOPE_LABELS: Record<ApiTokenScope, string> = {
   "variables:read": "See variable names and fingerprints, no values",
   "variables:read_plain": "Read plain values (secrets are never readable)",
   "variables:manage": "Set and delete variables",
+  "data:read": "Browse databases and run read-only queries",
+  "data:write": "Run writing queries on databases",
+  "backups:manage": "Change backup policies, back up and delete backups",
+  "backups:restore": "Restore and download backups",
 };
 
 /** A choice in the create dialog: a preset, or picking scopes one by one. */

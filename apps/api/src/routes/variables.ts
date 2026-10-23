@@ -15,7 +15,7 @@
  *
  * @module
  */
-import { clientIp, createRouter, requireMasterKey } from "../context";
+import { clientIp, createRouter, requireKeys } from "../context";
 import {
   listServiceVariables,
   listSharedVariables,
@@ -56,7 +56,7 @@ export const variableRoutes = createRouter()
       scope: "service",
       serviceId,
     };
-    const key = await projectKey(db, requireMasterKey(c), project.id);
+    const key = await projectKey(db, requireKeys(c), project.id);
     const plain = caller.allows("variables:read_plain");
     return c.json({ variables: await listVariables(db, key, target, { plain }) }, 200);
   })
@@ -79,7 +79,7 @@ export const variableRoutes = createRouter()
       scope: "service",
       serviceId,
     };
-    const key = await projectKey(db, requireMasterKey(c), project.id);
+    const key = await projectKey(db, requireKeys(c), project.id);
     const changed = await putVariables(db, key, target, body, caller.user.id);
     await recordAudit(db, {
       workspaceId: project.workspaceId,
@@ -109,7 +109,7 @@ export const variableRoutes = createRouter()
     );
     const environment = await environmentOf(c, project.id, environment_id);
     const db = c.get("db");
-    const key = await projectKey(db, requireMasterKey(c), project.id);
+    const key = await projectKey(db, requireKeys(c), project.id);
     const { variables, localKeys } = await resolvePlainEnvironment(db, key, {
       projectId: project.id,
       service,
@@ -136,7 +136,7 @@ export const variableRoutes = createRouter()
     );
     await environmentOf(c, project.id, environment_id);
     const db = c.get("db");
-    const key = await projectKey(db, requireMasterKey(c), project.id);
+    const key = await projectKey(db, requireKeys(c), project.id);
     const target: VariableTarget = {
       projectId,
       environmentId: environment_id,
@@ -159,7 +159,7 @@ export const variableRoutes = createRouter()
     await environmentOf(c, project.id, environment_id);
     assertValidReferences(withValues(body.set));
     const db = c.get("db");
-    const key = await projectKey(db, requireMasterKey(c), project.id);
+    const key = await projectKey(db, requireKeys(c), project.id);
     const target: VariableTarget = {
       projectId,
       environmentId: environment_id,

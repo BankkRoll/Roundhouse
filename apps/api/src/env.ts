@@ -7,9 +7,11 @@
 import type { AuditChain } from "./durable/audit-chain";
 import type { NodeConnection } from "./durable/node-connection";
 import type { ProjectRoom } from "./durable/project-room";
+import type { BackupParams } from "./workflows/backup";
 import type { DeployParams } from "./workflows/deploy";
 import type { KeyRotationParams } from "./workflows/key-rotation";
 import type { ProvisionParams } from "./workflows/provision";
+import type { RestoreParams } from "./workflows/restore";
 
 /** Worker bindings declared in `wrangler.jsonc`. */
 export interface Env {
@@ -31,8 +33,29 @@ export interface Env {
   WEBHOOK_LIMITER?: RateLimit;
   /** Per-token limiter for MCP tool calls (60 a minute, ADR 0012). Optional like `AUTH_LIMITER`. */
   MCP_LIMITER?: RateLimit;
-  /** Optional: absent in local dev and tests. */
+  /**
+   * The `roundhouse_metrics` dataset (ADR 0008). Optional: `wrangler dev`
+   * stubs it and tests run without it.
+   */
   METRICS?: AnalyticsEngineDataset;
+  /** Cloudflare account ID, for the Analytics Engine SQL API. Set by the deploy script. */
+  CF_ACCOUNT_ID?: string;
+  /**
+   * API token with "Account Analytics Read" (secret), for the Analytics
+   * Engine SQL API. Without it (or `CF_ACCOUNT_ID`) metrics fall back to D1.
+   */
+  CF_ANALYTICS_TOKEN?: string;
+  /**
+   * `d1` forces the short-retention D1 store (development, tests, e2e);
+   * `analytics_engine` refuses to fall back. Unset picks Analytics Engine
+   * when its credentials are present, D1 otherwise.
+   */
+  METRICS_BACKEND?: string;
+  /**
+   * Overrides the 15 s agent sampling interval, in ms. For development and
+   * the end-to-end suite; unset in production.
+   */
+  METRICS_INTERVAL_MS?: string;
   /** Base64 32-byte root secret. Missing until the operator sets it; setup refuses to run without it. */
   MASTER_KEY?: string;
   /**
@@ -54,6 +77,10 @@ export interface Env {
   KEY_ROTATION_WORKFLOW: Workflow<KeyRotationParams>;
   /** Runs one-click server provisioning, one instance per run (instance ID = `prov_…`). */
   PROVISION_WORKFLOW: Workflow<ProvisionParams>;
+  /** Runs one backup per instance (instance ID = the `bak_…` backup ID), ADR 0004. */
+  BACKUP_WORKFLOW: Workflow<BackupParams>;
+  /** Runs one restore per instance (instance ID = the `rst_…` restore ID), ADR 0004. */
+  RESTORE_WORKFLOW: Workflow<RestoreParams>;
   /**
    * Seconds a provisioned server gets to join, overriding `JOIN_TIMEOUT_MS`;
    * and seconds between join checks. For development and tests; unset in production.

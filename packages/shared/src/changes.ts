@@ -19,6 +19,7 @@
  * @module
  */
 
+import type { ServiceDatabaseEngine } from "./databases";
 import type { ServiceKind, VariableScope } from "./projects";
 import type { ProjectAction } from "./rbac";
 import type {
@@ -141,6 +142,21 @@ export interface ServiceCreateOp {
   source: ServiceSource;
   /** Applied on top of `defaultServiceConfig(source)`. */
   config?: Omit<ServiceConfigPatch, "source">;
+  /**
+   * A database service (ADR 0004): `source` and `config` are rendered from
+   * the registry when staged, and the apply generates its credentials and
+   * creates its volume in every environment.
+   */
+  database?: ServiceCreateDatabase;
+}
+
+/** The database a `service.create` op renders; see {@link ServiceCreateOp.database}. */
+export interface ServiceCreateDatabase {
+  engine: ServiceDatabaseEngine;
+  /** A registry version, resolved when staged. */
+  version: string;
+  /** Volume quota in MiB. */
+  size_mb: number;
 }
 
 /** Renames a service or changes its icon. */

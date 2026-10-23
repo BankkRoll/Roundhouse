@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
@@ -19,6 +20,8 @@ type ContainerCreate struct {
 	Labels       map[string]string   `json:"Labels,omitempty"`
 	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
 	Hostname     string              `json:"Hostname,omitempty"`
+	// User overrides the image's user ("uid:gid" or a name).
+	User string `json:"User,omitempty"`
 	// StopTimeout is seconds between SIGTERM and SIGKILL on stop.
 	StopTimeout      *int              `json:"StopTimeout,omitempty"`
 	HostConfig       HostConfig        `json:"HostConfig"`
@@ -45,6 +48,24 @@ type HostConfig struct {
 	NanoCPUs  int64  `json:"NanoCpus,omitempty"`
 	PidsLimit *int64 `json:"PidsLimit,omitempty"`
 	Init      *bool  `json:"Init,omitempty"`
+	// Mounts are volume (and other) mounts, beside Binds.
+	Mounts []Mount `json:"Mounts,omitempty"`
+}
+
+// Mount types.
+const (
+	MountVolume = "volume"
+	MountBind   = "bind"
+)
+
+// Mount is one entry of HostConfig.Mounts.
+type Mount struct {
+	// Type is [MountVolume] or [MountBind].
+	Type string `json:"Type"`
+	// Source is the volume name or host path.
+	Source   string `json:"Source"`
+	Target   string `json:"Target"`
+	ReadOnly bool   `json:"ReadOnly,omitempty"`
 }
 
 // PortBinding publishes a container port on the host.
@@ -146,6 +167,20 @@ type ContainerState struct {
 type ContainerConfig struct {
 	Image  string            `json:"Image"`
 	Labels map[string]string `json:"Labels"`
+	// Env is the container's environment as KEY=value entries.
+	Env []string `json:"Env"`
+	// User is the user the container runs as, "" for the image default.
+	User string `json:"User"`
+}
+
+// MountPoint is one mount of an inspected container.
+type MountPoint struct {
+	Type string `json:"Type"`
+	// Name is the volume name, for volume mounts.
+	Name        string `json:"Name"`
+	Source      string `json:"Source"`
+	Destination string `json:"Destination"`
+	RW          bool   `json:"RW"`
 }
 
 // EndpointInfo is a container's attachment to one network.
@@ -169,6 +204,7 @@ type ContainerInfo struct {
 	State           ContainerState  `json:"State"`
 	Config          ContainerConfig `json:"Config"`
 	NetworkSettings NetworkSettings `json:"NetworkSettings"`
+	Mounts          []MountPoint    `json:"Mounts"`
 }
 
 // InspectContainer returns a container's details. It fails with an error
@@ -238,4 +274,65 @@ func padNanos(n int) string {
 		s = "0" + s
 	}
 	return s
+}
+
+// ListContainersFiltered returns all containers, stopped ones included,
+// matching the engine's filters, e.g. {"volume": ["name"]}.
+func (c *Client) ListContainersFiltered(ctx context.Context, filters map[string][]string) ([]ContainerSummary, error) {
+	q := url.Values{"all": {"1"}}
+	if len(filters) > 0 {
+		q.Set("filters", labelFilters(filters))
+	}
+	var out []ContainerSummary
+	err := c.do(ctx, request{method: http.MethodGet, path: "/containers/json", query: q}, &out)
+	return out, err
+}
+
+// WaitContainer blocks until the container is no longer running and returns
+// its exit code. condition is "not-running" (the default when empty),
+// "next-exit" or "removed".
+func (c *Client) WaitContainer(ctx context.Context, id, condition string) (int, error) {
+	if condition == "" {
+		condition = "not-running"
+	}
+	var out struct {
+		StatusCode int `json:"StatusCode"`
+		Error      *struct {
+			Message string `json:"Message"`
+		} `json:"Error"`
+	}
+	req, err := c.newRequest(ctx, request{
+		method: http.MethodPost,
+		path:   "/containers/" + url.PathEscape(id) + "/wait",
+		query:  url.Values{"condition": {condition}},
+	})
+	if err != nil {
+		return 0, err
+	}
+	// NOTE: the engine holds the request open until the container exits, so
+	// it goes over the stream client and lasts as long as ctx.
+	resp, err := c.stream.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp); err != nil {
+		return 0, err
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, err
+	}
+	if out.Error != nil && out.Error.Message != "" {
+		return out.StatusCode, &Error{Status: http.StatusInternalServerError, Message: out.Error.Message}
+	}
+	return out.StatusCode, nil
+}
+
+// KillContainer sends signal (e.g. "SIGKILL") to a running container.
+func (c *Client) KillContainer(ctx context.Context, id, signal string) error {
+	return c.do(ctx, request{
+		method: http.MethodPost,
+		path:   "/containers/" + url.PathEscape(id) + "/kill",
+		query:  url.Values{"signal": {signal}},
+	}, nil)
 }

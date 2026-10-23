@@ -37,7 +37,7 @@ import { POLICY_KEY, type RoutePolicy } from "./contracts/policy";
 import type { Env } from "./env";
 import { loadAccessContext, loadWorkspaceAccess } from "./lib/access";
 import { bearerSecret, resolveApiToken } from "./lib/api-tokens";
-import { isValidMasterKey } from "./lib/crypto";
+import { isValidMasterKey, type KeyEnv } from "./lib/crypto";
 import { ApiError, errorBody } from "./lib/errors";
 import { requireFreshSession } from "./lib/fresh-session";
 import { publicOrigin } from "./lib/origin";
@@ -177,6 +177,22 @@ export function requireMasterKey(c: AppContext): string {
     );
   }
   return key.trim();
+}
+
+/**
+ * Returns the keyring bindings, or throws a 503 when `MASTER_KEY` isn't
+ * usable. Pass these, not the bare key, to the crypto helpers: values sealed
+ * under a key in `MASTER_KEYS_PREVIOUS` only open through them.
+ *
+ * @param c - Request context.
+ * @returns `c.env`, with `MASTER_KEY` validated.
+ * @throws {ApiError} 503 `master_key_missing`.
+ * @example
+ * const key = await projectKey(db, requireKeys(c), project.id);
+ */
+export function requireKeys(c: AppContext): KeyEnv {
+  requireMasterKey(c);
+  return c.env;
 }
 
 /**

@@ -69,6 +69,10 @@ export function toApiService(s: Row<typeof services>) {
     slug: s.slug,
     kind: s.kind,
     icon: s.icon,
+    database:
+      s.databaseEngine && s.databaseVersion
+        ? { engine: s.databaseEngine, version: s.databaseVersion }
+        : null,
     created_at: +s.createdAt,
     updated_at: +s.updatedAt,
   };

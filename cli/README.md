@@ -119,6 +119,93 @@ roundhouse rollback                 # to the deployment before the current one
 roundhouse status
 ```
 
+## Metrics
+
+```sh
+roundhouse metrics                          # last hour of the linked service
+roundhouse metrics --range 24h -m cpu,memory
+roundhouse metrics --from 2026-10-21T09:00:00Z --to 2026-10-21T12:00:00Z
+roundhouse metrics --replicas               # one row per replica
+roundhouse metrics summary                  # every service, last 5 minutes
+roundhouse servers metrics web-1 --range 7d
+roundhouse metrics --json                   # the API response as is
+```
+
+Each metric shows its latest value, average and peak over the range, with
+the service's limit where it has one: CPU in millicores (`1000m` is one
+core) and as a share of the limit, memory in binary units, network and disk
+as rates. `--range` takes `1h`, `6h`, `24h`, `7d` or `30d`; `--from` and
+`--to` take a duration ago (`90m`, `2d`) or a time, and the range may span
+90 days. `-m` repeats or takes a comma-separated list; `network` and `disk`
+select both directions. On a terminal each row ends with a sparkline of the
+range (peaks per bar, so short spikes stay visible); piped output has none.
+
+A note on stderr says when the control plane keeps metrics for 48 hours
+only (its D1 fallback, without Analytics Engine) or when some samples are
+approximate (Docker stats on a cgroup v1 host). `--json` carries both as
+`short_retention` and `approximate`; points are `[t_ms, value]`, with
+`null` for a step without samples.
+
+## Databases
+
+```sh
+roundhouse db create --engine postgres      # also mysql, redis (Valkey), mongodb
+roundhouse db list                          # engines, volumes, usage
+roundhouse db info                          # volume and connection references
+roundhouse db query "SELECT id, email FROM users LIMIT 10"
+roundhouse db query 'SELECT * FROM orders WHERE user_id = $1' --param 42
+roundhouse db tables --namespace public
+roundhouse db volume resize --size-mb 20480 # grow only
+roundhouse db volume delete --yes           # data removed after 72 hours
+roundhouse db volume undelete
+```
+
+`db create` adds a database service with a volume in every environment and
+generated credentials stored as write-only secrets. Other services reference
+them, e.g. `roundhouse vars set 'DATABASE_URL=${{postgres.DATABASE_URL}}'`;
+`db info` lists those references and never a value. Commands act on
+`--service`, else the linked service when it is a database, else the
+project's only database, and ask when there are several.
+
+`db query` is read-only: it runs as the database's read-only principal in a
+read-only transaction, one statement at a time (SQL with `--param` values, a
+JSON command document for MongoDB, a command line for Valkey and Redis).
+Results print as a table with control characters escaped and long cells
+shortened; the row count, timing, truncation (`--max-rows`, up to 1000) and
+engine notices go to stderr. `--json` prints the API's result as is. An
+engine error (a syntax error, a refused write) exits 1. The control plane
+audits every statement and never stores results.
+
+### Backups
+
+```sh
+roundhouse db backups list
+roundhouse db backups run --wait
+roundhouse db backups policy                # schedule, next runs, retention
+roundhouse db backups policy set --schedule "0 2 * * *" --keep-last 14 --max-age-days 30
+roundhouse db backups restore bak_01J9Z6Y4M0V8 --mode in_place --confirm postgres --wait
+roundhouse db backups download bak_01J9Z6Y4M0V8 --decrypt -o shop.rhbk.zst
+```
+
+Schedules are five-field cron in UTC. Manual backups are pinned, so
+`--keep-last` never prunes them. Without a backup bucket (an instance admin
+sets one under Settings → Backups) backup commands exit 6 with
+`backup_storage_not_configured`.
+
+`restore` asks for the database's slug (`--confirm` in scripts); `in_place`
+takes a safety backup first unless `--skip-safety-backup` is given.
+Restoring and decrypting need a recent sign-in: on `reauth_required` (exit
+4) run `roundhouse login` again. API tokens never qualify.
+
+`download` fetches the encrypted object straight from object storage,
+without the control plane's credential, verifies its SHA-256, and writes it
+with `0600` permissions under a temporary name that is renamed only once it
+checks out. `--decrypt` fetches the project's backup key (audited) and
+decrypts with [age](https://age-encryption.org) as it downloads; the key is
+never printed or saved. The result is a zstd-compressed RHBK1 archive
+(`packages/protocol/rhbk.md`). `-o -` writes to stdout; an existing file is
+replaced only with `--force`.
+
 ## Variables
 
 ```sh
@@ -204,6 +291,8 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `open [--dashboard]`                                | Open the service URL or the dashboard                    |
 | `deploy [--wait]`                                   | Deploy the latest config                                 |
 | `logs [-f] [--build] [--deployment] [--since] [-n]` | Show and follow logs                                     |
+| `metrics [--range\|--from --to] [-m] [--replicas]`  | Service CPU, memory, network and disk over a range       |
+| `metrics summary`                                   | Every service's current CPU and memory                   |
 | `rollback [deployment]`, `cancel [deployment]`      | Steer deployments                                        |
 | `vars [get\|set\|unset\|import\|export]`            | Service (or `--shared`) variables                        |
 | `run -- <cmd>`                                      | Run a local command with the service's variables         |
@@ -214,6 +303,10 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `servers list\|add [--provider]`                    | Servers; `add` prints the install command, or provisions |
 | `servers remove <server> [--keep-server] [-y]`      | Remove a server; deletes a provisioned cloud server too  |
 | `servers cancel <provision-id> [--no-wait]`         | Cancel a provisioning run and delete what it created     |
+| `servers metrics <server> [--range] [-m]`           | A server's CPU, memory, disk and load                    |
+| `db create\|list\|info\|query\|tables`              | Database services and read-only queries                  |
+| `db volume [resize\|delete\|undelete]`              | A database's volume                                      |
+| `db backups list\|run\|policy\|restore\|download`   | Backups, schedules, restores, decrypted downloads        |
 | `tokens list\|create\|revoke`                       | Workspace API tokens for CI and scripts                  |
 | `version`, `completion`                             | Build info, shell completion                             |
 | `up`, `shell`, `db connect`                         | Not available on the control plane yet (exit 10)         |

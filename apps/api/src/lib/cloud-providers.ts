@@ -15,7 +15,6 @@
  * @module
  */
 import { type Db, providerCredentials } from "@roundhouse/db";
-import { fromBase64 } from "@roundhouse/protocol";
 import {
   createProvider,
   isAmbiguous,
@@ -34,10 +33,10 @@ import {
   sealInstanceSecret,
   unsealInstanceSecret,
 } from "./instance-secrets";
+import { providerFingerprintKey, variableFingerprint } from "./keyring";
+import { loadFingerprintSecret } from "./settings";
 
 type CredentialRow = typeof providerCredentials.$inferSelect;
-
-const encoder = new TextEncoder();
 
 /** `instance_settings`-style key the token AAD is namespaced under. */
 const SETTING_KEY = "provider_credential";
@@ -90,39 +89,31 @@ export function unsealProviderToken(keys: KeyEnv, row: CredentialRow): Promise<s
 }
 
 /**
- * A token's display fingerprint: the first 8 hex characters of
- * HMAC-SHA256 under a key derived from the master key for this workspace.
+ * A token's display fingerprint: the first 8 hex characters of HMAC-SHA256
+ * under the workspace's provider fingerprint key (`providerFingerprintKey`),
+ * the same construction as variable fingerprints. The key derives from the
+ * instance fingerprint secret, not `MASTER_KEY`, so a stored fingerprint
+ * still matches its token after a master key rotation.
  *
  * SECURITY: Keyed so the stored fingerprint is no offline oracle for the
  * token, even for providers whose tokens are short.
  *
- * @param masterKey - Base64 master key.
+ * @param db - Database client, to load (or create) the fingerprint secret.
+ * @param keys - The keyring bindings.
  * @param workspaceId - Owning workspace; part of the derivation.
  * @param token - Plaintext token.
  * @returns 8 lowercase hex characters.
  */
 export async function providerTokenFingerprint(
-  masterKey: string,
+  db: Db,
+  keys: KeyEnv,
   workspaceId: string,
   token: string,
 ): Promise<string> {
-  const ikm = await crypto.subtle.importKey("raw", fromBase64(masterKey.trim()), "HKDF", false, [
-    "deriveKey",
-  ]);
-  const key = await crypto.subtle.deriveKey(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt: encoder.encode("roundhouse/v2/provider-fingerprint"),
-      info: encoder.encode(`provider-fingerprint:${workspaceId}`),
-    },
-    ikm,
-    { name: "HMAC", hash: "SHA-256", length: 256 },
-    false,
-    ["sign"],
-  );
-  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(token)));
-  return [...mac.subarray(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const secret = await loadFingerprintSecret(db, keys);
+  const key = await providerFingerprintKey(secret, workspaceId);
+  secret.fill(0);
+  return variableFingerprint(key, token);
 }
 
 /**

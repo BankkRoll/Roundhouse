@@ -111,7 +111,7 @@ func (a *App) serversCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "servers",
 		Aliases: []string{"server", "nodes"},
-		Short:   "List, add and remove servers",
+		Short:   "List, add and remove servers, and show their usage",
 		Example: `  roundhouse servers list
   roundhouse servers add
   roundhouse servers remove web-1`,
@@ -222,7 +222,7 @@ API tokens cannot provision.`,
 	}
 	add.Flags().StringVarP(&addWorkspace, "workspace", "w", "", "workspace ID, slug or name")
 	pf.register(add)
-	cmd.AddCommand(list, add, a.serversRemoveCmd(), a.serversCancelCmd())
+	cmd.AddCommand(list, add, a.serversMetricsCmd(), a.serversRemoveCmd(), a.serversCancelCmd())
 	return cmd
 }
 
@@ -820,20 +820,4 @@ func (a *App) shellCmd() *cobra.Command {
 		`Open an interactive shell inside one of the service's running containers.
 This needs an exec relay the control plane does not offer yet.`,
 		`  roundhouse shell --service api`, noArgs)
-}
-
-func (a *App) dbCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:     "db",
-		Short:   "Work with database services (not available yet)",
-		Example: "  roundhouse db connect postgres",
-		Args:    noArgs,
-	}
-	// TODO(phase-4): needs managed database services and a tunnel endpoint
-	// to reach their private address from this machine.
-	cmd.AddCommand(a.stub("connect [SERVICE]", "Open a database client to a database service (not available yet)",
-		`Connect psql, mysql or redis-cli to a database service through a tunnel.
-This needs database tunnels the control plane does not offer yet.`,
-		`  roundhouse db connect postgres`, maxArgs(1)))
-	return cmd
 }

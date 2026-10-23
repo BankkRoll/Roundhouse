@@ -22,6 +22,10 @@ MASTER_KEY=
 # docs/configuration.md.
 # MASTER_KEYS_PREVIOUS=
 
+# Cloudflare API token with Account Analytics Read, for reading metrics back
+# from Analytics Engine. Unset in development: metrics use D1 instead.
+# CF_ANALYTICS_TOKEN=
+
 # -----------------------------------------------------------------------------
 # Variables
 # -----------------------------------------------------------------------------
@@ -40,6 +44,13 @@ ROUNDHOUSE_DEV=1
 # Cloudflare's resolver, with Google's as the fallback.
 # DNS_RESOLVER_URL=https://cloudflare-dns.com/dns-query
 
+# Cloudflare account ID for the Analytics Engine SQL API, with CF_ANALYTICS_TOKEN.
+# CF_ACCOUNT_ID=
+
+# `d1` forces the short-retention D1 metrics store; unset picks Analytics
+# Engine when its credentials are set.
+# METRICS_BACKEND=d1
+
 # -----------------------------------------------------------------------------
 # Test and development knobs (leave unset in production)
 # -----------------------------------------------------------------------------
@@ -51,3 +62,6 @@ ROUNDHOUSE_DEV=1
 # between join checks (default 10).
 # PROVISION_JOIN_TIMEOUT_S=120
 # PROVISION_JOIN_POLL_S=5
+
+# Agent metrics sampling interval in ms (default 15000).
+# METRICS_INTERVAL_MS=5000

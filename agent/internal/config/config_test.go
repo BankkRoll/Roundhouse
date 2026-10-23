@@ -21,6 +21,7 @@ func TestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "etc", "agent.yaml")
 	want := validConfig(filepath.Join(dir, "data"))
+	want.Volumes = VolumesConfig{Root: "/srv/roundhouse/volumes", Quota: "loop"}
 
 	if ok, err := Exists(path); err != nil || ok {
 		t.Fatalf("Exists before save = %v, %v", ok, err)

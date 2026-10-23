@@ -69,6 +69,12 @@ func (u *IO) ForceInteractive() {
 	u.interactive = &t
 }
 
+// ForceStdoutTTY makes stdout behave as a terminal, with colour when color
+// is set, for tests.
+func (u *IO) ForceStdoutTTY(color bool) {
+	u.outTTY, u.outColor = true, color
+}
+
 // DisableInput makes every prompt fail, as --no-input requests.
 func (u *IO) DisableInput() { u.noInput = true }
 

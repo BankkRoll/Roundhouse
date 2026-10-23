@@ -36,9 +36,11 @@ import {
   requireWorkspace,
   unauthorized,
 } from "./common";
+import { dataHandlers } from "./data-handlers";
 import { type DbAuditEntry, type DbInvite, type DbMembership, db, nextId } from "./db";
 import { deployHandlers } from "./deploy-handlers";
 import { domainHandlers } from "./domains-mock";
+import { metricsHandlers } from "./metrics-handlers";
 import { providerHandlers } from "./providers-handlers";
 import { securityHandlers } from "./security-handlers";
 import { signingKeyHandlers } from "./signing-keys-mock";
@@ -748,6 +750,8 @@ export const handlers = [
   ...providerHandlers,
   ...templateHandlers,
   ...changeHandlers,
+  ...metricsHandlers,
+  ...dataHandlers,
   ...signingKeyHandlers,
   ...securityHandlers,
   ...accountSecurityHandlers,

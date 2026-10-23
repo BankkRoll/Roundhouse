@@ -19,7 +19,7 @@ import {
   variableDependencies,
 } from "@roundhouse/shared";
 import { and, eq, isNull } from "drizzle-orm";
-import type { Sealed } from "../crypto";
+import type { KeyEnv, Sealed } from "../crypto";
 import { ApiError } from "../errors";
 import { slugFor } from "../projects";
 import { loadEnvironmentVariables, projectKey } from "../variables";
@@ -59,12 +59,12 @@ export async function loadLayout(db: Db, projectId: string) {
 /**
  * Builds the canvas of one environment.
  *
- * @param ctx - Database, master key, project and environment.
+ * @param ctx - Database, keyring bindings, project and environment.
  * @returns The `Canvas` wire shape.
  */
 export async function buildCanvas(ctx: {
   db: Db;
-  masterKey: string;
+  keys: KeyEnv;
   project: ProjectRow;
   environment: EnvironmentRow;
 }) {
@@ -125,7 +125,7 @@ export async function buildCanvas(ctx: {
   }
 
   // Raw values before and after the draft, by slug.
-  const dek = await projectKey(db, ctx.masterKey, project.id);
+  const dek = await projectKey(db, ctx.keys, project.id);
   const current = await loadEnvironmentVariables(db, dek, project.id, environment.id);
   const idBySlugBefore = new Map(live.map((s) => [s.slug, s.id]));
   const slugAfter = new Map<string, string>(live.map((s) => [s.id, s.slug]));

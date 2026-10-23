@@ -16,6 +16,7 @@ import { renderTemplate, TemplateSchema } from "@roundhouse/shared/template";
 import { afterEach, describe, expect, it } from "vitest";
 import { policyOf, TEMPLATE_ROUTES } from "../src/contracts";
 import { app } from "../src/index";
+import { databaseCreateOp } from "../src/lib/databases";
 import { mergeConfig } from "../src/lib/projects";
 import { BUILT_IN_TEMPLATES } from "../src/lib/template-catalogue";
 import { openVariable, projectKey } from "../src/lib/variables";
@@ -124,7 +125,11 @@ describe("built-in catalogue", () => {
         randomBytes: (n) => crypto.getRandomValues(new Uint8Array(n)),
       });
       for (const s of rendered.services) {
-        expect(s.source.type).not.toBe("database");
+        if (s.source.type === "database") {
+          const op = databaseCreateOp({ ref: "new:1", database: s.source, config: s.config });
+          expect(op.kind, s.ref).toBe("database");
+          continue;
+        }
         const source = ServiceSourceSchema.parse(s.source);
         const spec = mergeConfig(defaultServiceConfig(source), s.config);
         expect(spec.networking.port, s.ref).not.toBeNull();
@@ -226,7 +231,7 @@ describe("POST /v1/workspaces/{id}/projects/from-template", () => {
     expect(JSON.stringify(res.body)).not.toMatch(/[0-9a-f]{64}/);
 
     const db = createDb(env.DB);
-    const key = await projectKey(db, env.MASTER_KEY!, res.body.project.id);
+    const key = await projectKey(db, env, res.body.project.id);
     const row = await db.query.variables.findFirst({
       where: (v, { eq }) => eq(v.key, "N8N_ENCRYPTION_KEY"),
     });
@@ -264,7 +269,7 @@ describe("POST /v1/workspaces/{id}/projects/from-template", () => {
     const db = createDb(env.DB);
     const values = await Promise.all(
       [a, b].map(async (r) => {
-        const key = await projectKey(db, env.MASTER_KEY!, r.body.project.id);
+        const key = await projectKey(db, env, r.body.project.id);
         const row = await db.query.variables.findFirst({
           where: (v, { and, eq }) =>
             and(eq(v.projectId, r.body.project.id), eq(v.key, "N8N_ENCRYPTION_KEY")),

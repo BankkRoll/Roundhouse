@@ -37,8 +37,6 @@ afterEach(async () => {
   await introspector?.dispose();
 });
 
-const MASTER_KEY = () => env.MASTER_KEY!.trim();
-
 /** A format 1 value as stored before ADR 0014: `{ v: 1, iv, ct }`, no kid. */
 async function sealV1(key: CryptoKey, plaintext: string, aad: string): Promise<Sealed> {
   const b64 = (b: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(b)));
@@ -105,7 +103,7 @@ describe("deployment env", () => {
     const row = await frozen(d.id);
     expect(row.secretKeys).toEqual(["API_KEY", "DB_URL", "TLS_KEY"]);
     expect(row.buildEnvSealed).toBeNull(); // image sources build nothing
-    const key = await projectKey(createDb(env.DB), MASTER_KEY(), s.project.id);
+    const key = await projectKey(createDb(env.DB), env, s.project.id);
     const opened = JSON.parse(
       await unsealWith(key, row.envSealed!, deploymentEnvAadV2(s.workspaceId, s.project.id, d.id)),
     );
@@ -120,7 +118,7 @@ describe("deployment env", () => {
     const d = await deploy(s.owner, s.serviceId, s.envId);
     const active = await waitForStatus(s.owner, d.id, ["active"]);
     const db = createDb(env.DB);
-    const key = await projectKey(db, MASTER_KEY(), s.project.id);
+    const key = await projectKey(db, env, s.project.id);
     // The pre-0014 shape: a flat map under `deployment-env:<id>`, no secret_keys.
     const legacy = await sealV1(
       key,
@@ -145,7 +143,7 @@ describe("deployment env", () => {
 describe("deployment env AAD", () => {
   it("opens format 2 only under the v2 AAD and format 1 only under the old one", async () => {
     const s = await stage();
-    const key = await projectKey(createDb(env.DB), MASTER_KEY(), s.project.id);
+    const key = await projectKey(createDb(env.DB), env, s.project.id);
     const ref = { workspaceId: s.workspaceId, projectId: s.project.id, deploymentId: "dep_x" };
     const body = JSON.stringify({ env: { A: "1" }, files: {} });
     const v2 = deploymentEnvAadV2(ref.workspaceId, ref.projectId, ref.deploymentId);
@@ -215,7 +213,7 @@ describe("build inputs", () => {
     expect(s.agent.rejected).toEqual([]);
 
     const row = await frozen(d.id);
-    const key = await projectKey(createDb(env.DB), MASTER_KEY(), s.project.id);
+    const key = await projectKey(createDb(env.DB), env, s.project.id);
     const inputs = JSON.parse(
       await unsealWith(
         key,

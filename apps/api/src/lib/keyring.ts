@@ -6,7 +6,6 @@
  *
  * @module
  */
-import { env as workerEnv } from "cloudflare:workers";
 import { fromBase64 } from "@roundhouse/protocol";
 import type { VariableScope } from "@roundhouse/shared";
 
@@ -43,12 +42,6 @@ export interface KeyEnv {
   /** Earlier master keys, comma-separated, newest first. */
   MASTER_KEYS_PREVIOUS?: string;
 }
-
-/**
- * Where a caller gets the keyring from: the bindings, or `MASTER_KEY` alone
- * (call sites that predate the keyring); see {@link keyringOf}.
- */
-export type KeySource = string | KeyEnv;
 
 /**
  * Validates that `MASTER_KEY` decodes to at least 32 bytes.
@@ -143,19 +136,13 @@ export function keyByKid(keyring: Keyring, kid: string): MasterKey | undefined {
 const ringCache = new Map<string, Promise<Keyring | null>>();
 
 /**
- * The keyring for a key source, parsed once per isolate.
+ * The keyring of the bindings, parsed once per isolate.
  *
- * A bare `MASTER_KEY` string gets the Worker's `MASTER_KEYS_PREVIOUS` added,
- * so values sealed under a previous key stay readable between the
- * operator's key change and the rotation workflow, whichever form the
- * caller passes.
- *
- * @param source - The bindings, or the current master key.
+ * @param keys - `MASTER_KEY` and `MASTER_KEYS_PREVIOUS` (`c.env` / `this.env`).
  * @returns The keyring.
  * @throws {Error} When `MASTER_KEY` is missing or invalid, or a previous key is.
  */
-export async function keyringOf(source: KeySource): Promise<Keyring> {
-  const keys = typeof source === "string" ? withWorkerPrevious(source) : source;
+export async function keyringOf(keys: KeyEnv): Promise<Keyring> {
   const id = `${keys.MASTER_KEY?.trim() ?? ""}|${keys.MASTER_KEYS_PREVIOUS ?? ""}`;
   let ring = ringCache.get(id);
   if (!ring) {
@@ -167,19 +154,6 @@ export async function keyringOf(source: KeySource): Promise<Keyring> {
   const parsed = await ring;
   if (!parsed) throw new Error("MASTER_KEY is not configured");
   return parsed;
-}
-
-function withWorkerPrevious(masterKey: string): KeyEnv {
-  const current = masterKey.trim();
-  const previous = (workerEnv as KeyEnv | undefined)?.MASTER_KEYS_PREVIOUS ?? "";
-  return {
-    MASTER_KEY: current,
-    MASTER_KEYS_PREVIOUS: previous
-      .split(",")
-      .map((k) => k.trim())
-      .filter((k) => k && k !== current)
-      .join(","),
-  };
 }
 
 /** Purposes a v2 subkey is derived for. */
@@ -333,11 +307,35 @@ export async function fingerprintKey(
 }
 
 /**
+ * A workspace's provider token fingerprint key: HKDF-SHA256(instance
+ * fingerprint secret, salt `roundhouse/v2/fingerprint`, info
+ * `provider-fingerprint:<workspace_id>`), imported for HMAC-SHA256. The
+ * secret is random and sealed in `instance_settings`, so the key, unlike one
+ * derived from `MASTER_KEY`, survives a master key rotation; workspaces have
+ * no DEK of their own to derive it from as {@link fingerprintKey} does.
+ *
+ * @param secret - The 32-byte instance fingerprint secret.
+ * @param workspaceId - The workspace.
+ * @returns An HMAC key for {@link variableFingerprint}.
+ */
+export async function providerFingerprintKey(
+  secret: Uint8Array<ArrayBuffer>,
+  workspaceId: string,
+): Promise<CryptoKey> {
+  const raw = await hkdf(
+    secret,
+    "roundhouse/v2/fingerprint",
+    `provider-fingerprint:${workspaceId}`,
+  );
+  return crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+}
+
+/**
  * A value's fingerprint: the first 8 hex characters of
  * HMAC-SHA256(fingerprint key, UTF-8 value). Enough to tell values apart at
  * a glance, too short to be a useful oracle even with the key.
  *
- * @param key - From {@link fingerprintKey}.
+ * @param key - From {@link fingerprintKey} or {@link providerFingerprintKey}.
  * @param value - The raw (unresolved) value as stored.
  * @returns 8 lowercase hex characters.
  */

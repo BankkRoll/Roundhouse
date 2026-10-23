@@ -5,7 +5,7 @@
  *
  * @module
  */
-import { createRouter, requireMasterKey, requireWorkspace } from "../context";
+import { createRouter, requireKeys, requireWorkspace } from "../context";
 import { policyOf } from "../contracts/policy";
 import {
   createProjectFromTemplate,
@@ -43,11 +43,11 @@ export const templateRoutes = createRouter()
       workspaceId,
       policyOf(createProjectFromTemplate).action!,
     );
-    const masterKey = requireMasterKey(c);
+    const keys = requireKeys(c);
     const result = await createFromTemplate(
       c,
       caller,
-      masterKey,
+      keys,
       findTemplate(body.template_id),
       {
         ...(body.name !== undefined ? { name: body.name } : {}),
@@ -76,7 +76,7 @@ export const templateRoutes = createRouter()
     const result = await deployTemplateIntoProject(
       c,
       caller,
-      requireMasterKey(c),
+      requireKeys(c),
       findTemplate(body.template_id),
       project,
       environment,

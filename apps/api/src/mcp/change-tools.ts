@@ -23,7 +23,7 @@ import { changeSets, environments } from "@roundhouse/db";
 import { type ApiTokenScope, describeOp, MAX_STAGED_OPS } from "@roundhouse/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { type AppContext, clientIp, originOf, requireMasterKey } from "../context";
+import { type AppContext, clientIp, originOf, requireKeys } from "../context";
 import { putServiceVariables } from "../contracts";
 import { policyOf } from "../contracts/policy";
 import { recordAudit } from "../lib/audit";
@@ -145,7 +145,7 @@ async function stageAll(
 ) {
   const { c, tool } = ctx;
   const db = c.get("db");
-  const staging: StagingContext = { db, masterKey: requireMasterKey(c), ...scope };
+  const staging: StagingContext = { db, keys: requireKeys(c), ...scope };
   let { set, opened } = await tokenSet(
     ctx,
     scope.caller,

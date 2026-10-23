@@ -110,6 +110,14 @@ type Fake struct {
 	tokenSeq    int
 	changeSets  []*changeSet
 
+	serviceMetrics map[string]ServiceMetricsData
+	nodeMetrics    map[string]NodeMetricsData
+	summaries      map[string]api.ServiceMetricsSummary
+	summaryBackend string
+
+	// data holds databases, volumes and backups; see [Fake.dataState].
+	data *dataState
+
 	// templateDeployErrors maps a template service ref to the message its
 	// first deployment fails to start with; see [Fake.FailTemplateDeploy].
 	templateDeployErrors map[string]string
@@ -548,6 +556,9 @@ func (f *Fake) workspaceOf(r *http.Request) string {
 	}
 	projectID := r.PathValue("projectId")
 	serviceID := r.PathValue("serviceId")
+	if id := f.dataServiceOf(r); id != "" {
+		serviceID = id
+	}
 	for _, d := range f.deployments {
 		if d.ID == r.PathValue("deploymentId") || d.BuildID != nil && *d.BuildID == r.PathValue("buildId") {
 			serviceID = d.ServiceID
@@ -677,7 +688,12 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteReviewChangeSet:  {"projects:read", f.reviewChangeSet},
 		api.RouteApplyChangeSet:   {"projects:read", f.applyChangeSet},
 		api.RouteDiscardChangeSet: {"projects:read", f.discardChangeSet},
+
+		api.RouteServiceMetrics: {"services:read", f.serviceMetricsHandler},
+		api.RouteMetricsSummary: {"projects:read", f.metricsSummaryHandler},
+		api.RouteNodeMetrics:    {"nodes:read", f.nodeMetricsHandler},
 	}
+	f.dataRoutes(mux, handlers)
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
 	}

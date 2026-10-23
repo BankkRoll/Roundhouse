@@ -17,7 +17,7 @@
  * @module
  */
 import { toBase64 } from "@roundhouse/protocol";
-import { deriveKeyV2, type KeySource, keyringOf, type MasterKey } from "./keyring";
+import { deriveKeyV2, type KeyEnv, keyringOf, type MasterKey } from "./keyring";
 
 /** One versioned Better Auth secret. */
 export interface AuthSecret {
@@ -74,7 +74,7 @@ const cache = new Map<string, Promise<AuthSecrets>>();
  * @returns The versioned secrets and the matching `SecretConfig`.
  * @throws {Error} When `MASTER_KEY` is missing or a key is invalid.
  */
-export async function authSecretsFor(keys: KeySource): Promise<AuthSecrets> {
+export async function authSecretsFor(keys: KeyEnv): Promise<AuthSecrets> {
   const ring = await keyringOf(keys);
   const id = [ring.current, ...ring.previous].map((k) => k.kid).join(",");
   let entry = cache.get(id);

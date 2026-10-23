@@ -31,6 +31,7 @@ import {
   masterKeyId,
   parseKeyring,
   projectKeyAadV2,
+  providerFingerprintKey,
   variableAadV2,
   variableFingerprint,
 } from "../src/lib/keyring";
@@ -152,6 +153,17 @@ describe("DEK ids and fingerprints", () => {
       .join("")
       .slice(0, 8);
     expect(fp).not.toBe(bare);
+  });
+
+  it("fingerprints provider tokens per workspace, keyed apart from variables", async () => {
+    const k1 = await providerFingerprintKey(dek, "ws_1");
+    const fp = await variableFingerprint(k1, "hunter2");
+    expect(fp).toBe("9fc71e5b");
+    expect(
+      await variableFingerprint(await providerFingerprintKey(dek, "ws_2"), "hunter2"),
+    ).not.toBe(fp);
+    // Same secret and id, other purpose: the info string keeps them apart.
+    expect(await variableFingerprint(await fingerprintKey(dek, "ws_1"), "hunter2")).not.toBe(fp);
   });
 });
 

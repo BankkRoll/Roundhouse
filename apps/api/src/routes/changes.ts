@@ -7,7 +7,7 @@
  */
 import { changeSets } from "@roundhouse/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { type AppContext, clientIp, createRouter, requireMasterKey } from "../context";
+import { type AppContext, clientIp, createRouter, requireKeys } from "../context";
 import {
   applyChangeSet,
   createChangeSet,
@@ -69,7 +69,7 @@ async function stagingContext(c: AppContext, changeSetId: string) {
   const scope = await changeSetScope(c, changeSetId, "projects:read");
   const ctx: StagingContext = {
     db: c.get("db"),
-    masterKey: requireMasterKey(c),
+    keys: requireKeys(c),
     project: scope.project,
     environment: scope.environment,
     caller: scope.caller,
@@ -92,7 +92,7 @@ export const changeRoutes = createRouter()
     const environment = await environmentOf(c, project.id, environment_id);
     const canvas = await buildCanvas({
       db: c.get("db"),
-      masterKey: requireMasterKey(c),
+      keys: requireKeys(c),
       project,
       environment,
     });
@@ -158,7 +158,7 @@ export const changeRoutes = createRouter()
     const db = c.get("db");
     const ctx: StagingContext = {
       db,
-      masterKey: requireMasterKey(c),
+      keys: requireKeys(c),
       project,
       environment,
       caller,
@@ -213,7 +213,7 @@ export const changeRoutes = createRouter()
     const db = c.get("db");
     const ctx: StagingContext = {
       db,
-      masterKey: requireMasterKey(c),
+      keys: requireKeys(c),
       project,
       environment,
       caller,

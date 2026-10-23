@@ -110,12 +110,13 @@ describe("palette and shortcuts in a project", () => {
     expect(links.map((link) => link.textContent)).toEqual([
       "Deployments",
       "Logs",
+      "Metrics",
       "Variables",
       "Settings",
       "Domains",
     ]);
     expect(links[0]).toHaveAttribute("aria-current", "page");
-    links[2]?.focus();
+    links[3]?.focus();
     await user.keyboard("{Enter}");
     await waitFor(() =>
       expect(within(tabs).getByRole("link", { name: "Variables" })).toHaveAttribute(

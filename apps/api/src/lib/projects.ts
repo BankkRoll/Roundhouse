@@ -34,7 +34,9 @@ import {
   retireDeployments,
   transitionDeployment,
 } from "./deployments";
+import { refreshNodes } from "./desired-state";
 import { ApiError, conflict, type ErrorDetail, isUniqueViolation } from "./errors";
+import { retireServiceVolumes } from "./volumes";
 
 /** Longest slug the API accepts. */
 export const SLUG_MAX_LENGTH = 40;
@@ -314,7 +316,9 @@ export async function syncGeneratedDomain(
 
 /**
  * Stops every deployment of the given services: in-flight ones are
- * cancelled, live ones removed, and their replicas pulled from nodes.
+ * cancelled, live ones removed, and their replicas pulled from nodes. Their
+ * volumes are soft-deleted (ADR 0004), so the data stays on its node for
+ * the grace period.
  *
  * @param ctx - Database and bindings.
  * @param projectId - Owning project.
@@ -348,10 +352,13 @@ export async function tearDownServices(
       if (!(err instanceof IllegalTransitionError)) throw err;
     }
   }
+  // Before the deployments retire, so the desired state they push no longer lists the volumes.
+  const holders = await retireServiceVolumes(ctx.db, serviceIds);
   await retireDeployments(
     ctx,
     rows.map((d) => d.id),
   );
+  if (holders.length) await refreshNodes(ctx.env, ctx.db, holders);
 }
 
 /**

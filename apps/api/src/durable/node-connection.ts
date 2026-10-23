@@ -16,6 +16,14 @@
  *   store (R2 + `log_chunks`) and forward `logs` to the project
  *   room, flushing on the Durable Object's alarm and dropping lines whose
  *   deployment or build no longer exists;
+ * - ask metrics-capable agents for `metrics` in `welcome`, and write their
+ *   samples and every heartbeat to the metrics dataset (ADR 0008,
+ *   `./node/handlers/metrics.ts`);
+ * - record `volume_status` reports (`./node/handlers/volumes.ts`), run
+ *   data-browser queries (`runQuery`, answered by `db_query_result`,
+ *   `./node/handlers/data.ts`), create each database's read-only principal
+ *   once it runs healthy, and send `volume_delete` (ADR 0004); backup and
+ *   restore frames are dispatched to `./node/handlers/backups.ts`;
  * - sign and send control frames: `welcome`, `desired_state` (always
  *   computed from D1, so a reconnect gets the truth), `build_job` and
  *   `build_cancel`, never sending a frame or field to an agent whose
@@ -45,8 +53,9 @@ import {
   services,
 } from "@roundhouse/db";
 import {
-  type AgentMessage,
-  AgentMessageSchema,
+  type AgentFrame,
+  AgentFrameSchema,
+  BACKUPS_PROTOCOL_VERSION,
   BUILD_CANCEL_PROTOCOL_VERSION,
   type BuildJob,
   type BuildResult,
@@ -54,6 +63,7 @@ import {
   ControlMessageSchema,
   CREDENTIAL_FRAME_TTL_MS,
   carriesCredentials,
+  DB_QUERY_PROTOCOL_VERSION,
   type Heartbeat,
   type Hello,
   KEY_ROLLOVER_PROTOCOL_VERSION,
@@ -61,12 +71,14 @@ import {
   type Logs,
   MAX_AGENT_FRAME_BYTES,
   MAX_CONTROL_FRAME_BYTES,
+  METRICS_PROTOCOL_VERSION,
   MIN_PROTOCOL_VERSION,
   type NodeEncryptionKey,
   PROTOCOL_VERSION,
   SEALED_ENV_PROTOCOL_VERSION,
   SECRET_BUILD_ARGS_PROTOCOL_VERSION,
   signEnvelope,
+  VOLUMES_PROTOCOL_VERSION,
   verifyNodeEncryptionKey,
   WORKLOADS_PROTOCOL_VERSION,
   type WorkloadState,
@@ -83,6 +95,12 @@ import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
 import {
+  DB_QUERY_WAIT_MS,
+  type DbQueryBody,
+  provisionReadonlyOnNode,
+  type RunQueryOutcome,
+} from "../lib/db-query";
+import {
   addDeploymentEvent,
   IllegalTransitionError,
   transitionDeployment,
@@ -90,6 +108,8 @@ import {
 } from "../lib/deployments";
 import { buildDesiredState } from "../lib/desired-state";
 import { deploymentRedaction, logChunkKey, type StoredLogLine, toNdjson } from "../lib/logs";
+import { metricsIntervalMs } from "../lib/metrics/backend";
+import { nodeRow, writeMetricRows } from "../lib/metrics/write";
 import { NODE_ID_HEADER } from "../lib/nodes";
 import { projectRoom } from "../lib/realtime";
 import {
@@ -98,6 +118,10 @@ import {
   loadSigningKeys,
   signingKeyFor,
 } from "../lib/signing-keys";
+import { type BackupJobFrameBody, onBackupFrame } from "./node/handlers/backups";
+import { MAX_QUERIES_PER_NODE, PendingQueries, UserQueryLimiter } from "./node/handlers/data";
+import { MetricOwners, onMetrics } from "./node/handlers/metrics";
+import { onVolumeStatus } from "./node/handlers/volumes";
 
 /** Signed control frames expire quickly so a captured frame can't be replayed later. */
 const CONTROL_TTL_MS = 5 * 60 * 1000;
@@ -129,18 +153,41 @@ const MAX_RATE_STRIKES = 5;
  * Frames of each type accepted per {@link RATE_WINDOW_MS}. An agent flushes
  * logs once a second per source and reports statuses on change, so these
  * leave headroom for a node running `MAX_WORKLOADS_PER_NODE` replicas.
+ * `metrics` is one per second by contract, plus one for a frame that lands
+ * at a window's edge. `other` covers frames this object validates but has
+ * no handler for yet, which are dropped.
  */
 export const FRAME_RATE_LIMITS = {
   workload_status: 64,
   logs: 256,
   build_result: 8,
+  metrics: 2,
+  /** Every 60 s and on change; a burst of changes coalesces on the agent. */
+  volume_status: 4,
+  /** At most 4 queries run per node at once (ADR 0004). */
+  db_query_result: 8,
+  backup_parts_request: 8,
+  backup_progress: 16,
+  backup_result: 4,
+  restore_result: 4,
+  other: 64,
 } as const;
 
 /** Window of {@link FRAME_RATE_LIMITS}. */
 const RATE_WINDOW_MS = 1000;
 
+/** A budget of {@link FRAME_RATE_LIMITS}. */
+type RateBucket = keyof typeof FRAME_RATE_LIMITS;
+
 /** Frames over the limit dropped in one connection before it is closed. */
 const MAX_DROPPED_FRAMES = 200;
+
+/**
+ * Least time between two attempts to create one database's read-only
+ * principal. Just under the agent's 60 s `volume_status` period, so every
+ * report can retry a failed attempt.
+ */
+const READONLY_RETRY_MS = 50_000;
 
 /** Buffered log bytes for one source before it is flushed to R2. */
 const LOG_FLUSH_BYTES = 256 * 1024;
@@ -189,7 +236,7 @@ interface Attachment {
   lastBeatAt: number;
   strikes: number;
   windowStart: number;
-  counts: Partial<Record<keyof typeof FRAME_RATE_LIMITS, number>>;
+  counts: Partial<Record<RateBucket, number>>;
   dropped: number;
 }
 
@@ -240,10 +287,16 @@ export class NodeConnection extends DurableObject<Env> {
   private logBuffers = new Map<string, LogBuffer>();
   private owners = new Map<string, { owner: LogOwner | null; at: number }>();
   private redactionSets = new Map<string, { needles: string[]; expires: number }>();
+  private metricOwners: MetricOwners;
+  private queries = new PendingQueries();
+  private queryLimiter = new UserQueryLimiter();
+  /** Volumes whose read-only principal is being created, or was last tried, and when. */
+  private readonlyAttempts = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = createDb(env.DB);
+    this.metricOwners = new MetricOwners(this.db);
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -280,9 +333,9 @@ export class NodeConnection extends DurableObject<Env> {
     if (size > MAX_AGENT_FRAME_BYTES) return ws.close(CloseCode.tooBig, "frame too large");
     if (typeof raw !== "string") return ws.close(CloseCode.policy, "binary frames not supported");
 
-    let message: AgentMessage;
+    let message: AgentFrame;
     try {
-      const parsed = AgentMessageSchema.safeParse(JSON.parse(raw));
+      const parsed = AgentFrameSchema.safeParse(JSON.parse(raw));
       if (!parsed.success) return ws.close(CloseCode.policy, "invalid message");
       message = parsed.data;
     } catch {
@@ -333,7 +386,8 @@ export class NodeConnection extends DurableObject<Env> {
 
     // Workload frames are a version 2 feature; an older agent has none to send.
     if (attachment.protocolVersion < WORKLOADS_PROTOCOL_VERSION) return;
-    if (!this.admit(ws, attachment, message.type)) return;
+    const bucket = message.type in FRAME_RATE_LIMITS ? (message.type as RateBucket) : "other";
+    if (!this.admit(ws, attachment, bucket)) return;
     switch (message.type) {
       case "workload_status":
         await this.applyStatuses(attachment.nodeId, [message]);
@@ -341,8 +395,57 @@ export class NodeConnection extends DurableObject<Env> {
       case "build_result":
         await this.onBuildResult(attachment.nodeId, message);
         return;
-      case "logs":
-        await this.onLogs(attachment.nodeId, message);
+      case "logs": {
+        // NOTE: job and task sources (protocol 5–6) have no ingest here yet;
+        // their lines are dropped rather than filed under a replica.
+        const { source } = message;
+        if (source.type !== "runtime" && source.type !== "build") return;
+        await this.onLogs(attachment.nodeId, { ...message, source });
+        return;
+      }
+      case "metrics":
+        // A frame the control plane never asked for (an older protocol) is dropped.
+        if (attachment.protocolVersion < METRICS_PROTOCOL_VERSION) return;
+        try {
+          await onMetrics(this.env, this.metricOwners, attachment.nodeId, message);
+        } catch (err) {
+          // Losing one sample must not take the agent connection down.
+          console.error("metrics write failed", err instanceof Error ? err.message : "error");
+        }
+        return;
+      case "volume_status":
+        if (attachment.protocolVersion < VOLUMES_PROTOCOL_VERSION) return;
+        await onVolumeStatus(this.db, this.env, attachment.nodeId, message);
+        // The 60 s report doubles as the retry tick for read-only principals.
+        this.provisionReadonlySoon(attachment.nodeId);
+        return;
+      case "db_query_result":
+        if (attachment.protocolVersion < DB_QUERY_PROTOCOL_VERSION) return;
+        this.queries.settle(message);
+        return;
+      // Backups and restores (ADR 0004): `./node/handlers/backups.ts`.
+      case "backup_parts_request":
+      case "backup_progress":
+      case "backup_result":
+      case "restore_result":
+        if (attachment.protocolVersion < BACKUPS_PROTOCOL_VERSION) return;
+        await onBackupFrame(
+          {
+            db: this.db,
+            env: this.env,
+            nodeId: attachment.nodeId,
+            reply: async (body) => {
+              await this.send(ws, {
+                ...this.header(attachment.nodeId, Date.now(), CREDENTIAL_FRAME_TTL_MS),
+                ...body,
+              });
+            },
+          },
+          message,
+        );
+        return;
+      default:
+        // Validated Phase 2–3 frames whose handlers land with their streams.
         return;
     }
   }
@@ -491,6 +594,94 @@ export class NodeConnection extends DurableObject<Env> {
   }
 
   /**
+   * Signs and sends a `db_query` and waits for its `db_query_result`. The
+   * caller seals the credential to this node, bound to `request_id`, so the
+   * plaintext never reaches this object.
+   *
+   * @param query - The frame body.
+   * @param options - `userId` applies the per-user rate limit (system
+   *   queries have none); `waitMs` overrides {@link DB_QUERY_WAIT_MS}.
+   * @returns The result, or why there is none.
+   */
+  async runQuery(
+    query: DbQueryBody,
+    options: { userId?: string; waitMs?: number } = {},
+  ): Promise<RunQueryOutcome> {
+    const ws = this.greetedSocket();
+    if (!ws) return { ok: false, reason: "not_connected" };
+    const attachment = ws.deserializeAttachment() as Attachment;
+    if (attachment.protocolVersion < DB_QUERY_PROTOCOL_VERSION) {
+      return { ok: false, reason: "protocol_too_old" };
+    }
+    if (options.userId !== undefined && !this.queryLimiter.admit(options.userId, Date.now())) {
+      return { ok: false, reason: "rate_limited" };
+    }
+    if (this.queries.size >= MAX_QUERIES_PER_NODE) return { ok: false, reason: "busy" };
+    const waitMs = options.waitMs ?? DB_QUERY_WAIT_MS;
+    const answer = this.queries.wait(query.request_id, waitMs);
+    try {
+      await this.send(ws, {
+        type: "db_query",
+        ...this.header(attachment.nodeId, Date.now(), CREDENTIAL_FRAME_TTL_MS),
+        ...query,
+      });
+    } catch (err) {
+      this.queries.cancel(query.request_id);
+      throw err;
+    }
+    const result = await answer;
+    return result ? { ok: true, result } : { ok: false, reason: "timeout" };
+  }
+
+  /**
+   * Signs and sends a `backup_job` or `restore_job` (ADR 0004) with the
+   * credential TTL. The caller has sealed its URLs and identity to this
+   * node, so no plaintext credential reaches this object.
+   *
+   * @param body - The frame body, `type` included.
+   * @returns `{ sent: true }`, or why it could not be delivered.
+   */
+  async sendBackupJob(
+    body: BackupJobFrameBody,
+  ): Promise<{ sent: true } | { sent: false; reason: "not_connected" | "protocol_too_old" }> {
+    const ws = this.greetedSocket();
+    if (!ws) return { sent: false, reason: "not_connected" };
+    const attachment = ws.deserializeAttachment() as Attachment;
+    if (attachment.protocolVersion < BACKUPS_PROTOCOL_VERSION) {
+      return { sent: false, reason: "protocol_too_old" };
+    }
+    await this.send(ws, {
+      ...this.header(attachment.nodeId, Date.now(), CREDENTIAL_FRAME_TTL_MS),
+      ...body,
+    } as ControlMessage);
+    return { sent: true };
+  }
+
+  /**
+   * Signs and sends a `volume_delete`, the only frame that removes a
+   * volume's data. The node confirms with `volume_status` state `deleted`.
+   *
+   * @param volumeId - A volume past its deletion grace.
+   * @returns `{ sent: true }`, or why it could not be delivered.
+   */
+  async sendVolumeDelete(
+    volumeId: string,
+  ): Promise<{ sent: true } | { sent: false; reason: "not_connected" | "protocol_too_old" }> {
+    const ws = this.greetedSocket();
+    if (!ws) return { sent: false, reason: "not_connected" };
+    const attachment = ws.deserializeAttachment() as Attachment;
+    if (attachment.protocolVersion < VOLUMES_PROTOCOL_VERSION) {
+      return { sent: false, reason: "protocol_too_old" };
+    }
+    await this.send(ws, {
+      type: "volume_delete",
+      ...this.header(attachment.nodeId, Date.now()),
+      volume_id: volumeId,
+    });
+    return { sent: true };
+  }
+
+  /**
    * Drops this isolate's cached signing keys and, when a successor is
    * scheduled, announces it to the connected agent in a `key_announce` (if
    * its protocol has rollover). Called after a rollover is scheduled,
@@ -576,6 +767,9 @@ export class NodeConnection extends DurableObject<Env> {
       type: "welcome",
       ...this.header(attachment.nodeId, now),
       heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,
+      ...(hello.protocol_version >= METRICS_PROTOCOL_VERSION
+        ? { metrics_interval_ms: metricsIntervalMs(this.env) }
+        : {}),
     });
     await this.sendDesiredState(ws, attachment.nodeId);
     if (hello.statuses?.length && hello.protocol_version >= WORKLOADS_PROTOCOL_VERSION) {
@@ -627,7 +821,7 @@ export class NodeConnection extends DurableObject<Env> {
 
   private async onHeartbeat(nodeId: string, hb: Heartbeat): Promise<void> {
     const now = Date.now();
-    await this.db
+    const [node] = await this.db
       .update(nodes)
       .set({
         status: liveStatus(),
@@ -640,22 +834,20 @@ export class NodeConnection extends DurableObject<Env> {
         observedGeneration: hb.observed_generation,
         lastHeartbeatAt: new Date(now),
       })
-      .where(and(eq(nodes.id, nodeId), isNull(nodes.deletedAt)));
+      .where(and(eq(nodes.id, nodeId), isNull(nodes.deletedAt)))
+      .returning({ workspaceId: nodes.workspaceId });
     await this.ctx.storage.put("last_seen", now);
     await this.ctx.storage.setAlarm(now + OFFLINE_AFTER_MS);
 
-    this.env.METRICS?.writeDataPoint({
-      indexes: [nodeId],
-      blobs: [nodeId, "node"],
-      doubles: [
-        hb.usage.cpu_percent,
-        hb.usage.mem_used_bytes,
-        hb.usage.mem_total_bytes,
-        hb.usage.disk_used_bytes,
-        hb.usage.disk_total_bytes,
-        hb.usage.load1,
-      ],
-    });
+    if (!node) return;
+    try {
+      // Stamped with the receive time: the agent's clock may be skewed.
+      await writeMetricRows(this.env, [
+        nodeRow(nodeId, node.workspaceId, { ...hb, ts: now }, HEARTBEAT_INTERVAL_MS / 1000),
+      ]);
+    } catch (err) {
+      console.error("node metrics write failed", err instanceof Error ? err.message : "error");
+    }
   }
 
   /**
@@ -692,6 +884,43 @@ export class NodeConnection extends DurableObject<Env> {
       await this.onReplicaStatus(row.deploymentId, row.replica, r);
     }
     for (const deploymentId of touched) await this.evaluateDeployment(deploymentId);
+    if (touched.size && reports.some((r) => r.state === "healthy")) {
+      this.provisionReadonlySoon(nodeId);
+    }
+  }
+
+  /**
+   * Creates the read-only principal of each database on this node that
+   * runs healthy without one (ADR 0004, "Read-only principal"), in the
+   * background so the frame that triggered it isn't held up by the query.
+   * A volume is retried at most every {@link READONLY_RETRY_MS} until it
+   * succeeds; healthy reports and every `volume_status` trigger it.
+   */
+  private provisionReadonlySoon(nodeId: string): void {
+    const ws = this.greetedSocket();
+    if (!ws) return;
+    if ((ws.deserializeAttachment() as Attachment).protocolVersion < DB_QUERY_PROTOCOL_VERSION) {
+      return;
+    }
+    const now = Date.now();
+    const skip = (volumeId: string) => {
+      const last = this.readonlyAttempts.get(volumeId);
+      if (last !== undefined && now - last < READONLY_RETRY_MS) return true;
+      this.readonlyAttempts.set(volumeId, now);
+      return false;
+    };
+    const run = provisionReadonlyOnNode(
+      this.db,
+      this.env,
+      nodeId,
+      (q) => this.runQuery(q),
+      skip,
+    ).then(({ provisioned }) => {
+      for (const id of provisioned) this.readonlyAttempts.delete(id);
+    });
+    run.catch((err) => {
+      console.error("read-only provisioning failed", err instanceof Error ? err.message : "error");
+    });
   }
 
   private async deploymentContext(deploymentId: string) {
@@ -839,7 +1068,7 @@ export class NodeConnection extends DurableObject<Env> {
    * Counts a frame against its per-second budget. Over-budget frames are
    * dropped; a connection that keeps exceeding it is closed.
    */
-  private admit(ws: WebSocket, a: Attachment, type: keyof typeof FRAME_RATE_LIMITS): boolean {
+  private admit(ws: WebSocket, a: Attachment, type: RateBucket): boolean {
     const now = Date.now();
     if (now - a.windowStart >= RATE_WINDOW_MS) {
       a.windowStart = now;
@@ -926,9 +1155,8 @@ export class NodeConnection extends DurableObject<Env> {
     const key = `${build ? "b" : "r"}:${owner.redactionDeploymentId}`;
     const cached = this.redactionSets.get(key);
     if (cached && Date.now() < cached.expires) return cached.needles;
-    const masterKey = this.env.MASTER_KEY?.trim();
-    const set = masterKey
-      ? await deploymentRedaction(this.db, masterKey, owner.redactionDeploymentId, build)
+    const set = this.env.MASTER_KEY?.trim()
+      ? await deploymentRedaction(this.db, this.env, owner.redactionDeploymentId, build)
       : { needles: [], frozen: false };
     if (this.redactionSets.size >= REDACTION_CACHE_LIMIT) {
       const oldest = this.redactionSets.keys().next().value;
@@ -1010,12 +1238,11 @@ export class NodeConnection extends DurableObject<Env> {
   }
 
   private async sendDesiredState(ws: WebSocket, nodeId: string): Promise<boolean> {
-    const masterKey = this.env.MASTER_KEY?.trim();
-    if (!masterKey) {
+    if (!this.env.MASTER_KEY?.trim()) {
       ws.close(1011, "control plane misconfigured");
       return false;
     }
-    const body = await buildDesiredState(this.db, masterKey, nodeId);
+    const body = await buildDesiredState(this.db, this.env, nodeId);
     if (!body) return false;
     const now = Date.now();
     const ttl = carriesCredentials(body) ? CREDENTIAL_FRAME_TTL_MS : CONTROL_TTL_MS;

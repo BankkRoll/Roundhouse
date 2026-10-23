@@ -13,7 +13,7 @@
  */
 import { type Db, oauthCodes } from "@roundhouse/db";
 import { type ApiTokenScope, isApiTokenScope } from "@roundhouse/shared";
-import { hashToken, randomToken, signState, verifyState } from "../../lib/crypto";
+import { hashToken, type KeyEnv, randomToken, signState, verifyState } from "../../lib/crypto";
 import { type OAuthClient, redirectUriMatches, resolveClient } from "./clients";
 import {
   AUTHORIZATION_CODE_TTL_MS,
@@ -254,18 +254,18 @@ export interface ConsentHolder {
  * approval names exactly the request the user was shown, in the same
  * session, recently; a forged or replayed body with other parameters fails.
  *
- * @param masterKey - Master key; the HMAC key is derived from it.
+ * @param keys - The keyring bindings; the HMAC key is derived from the current key.
  * @param holder - The session's user and ID.
  * @param params - The request shown.
  * @returns The ticket and when it expires (unix ms).
  */
 export async function signConsentTicket(
-  masterKey: string,
+  keys: KeyEnv,
   holder: ConsentHolder,
   params: AuthorizationParams,
 ): Promise<{ ticket: string; expiresAt: number }> {
   const ticket = await signState(
-    masterKey,
+    keys,
     CONSENT_PURPOSE,
     { u: holder.userId, s: holder.sessionId, r: await requestDigest(params) },
     CONSENT_TTL_MS,
@@ -276,19 +276,19 @@ export async function signConsentTicket(
 /**
  * Checks a consent ticket against the session and request.
  *
- * @param masterKey - Master key.
+ * @param keys - The keyring bindings.
  * @param ticket - Untrusted ticket from the body.
  * @param holder - The session submitting it.
  * @param params - The request being approved.
  * @returns `true` when the ticket was issued for this session and request and hasn't expired.
  */
 export async function verifyConsentTicket(
-  masterKey: string,
+  keys: KeyEnv,
   ticket: string,
   holder: ConsentHolder,
   params: AuthorizationParams,
 ): Promise<boolean> {
-  const payload = await verifyState(masterKey, CONSENT_PURPOSE, ticket);
+  const payload = await verifyState(keys, CONSENT_PURPOSE, ticket);
   return (
     payload !== null &&
     payload.u === holder.userId &&

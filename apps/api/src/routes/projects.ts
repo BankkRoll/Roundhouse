@@ -22,13 +22,7 @@ import {
   type ServiceConfigSpec,
 } from "@roundhouse/shared";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
-import {
-  clientIp,
-  createRouter,
-  requireMasterKey,
-  requireWorkspace,
-  visibleProjects,
-} from "../context";
+import { clientIp, createRouter, requireKeys, requireWorkspace, visibleProjects } from "../context";
 import {
   createEnvironment,
   createProject,
@@ -123,13 +117,13 @@ export const projectRoutes = createRouter()
   .openapi(createProject, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const m = await requireWorkspace(c, workspaceId, policyOf(createProject).action!);
-    const masterKey = requireMasterKey(c);
+    const keys = requireKeys(c);
     const body = c.req.valid("json");
     const db = c.get("db");
 
     const id = newId("project");
     const envId = newId("environment");
-    const keyRow = await newProjectKeyRow(masterKey, id, workspaceId);
+    const keyRow = await newProjectKeyRow(keys, id, workspaceId);
     const { slug } = await insertWithFreeSlug({
       base: body.slug ?? slugFor(body.name, "project"),
       uniqueOn: "projects",
@@ -311,7 +305,7 @@ export const projectRoutes = createRouter()
     const variableRows = from
       ? await copiedVariableRows(
           db,
-          await projectKey(db, requireMasterKey(c), projectId),
+          await projectKey(db, requireKeys(c), projectId),
           projectId,
           from.id,
           envId,

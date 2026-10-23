@@ -92,7 +92,7 @@ async function legacyInstall() {
     .bind(p.id)
     .first<{ dek_sealed: string }>())!;
   const rawDek = await unsealDataKey(
-    OLD,
+    { MASTER_KEY: OLD },
     JSON.parse(keyRow.dek_sealed),
     installed.workspaceId,
     p.id,

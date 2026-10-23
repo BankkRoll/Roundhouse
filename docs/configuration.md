@@ -28,10 +28,11 @@ are optional at deploy time; the setup wizard refuses to run until
 
 ### Secrets
 
-| Name                   | Required | Purpose                                                                                                                            |
-| ---------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `MASTER_KEY`           | yes      | Base64 of 32 random bytes. The root of every key: the auth secret, the key-encryption key for project data keys, instance secrets. |
-| `MASTER_KEYS_PREVIOUS` | no       | Comma-separated base64 keys that `MASTER_KEY` replaced, newest first. Set only during a [rotation](#rotating-the-master-key).      |
+| Name                   | Required | Purpose                                                                                                                             |
+| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `MASTER_KEY`           | yes      | Base64 of 32 random bytes. The root of every key: the auth secret, the key-encryption key for project data keys, instance secrets.  |
+| `MASTER_KEYS_PREVIOUS` | no       | Comma-separated base64 keys that `MASTER_KEY` replaced, newest first. Set only during a [rotation](#rotating-the-master-key).       |
+| `CF_ANALYTICS_TOKEN`   | no       | Cloudflare API token with Account Analytics Read, for reading metrics back from Analytics Engine. Without it metrics use D1 (48 h). |
 
 Set them with Wrangler, which prompts for the value so it never reaches your
 shell history:
@@ -52,6 +53,8 @@ credentials, provider tokens) is unrecoverable.
 | ------------------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PUBLIC_ORIGIN`    | required                               | The control plane's public origin, e.g. `https://cp.example.com` (https, no path). The only source of absolute URLs, cookies and the same-origin check (ADR 0014); without it the API answers `503 public_origin_missing`. |
 | `ROUNDHOUSE_DEV`   | unset                                  | `1` in local development only: uses the request's origin when `PUBLIC_ORIGIN` is unset, allows `http://` OAuth issuers and provider callbacks, and lets agents run workloads over `ws://`. Never set it in production.     |
+| `CF_ACCOUNT_ID`    | unset                                  | Cloudflare account ID, needed with `CF_ANALYTICS_TOKEN` to query the Analytics Engine SQL API.                                                                                                                             |
+| `METRICS_BACKEND`  | auto                                   | `d1` forces the short-retention D1 metrics store; `analytics_engine` refuses to fall back. Unset uses Analytics Engine when `CF_ACCOUNT_ID` and `CF_ANALYTICS_TOKEN` are set, D1 otherwise.                                |
 | `DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | DNS-over-HTTPS JSON endpoint for custom-domain checks, e.g. one that sees split-horizon records. Google's resolver is always the fallback.                                                                                 |
 
 Variables can be set as secrets too (`wrangler secret put PUBLIC_ORIGIN`),
@@ -69,6 +72,7 @@ make slow paths fast.
 | `ROLLOUT_TIMEOUT_S`        | `600`   | Seconds a rollout waits for healthy replicas; accepted from 10 up to 600. |
 | `PROVISION_JOIN_TIMEOUT_S` | `600`   | Seconds a provisioned cloud server gets to join before the run fails.     |
 | `PROVISION_JOIN_POLL_S`    | `10`    | Seconds between join checks while provisioning.                           |
+| `METRICS_INTERVAL_MS`      | `15000` | Agent metrics sampling interval, in ms (1000 to 300000).                  |
 
 ### Bindings
 
@@ -87,20 +91,26 @@ the first deploy; there are no IDs to copy.
 | `DEPLOY_WORKFLOW`       | Workflow         | The deploy pipeline, one instance per deployment                        |
 | `KEY_ROTATION_WORKFLOW` | Workflow         | Re-seals stored secrets under the current master key                    |
 | `PROVISION_WORKFLOW`    | Workflow         | One-click cloud server provisioning                                     |
+| `BACKUP_WORKFLOW`       | Workflow         | One database or volume backup per instance                              |
+| `RESTORE_WORKFLOW`      | Workflow         | One restore per instance                                                |
 | `AUTH_LIMITER`          | Rate limit       | 10 a minute per IP on secret-accepting endpoints and agent connects     |
 | `WEBHOOK_LIMITER`       | Rate limit       | 300 a minute per IP on the GitHub webhook receiver                      |
 | `MCP_LIMITER`           | Rate limit       | 60 a minute per token on MCP tool calls                                 |
 | `METRICS`               | Analytics Engine | Metrics dataset (`roundhouse_metrics`); optional, absent in development |
 
-Two cron triggers run in the same Worker: hourly retention (`17 * * * *`)
-and custom-domain checks every minute.
+Two cron triggers run in the same Worker: hourly retention (`17 * * * *`),
+which also applies backup retention, and a minute tick that seals the audit
+chain, checks custom domains, starts scheduled backups and sends volume
+deletions past their grace period.
 
 ### Stored in the database, not in the environment
 
 These are configured in the dashboard and sealed in D1, so there are no
 environment variables for them: the GitHub App (created from a manifest in the
 dashboard), cloud provider tokens (Hetzner, DigitalOcean, Vultr, Linode),
-instance settings such as MCP on/off, and every project's variables.
+instance settings such as MCP on/off and backup storage (an S3-compatible
+bucket; its secret access key is sealed and write-only), and every
+project's variables.
 
 ### Rotating the master key
 

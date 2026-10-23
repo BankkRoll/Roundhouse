@@ -1,0 +1,16 @@
+{
+  "meta": [
+    { "name": "t", "type": "UInt32" },
+    { "name": "workload", "type": "String" },
+    { "name": "m0", "type": "Float64" },
+    { "name": "m1", "type": "Float64" },
+    { "name": "approx", "type": "UInt8" }
+  ],
+  "data": [
+    { "t": 1792735200, "workload": "wl_01JA", "m0": 250.5, "m1": 134217728, "approx": 0 },
+    { "t": 1792735200, "workload": "wl_01JB", "m0": 120, "m1": 67108864, "approx": 0 },
+    { "t": 1792735215, "workload": "wl_01JA", "m0": "260", "m1": "nan", "approx": 1 }
+  ],
+  "rows": 3,
+  "rows_before_limit_at_least": 3
+}

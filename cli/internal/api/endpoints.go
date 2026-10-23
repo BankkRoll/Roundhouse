@@ -76,6 +76,11 @@ var Routes = []Route{
 	RouteListTemplates, RouteGetTemplate, RouteFromTemplate, RouteDeployTemplate,
 	RouteListChangeSets, RouteGetDraft, RouteGetChangeSet, RouteReviewChangeSet,
 	RouteApplyChangeSet, RouteDiscardChangeSet,
+	RouteServiceMetrics, RouteMetricsSummary, RouteNodeMetrics,
+	RouteCreateDatabase, RouteServiceVolume, RouteResizeVolume, RouteDeleteVolume, RouteUndeleteVolume,
+	RouteDatabaseQuery, RouteDatabaseSchema,
+	RouteBackupPolicy, RoutePutBackupPolicy, RouteListBackups, RouteCreateBackup, RouteGetBackup,
+	RouteBackupDownload, RouteBackupKey, RouteRestoreBackup, RouteGetRestore,
 }
 
 // AuthRoutes lists the Better Auth routes the client calls.

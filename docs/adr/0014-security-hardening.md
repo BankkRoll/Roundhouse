@@ -393,6 +393,16 @@ useless as an oracle. Implemented: `fingerprintKey`, `variableFingerprint`
 in `lib/keyring.ts` (pinned: DEK `07`×32, project `prj_1`, value `hunter2` →
 `8702a7a8`).
 
+`provider_credentials.fingerprint` is built the same way, keyed per
+workspace: HKDF-SHA256(fingerprint secret, salt `roundhouse/v2/fingerprint`,
+info `provider-fingerprint:<workspace_id>`). Workspaces have no DEK, so the
+fingerprint secret is 32 random bytes in `instance_settings.fingerprint_secret`,
+sealed as an instance secret and created on first use. Rotation re-wraps it
+like the signing key, so fingerprints survive a master key change; a key
+derived from `MASTER_KEY` itself would not. Implemented:
+`providerFingerprintKey` (pinned: secret `07`×32, workspace `ws_1`, token
+`hunter2` → `9fc71e5b`), `loadFingerprintSecret` in `lib/settings.ts`.
+
 #### Secret-derived values
 
 A plain variable whose resolution reaches a secret (`url =

@@ -1,12 +1,14 @@
 /**
  * Install-wide settings: the first-run setup lock and completion marker, the
  * setting keys of the control-plane signing keys (handled by
- * `./signing-keys`), the ingress settings (`apps_domain`,
- * `tls_mode`), log retention, and whether the MCP endpoint is enabled.
+ * `./signing-keys`), the fingerprint secret, the ingress settings
+ * (`apps_domain`, `tls_mode`), log retention, and whether the MCP endpoint
+ * is enabled.
  *
  * @module
  */
 import { type Db, instanceSettings } from "@roundhouse/db";
+import { fromBase64, toBase64 } from "@roundhouse/protocol";
 import {
   DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_TLS_MODE,
@@ -15,12 +17,24 @@ import {
   type TlsMode,
 } from "@roundhouse/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { z } from "zod";
+import {
+  type KeyEnv,
+  SealedSchema,
+  sealInstanceSecret,
+  unsealInstanceSecret,
+} from "./instance-secrets";
 
 /** Keys used in `instance_settings`. */
 export const SettingKey = {
   setupLock: "setup_lock",
   setupCompletedAt: "setup_completed_at",
   signingKey: "signing_key",
+  /**
+   * Random secret the workspaces' provider token fingerprint keys derive
+   * from, sealed like the signing key; created on first use.
+   */
+  fingerprintSecret: "fingerprint_secret",
   /** A scheduled successor of `signing_key` and its `not_before` (ADR 0014 §13). */
   signingKeyNext: "signing_key_next",
   /** Public half and retirement time of the key the latest rollover replaced. */
@@ -37,6 +51,12 @@ export const SettingKey = {
   logRetentionDays: "log_retention_days",
   /** Whether `/mcp` serves coding agents (a boolean); off when unset (ADR 0012). */
   mcpEnabled: "mcp_enabled",
+  /**
+   * S3-compatible bucket for backups (ADR 0004): endpoint, bucket, region,
+   * access key ID, and the secret access key sealed like the signing key.
+   * See `lib/backups/storage.ts`.
+   */
+  backupStorage: "backup_storage",
 } as const;
 
 /**
@@ -110,6 +130,38 @@ export async function releaseSetupLock(db: Db, token: number): Promise<void> {
         sql`CAST(${instanceSettings.value} AS INTEGER) = ${token}`,
       ),
     );
+}
+
+const StoredFingerprintSecretSchema = z.object({ secret: SealedSchema });
+
+/**
+ * Loads the instance fingerprint secret, creating it on first use. Keys
+ * derived from it (`providerFingerprintKey`) don't change when `MASTER_KEY`
+ * does: rotation re-wraps the secret but never replaces it.
+ *
+ * @param db - Database client.
+ * @param keys - The master keyring bindings (`c.env`).
+ * @returns The 32-byte secret. Never store or return it.
+ */
+export async function loadFingerprintSecret(
+  db: Db,
+  keys: KeyEnv,
+): Promise<Uint8Array<ArrayBuffer>> {
+  let raw = await getSetting<unknown>(db, SettingKey.fingerprintSecret);
+  if (raw === undefined) {
+    const fresh = toBase64(crypto.getRandomValues(new Uint8Array(32)));
+    const value = {
+      secret: await sealInstanceSecret(keys, fresh, SettingKey.fingerprintSecret),
+    };
+    // Concurrent first uses race on the insert; whichever lands is the secret.
+    await db
+      .insert(instanceSettings)
+      .values({ key: SettingKey.fingerprintSecret, value })
+      .onConflictDoNothing();
+    raw = await getSetting<unknown>(db, SettingKey.fingerprintSecret);
+  }
+  const stored = StoredFingerprintSecretSchema.parse(raw);
+  return fromBase64(await unsealInstanceSecret(keys, stored.secret, SettingKey.fingerprintSecret));
 }
 
 // -----------------------------------------------------------------------------

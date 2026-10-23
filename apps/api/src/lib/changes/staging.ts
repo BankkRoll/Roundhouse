@@ -49,11 +49,13 @@ import {
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { StagedOpInputSchema } from "../../contracts/changes";
 import { auditInsert } from "../audit";
-import type { Sealed } from "../crypto";
+import type { KeyEnv, Sealed } from "../crypto";
+import { databaseCreateOp } from "../databases";
 import { ApiError, type ErrorCode, notFound } from "../errors";
 import { mergeConfig, slugFor, specOf } from "../projects";
 import type { Caller } from "../scope";
 import { assertValidReferences, openVariable, projectKey, type VariableTarget } from "../variables";
+import { assertSingleReplica, singleReplicaError } from "../volumes";
 import { fingerprintOf, sealStagedValue } from "./secrets";
 import {
   bumpRevision,
@@ -73,7 +75,7 @@ export type StagedOpRequest = z.output<typeof StagedOpInputSchema>;
 /** What staging needs to know about where and who. */
 export interface StagingContext {
   db: Db;
-  masterKey: string;
+  keys: KeyEnv;
   project: ProjectRow;
   environment: EnvironmentRow;
   /** Resolved against the project, not the environment: see {@link authorizeStaging}. */
@@ -214,11 +216,11 @@ export async function currentVariable(db: Db, t: VariableTarget, key: string) {
  * @returns 8 hex characters.
  */
 export async function storedFingerprint(
-  ctx: Pick<StagingContext, "db" | "masterKey" | "project">,
+  ctx: Pick<StagingContext, "db" | "keys" | "project">,
   row: typeof variables.$inferSelect,
 ): Promise<string> {
   if (row.fingerprint) return row.fingerprint;
-  const dek = await projectKey(ctx.db, ctx.masterKey, ctx.project.id);
+  const dek = await projectKey(ctx.db, ctx.keys, ctx.project.id);
   return fingerprintOf(
     dek,
     await openVariable(dek, { ...row, valueSealed: row.valueSealed as Sealed }),
@@ -328,7 +330,11 @@ async function prepare(
 
   switch (input.type) {
     case "service.create": {
-      const { type, ref, name, slug, kind, icon, source, config } = input;
+      const { type, ref, name, slug, kind, icon, source, config, database } = input;
+      if (database) {
+        return prepareCreate(databaseCreateOp({ ref, name, slug, icon, database, config }));
+      }
+      if (!source) throw new ApiError(400, "invalid_request", "source: Required");
       const op: ServiceCreateOp = {
         type,
         ref,
@@ -387,6 +393,16 @@ async function prepare(
           );
         }
         const { source, ...rest } = input.patch;
+        if (create.database) {
+          if (source) {
+            throw new ApiError(
+              400,
+              "invalid_request",
+              "A database's image comes from the registry",
+            );
+          }
+          if ((rest.deploy?.replicas ?? 1) > 1) throw singleReplicaError();
+        }
         return prepareCreate({
           ...create,
           ...(source ? { source } : {}),
@@ -408,6 +424,7 @@ async function prepare(
       if (!baseRow) throw notFound("Service config");
       const before = specOf(baseRow);
       const after = mergeConfig(before, patch);
+      await assertSingleReplica(db, svc, after.deploy.replicas);
       return {
         op: { type: "config.patch", service: svc.id, patch },
         base: { config_version: baseRow.version },
@@ -430,7 +447,7 @@ async function prepare(
         confirmWriteOnly: input.confirm_write_only ?? false,
         acknowledgePublic: input.acknowledge_public ?? false,
       });
-      const dek = await projectKey(db, ctx.masterKey, project.id);
+      const dek = await projectKey(db, ctx.keys, project.id);
       const fingerprint = await fingerprintOf(dek, input.value);
       const op: StagedOp = {
         type: "variable.set",
@@ -742,7 +759,7 @@ export async function resolveConflict(
  * @returns The new `base` and `diff`.
  */
 export async function rebaseRow(
-  ctx: Pick<StagingContext, "db" | "masterKey" | "project" | "environment">,
+  ctx: Pick<StagingContext, "db" | "keys" | "project" | "environment">,
   row: StagedRow,
 ): Promise<{ base: StagedBase; diff: DiffEntry[] }> {
   const { db, project, environment } = ctx;

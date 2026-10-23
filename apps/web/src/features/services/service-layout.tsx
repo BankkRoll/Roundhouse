@@ -18,7 +18,7 @@ import { ProjectPresence } from "../projects/presence";
 import { describeSource } from "../projects/service-list";
 import { findService, useProjectEnvironment } from "../projects/use-project-environment";
 import { KEEP_FOCUS_ATTRIBUTE } from "../shell/focus";
-import { SERVICE_TAB_PATHS, SERVICE_TABS } from "./tabs";
+import { SERVICE_TAB_PATHS, serviceTabs } from "./tabs";
 
 /** Props shared by every service page. */
 export interface ServicePageProps {
@@ -146,7 +146,7 @@ export function ServiceLayout({ workspaceId, projectId, serviceId }: ServicePage
         className="mb-6 flex gap-4 overflow-x-auto border-b border-border [scrollbar-width:none] sm:gap-5 lg:mb-8"
         {...{ [KEEP_FOCUS_ATTRIBUTE]: "" }}
       >
-        {SERVICE_TABS.map((tab) => (
+        {serviceTabs(service, can).map((tab) => (
           <Link
             key={tab.id}
             to={SERVICE_TAB_PATHS[tab.id]}

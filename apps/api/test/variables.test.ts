@@ -71,7 +71,7 @@ describe("service variables", () => {
       expect(r.value_sealed).not.toContain("debug");
     }
     // Round trip with the project DEK and the row's format 2 AAD.
-    const key = await projectKey(createDb(env.DB), env.MASTER_KEY!, s.project.id);
+    const key = await projectKey(createDb(env.DB), env, s.project.id);
     const row = await env.DB.prepare("SELECT * FROM variables WHERE key = 'API_KEY'").first<{
       id: string;
       value_sealed: string;

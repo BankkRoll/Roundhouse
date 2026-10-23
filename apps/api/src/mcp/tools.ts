@@ -39,7 +39,7 @@ import {
   type AppContext,
   clientIp,
   originOf,
-  requireMasterKey,
+  requireKeys,
   requireWorkspace,
   type TokenIdentity,
   visibleProjects,
@@ -88,6 +88,7 @@ import { getIngressSettings } from "../lib/settings";
 import { projectSummaries } from "../lib/summaries";
 import { listVariables, projectKey, type VariableTarget } from "../lib/variables";
 import { CHANGE_TOOLS } from "./change-tools";
+import { DATA_TOOLS } from "./data-tools";
 import { deployTemplateTool, listTemplatesTool } from "./template-tools";
 
 // -----------------------------------------------------------------------------
@@ -682,7 +683,7 @@ const listVariablesTool = defineTool({
       false,
     );
     const db = c.get("db");
-    const key = await projectKey(db, requireMasterKey(c), project.id);
+    const key = await projectKey(db, requireKeys(c), project.id);
     const plain = caller.allows("variables:read_plain");
     return { variables: await listVariables(db, key, target, { plain }) };
   },
@@ -707,7 +708,7 @@ const resolveVariablesTool = defineTool({
     );
     const environment = await environmentOf(c, project.id, input.environment_id);
     const db = c.get("db");
-    const key = await projectKey(db, requireMasterKey(c), project.id);
+    const key = await projectKey(db, requireKeys(c), project.id);
     const { variables, localKeys } = await resolvePlainEnvironment(db, key, {
       projectId: project.id,
       service,
@@ -773,6 +774,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   resolveVariablesTool,
   ...CHANGE_TOOLS,
   listNodesTool,
+  ...DATA_TOOLS,
   listTemplatesTool,
   deployTemplateTool,
 ] as readonly McpTool[];

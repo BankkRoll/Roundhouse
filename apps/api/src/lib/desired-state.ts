@@ -5,7 +5,10 @@
  *
  * - {@link buildDesiredState}: every `service` workload placed on the node
  *   whose deployment is live (`deploying`, `active`, `crashed`), plus the
- *   install's ingress settings and, for builder nodes, the registry.
+ *   install's ingress settings and, for builder nodes, the registry. From
+ *   `VOLUMES_PROTOCOL_VERSION` it also lists every live volume pinned to the
+ *   node (ADR 0004), and a volume service's workload mounts its volume,
+ *   stops before it is replaced, and a database gets its `exec` probe.
  * - {@link refreshNodes}: bumps nodes' `desired_generation` and asks their
  *   Durable Objects to push the new state.
  * - {@link sealDeploymentEnv}/{@link openDeploymentEnv} and the build
@@ -23,12 +26,14 @@ import {
   projects,
   serviceConfigs,
   services,
+  volumes,
 } from "@roundhouse/db";
 import {
   computeSpecHash,
   type DesiredState,
   environmentNetworkName,
   type Healthcheck,
+  MAX_VOLUMES_PER_NODE,
   MAX_WORKLOADS_PER_NODE,
   REGISTRY_LISTEN,
   type RegistryConfig,
@@ -36,18 +41,25 @@ import {
   type SealedBox,
   type SealedWorkloadEnv,
   sealBox,
+  VOLUMES_PROTOCOL_VERSION,
+  type VolumeSpec,
   type WorkloadSpec,
   workloadEnvAad,
 } from "@roundhouse/protocol";
 import {
+  DATABASE_STOP_GRACE_S,
   DEFAULT_PIDS_LIMIT,
   type DeploymentStatus,
+  databaseHealthCommand,
+  databaseVersion,
   type HealthcheckConfig,
+  LIVE_VOLUME_STATUSES,
   type ServiceConfigSpec,
+  type ServiceDatabaseEngine,
 } from "@roundhouse/shared";
-import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import type { NodeConnection } from "../durable/node-connection";
-import { type Sealed, sealWith, unsealWith } from "./crypto";
+import { type KeyEnv, type Sealed, sealWith, unsealWith } from "./crypto";
 import { deploymentBuildAadV2, deploymentEnvAadV2 } from "./keyring";
 import { getIngressSettings } from "./settings";
 import { deploymentEnvAad, projectKey } from "./variables";
@@ -264,6 +276,41 @@ export interface WorkloadInput {
   config: Pick<ServiceConfigSpec, "deploy" | "resources" | "healthcheck" | "networking">;
   hostnames: string[];
   privateDomain: string;
+  /** The service's volume on this node (ADR 0004); its replica mounts it. */
+  volume?: { id: string; mountPath: string };
+  /** A database service: its engine's `exec` probe replaces the configured one. */
+  database?: { engine: ServiceDatabaseEngine; version: string | null };
+}
+
+/** Probe timings of a database's `exec` health check (ADR 0004, "Service and config"). */
+export const DATABASE_PROBE = {
+  interval_s: 5,
+  timeout_s: 5,
+  retries: 6,
+  start_period_s: 30,
+} as const;
+
+/**
+ * The health probe of a replica: a database's engine probe, else the
+ * configured one.
+ *
+ * @param w - The replica's inputs.
+ * @returns The probe, or `null` for none.
+ */
+export function workloadHealthcheck(
+  w: Pick<WorkloadInput, "config" | "database">,
+): Healthcheck | null {
+  if (w.database) {
+    const v = databaseVersion(w.database.engine, w.database.version);
+    if (v) {
+      return {
+        type: "exec",
+        command: databaseHealthCommand(w.database.engine, v),
+        ...DATABASE_PROBE,
+      };
+    }
+  }
+  return healthcheckSpec(w.config.healthcheck ?? null, w.config.networking.port);
 }
 
 /**
@@ -290,7 +337,7 @@ export async function workloadSpec(w: WorkloadInput): Promise<WorkloadSpec> {
     env_sealed: w.envSealed,
     ports: port ? [{ container_port: port, protocol: "http" }] : [],
     routes: port ? w.hostnames.map((hostname) => ({ hostname, container_port: port })) : [],
-    healthcheck: healthcheckSpec(w.config.healthcheck ?? null, port),
+    healthcheck: workloadHealthcheck(w),
     resources: {
       cpu_millis: w.config.resources.cpu_millis,
       memory_mb: w.config.resources.memory_mb,
@@ -303,6 +350,15 @@ export async function workloadSpec(w: WorkloadInput): Promise<WorkloadSpec> {
     network: await environmentNetworkName(w.projectId, w.environmentId),
     labels: { [PRIVATE_DOMAIN_LABEL]: w.privateDomain },
     drain_s: w.config.deploy.drain_s,
+    // A volume is never mounted by two containers at once: the old replica
+    // stops before the new one starts (ADR 0004, "Placement affinity").
+    ...(w.volume
+      ? {
+          mounts: [{ volume_id: w.volume.id, path: w.volume.mountPath, read_only: false }],
+          rollout: "stop_first" as const,
+          ...(w.database ? { stop_grace_s: DATABASE_STOP_GRACE_S } : {}),
+        }
+      : {}),
   };
   return { ...spec, spec_hash: await computeSpecHash(spec) };
 }
@@ -358,13 +414,13 @@ export const BUILDER_REGISTRY: RegistryConfig = {
  * Computes a node's complete desired state from D1.
  *
  * @param db - Database client.
- * @param masterKey - Base64 master key, to unseal each deployment's env.
+ * @param keys - The keyring bindings, to unseal each deployment's env.
  * @param nodeId - The node.
  * @returns The frame body, or `null` when the node no longer exists.
  */
 export async function buildDesiredState(
   db: Db,
-  masterKey: string,
+  keys: KeyEnv,
   nodeId: string,
 ): Promise<DesiredStateBody | null> {
   // Generation first: content read afterwards is at least as new as the
@@ -392,6 +448,29 @@ export async function buildDesiredState(
     apps_domain: ingress.appsDomain,
     registry: runsWorkloads && node.capabilities?.builder ? BUILDER_REGISTRY : null,
   };
+  const holdsVolumes = node.protocolVersion >= VOLUMES_PROTOCOL_VERSION;
+  const nodeVolumes = holdsVolumes
+    ? await db
+        .select()
+        .from(volumes)
+        .where(and(eq(volumes.nodeId, nodeId), inArray(volumes.status, [...LIVE_VOLUME_STATUSES])))
+        .orderBy(asc(volumes.id))
+        .limit(MAX_VOLUMES_PER_NODE)
+    : [];
+  if (holdsVolumes) {
+    // Every volume the node holds, including those of services scaled to
+    // zero: the agent reports an unlisted one as orphaned but never deletes it.
+    body.volumes = nodeVolumes.map(
+      (v): VolumeSpec => ({
+        id: v.id,
+        size_mb: v.sizeMb,
+        project_id: v.projectId,
+        environment_id: v.environmentId,
+        service_id: v.serviceId,
+        owner: null,
+      }),
+    );
+  }
   if (!runsWorkloads || nodeKey === null) return body;
 
   const rows = await db
@@ -399,6 +478,8 @@ export async function buildDesiredState(
       placement: placements,
       deployment: deployments,
       serviceSlug: services.slug,
+      databaseEngine: services.databaseEngine,
+      databaseVersion: services.databaseVersion,
       projectId: services.projectId,
       workspaceId: projects.workspaceId,
       environmentSlug: environments.slug,
@@ -463,10 +544,33 @@ export async function buildDesiredState(
     }
   }
 
+  const volumeServices = new Set<string>();
+  if (pairs.length) {
+    const held = await db
+      .select({ serviceId: volumes.serviceId, environmentId: volumes.environmentId })
+      .from(volumes)
+      .where(
+        and(
+          inArray(
+            volumes.serviceId,
+            pairs.map((p) => p.serviceId),
+          ),
+          notInArray(volumes.status, ["deleted", "abandoned"]),
+        ),
+      );
+    for (const v of held) volumeServices.add(`${v.serviceId}:${v.environmentId}`);
+  }
+  const mountOf = new Map(nodeVolumes.map((v) => [`${v.serviceId}:${v.environmentId}`, v]));
+
   for (const r of rows) {
     const d = r.deployment;
     if (!d.image || !d.envSealed) continue;
-    const key = await projectKey(db, masterKey, r.projectId);
+    const pair = `${d.serviceId}:${d.environmentId}`;
+    const volume = mountOf.get(pair);
+    // SECURITY: a volume service never runs without its volume, or a
+    // database would initialise a fresh, empty data directory.
+    if (!volume && (r.databaseEngine || volumeServices.has(pair))) continue;
+    const key = await projectKey(db, keys, r.projectId);
     const payload = await openDeploymentEnv(key, d.envSealed as Sealed, {
       workspaceId: r.workspaceId,
       projectId: r.projectId,
@@ -494,6 +598,10 @@ export async function buildDesiredState(
           .filter((h) => h.type !== "generated" || networking.generated_domain)
           .map((h) => h.hostname),
         privateDomain: privateDomain(r.serviceSlug, r.environmentSlug),
+        ...(volume ? { volume: { id: volume.id, mountPath: volume.mountPath } } : {}),
+        ...(r.databaseEngine
+          ? { database: { engine: r.databaseEngine, version: r.databaseVersion } }
+          : {}),
       }),
     );
   }
