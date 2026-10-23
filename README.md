@@ -1,8 +1,11 @@
 # Roundhouse
 
-Roundhouse is a source-available, self-hosted platform for deploying applications, similar in spirit to Railway. The control plane runs on your own Cloudflare account; your workloads run on your own Linux servers.
+> [!WARNING]
+> **Roundhouse is under active development and not ready for production.**
+> The schema, API and agent protocol change without notice, and there are no
+> releases yet. Try it, file issues, and watch the repo for the first release.
 
-> Early development. Schema, API, and agent protocol may change without notice.
+Roundhouse is a source-available, self-hosted platform for deploying applications, similar in spirit to Railway. The control plane runs on your own Cloudflare account; your workloads run on your own Linux servers.
 
 ## Install
 

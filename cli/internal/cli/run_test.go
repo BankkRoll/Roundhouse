@@ -32,13 +32,13 @@ func TestRunInjectsResolvedVariables(t *testing.T) {
 	}
 	env := envMap(h.execEnv)
 	want := map[string]string{
-		"PATH":                    "/usr/bin",
-		"NODE_ENV":                "production",
-		"DATABASE_URL":            "postgres://app:pg-secret-password@db.production.internal:5432/shop",
-		"API_KEY":                 apitest.SecretValue,
-		"REGION":                  "eu-west",
-		"LISTEN":                  "0.0.0.0:8080",
-		"PORT":                    "8080",
+		"PATH":                      "/usr/bin",
+		"NODE_ENV":                  "production",
+		"DATABASE_URL":              "postgres://app:pg-secret-password@db.production.internal:5432/shop",
+		"API_KEY":                   apitest.SecretValue,
+		"REGION":                    "eu-west",
+		"LISTEN":                    "0.0.0.0:8080",
+		"PORT":                      "8080",
 		"ROUNDHOUSE_PUBLIC_DOMAIN":  "api-production-x7k2.apps.example.com",
 		"ROUNDHOUSE_PRIVATE_DOMAIN": "api.production.internal",
 		"ROUNDHOUSE_ENVIRONMENT":    "production",

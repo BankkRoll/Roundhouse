@@ -54,6 +54,13 @@ describe("landing page content", () => {
     expect(screen.getAllByText(/early development/i).length).toBeGreaterThan(0);
   });
 
+  it("announces that the project is under development above the header bar", async () => {
+    await renderLanding();
+    const banner = screen.getByTestId("dev-banner");
+    expect(banner).toHaveTextContent(/under active development/i);
+    expect(banner.closest("header")).not.toBeNull();
+  });
+
   it("points every GitHub link at the project repository", async () => {
     await renderLanding();
     const external = screen
