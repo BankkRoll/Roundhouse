@@ -37,6 +37,7 @@ import {
 import { useMe } from "../../queries/me";
 import { submitGithubManifest } from "./github-manifest";
 import { SettingsFrame } from "./settings-frame";
+import { SigningKeysSection } from "./signing-keys-section";
 
 /** The MCP section of the API README: endpoint, tools, scopes and client setup. */
 export const MCP_DOCS_URL =
@@ -430,7 +431,8 @@ function GithubSection({
 
 /**
  * Install-wide settings: the apps domain and TLS mode for generated domains, how long
- * logs are kept, and whether the MCP endpoint is on (instance admins), and the GitHub App with its installations. Owners can
+ * logs are kept, whether the MCP endpoint is on, and the control-plane signing key and its
+ * rollover (instance admins), and the GitHub App with its installations. Owners can
  * create the App through GitHub's manifest flow; anyone who manages projects can install
  * it.
  *
@@ -468,6 +470,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
               <IngressForm settings={settings.data} />
               <LogRetentionForm settings={settings.data} />
               <McpSection settings={settings.data} />
+              <SigningKeysSection />
             </>
           )
         ) : (

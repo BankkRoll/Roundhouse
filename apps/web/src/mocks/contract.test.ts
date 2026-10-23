@@ -82,6 +82,7 @@ const ROUTE_MODULES = [
   "providers",
   "templates",
   "changes",
+  "signing-keys",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -1104,6 +1105,40 @@ describe("MSW mocks match the API contract", () => {
       as(null);
       expect((await call("GET", "/v1/instance/settings")).status).toBe(401);
       expect((await call("PATCH", "/v1/instance/settings", { tls_mode: "off" })).status).toBe(401);
+    });
+  });
+
+  it("signing keys: schedule, cancel, complete; instance admins only", async () => {
+    await fresh(async () => {
+      const KEYS = "/v1/instance/signing-keys";
+      expect(await call("GET", KEYS)).toMatchObject({ status: 200, body: { next: null } });
+      expect((await call("POST", `${KEYS}/rotate`, { delay_hours: 0 })).status).toBe(400);
+      expect((await call("DELETE", `${KEYS}/next`)).status).toBe(404);
+      expect((await call("POST", `${KEYS}/complete`, {})).status).toBe(404);
+      expect(await call("POST", `${KEYS}/rotate`, {})).toMatchObject({
+        status: 200,
+        body: { next: { due: false } },
+      });
+      expect((await call("POST", `${KEYS}/rotate`, {})).status).toBe(409);
+      expect((await call("POST", `${KEYS}/complete`, {})).status).toBe(409);
+      expect(await call("DELETE", `${KEYS}/next`)).toMatchObject({
+        status: 200,
+        body: { next: null },
+      });
+      await call("POST", `${KEYS}/rotate`, { delay_hours: 1 });
+      const next = db.signingKeys.next;
+      if (next) next.not_before = Date.now() - 1;
+      expect((await call("DELETE", `${KEYS}/next`)).status).toBe(409);
+      expect((await call("POST", `${KEYS}/complete`, {})).status).toBe(409);
+      expect(await call("POST", `${KEYS}/complete`, { force: true })).toMatchObject({
+        status: 200,
+        body: { next: null, current: { kid: next?.kid } },
+      });
+      as("admin");
+      expect((await call("GET", KEYS)).status).toBe(403);
+      expect((await call("POST", `${KEYS}/rotate`, {})).status).toBe(403);
+      as(null);
+      expect((await call("GET", KEYS)).status).toBe(401);
     });
   });
 

@@ -45,6 +45,20 @@ export interface DbInvite extends Invite {
 /** A stored audit row. `actor_name` is a fallback; handlers resolve names at read time. */
 export type DbAuditEntry = AuditLogEntry & { workspace_id: string };
 
+/**
+ * The control-plane signing keys (ADR 0014 §13). Times are unix ms; `pins` maps a node
+ * id to the kids its agent pins.
+ */
+export interface DbSigningKeys {
+  current: { kid: string; public_key: string };
+  next: { kid: string; public_key: string; not_before: number; scheduled_at: number } | null;
+  retired: { kid: string; retired_at: number } | null;
+  pins: Record<string, string[]>;
+}
+
+/** Kid of the seeded signing key. */
+export const SIGNING_KID = "kmock0001";
+
 /** The whole mock database. */
 export interface MockDb {
   setup: SetupStatus;
@@ -64,6 +78,7 @@ export interface MockDb {
   providers: ProvidersDb;
   /** Staged change sets and canvas layouts. */
   changes: ChangesDb;
+  signingKeys: DbSigningKeys;
   counter: number;
 }
 
@@ -255,6 +270,12 @@ function seed(): MockDb {
     deploy: seedDeploy(WORKSPACE_ID, now),
     providers: emptyProviders(),
     changes: emptyChanges(),
+    signingKeys: {
+      current: { kid: SIGNING_KID, public_key: "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=" },
+      next: null,
+      retired: null,
+      pins: {},
+    },
     counter: 0,
   };
 }
