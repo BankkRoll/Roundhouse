@@ -15,6 +15,17 @@
             {
               "handle": [
                 {
+                  "handler": "headers",
+                  "response": {
+                    "deferred": true,
+                    "set": {
+                      "Strict-Transport-Security": [
+                        "max-age=31536000"
+                      ]
+                    }
+                  }
+                },
+                {
                   "dynamic_upstreams": {
                     "dial_timeout": "1s",
                     "name": "04100bf959948fa3df10b7b3ac82d6cb.upstreams.roundhouse.invalid.",
@@ -52,6 +63,17 @@
             },
             {
               "handle": [
+                {
+                  "handler": "headers",
+                  "response": {
+                    "deferred": true,
+                    "set": {
+                      "Strict-Transport-Security": [
+                        "max-age=31536000"
+                      ]
+                    }
+                  }
+                },
                 {
                   "dynamic_upstreams": {
                     "dial_timeout": "1s",
@@ -232,6 +254,25 @@
             "on_demand": true
           }
         ]
+      }
+    }
+  },
+  "logging": {
+    "logs": {
+      "roundhouse_tls": {
+        "encoder": {
+          "format": "json"
+        },
+        "include": [
+          "tls"
+        ],
+        "level": "INFO",
+        "writer": {
+          "address": "127.0.0.1:2022",
+          "dial_timeout": "2s",
+          "output": "net",
+          "soft_start": true
+        }
       }
     }
   }

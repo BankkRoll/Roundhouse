@@ -82,3 +82,19 @@ func Opener(key *ecdh.PrivateKey, nodeID string) func(int64, *protocol.WorkloadS
 		return protocol.OpenWorkloadEnv(key, nodeID, generation, w)
 	}
 }
+
+// SealCertKey seals a certificate's private key PEM for nodeID, as the
+// control plane does for one cert_sync upsert with the given ID and chain
+// digest.
+func SealCertKey(tb testing.TB, to *ecdh.PublicKey, nodeID, certID, sha256, keyPEM string) *protocol.SealedBox {
+	tb.Helper()
+	pt, err := json.Marshal(protocol.SealedCertKey{KeyPEM: keyPEM})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	box, err := protocol.SealBox(to, pt, protocol.BoxPurposeCertKey, protocol.CertKeyAAD(nodeID, certID, sha256))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return box
+}

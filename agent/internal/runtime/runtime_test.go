@@ -309,7 +309,7 @@ func TestRecreateIsZeroDowntime(t *testing.T) {
 		t.Fatalf("routes after swap: %v", r)
 	}
 	ops := h.d.opLog()
-	switchAt := slices.Index(ops, "routes [{app.example.com  ["+next.ip+":80] [80]}]")
+	switchAt := slices.Index(ops, "routes [{app.example.com  ["+next.ip+":80] [80] <nil>}]")
 	stopAt := slices.Index(ops, "stop "+old.name)
 	removeAt := slices.Index(ops, "remove "+old.name)
 	if switchAt < 0 || stopAt < switchAt || removeAt < stopAt {

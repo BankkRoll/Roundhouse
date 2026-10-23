@@ -1,7 +1,8 @@
 /**
  * Custom domain routes (ADR 0009, direct mode): add a hostname to a service
- * in an environment, read it with the DNS records to create, check it now,
- * and remove it. Listing lives with the Phase 1 routes (`listDomains`).
+ * in an environment, read it with the DNS records to create, change its HSTS
+ * policy, check it now, and remove it. Listing lives with the Phase 1 routes
+ * (`listDomains`). The public ACME HTTP-01 responder is in `./acme`.
  *
  * Changes are `services:manage` checked against the target environment, so
  * a protected environment's `config` rule applies to its domains too.
@@ -9,7 +10,7 @@
  * @module
  */
 import { z } from "@hono/zod-openapi";
-import { body, DomainSchema, errors, json, sessionAuth } from "../schemas";
+import { body, DomainHstsSchema, DomainSchema, errors, json, sessionAuth } from "../schemas";
 import { ServiceParams } from "./params";
 import { defineRoute, session } from "./policy";
 
@@ -59,6 +60,35 @@ export const getDomain = defineRoute(session("services:read"), {
   responses: { 200: json(DomainSchema), ...errors(401, 403, 404) },
 });
 
+/** Body of `PATCH /v1/domains/{domainId}`. */
+export const UpdateDomainBody = z
+  .object({
+    hsts: DomainHstsSchema,
+    /**
+     * The hostname, typed out, when turning `preload` on: preloading is
+     * effectively irreversible, so it needs explicit consent (ADR 0009).
+     */
+    confirm_preload: z.string().max(300).optional(),
+  })
+  .openapi("UpdateDomain");
+
+/**
+ * Changes a custom domain's HSTS policy; the nodes serving it pick it up
+ * with the next desired state. 422 `invalid_hsts` names each rule broken
+ * (preload needs `include_subdomains`, a max-age of at least a year and an
+ * apex hostname) and `preload_confirmation_required` when `confirm_preload`
+ * doesn't match the hostname. Generated domains keep the default (409).
+ */
+export const updateDomain = defineRoute(session("services:manage", ["domain.updated"]), {
+  method: "patch",
+  path: "/v1/domains/{domainId}",
+  tags: ["domains"],
+  summary: "Update a custom domain",
+  security: sessionAuth,
+  request: { params: DomainParams, ...body(UpdateDomainBody) },
+  responses: { 200: json(DomainSchema), ...errors(400, 401, 403, 404, 409, 422) },
+});
+
 /**
  * Checks a custom domain's DNS now instead of waiting for the schedule, and
  * resumes a `failed` one with a fresh 72-hour window. 429 when it was
@@ -89,4 +119,10 @@ export const removeDomain = defineRoute(session("services:manage", ["domain.remo
 });
 
 /** Every custom-domain route, by name. */
-export const DOMAIN_ROUTES = { addDomain, getDomain, recheckDomain, removeDomain } as const;
+export const DOMAIN_ROUTES = {
+  addDomain,
+  getDomain,
+  updateDomain,
+  recheckDomain,
+  removeDomain,
+} as const;

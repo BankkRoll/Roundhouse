@@ -8,9 +8,16 @@
  *   pushing routes to nodes once verified).
  * - {@link runDomainChecks}: the Cron Trigger's batch of due domains.
  *
+ * TLS after verification: in `acme` mode the serving nodes report their
+ * certificates (`cert_status`, `./tls.ts`), and only when none of them
+ * speaks `CERTS_PROTOCOL_VERSION` does a check fall back to an HTTPS probe;
+ * in `managed` mode the certificate pipeline (`lib/certificates`) moves
+ * the domain to `active` once every serving node holds the certificate.
+ *
  * SECURITY: `verification_status = 'verified'` is what puts a hostname into
  * nodes' routes (desired state reads it), and it is only ever set here, once
- * both the routing record and the per-domain ownership TXT are seen.
+ * both the routing record and the per-domain ownership TXT are seen (and,
+ * for a wildcard, its `_acme-challenge` delegation).
  *
  * @module
  */
@@ -23,9 +30,13 @@ import {
   services,
   workspaces,
 } from "@roundhouse/db";
+import { CERTS_PROTOCOL_VERSION } from "@roundhouse/protocol";
 import {
+  acmeDelegationName,
+  acmeDelegationTarget,
   DOMAIN_VERIFY_WINDOW_MS,
   type DomainDnsObservation,
+  isWildcardHostname,
   nextCheckDelayMs,
   ownershipRecordName,
   ownershipRecordValue,
@@ -42,7 +53,14 @@ import {
 } from "../desired-state";
 import { getIngressSettings } from "../settings";
 import { type DnsEnv, DnsLookupError, domainFetch, type Resolution, resolveDomain } from "./dns";
-import { evaluateOwnership, evaluateRouting, type RoutingTargets, routingTargets } from "./records";
+import {
+  evaluateDelegation,
+  evaluateOwnership,
+  evaluateRouting,
+  type RoutingTargets,
+  routingTargets,
+} from "./records";
+import { pairKey, servingNodes } from "./serving";
 
 type DomainRow = typeof domains.$inferSelect;
 
@@ -81,7 +99,10 @@ export interface CheckInput {
   lookupError?: string;
   targets: RoutingTargets;
   tlsMode: TlsMode;
-  /** Present when the domain was already `issuing` and an HTTPS request was made. */
+  /**
+   * Present when the domain was already `issuing` in `acme` mode and an
+   * HTTPS request was made, because no serving node reports certificates.
+   */
   tls?: TlsProbe;
 }
 
@@ -114,6 +135,21 @@ function describeOwnership(d: DomainRow, state: string) {
     return `TXT ${name} doesn't contain ${ownershipRecordValue(d.verificationToken!)}.`;
   return null;
 }
+
+function describeDelegation(d: DomainRow, seen: DomainDnsObservation, targets: RoutingTargets) {
+  if (!isWildcardHostname(d.hostname)) return null;
+  if (!targets.appsDomain) return "Set the apps domain before adding a wildcard.";
+  const target = acmeDelegationTarget(d.id, targets.appsDomain);
+  const state = evaluateDelegation(seen, target);
+  if (state === "ok") return null;
+  const name = acmeDelegationName(d.hostname);
+  return state === "missing"
+    ? `CNAME ${name} not found.`
+    : `${name} points to ${seen.acme_delegation?.[0]}, not ${target}.`;
+}
+
+/** Whether the TLS mode issues certificates after verification (rather than having them at once). */
+const issues = (tlsMode: TlsMode) => tlsMode === "acme" || tlsMode === "managed";
 
 function settledTls(tlsMode: TlsMode) {
   return tlsMode === "off" ? ("disabled" as const) : ("issued" as const);
@@ -156,10 +192,13 @@ export function planCheck(d: DomainRow, input: CheckInput): CheckPlan {
     cname: seen.cname,
     addresses: seen.addresses,
     txt: seen.txt,
+    ...(seen.acme_delegation ? { acme_delegation: seen.acme_delegation } : {}),
   };
+  const delegation = describeDelegation(d, observed, targets);
   const problems = [
     describeRouting(d, seen, routing, targets),
     describeOwnership(d, ownership),
+    delegation,
   ].filter(Boolean);
   const patch: Partial<DomainRow> = {
     ...base,
@@ -173,8 +212,22 @@ export function planCheck(d: DomainRow, input: CheckInput): CheckPlan {
     // The records belong to the customer; removing the route because of a
     // DNS blip would be an outage, and ownership changes need a new token
     // (remove and re-add) anyway.
-    if (d.status === "issuing" && tlsMode === "acme") {
-      if (input.tls?.ok) {
+    if (d.status === "issuing" && issues(tlsMode)) {
+      // The nodes' reports (acme) or the certificate pipeline (managed) move
+      // the domain on; only the probe fallback decides here.
+      if (!input.tls) {
+        return {
+          patch: {
+            ...patch,
+            error: problems.length
+              ? `Records changed since verification: ${problems.join(" ")}`
+              : d.error,
+            nextCheckAt: new Date(now + VERIFIED_RECHECK_MS),
+          },
+          event: null,
+        };
+      }
+      if (input.tls.ok) {
         return {
           patch: {
             ...patch,
@@ -208,19 +261,19 @@ export function planCheck(d: DomainRow, input: CheckInput): CheckPlan {
     };
   }
 
-  if (routing === "ok" && ownership === "ok") {
-    const acme = tlsMode === "acme";
+  if (routing === "ok" && ownership === "ok" && !delegation) {
+    const issuing = issues(tlsMode);
     return {
       patch: {
         ...patch,
         verificationStatus: "verified",
         verifiedAt: new Date(now),
-        status: acme ? "issuing" : "active",
-        tlsStatus: acme ? "pending" : settledTls(tlsMode),
+        status: issuing ? "issuing" : "active",
+        tlsStatus: issuing ? "pending" : settledTls(tlsMode),
         error: null,
         checkAttempts: 0,
-        // The first HTTPS probe waits for the nodes to load the new route.
-        nextCheckAt: new Date(now + (acme ? nextCheckDelayMs(1) : VERIFIED_RECHECK_MS)),
+        // A probe, if one is needed, waits for the nodes to load the new route.
+        nextCheckAt: new Date(now + (tlsMode === "acme" ? nextCheckDelayMs(1) : VERIFIED_RECHECK_MS)),
       },
       event: "verified",
     };
@@ -278,6 +331,19 @@ export async function probeTls(hostname: string): Promise<TlsProbe> {
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "request failed" };
   }
+}
+
+/**
+ * Whether an issuing domain's certificate can only be learned by probing:
+ * it has serving nodes, and none of them reports `cert_status`.
+ *
+ * @param db - Database client.
+ * @param d - The domain.
+ * @returns `true` when a probe is the only signal.
+ */
+async function needsProbe(db: Db, d: DomainRow): Promise<boolean> {
+  const nodes = (await servingNodes(db, [d])).get(pairKey(d)) ?? [];
+  return nodes.length > 0 && nodes.every((n) => n.protocolVersion < CERTS_PROTOCOL_VERSION);
 }
 
 /**
@@ -361,7 +427,8 @@ export async function checkDomain(
     seen &&
     d.verificationStatus === "verified" &&
     d.status === "issuing" &&
-    ingress.tlsMode === "acme"
+    ingress.tlsMode === "acme" &&
+    (await needsProbe(db, d))
       ? await probeTls(d.hostname)
       : undefined;
   const now = ctx.now ?? Date.now();

@@ -7,7 +7,7 @@
  * state.
  */
 import { env } from "cloudflare:test";
-import type { DesiredState } from "@roundhouse/protocol";
+import { CERTS_PROTOCOL_VERSION, type DesiredState } from "@roundhouse/protocol";
 import { DOMAIN_VERIFY_WINDOW_MS } from "@roundhouse/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DOMAIN_ROUTES, policyOf } from "../src/contracts";
@@ -24,11 +24,14 @@ import {
   evaluateRouting,
   type RoutingTargets,
 } from "../src/lib/domains/records";
-import { addMember, type Client, install } from "./helpers";
+import { summarizeReports } from "../src/lib/domains/tls";
+import { addMember, type Client, install, joinNode } from "./helpers";
 import {
+  connectWorkloadAgent,
   createProject,
   createService,
   deploy,
+  IMAGE_SERVICE,
   IMAGE_SERVICE,
   isDesired,
   stage,
@@ -438,9 +441,29 @@ describe("verification", () => {
     expect(ok.body).toMatchObject({ status: "active", tls_status: "issued" });
   });
 
-  it("in acme mode, waits in issuing until an HTTPS request succeeds", async () => {
+  it("in acme mode, waits in issuing without probing while no node serves the domain", async () => {
     const s = await setup("acme");
     dns.set("shop.example.com", { CNAME: s.generated });
+    const pending = await add(s.owner, s, "shop.example.com");
+    dns.set("_roundhouse.shop.example.com", { TXT: [txtFor(pending.body)] });
+    await forgetLastCheck(pending.body.id);
+    const verified = await check(s.owner, pending.body.id);
+    expect(verified.body).toMatchObject({ status: "issuing", tls_status: "pending" });
+    await forgetLastCheck(pending.body.id);
+    const again = await check(s.owner, pending.body.id);
+    expect(again.body).toMatchObject({ status: "issuing", tls_status: "pending" });
+    expect(dns.probes).toEqual([]);
+  });
+
+  it("in acme mode, probes HTTPS when only older agents serve the domain", async () => {
+    const s = await stage();
+    await setIngress(s.owner, "acme");
+    const deployment = await deploy(s.owner, s.serviceId, s.envId);
+    await waitForStatus(s.owner, deployment.id, ["active"]);
+    await env.DB.prepare("UPDATE nodes SET public_ip = '203.0.113.10' WHERE id = ?")
+      .bind(s.joined.node_id)
+      .run();
+    dns.set("shop.example.com", { A: ["203.0.113.10"] });
     const pending = await add(s.owner, s, "shop.example.com");
     dns.set("_roundhouse.shop.example.com", { TXT: [txtFor(pending.body)] });
     await forgetLastCheck(pending.body.id);
@@ -649,6 +672,8 @@ describe("check evaluation", () => {
     appsDomain: "apps.example.com",
     ingressHostname: null,
     addresses: ["203.0.113.10", "2001:db8::1"],
+    servingAddresses: ["203.0.113.10", "2001:db8::1"],
+    nodes: [],
   };
   const seen = (o: Partial<{ cname: string[]; addresses: string[]; txt: string[] }>) => ({
     cname: [],
@@ -706,6 +731,12 @@ describe("check evaluation", () => {
       lastCheckedAt: null,
       nextCheckAt: null,
       verifiedAt: null,
+      hsts: null,
+      tlsIssuer: null,
+      tlsNotBefore: null,
+      tlsNotAfter: null,
+      tlsError: null,
+      tlsUpdatedAt: null,
       createdAt: new Date(now - DOMAIN_VERIFY_WINDOW_MS - 1),
       updatedAt: new Date(now),
     };
@@ -727,5 +758,242 @@ describe("check evaluation", () => {
     expect(verified.event).toBeNull();
     expect(verified.patch.verificationStatus).toBeUndefined();
     expect(verified.patch.error).toMatch(/^Records changed since verification:/);
+  });
+});
+
+describe("TLS and HSTS", () => {
+  async function v6Stage() {
+    const installed = await install();
+    const joined = await joinNode(installed.owner, installed.workspaceId);
+    const agent = await connectWorkloadAgent(
+      joined,
+      {},
+      { protocol_version: CERTS_PROTOCOL_VERSION },
+    );
+    const project = await createProject(installed.owner, installed.workspaceId);
+    const created = await createService(installed.owner, project.id, IMAGE_SERVICE);
+    const s = {
+      ...installed,
+      joined,
+      agent,
+      envId: project.environments[0]!.id,
+      serviceId: created.service.id,
+    };
+    await setIngress(s.owner, "acme");
+    const deployment = await deploy(s.owner, s.serviceId, s.envId);
+    await waitForStatus(s.owner, deployment.id, ["active"]);
+    await env.DB.prepare("UPDATE nodes SET public_ip = '203.0.113.10' WHERE id = ?")
+      .bind(joined.node_id)
+      .run();
+    dns.set("shop.example.com", { A: ["203.0.113.10"] });
+    const pending = await add(s.owner, s, "shop.example.com");
+    dns.set("_roundhouse.shop.example.com", { TXT: [txtFor(pending.body)] });
+    await forgetLastCheck(pending.body.id);
+    const verified = await check(s.owner, pending.body.id);
+    expect(verified.body).toMatchObject({ verification_status: "verified", status: "issuing" });
+    return { ...s, domainId: pending.body.id };
+  }
+
+  const routeOf = (m: DesiredState, host: string) =>
+    m.workloads.flatMap((w) => w.routes).find((r) => r.hostname === host);
+
+  interface TlsBody extends DomainBody {
+    hsts: { enabled: boolean };
+    tls: {
+      status: string;
+      issuer: string | null;
+      not_after: number | null;
+      nodes: { node_id: string; state: string; error: string | null }[];
+    };
+    routing_nodes: { id: string; public_ip: string | null; serves: boolean }[];
+  }
+
+  async function domainUntil(s: { owner: Client; domainId: string }, done: (d: TlsBody) => boolean) {
+    let d = (await s.owner.json<TlsBody>(`/v1/domains/${s.domainId}`)).body;
+    for (let i = 0; i < 60 && !done(d); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      d = (await s.owner.json<TlsBody>(`/v1/domains/${s.domainId}`)).body;
+    }
+    return d;
+  }
+
+  it("sends routes with HSTS and the ingress settings to protocol 6 agents", async () => {
+    const s = await v6Stage();
+    const routed = await s.agent.waitFor(
+      (m): m is DesiredState => isDesired(m) && !!routeOf(m, "shop.example.com"),
+    );
+    expect(routeOf(routed, "shop.example.com")?.hsts).toEqual({
+      max_age: 31_536_000,
+      include_subdomains: false,
+      preload: false,
+    });
+    expect(routed.ingress).toEqual({
+      acme_challenge_upstream: null,
+      allowed_sources: null,
+      managed_hosts: [],
+    });
+    expect(routed.certificates).toEqual([]);
+  }, 30_000);
+
+  it("validates and applies a domain's HSTS policy", async () => {
+    const s = await v6Stage();
+    const patch = (json: unknown) =>
+      s.owner.json<TlsBody & { error?: { code: string } }>(`/v1/domains/${s.domainId}`, {
+        method: "PATCH",
+        json,
+      });
+    const preload = { enabled: true, max_age: 31_536_000, include_subdomains: true, preload: true };
+    const notApex = await patch({ hsts: preload, confirm_preload: "shop.example.com" });
+    expect(notApex.status).toBe(422);
+    expect(notApex.body.error?.code).toBe("invalid_hsts");
+    expect((await patch({ hsts: { ...preload, include_subdomains: false } })).status).toBe(422);
+
+    const off = await patch({
+      hsts: { enabled: false, max_age: 0, include_subdomains: false, preload: false },
+    });
+    expect(off.status).toBe(200);
+    expect(off.body.hsts).toMatchObject({ enabled: false });
+    const updated = await s.agent.waitFor(
+      (m): m is DesiredState =>
+        isDesired(m) && !!routeOf(m, "shop.example.com") && !routeOf(m, "shop.example.com")!.hsts,
+    );
+    expect(routeOf(updated, "shop.example.com")).toEqual({
+      hostname: "shop.example.com",
+      container_port: 8080,
+    });
+    expect((await auditActions(s.workspaceId)).map((a) => a.action)).toContain("domain.updated");
+  }, 30_000);
+
+  it("requires typed consent to preload an apex", async () => {
+    const s = await v6Stage();
+    await env.DB.prepare("UPDATE domains SET apex = 1 WHERE id = ?").bind(s.domainId).run();
+    const hsts = { enabled: true, max_age: 31_536_000, include_subdomains: true, preload: true };
+    const missing = await s.owner.json<{ error: { code: string } }>(`/v1/domains/${s.domainId}`, {
+      method: "PATCH",
+      json: { hsts },
+    });
+    expect(missing.status).toBe(422);
+    expect(missing.body.error.code).toBe("preload_confirmation_required");
+    const confirmed = await s.owner.json(`/v1/domains/${s.domainId}`, {
+      method: "PATCH",
+      json: { hsts, confirm_preload: "shop.example.com" },
+    });
+    expect(confirmed.status).toBe(200);
+  }, 30_000);
+
+  it("moves an issuing domain to active on the serving node's cert_status", async () => {
+    const s = await v6Stage();
+    const notAfter = Date.now() + 80 * 86_400_000;
+    s.agent.send({
+      type: "cert_status",
+      hostname: "shop.example.com",
+      state: "issued",
+      issuer: "R11",
+      not_after: notAfter,
+    });
+    const issued = await domainUntil(s, (d) => d.status === "active");
+    expect(issued).toMatchObject({ status: "active", tls_status: "issued" });
+    expect(issued.tls).toMatchObject({ status: "issued", issuer: "R11", not_after: notAfter });
+    expect(issued.tls.nodes).toEqual([
+      expect.objectContaining({ node_id: s.joined.node_id, state: "issued", error: null }),
+    ]);
+
+    s.agent.send({
+      type: "cert_status",
+      hostname: "shop.example.com",
+      state: "failed",
+      error: "rate limited",
+    });
+    const failed = await domainUntil(s, (d) => d.tls.status === "failed");
+    expect(failed.tls.status).toBe("failed");
+    expect(failed.status).toBe("active");
+  }, 30_000);
+
+  it("ignores cert_status for hostnames the node doesn't serve", async () => {
+    const s = await v6Stage();
+    const other = await joinNode(s.owner, s.workspaceId);
+    const stranger = await connectWorkloadAgent(
+      other,
+      {},
+      { protocol_version: CERTS_PROTOCOL_VERSION },
+    );
+    stranger.send({ type: "cert_status", hostname: "shop.example.com", state: "issued" });
+    await new Promise((r) => setTimeout(r, 300));
+    const d = await s.owner.json<DomainBody>(`/v1/domains/${s.domainId}`);
+    expect(d.body).toMatchObject({ status: "issuing", tls_status: "pending" });
+  }, 30_000);
+
+  it("points DNS at the servers that run the service when some don't", async () => {
+    const s = await v6Stage();
+    const other = await joinNode(s.owner, s.workspaceId);
+    await env.DB.prepare("UPDATE nodes SET public_ip = '198.51.100.7' WHERE id = ?")
+      .bind(other.node_id)
+      .run();
+    const d = await s.owner.json<TlsBody>(`/v1/domains/${s.domainId}`);
+    expect(d.body.routing_nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: s.joined.node_id, serves: true }),
+        expect.objectContaining({ id: other.node_id, serves: false }),
+      ]),
+    );
+    expect(d.body.records.filter((r) => r.purpose === "routing")).toEqual([
+      expect.objectContaining({
+        type: "A",
+        value: "203.0.113.10",
+        note: expect.stringMatching(/runs on 1 of 2 servers/),
+      }),
+    ]);
+  }, 30_000);
+
+  it("refuses managed mode, and acme with several ingress servers", async () => {
+    const installed = await install();
+    const settings = (json: unknown) =>
+      installed.owner.json<{ error: { code: string } }>("/v1/instance/settings", {
+        method: "PATCH",
+        json,
+      });
+    const managed = await settings({ tls_mode: "managed" });
+    expect(managed.status).toBe(422);
+    expect(managed.body.error.code).toBe("managed_tls_unavailable");
+    await setIngress(installed.owner, "internal");
+    await joinNode(installed.owner, installed.workspaceId);
+    await joinNode(installed.owner, installed.workspaceId);
+    const acme = await settings({ tls_mode: "acme" });
+    expect(acme.status).toBe(409);
+    expect(acme.body.error.code).toBe("acme_mode_single_ingress_only");
+    const read = await installed.owner.json<{ ingress_nodes: number }>("/v1/instance/settings");
+    expect(read.body.ingress_nodes).toBe(2);
+  });
+});
+
+describe("TLS summaries", () => {
+  const nodes = [
+    { id: "node_a", name: "a" },
+    { id: "node_b", name: "b" },
+  ];
+  const report = (nodeId: string, state: "issued" | "failed" | "pending", notAfter?: number) => ({
+    domainId: "dom_1",
+    nodeId,
+    state,
+    issuer: state === "issued" ? "LE" : null,
+    notAfter: notAfter ? new Date(notAfter) : null,
+    error: state === "failed" ? "boom" : null,
+    reportedAt: new Date(),
+  });
+
+  it("is issued only once every serving node reported a certificate", () => {
+    expect(summarizeReports(nodes, [report("node_a", "issued", 5)]).status).toBe("pending");
+    const all = summarizeReports(nodes, [
+      report("node_a", "issued", 9),
+      report("node_b", "issued", 5),
+    ]);
+    expect(all).toMatchObject({ status: "issued", issuer: "LE", notAfter: 5 });
+  });
+
+  it("fails while any serving node fails and ignores nodes that don't serve", () => {
+    const reports = [report("node_a", "issued", 9), report("node_b", "failed")];
+    expect(summarizeReports(nodes, reports)).toMatchObject({ status: "failed", error: "b: boom" });
+    expect(summarizeReports([nodes[0]!], reports).status).toBe("issued");
+    expect(summarizeReports([], []).status).toBe("pending");
   });
 });

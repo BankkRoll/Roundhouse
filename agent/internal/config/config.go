@@ -61,6 +61,17 @@ type Config struct {
 	Builder bool `yaml:"builder,omitempty"`
 	// Volumes configures where and how the node keeps volumes.
 	Volumes VolumesConfig `yaml:"volumes,omitempty"`
+	// Ingress configures the node's Caddy ingress.
+	Ingress IngressConfig `yaml:"ingress,omitempty"`
+}
+
+// IngressConfig is the ingress section of the config (ADR 0009).
+type IngressConfig struct {
+	// CertsDir holds the certificates the control plane issues in managed
+	// TLS mode, where Caddy can read them; empty means
+	// /var/lib/roundhouse-certs on Linux and a "certs" directory in the data
+	// directory elsewhere.
+	CertsDir string `yaml:"certs_dir,omitempty"`
 }
 
 // VolumesConfig is the volumes section of the config (ADR 0004, "Volumes").
@@ -168,6 +179,9 @@ func (c Config) Validate() error {
 		if _, err := protocol.ParsePublicKey(c.ControlPublicKey); err != nil {
 			errs = append(errs, errors.New("control_public_key must be a base64 raw Ed25519 public key"))
 		}
+	}
+	if c.Ingress.CertsDir != "" && !filepath.IsAbs(c.Ingress.CertsDir) {
+		errs = append(errs, errors.New("ingress.certs_dir must be an absolute path"))
 	}
 	return errors.Join(errs...)
 }

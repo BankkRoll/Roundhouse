@@ -44,6 +44,8 @@ import type {
   Deployment,
   DeploymentDetail,
   Environment,
+  InstanceSettings,
+  InstanceSettingsPatch,
   Project,
   ProjectDetail,
   ProjectSummary,
@@ -66,6 +68,7 @@ import {
 import { db, nextId } from "./db";
 import type { DbApiToken, DbDeployment, DbVariable } from "./deploy-db";
 import { generatedDomainState } from "./domains-db";
+import { presentDomain } from "./domains-mock";
 
 // -----------------------------------------------------------------------------
 // Validation with the contract's schemas
@@ -666,6 +669,19 @@ export function createConfigs(
 }
 
 /**
+ * The instance settings as the API reads them: the stored values plus the ingress
+ * server count, written back so tests can read `db.deploy.instance` directly.
+ *
+ * @returns The settings.
+ */
+export function instanceSettings(): InstanceSettings {
+  const instance = db.deploy.instance;
+  // NOTE: Mock nodes never opt out of ingress, so every server counts.
+  instance.ingress_nodes = db.nodes.length;
+  return instance;
+}
+
+/**
  * Adds a generated domain for a service in a config's environment when the config asks
  * for one and the instance has an apps domain.
  *
@@ -698,8 +714,7 @@ export function ensureGeneratedDomain(service: Service, config: ServiceConfig) {
     type: "generated",
     target_port: config.networking.port,
     verification_status: "verified",
-    tls_status: db.deploy.instance.tls_mode === "off" ? "disabled" : "pending",
-    ...generatedDomainState(),
+    ...generatedDomainState(db.deploy.instance.tls_mode === "off" ? "disabled" : "pending"),
     created_at: Date.now(),
   });
 }
@@ -1580,7 +1595,7 @@ export const deployHandlers = [
       (row) =>
         row.service_id === found.row.id && (!environmentId || row.environment_id === environmentId),
     );
-    return HttpResponse.json({ domains });
+    return HttpResponse.json({ domains: domains.map(presentDomain) });
   }),
 
   // ---------------------------------------------------------------------------
@@ -1589,7 +1604,7 @@ export const deployHandlers = [
   http.get(mswPath("getInstanceSettings"), () => {
     const denied = requireInstanceAdmin();
     if (denied) return denied;
-    return HttpResponse.json(db.deploy.instance);
+    return HttpResponse.json(instanceSettings());
   }),
 
   http.patch(mswPath("updateInstanceSettings"), async ({ request, params }) => {
@@ -1598,14 +1613,28 @@ export const deployHandlers = [
     const denied = requireInstanceAdmin() ?? requireFreshSession();
     if (denied) return denied;
     const user = currentUser();
-    if (input.body.apps_domain !== undefined)
-      db.deploy.instance.apps_domain = (input.body.apps_domain as string | null) ?? null;
-    if (input.body.tls_mode !== undefined)
-      db.deploy.instance.tls_mode = input.body.tls_mode as typeof db.deploy.instance.tls_mode;
-    if (input.body.log_retention_days !== undefined)
-      db.deploy.instance.log_retention_days = input.body.log_retention_days as number;
-    if (input.body.mcp_enabled !== undefined)
-      db.deploy.instance.mcp_enabled = input.body.mcp_enabled as boolean;
+    const body = input.body as InstanceSettingsPatch;
+    const before = instanceSettings();
+    if (body.tls_mode === "managed" && before.tls_mode !== "managed") {
+      return apiError(
+        422,
+        "managed_tls_unavailable",
+        "Managed TLS isn't available on this install yet.",
+      );
+    }
+    if (body.tls_mode === "acme" && before.tls_mode !== "acme" && before.ingress_nodes > 1) {
+      return apiError(
+        409,
+        "acme_mode_single_ingress_only",
+        `This install has ${before.ingress_nodes} ingress servers. With acme each one orders its own certificates and a validation reaching another server fails; use managed instead.`,
+      );
+    }
+    const instance = db.deploy.instance;
+    if (body.apps_domain !== undefined) instance.apps_domain = body.apps_domain ?? null;
+    if (body.tls_mode !== undefined) instance.tls_mode = body.tls_mode;
+    if (body.log_retention_days !== undefined)
+      instance.log_retention_days = body.log_retention_days;
+    if (body.mcp_enabled !== undefined) instance.mcp_enabled = body.mcp_enabled;
     recordAudit({
       workspaceId: null,
       actorType: "user",
@@ -1613,9 +1642,9 @@ export const deployHandlers = [
       action: "instance.settings_updated",
       targetType: "instance",
       targetId: "instance",
-      metadata: { ...input.body },
+      metadata: { ...body },
     });
-    return HttpResponse.json(db.deploy.instance);
+    return HttpResponse.json(instanceSettings());
   }),
 
   // ---------------------------------------------------------------------------

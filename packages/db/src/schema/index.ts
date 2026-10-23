@@ -6,6 +6,7 @@
  */
 export * from "./access";
 export * from "./auth";
+export * from "./certificates";
 export * from "./changes";
 export * from "./data";
 export * from "./deployments";

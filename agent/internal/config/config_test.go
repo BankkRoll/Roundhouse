@@ -71,11 +71,12 @@ func TestValidate(t *testing.T) {
 	c.NodeID = ""
 	c.ConnectURL = "https://cp.example.com/connect"
 	c.ControlPublicKey = "short"
+	c.Ingress.CertsDir = "relative/certs"
 	err := c.Validate()
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	for _, want := range []string{"node_id", "connect_url", "control_public_key"} {
+	for _, want := range []string{"node_id", "connect_url", "control_public_key", "ingress.certs_dir"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %s", err, want)
 		}

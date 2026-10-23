@@ -48,10 +48,15 @@ export const MCP_DOCS_URL =
 
 const HOSTNAME = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
-const TLS_COPY: Record<TlsMode, { label: string; hint: string }> = {
+const TLS_COPY: Record<TlsMode, { label: string; hint: string; unavailable?: boolean }> = {
   acme: {
     label: "Let's Encrypt (automatic)",
-    hint: "Certificates are issued on demand for each hostname. Needs public DNS pointing at your servers.",
+    hint: "Each server's Caddy orders certificates from Let's Encrypt for the hostnames it serves. Needs public DNS pointing at your servers, and one ingress server: with more, a validation can reach a server that didn't order it.",
+  },
+  managed: {
+    label: "Managed by the control plane (not available yet)",
+    hint: "The control plane orders certificates and hands them to every server, so any number of ingress servers can share a hostname. Not available on this install yet.",
+    unavailable: true,
   },
   internal: {
     label: "Internal CA",
@@ -65,12 +70,14 @@ function IngressForm({ settings }: { settings: InstanceSettings }) {
   const [domain, setDomain] = useState(settings.apps_domain ?? "");
   const [mode, setMode] = useState<TlsMode>(settings.tls_mode);
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const modeId = useId();
   const normalized = domain
     .trim()
     .toLowerCase()
     .replace(/^\.+|\.+$/g, "");
   const dirty = normalized !== (settings.apps_domain ?? "") || mode !== settings.tls_mode;
+  const acmeConflict = mode === "acme" && settings.ingress_nodes > 1;
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -79,6 +86,7 @@ function IngressForm({ settings }: { settings: InstanceSettings }) {
       return;
     }
     setError(null);
+    setSaveError(null);
     update.mutate(
       {
         ...(normalized !== (settings.apps_domain ?? "") ? { apps_domain: normalized || null } : {}),
@@ -86,7 +94,7 @@ function IngressForm({ settings }: { settings: InstanceSettings }) {
       },
       {
         onSuccess: () => toast({ title: "Platform settings saved", tone: "success" }),
-        onError: (cause) => setError(errorMessage(cause)),
+        onError: (cause) => setSaveError(errorMessage(cause)),
       },
     );
   }
@@ -126,7 +134,11 @@ function IngressForm({ settings }: { settings: InstanceSettings }) {
             onChange={(event) => setMode(event.target.value as TlsMode)}
           >
             {(Object.keys(TLS_COPY) as TlsMode[]).map((value) => (
-              <option key={value} value={value}>
+              <option
+                key={value}
+                value={value}
+                disabled={TLS_COPY[value].unavailable && value !== settings.tls_mode}
+              >
                 {TLS_COPY[value].label}
               </option>
             ))}
@@ -134,8 +146,28 @@ function IngressForm({ settings }: { settings: InstanceSettings }) {
           <p id={`${modeId}-hint`} className="mt-1.5 text-xs text-muted-foreground">
             {TLS_COPY[mode].hint}
           </p>
+          {acmeConflict ? (
+            <p role="status" className="mt-1.5 text-xs text-warning">
+              This install has {settings.ingress_nodes} ingress servers. With Let's Encrypt each one
+              orders its own certificates and a validation reaching another server fails, so
+              hostnames may not get a certificate.
+            </p>
+          ) : null}
+        </SettingsRow>
+        <SettingsRow
+          label="Ingress servers"
+          description="Servers that take HTTP traffic, across every workspace."
+        >
+          <p className="text-sm tabular-nums text-foreground md:text-right">
+            {settings.ingress_nodes}
+          </p>
         </SettingsRow>
       </SettingsSection>
+      {saveError ? (
+        <p role="alert" className="mt-3 text-sm text-danger">
+          {saveError}
+        </p>
+      ) : null}
       <SaveBar
         dirty={dirty}
         saving={update.isPending}
@@ -143,6 +175,7 @@ function IngressForm({ settings }: { settings: InstanceSettings }) {
           setDomain(settings.apps_domain ?? "");
           setMode(settings.tls_mode);
           setError(null);
+          setSaveError(null);
         }}
       />
     </form>

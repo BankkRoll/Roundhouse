@@ -24,6 +24,9 @@
  *   `./node/handlers/data.ts`), create each database's read-only principal
  *   once it runs healthy, and send `volume_delete` (ADR 0004); backup and
  *   restore frames are dispatched to `./node/handlers/backups.ts`;
+ * - answer `cert_request` with `cert_sync` (keys sealed to the node),
+ *   record `cert_ack` and `cert_status` (ADR 0009,
+ *   `./node/handlers/certs.ts`);
  * - sign and send control frames: `welcome`, `desired_state` (always
  *   computed from D1, so a reconnect gets the truth), `build_job` and
  *   `build_cancel`, never sending a frame or field to an agent whose
@@ -58,6 +61,7 @@ import {
   BACKUPS_PROTOCOL_VERSION,
   BUILD_CANCEL_PROTOCOL_VERSION,
   type BuildJob,
+  CERTS_PROTOCOL_VERSION,
   type BuildResult,
   type ControlMessage,
   ControlMessageSchema,
@@ -107,6 +111,7 @@ import {
   wakeWorkflow,
 } from "../lib/deployments";
 import { buildDesiredState } from "../lib/desired-state";
+import { onCertFrame } from "./node/handlers/certs";
 import { deploymentRedaction, logChunkKey, type StoredLogLine, toNdjson } from "../lib/logs";
 import { metricsIntervalMs } from "../lib/metrics/backend";
 import { nodeRow, writeMetricRows } from "../lib/metrics/write";
@@ -170,6 +175,11 @@ export const FRAME_RATE_LIMITS = {
   backup_progress: 16,
   backup_result: 4,
   restore_result: 4,
+  /** Sent after a manifest mismatch; each one costs a desired-state build. */
+  cert_request: 2,
+  cert_ack: 8,
+  /** On change, and for every routed host after a reconnect. */
+  cert_status: 32,
   other: 64,
 } as const;
 
@@ -443,6 +453,32 @@ export class NodeConnection extends DurableObject<Env> {
           },
           message,
         );
+        return;
+      // Certificates (ADR 0009): `./node/handlers/certs.ts`.
+      case "cert_request":
+      case "cert_ack":
+      case "cert_status":
+        if (attachment.protocolVersion < CERTS_PROTOCOL_VERSION) return;
+        try {
+          await onCertFrame(
+            {
+              db: this.db,
+              env: this.env,
+              nodeId: attachment.nodeId,
+              reply: async (body) => {
+                await this.send(ws, {
+                  ...this.header(attachment.nodeId, Date.now(), CREDENTIAL_FRAME_TTL_MS),
+                  ...body,
+                });
+              },
+            },
+            message,
+          );
+        } catch (err) {
+          // A certificate the agent can't get now is requested again on the
+          // next manifest check; the connection stays up.
+          console.error("certificate frame failed", message.type, err instanceof Error ? err.message : "error");
+        }
         return;
       default:
         // Validated Phase 2–3 frames whose handlers land with their streams.

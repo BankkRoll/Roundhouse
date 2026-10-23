@@ -6,7 +6,7 @@
  */
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Domain } from "../lib/api/deploy-types";
-import { domainsApi } from "../lib/api/domains-client";
+import { domainsApi, type UpdateDomainBody } from "../lib/api/domains-client";
 import { queryKeys } from "./keys";
 import { domainsQueryOptions } from "./services";
 
@@ -66,6 +66,20 @@ export function useAddDomain(serviceId: string) {
   return useMutation({
     mutationFn: (body: { environment_id: string; hostname: string }) =>
       domainsApi.add(serviceId, body),
+    onSuccess: (domain) => upsert(queryClient, domain),
+  });
+}
+
+/**
+ * Changes a custom domain's HSTS policy.
+ *
+ * @returns The mutation; its result is the domain with the new policy.
+ */
+export function useUpdateDomain() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ domain, body }: { domain: Domain; body: UpdateDomainBody }) =>
+      domainsApi.update(domain.id, body),
     onSuccess: (domain) => upsert(queryClient, domain),
   });
 }

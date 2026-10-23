@@ -15,12 +15,14 @@ import (
 	"net/netip"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/BankkRoll/Roundhouse/agent/internal/atomicfile"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // Defaults applied when the corresponding [Options] field is zero.
@@ -31,6 +33,9 @@ const (
 	DefaultVerifyInterval = 30 * time.Second
 	DefaultMinBackoff     = time.Second
 	DefaultMaxBackoff     = time.Minute
+	// DefaultRenewalInterval is the least time between two loads that
+	// carry certificate renewals (ADR 0009, "Reload cost").
+	DefaultRenewalInterval = 10 * time.Minute
 )
 
 const (
@@ -59,6 +64,27 @@ type Options struct {
 	// them at once, before its first desired state; "" keeps them in
 	// memory only. They name container IPs and nothing secret.
 	UpstreamsPath string
+	// OnLoaded is called whenever Caddy is known to run a config the
+	// manager built, with what that config serves, once per change. It is
+	// called with loads serialised and must not block or call back into the
+	// manager.
+	OnLoaded func(Loaded)
+	// RenewalInterval is the least time between loads made only to pick up
+	// renewed certificates. Default [DefaultRenewalInterval].
+	RenewalInterval time.Duration
+	// Now is the clock; nil uses time.Now.
+	Now func() time.Time
+}
+
+// Loaded describes a config Caddy accepted.
+type Loaded struct {
+	TLSMode protocol.TLSMode
+	// Hosts are the exact, unmanaged hostnames Caddy may issue certificates
+	// for on demand, sorted: the ask endpoint's allowlist.
+	Hosts []string
+	// Certificates maps the ID of every loaded certificate file to the
+	// SHA-256 of the chain the config names.
+	Certificates map[string]string
 }
 
 // Manager keeps Caddy's config equal to the latest [Config] it was given.
@@ -89,6 +115,21 @@ type Manager struct {
 	// persisted is the encoding of the DNS answers last written to disk.
 	persisted []byte
 
+	// cfg is the latest config given to Apply; nil until the first.
+	cfg *Config
+	// certs are the certificates to load, by ID.
+	certs map[string]Certificate
+	// wantCerts are the certificates in want, by ID.
+	wantCerts map[string]Certificate
+	// wantInfo describes want, for OnLoaded.
+	wantInfo Loaded
+	// lastRenewal is when a wanted config last picked up a renewal.
+	lastRenewal time.Time
+	// renewTimer fires when deferred renewals are due.
+	renewTimer *time.Timer
+	// notified is what OnLoaded was last called with.
+	notified *Loaded
+
 	dns     *dnsServer
 	allowed atomic.Pointer[map[string]struct{}]
 	wake    chan struct{}
@@ -103,6 +144,10 @@ func New(opts Options) *Manager {
 	opts.MinBackoff = cmp.Or(opts.MinBackoff, DefaultMinBackoff)
 	opts.MaxBackoff = max(cmp.Or(opts.MaxBackoff, DefaultMaxBackoff), opts.MinBackoff)
 	opts.Build.Resolver = cmp.Or(opts.Build.Resolver, DefaultDNSListen)
+	opts.RenewalInterval = cmp.Or(opts.RenewalInterval, DefaultRenewalInterval)
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
 	m := &Manager{
 		opts: opts,
 		hc:   opts.HTTPClient,
@@ -126,26 +171,62 @@ func New(opts Options) *Manager {
 // answers change immediately, so a swap reaches Caddy within one refresh
 // interval without touching its config; Caddy is loaded synchronously only
 // if the generated config differs from the one it last accepted, which
-// takes a change to the routes, their ports or the TLS mode. On failure
-// Apply returns the error and [Manager.Run] keeps retrying in the
-// background.
+// takes a change to the routes, their ports, HSTS, the TLS mode, the managed
+// hosts or the certificates. On failure Apply returns the error and
+// [Manager.Run] keeps retrying in the background. c.Certificates is ignored:
+// see [Manager.SetCertificates].
 func (m *Manager) Apply(ctx context.Context, c Config) error {
+	managed := make(map[string]struct{}, len(c.ManagedHosts))
+	for _, h := range c.ManagedHosts {
+		managed[strings.ToLower(h)] = struct{}{}
+	}
 	hosts := make(map[string]struct{}, len(c.AllowedHosts))
 	for _, h := range c.AllowedHosts {
-		hosts[strings.ToLower(h)] = struct{}{}
+		h = strings.ToLower(h)
+		// SECURITY: a wildcard would let anyone pick names under it, and a
+		// managed host's certificate comes from the control plane only.
+		if _, ok := managed[h]; ok || isWildcard(h) || h == "" {
+			continue
+		}
+		hosts[h] = struct{}{}
 	}
 	m.allowed.Store(&hosts)
 	// NOTE: answers go out before a load that adds a route, so the route
 	// resolves the moment Caddy has it.
 	m.setUpstreams(BuildTable(c))
 
-	cfg := BuildConfig(c, m.opts.Build)
-	h := Hash(cfg)
+	c.Certificates = nil
 	m.mu.Lock()
-	m.want, m.wantHash = cfg, h
-	same := h == m.applied
+	m.cfg = &c
 	m.mu.Unlock()
+	return m.rebuild(ctx)
+}
+
+// SetCertificates replaces the certificate files Caddy loads in managed
+// mode. A new or removed ID changes the config at once. A renewal, an ID
+// already in the config with another digest, waits until the next load
+// that happens anyway or until [Options.RenewalInterval] has passed since
+// the last load made for renewals, whichever is first. Nothing loads before
+// the first [Manager.Apply].
+func (m *Manager) SetCertificates(ctx context.Context, certs []Certificate) error {
+	byID := make(map[string]Certificate, len(certs))
+	for _, c := range certs {
+		byID[c.ID] = c
+	}
+	m.mu.Lock()
+	m.certs = byID
+	m.mu.Unlock()
+	return m.rebuild(ctx)
+}
+
+// rebuild plans the wanted config and loads it if Caddy does not run it.
+func (m *Manager) rebuild(ctx context.Context) error {
+	same, info, ok := m.plan()
+	if !ok {
+		return nil
+	}
 	if same {
+		m.notify(info)
 		return nil
 	}
 	err := m.load(ctx)
@@ -153,6 +234,95 @@ func (m *Manager) Apply(ctx context.Context, c Config) error {
 		m.poke()
 	}
 	return err
+}
+
+// replan plans again, for deferred renewals that came due; [Manager.Run]
+// loads the result.
+func (m *Manager) replan() {
+	if same, info, ok := m.plan(); ok && same {
+		m.notify(info)
+	}
+}
+
+// plan builds the wanted config from the latest inputs and reports whether
+// Caddy already runs it; ok is false before the first [Manager.Apply].
+func (m *Manager) plan() (same bool, info Loaded, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cfg == nil {
+		return false, Loaded{}, false
+	}
+	c := *m.cfg
+	var use map[string]Certificate
+	var cfg []byte
+	if c.TLSMode == protocol.TLSManaged {
+		now := m.opts.Now()
+		fresh, deferred, renewals := splitRenewals(m.certs, m.wantCerts)
+		use = deferred
+		c.Certificates = certList(deferred)
+		cfg = BuildConfig(c, m.opts.Build)
+		if renewals {
+			due := m.lastRenewal.IsZero() || now.Sub(m.lastRenewal) >= m.opts.RenewalInterval
+			// A load that happens anyway costs nothing extra to carry them.
+			if due || Hash(cfg) != m.applied {
+				if due {
+					m.lastRenewal = now
+				}
+				use = fresh
+				c.Certificates = certList(fresh)
+				cfg = BuildConfig(c, m.opts.Build)
+			} else {
+				m.armRenewal(m.lastRenewal.Add(m.opts.RenewalInterval).Sub(now))
+			}
+		}
+	} else {
+		cfg = BuildConfig(c, m.opts.Build)
+	}
+	h := Hash(cfg)
+	shas := make(map[string]string, len(use))
+	for id, cert := range use {
+		shas[id] = cert.SHA256
+	}
+	hosts := make([]string, 0, len(*m.allowed.Load()))
+	for h := range *m.allowed.Load() {
+		hosts = append(hosts, h)
+	}
+	slices.Sort(hosts)
+	m.want, m.wantHash, m.wantCerts = cfg, h, use
+	m.wantInfo = Loaded{TLSMode: c.TLSMode, Hosts: hosts, Certificates: shas}
+	return h == m.applied, m.wantInfo, true
+}
+
+// armRenewal pokes [Manager.Run] after d. Caller holds m.mu.
+func (m *Manager) armRenewal(d time.Duration) {
+	if m.renewTimer != nil {
+		m.renewTimer.Stop()
+	}
+	m.renewTimer = time.AfterFunc(max(d, 0), m.poke)
+}
+
+// splitRenewals returns want as is (fresh), and with every renewal (an ID
+// in base with another digest) replaced by its base entry (deferred), and
+// whether there was any renewal.
+func splitRenewals(want, base map[string]Certificate) (fresh, deferred map[string]Certificate, renewals bool) {
+	deferred = make(map[string]Certificate, len(want))
+	for id, c := range want {
+		if old, ok := base[id]; ok && old.SHA256 != c.SHA256 {
+			deferred[id] = old
+			renewals = true
+			continue
+		}
+		deferred[id] = c
+	}
+	return want, deferred, renewals
+}
+
+func certList(m map[string]Certificate) []Certificate {
+	out := make([]Certificate, 0, len(m))
+	for _, c := range m {
+		out = append(out, c)
+	}
+	return out
 }
 
 // Healthy reports whether Caddy accepted the latest config. It is false
@@ -255,6 +425,7 @@ func (m *Manager) Run(ctx context.Context) error {
 			return nil
 		case <-m.wake:
 			retry.Stop()
+			m.replan()
 			attempt()
 		case <-retry.C:
 			attempt()
@@ -289,7 +460,7 @@ func (m *Manager) load(ctx context.Context) error {
 	m.loadMu.Lock()
 	defer m.loadMu.Unlock()
 	m.mu.Lock()
-	cfg, h := m.want, m.wantHash
+	cfg, h, info := m.want, m.wantHash, m.wantInfo
 	done := m.applied == h
 	probe := !m.probed
 	m.mu.Unlock()
@@ -313,6 +484,7 @@ func (m *Manager) load(ctx context.Context) error {
 				m.up, m.applied = &up, h
 				m.mu.Unlock()
 				m.log.Debug("caddy already runs the wanted config", "config_hash", h)
+				m.notify(info)
 				return nil
 			}
 		}
@@ -337,7 +509,28 @@ func (m *Manager) load(ctx context.Context) error {
 	case err == nil:
 		m.log.Debug("caddy config loaded", "config_hash", h)
 	}
+	if err == nil {
+		m.notify(info)
+	}
 	return err
+}
+
+// notify calls OnLoaded with info unless it was the last thing it was
+// called with.
+func (m *Manager) notify(info Loaded) {
+	if m.opts.OnLoaded == nil {
+		return
+	}
+	m.mu.Lock()
+	same := m.notified != nil && m.notified.TLSMode == info.TLSMode &&
+		slices.Equal(m.notified.Hosts, info.Hosts) && maps.Equal(m.notified.Certificates, info.Certificates)
+	if !same {
+		m.notified = &info
+	}
+	m.mu.Unlock()
+	if !same {
+		m.opts.OnLoaded(info)
+	}
 }
 
 func (m *Manager) post(ctx context.Context, cfg []byte) error {

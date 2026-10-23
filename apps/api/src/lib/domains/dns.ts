@@ -13,7 +13,7 @@
  * @module
  */
 import type { DomainDnsObservation } from "@roundhouse/shared";
-import { ownershipRecordName } from "@roundhouse/shared";
+import { acmeDelegationName, isWildcardHostname, ownershipRecordName } from "@roundhouse/shared";
 
 /** Primary resolver unless `DNS_RESOLVER_URL` is set. */
 export const DEFAULT_DNS_RESOLVER = "https://cloudflare-dns.com/dns-query";
@@ -134,7 +134,10 @@ export interface Resolution extends DomainDnsObservation {
 
 /**
  * Resolves a hostname for a check: A and AAAA (whose answers carry the
- * CNAME chain), the ownership TXT, and optionally its SOA.
+ * CNAME chain), the ownership TXT, optionally its SOA, and for a wildcard
+ * the CNAME of its `_acme-challenge` delegation. A wildcard's own name is
+ * queried literally: resolvers answer `*.example.com` from the wildcard
+ * record itself.
  *
  * @param env - Resolver settings.
  * @param hostname - The custom hostname.
@@ -147,11 +150,13 @@ export async function resolveDomain(
   hostname: string,
   options: { apex?: boolean } = {},
 ): Promise<Resolution> {
-  const [a, aaaa, txt, soa] = await Promise.all([
+  const wildcard = isWildcardHostname(hostname);
+  const [a, aaaa, txt, soa, delegation] = await Promise.all([
     query(env, hostname, "A"),
     query(env, hostname, "AAAA"),
     query(env, ownershipRecordName(hostname), "TXT"),
-    options.apex ? query(env, hostname, "SOA") : Promise.resolve([]),
+    options.apex && !wildcard ? query(env, hostname, "SOA") : Promise.resolve([]),
+    wildcard ? query(env, acmeDelegationName(hostname), "CNAME") : Promise.resolve([]),
   ]);
   const chain: string[] = [];
   let current = hostname;
@@ -177,5 +182,25 @@ export async function resolveDomain(
     addresses,
     txt: txt.filter((r) => r.type === TYPE.TXT).map((r) => txtValue(r.data)),
     apex: soa.some((r) => r.type === TYPE.SOA && r.name === hostname),
+    ...(wildcard
+      ? {
+          acme_delegation: delegation
+            .filter((r) => r.type === TYPE.CNAME)
+            .map((r) => bare(r.data)),
+        }
+      : {}),
   };
+}
+
+/**
+ * The TXT values at a name, for watching a DNS-01 record propagate.
+ *
+ * @param env - Resolver settings.
+ * @param name - The record name; a CNAME to it (a delegation) is followed.
+ * @returns Each TXT value, chunks joined.
+ * @throws {DnsLookupError} When neither resolver answers.
+ */
+export async function resolveTxt(env: DnsEnv, name: string): Promise<string[]> {
+  const answers = await query(env, name, "TXT");
+  return answers.filter((r) => r.type === TYPE.TXT).map((r) => txtValue(r.data));
 }

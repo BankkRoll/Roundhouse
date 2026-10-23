@@ -9,6 +9,11 @@
  *   `VOLUMES_PROTOCOL_VERSION` it also lists every live volume pinned to the
  *   node (ADR 0004), and a volume service's workload mounts its volume,
  *   stops before it is replaced, and a database gets its `exec` probe.
+ *   From `CERTS_PROTOCOL_VERSION` routes carry HSTS and the frame carries
+ *   the node's TLS settings and certificate manifest (ADR 0009,
+ *   `lib/certificates/manifest.ts`). A node routes a hostname only while it
+ *   runs a replica of its service: cross-node routing waits for the mesh
+ *   (ADR 0005), so DNS guidance names the serving nodes (`lib/domains`).
  * - {@link refreshNodes}: bumps nodes' `desired_generation` and asks their
  *   Durable Objects to push the new state.
  * - {@link sealDeploymentEnv}/{@link openDeploymentEnv} and the build
@@ -29,6 +34,7 @@ import {
   volumes,
 } from "@roundhouse/db";
 import {
+  CERTS_PROTOCOL_VERSION,
   computeSpecHash,
   type DesiredState,
   environmentNetworkName,
@@ -37,6 +43,7 @@ import {
   MAX_WORKLOADS_PER_NODE,
   REGISTRY_LISTEN,
   type RegistryConfig,
+  type RouteHsts,
   SEALED_ENV_PROTOCOL_VERSION,
   type SealedBox,
   type SealedWorkloadEnv,
@@ -52,6 +59,7 @@ import {
   type DeploymentStatus,
   databaseHealthCommand,
   databaseVersion,
+  type DomainHsts,
   type HealthcheckConfig,
   LIVE_VOLUME_STATUSES,
   type ServiceConfigSpec,
@@ -59,8 +67,10 @@ import {
 } from "@roundhouse/shared";
 import { and, asc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import type { NodeConnection } from "../durable/node-connection";
+import { nodeTls, type RoutedDomain, routeHsts } from "./certificates/manifest";
 import { type KeyEnv, type Sealed, sealWith, unsealWith } from "./crypto";
 import { deploymentBuildAadV2, deploymentEnvAadV2 } from "./keyring";
+import type { OriginEnv } from "./origin";
 import { getIngressSettings } from "./settings";
 import { deploymentEnvAad, projectKey } from "./variables";
 
@@ -275,6 +285,8 @@ export interface WorkloadInput {
   envSealed: SealedBox;
   config: Pick<ServiceConfigSpec, "deploy" | "resources" | "healthcheck" | "networking">;
   hostnames: string[];
+  /** Each hostname's HSTS header (protocol 6 nodes only); absent entries send none. */
+  hsts?: ReadonlyMap<string, RouteHsts | null>;
   privateDomain: string;
   /** The service's volume on this node (ADR 0004); its replica mounts it. */
   volume?: { id: string; mountPath: string };
@@ -336,7 +348,12 @@ export async function workloadSpec(w: WorkloadInput): Promise<WorkloadSpec> {
       : {}),
     env_sealed: w.envSealed,
     ports: port ? [{ container_port: port, protocol: "http" }] : [],
-    routes: port ? w.hostnames.map((hostname) => ({ hostname, container_port: port })) : [],
+    routes: port
+      ? w.hostnames.map((hostname) => {
+          const hsts = w.hsts?.get(hostname);
+          return { hostname, container_port: port, ...(hsts ? { hsts } : {}) };
+        })
+      : [],
     healthcheck: workloadHealthcheck(w),
     resources: {
       cpu_millis: w.config.resources.cpu_millis,
@@ -413,14 +430,19 @@ export const BUILDER_REGISTRY: RegistryConfig = {
 /**
  * Computes a node's complete desired state from D1.
  *
+ * In `managed` TLS mode a node below `CERTS_PROTOCOL_VERSION` gets no
+ * routes: its Caddy would issue on demand, the per-node issuance `managed`
+ * exists to replace (ADR 0009, "Gates").
+ *
  * @param db - Database client.
- * @param keys - The keyring bindings, to unseal each deployment's env.
+ * @param keys - The keyring bindings, to unseal each deployment's env, and
+ *   `PUBLIC_ORIGIN`, where Caddy sends HTTP-01 challenges.
  * @param nodeId - The node.
  * @returns The frame body, or `null` when the node no longer exists.
  */
 export async function buildDesiredState(
   db: Db,
-  keys: KeyEnv,
+  keys: KeyEnv & OriginEnv,
   nodeId: string,
 ): Promise<DesiredStateBody | null> {
   // Generation first: content read afterwards is at least as new as the
@@ -448,6 +470,8 @@ export async function buildDesiredState(
     apps_domain: ingress.appsDomain,
     registry: runsWorkloads && node.capabilities?.builder ? BUILDER_REGISTRY : null,
   };
+  const certsCapable = node.protocolVersion >= CERTS_PROTOCOL_VERSION;
+  const routesAllowed = certsCapable || ingress.tlsMode !== "managed";
   const holdsVolumes = node.protocolVersion >= VOLUMES_PROTOCOL_VERSION;
   const nodeVolumes = holdsVolumes
     ? await db
@@ -471,7 +495,14 @@ export async function buildDesiredState(
       }),
     );
   }
-  if (!runsWorkloads || nodeKey === null) return body;
+  if (!runsWorkloads || nodeKey === null) {
+    if (certsCapable) {
+      const tls = await nodeTls(db, keys, [], ingress.tlsMode);
+      body.ingress = tls.ingress;
+      body.certificates = tls.certificates;
+    }
+    return body;
+  }
 
   const rows = await db
     .select({
@@ -517,14 +548,16 @@ export async function buildDesiredState(
       ]),
     ).values(),
   ];
-  const hostnames = new Map<string, { hostname: string; type: string }[]>();
-  if (pairs.length) {
+  const hostnames = new Map<string, (RoutedDomain & { serviceId: string })[]>();
+  if (pairs.length && routesAllowed) {
     const domainRows = await db
       .select({
+        id: domains.id,
         serviceId: domains.serviceId,
         environmentId: domains.environmentId,
         hostname: domains.hostname,
         type: domains.type,
+        hsts: domains.hsts,
       })
       .from(domains)
       .where(
@@ -539,10 +572,16 @@ export async function buildDesiredState(
       )
       .orderBy(asc(domains.hostname));
     for (const d of domainRows) {
+      // Wildcards reach only nodes that can take their certificate; the
+      // TLS pass below drops them until it exists.
+      if (!certsCapable && d.hostname.startsWith("*.")) continue;
       const key = `${d.serviceId}:${d.environmentId}`;
-      hostnames.set(key, [...(hostnames.get(key) ?? []), d]);
+      hostnames.set(key, [...(hostnames.get(key) ?? []), { ...d, hsts: d.hsts as DomainHsts | null }]);
     }
   }
+  const routedDomains = [...hostnames.values()].flat();
+  const tls = certsCapable ? await nodeTls(db, keys, routedDomains, ingress.tlsMode) : null;
+  const hsts = new Map(routedDomains.map((d) => [d.hostname, routeHsts(d, ingress.tlsMode)]));
 
   const volumeServices = new Set<string>();
   if (pairs.length) {
@@ -596,13 +635,27 @@ export async function buildDesiredState(
         config: r.config,
         hostnames: (hostnames.get(`${d.serviceId}:${d.environmentId}`) ?? [])
           .filter((h) => h.type !== "generated" || networking.generated_domain)
+          .filter((h) => !tls || tls.routable.has(h.hostname))
           .map((h) => h.hostname),
+        ...(certsCapable ? { hsts } : {}),
         privateDomain: privateDomain(r.serviceSlug, r.environmentSlug),
         ...(volume ? { volume: { id: volume.id, mountPath: volume.mountPath } } : {}),
         ...(r.databaseEngine
           ? { database: { engine: r.databaseEngine, version: r.databaseVersion } }
           : {}),
       }),
+    );
+  }
+  if (tls) {
+    // Only what this node really routes: a service's generated hostname is
+    // skipped when its config turns the generated domain off.
+    const routed = new Set(body.workloads.flatMap((w) => w.routes.map((r) => r.hostname)));
+    body.ingress = {
+      ...tls.ingress,
+      managed_hosts: tls.ingress.managed_hosts.filter((h) => routed.has(h)),
+    };
+    body.certificates = tls.certificates.filter((c) =>
+      (tls.hostsByCertificate.get(c.id) ?? []).some((h) => routed.has(h)),
     );
   }
   return body;

@@ -674,8 +674,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         type: "generated",
         target_port: 3000,
         verification_status: "verified",
-        tls_status: "issued",
-        ...generatedDomainState(),
+        ...generatedDomainState("issued", now - 4 * DAY),
         created_at: now - 4 * DAY,
       },
       {
@@ -687,8 +686,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         type: "generated",
         target_port: 8080,
         verification_status: "verified",
-        tls_status: "issued",
-        ...generatedDomainState(),
+        ...generatedDomainState("issued", now - 5 * DAY),
         created_at: now - 5 * DAY,
       },
       {
@@ -700,8 +698,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         type: "generated",
         target_port: 3000,
         verification_status: "verified",
-        tls_status: "issued",
-        ...generatedDomainState(),
+        ...generatedDomainState("issued", now - 14 * DAY),
         created_at: now - 14 * DAY,
       },
     ],
@@ -710,6 +707,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
       tls_mode: "acme",
       log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
       mcp_enabled: false,
+      ingress_nodes: 0,
     },
     github: {
       app: {
@@ -831,6 +829,7 @@ export function emptyDeploy(): DeployDb {
       tls_mode: "acme",
       log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
       mcp_enabled: false,
+      ingress_nodes: 0,
     },
     github: {
       app: null,

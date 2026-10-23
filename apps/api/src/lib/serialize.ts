@@ -16,7 +16,7 @@ import type {
   serviceConfigs,
   services,
 } from "@roundhouse/db";
-import type { TlsMode } from "@roundhouse/shared";
+import { DEFAULT_HSTS, isWildcardHostname, type TlsMode } from "@roundhouse/shared";
 import type { DnsRecord } from "./domains/records";
 
 type Row<T extends { $inferSelect: unknown }> = T["$inferSelect"];
@@ -218,7 +218,15 @@ export function toApiPlacement(p: Row<typeof placements>, nodeName: string | nul
  * @param records - The DNS records a custom domain needs (`expectedRecords`); none by default.
  * @returns The `Domain` wire shape.
  */
-export function toApiDomain(d: Row<typeof domains>, tlsMode: TlsMode, records: DnsRecord[] = []) {
+export function toApiDomain(
+  d: Row<typeof domains>,
+  tlsMode: TlsMode,
+  extra: {
+    records?: DnsRecord[];
+    tlsNodes?: { node_id: string; name: string; state: "pending" | "issued" | "failed"; error: string | null }[];
+    routingNodes?: { id: string; name: string; publicIp: string | null; serves: boolean }[];
+  } = {},
+) {
   return {
     id: d.id,
     service_id: d.serviceId,
@@ -231,8 +239,25 @@ export function toApiDomain(d: Row<typeof domains>, tlsMode: TlsMode, records: D
     tls_status: d.tlsStatus,
     status: d.status,
     apex: d.apex,
-    records,
+    records: extra.records ?? [],
     error: d.error,
+    wildcard: isWildcardHostname(d.hostname),
+    hsts: d.type === "custom" && d.hsts ? d.hsts : DEFAULT_HSTS,
+    tls: {
+      status: d.tlsStatus,
+      issuer: d.tlsIssuer,
+      not_before: ms(d.tlsNotBefore),
+      not_after: ms(d.tlsNotAfter),
+      error: d.tlsError,
+      updated_at: ms(d.tlsUpdatedAt),
+      nodes: extra.tlsNodes ?? [],
+    },
+    routing_nodes: (extra.routingNodes ?? []).map((n) => ({
+      id: n.id,
+      name: n.name,
+      public_ip: n.publicIp,
+      serves: n.serves,
+    })),
     last_checked_at: ms(d.lastCheckedAt),
     next_check_at: ms(d.nextCheckAt),
     verified_at: ms(d.verifiedAt),

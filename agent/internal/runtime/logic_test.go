@@ -449,3 +449,29 @@ func TestRouteConflictsBetweenProjects(t *testing.T) {
 		})
 	}
 }
+
+func TestIngressConfigCarriesTLSSettings(t *testing.T) {
+	rt := New(Options{Docker: newFakeDocker()})
+	w := spec("wl_a", "svc_web")
+	h := &protocol.RouteHSTS{MaxAge: 31536000, IncludeSubdomains: true}
+	w.Routes = []protocol.WorkloadRoute{
+		{Hostname: "shop.example.com", ContainerPort: 80, HSTS: h},
+		{Hostname: "*.apps.example.com", ContainerPort: 80},
+	}
+	ds := desired(1, w)
+	ds.TLSMode = protocol.TLSManaged
+	up := &protocol.ACMEChallengeUpstream{URL: "https://cp.example.com/v1/acme/http-01", Host: "cp.example.com"}
+	ds.Ingress = &protocol.IngressSettings{ACMEChallengeUpstream: up, ManagedHosts: []string{"*.apps.example.com"}}
+	cfg := rt.ingressConfig(ds, []*wantSpec{{WorkloadSpec: w}}, nil)
+	if cfg.TLSMode != protocol.TLSManaged || cfg.ChallengeUpstream != up ||
+		!slices.Equal(cfg.ManagedHosts, []string{"*.apps.example.com"}) {
+		t.Fatalf("ingress settings lost: %+v", cfg)
+	}
+	got := map[string]*protocol.RouteHSTS{}
+	for _, r := range cfg.Routes {
+		got[r.Host] = r.HSTS
+	}
+	if len(got) != 2 || got["shop.example.com"] != h || got["*.apps.example.com"] != nil {
+		t.Fatalf("route HSTS = %+v", got)
+	}
+}

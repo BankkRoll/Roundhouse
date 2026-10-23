@@ -3,25 +3,35 @@
  * judged against them (ADR 0009 "Custom domains: direct mode").
  *
  * - **Routing**: a CNAME to the install's ingress hostname (or, without one,
- *   to the service's generated hostname), or at a zone apex A/AAAA records
- *   to the workspace's servers. Correct when the CNAME chain reaches a name
- *   the install serves, or every address is one of those servers.
+ *   to the service's generated hostname), or A/AAAA records: at a zone apex,
+ *   and whenever some of the workspace's ingress servers don't run the
+ *   service, since until the mesh (ADR 0005) only servers with a replica
+ *   answer for it, so the records name exactly those. Correct when the CNAME
+ *   chain reaches a name the install serves, or every address is one of the
+ *   workspace's servers.
  * - **Ownership**: `TXT _roundhouse.<host> = "rh-verify=<token>"`, always
- *   required, so a dangling CNAME left by someone else can't be claimed.
+ *   required, so a dangling CNAME left by someone else can't be claimed. A
+ *   wildcard proves it at its base name.
+ * - **ACME delegation** (wildcards): `CNAME _acme-challenge.<base>` to a
+ *   name in the apps domain's zone, where the control plane answers DNS-01.
  *
  * @module
  */
-import { type Db, domains, nodes } from "@roundhouse/db";
+import { type Db, domains } from "@roundhouse/db";
 import {
+  acmeDelegationName,
+  acmeDelegationTarget,
   type DnsRecordPurpose,
   type DnsRecordState,
   type DnsRecordType,
   type DomainDnsObservation,
+  isWildcardHostname,
   ownershipRecordName,
   ownershipRecordValue,
 } from "@roundhouse/shared";
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getSetting } from "../settings";
+import { pairKey, servingNodes, workspaceIngressNodes } from "./serving";
 
 /**
  * Instance setting with the hostname customers CNAME to, kept by the
@@ -37,8 +47,12 @@ export interface RoutingTargets {
   /** Names a CNAME chain may end in: the apps domain and everything under it. */
   appsDomain: string | null;
   ingressHostname: string | null;
-  /** Public IPs of the workspace's servers, which an apex may point at. */
+  /** Public IPs of the workspace's ingress servers; addresses outside them are `wrong`. */
   addresses: string[];
+  /** Public IPs of the servers running a live replica of the service. */
+  servingAddresses: string[];
+  /** The workspace's ingress servers, and whether each runs the service. */
+  nodes: { id: string; name: string; publicIp: string | null; serves: boolean }[];
 }
 
 /** One record on the wire. */
@@ -67,7 +81,7 @@ export async function routingTargets(
   scope: { workspaceId: string; serviceId: string; environmentId: string },
   appsDomain: string | null,
 ): Promise<RoutingTargets> {
-  const [ingress, generated, servers] = await Promise.all([
+  const [ingress, generated, servers, serving] = await Promise.all([
     getSetting<unknown>(db, INGRESS_HOSTNAME_SETTING),
     db
       .select({ hostname: domains.hostname })
@@ -80,23 +94,25 @@ export async function routingTargets(
         ),
       )
       .limit(1),
-    db
-      .select({ ip: nodes.publicIp })
-      .from(nodes)
-      .where(
-        and(
-          eq(nodes.workspaceId, scope.workspaceId),
-          isNull(nodes.deletedAt),
-          isNotNull(nodes.publicIp),
-        ),
-      ),
+    workspaceIngressNodes(db, scope.workspaceId),
+    servingNodes(db, [scope]),
   ]);
   const ingressHostname = typeof ingress === "string" && ingress ? ingress.toLowerCase() : null;
+  const serves = new Set((serving.get(pairKey(scope)) ?? []).map((n) => n.id));
+  const ips = (list: { publicIp: string | null }[]) =>
+    [...new Set(list.flatMap((n) => (n.publicIp ? [n.publicIp.toLowerCase()] : [])))].sort();
   return {
     cname: ingressHostname ?? generated[0]?.hostname ?? null,
     appsDomain: appsDomain?.toLowerCase() ?? null,
     ingressHostname,
-    addresses: [...new Set(servers.map((s) => s.ip!.toLowerCase()))].sort(),
+    addresses: ips(servers),
+    servingAddresses: ips(servers.filter((n) => serves.has(n.id))),
+    nodes: servers.map((n) => ({
+      id: n.id,
+      name: n.name,
+      publicIp: n.publicIp,
+      serves: serves.has(n.id),
+    })),
   };
 }
 
@@ -114,7 +130,27 @@ export function expectedRecords(d: DomainRow, targets: RoutingTargets): DnsRecor
   if (d.type !== "custom" || !d.verificationToken) return [];
   const routing: DnsRecord[] = [];
   const state = d.dnsStatus;
-  if (d.apex && targets.addresses.length) {
+  const serving = targets.servingAddresses;
+  // Some ingress servers don't run the service, so a CNAME to a name that
+  // resolves to every server would send part of the traffic to `no route`.
+  const partial = serving.length > 0 && serving.length < targets.addresses.length;
+  if (partial) {
+    const names = targets.nodes.filter((n) => n.serves).map((n) => n.name);
+    const note =
+      `This service runs on ${names.length} of ${targets.nodes.length} servers (${names.join(", ")}); ` +
+      "until servers route to each other's replicas only those answer for it. Point DNS at these " +
+      "addresses and update the records if the service moves to other servers.";
+    for (const ip of serving) {
+      routing.push({
+        type: isV6(ip) ? "AAAA" : "A",
+        name: d.hostname,
+        value: ip,
+        purpose: "routing",
+        state,
+        note,
+      });
+    }
+  } else if (d.apex && targets.addresses.length) {
     for (const ip of targets.addresses) {
       routing.push({
         type: isV6(ip) ? "AAAA" : "A",
@@ -150,7 +186,7 @@ export function expectedRecords(d: DomainRow, targets: RoutingTargets): DnsRecor
       });
     }
   }
-  return [
+  const records: DnsRecord[] = [
     ...routing,
     {
       type: "TXT",
@@ -161,6 +197,34 @@ export function expectedRecords(d: DomainRow, targets: RoutingTargets): DnsRecor
       note: null,
     },
   ];
+  if (isWildcardHostname(d.hostname) && targets.appsDomain) {
+    const target = acmeDelegationTarget(d.id, targets.appsDomain);
+    records.push({
+      type: "CNAME",
+      name: acmeDelegationName(d.hostname),
+      value: target,
+      purpose: "acme_delegation",
+      state: evaluateDelegation(d.dnsObserved, target),
+      note: "Lets this install answer the DNS-01 challenges of the wildcard certificate.",
+    });
+  }
+  return records;
+}
+
+/**
+ * Judges a wildcard's `_acme-challenge` delegation.
+ *
+ * @param seen - The last check's answers, if any.
+ * @param target - Where the CNAME must point.
+ * @returns `unknown` before a check, then `ok`, `missing` or `wrong`.
+ */
+export function evaluateDelegation(
+  seen: DomainDnsObservation | null,
+  target: string,
+): DnsRecordState {
+  if (!seen?.acme_delegation) return "unknown";
+  if (!seen.acme_delegation.length) return "missing";
+  return seen.acme_delegation.includes(target) ? "ok" : "wrong";
 }
 
 const servedBy = (name: string, targets: RoutingTargets) =>
