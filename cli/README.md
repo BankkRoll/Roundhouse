@@ -74,17 +74,30 @@ roundhouse status
 roundhouse vars
 roundhouse vars set NODE_ENV=production 'DATABASE_URL=${{db.DATABASE_URL}}'
 roundhouse vars set --secret STRIPE_KEY=- < stripe.key
+roundhouse vars set --secret --build NPM_TOKEN=- < npm-token.txt
 roundhouse vars import .env
-roundhouse vars export --reveal > .env.local
+roundhouse vars export > .env.example
 roundhouse run -- npm run dev
 ```
 
+Every variable is `plain` or `secret`. Secrets are write-only: nothing, the
+CLI included, can read a secret's value back, so `vars` and `vars get` show
+`<secret fp:xxxxxxxx>` (a fingerprint: equal values have equal
+fingerprints) and `vars export` leaves secrets out, naming them on stderr.
+The control plane picks a new variable's tier from its name and value
+(`API_KEY` or a `sk_live_…` value becomes secret, `VITE_…` stays plain);
+`--secret` and `--plain` override it where the tier isn't locked. When it
+would make a value secret that you didn't mark, `vars set` asks first; pass
+`--yes` in scripts. `--build` passes a variable to builds (secrets as
+BuildKit secrets, read with `RUN --mount=type=secret,id=KEY`), and
+`--mount-as-file` delivers it as `/run/secrets/KEY`. A bare `KEY` without
+`=VALUE` changes only these settings.
+
 References (`${{service.VAR}}`, `${{shared.VAR}}`, `${{VAR}}`) are stored as
-written. Secrets stay masked unless you pass `--reveal`, and every reveal is
-recorded in the audit log. `run` asks the control plane for the service's
-plain environment as a deployment gets it (references resolved, built-ins
+written. `run` asks the control plane for the service's plain environment
+as a deployment gets it (references resolved, built-ins
 such as `PORT` added); that needs the `variables:read_plain` permission and
-is audited too. Secret values never leave the control plane: secrets, and
+is audited. Secret values never leave the control plane: secrets, and
 variables whose value references one, come from a local env file instead
 (`--env-file`, default `.env`, which may be absent), and a warning names any
 it does not set. The values go to the child process alone; nothing is

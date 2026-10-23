@@ -113,30 +113,33 @@ func jsonFields(t reflect.Type) []string {
 func TestWireTypesMatchSchemas(t *testing.T) {
 	doc := loadOpenAPI(t)
 	for name, v := range map[string]any{
-		"Project":           Project{},
-		"ProjectDetail":     ProjectDetail{},
-		"Environment":       Environment{},
-		"Service":           Service{},
-		"CreatedService":    CreatedService{},
-		"ServiceConfig":     ServiceConfig{},
-		"NetworkingConfig":  NetworkingConfig{},
-		"Variable":          Variable{},
-		"VariablesPut":      VariablesPut{},
-		"Build":             Build{},
-		"Deployment":        Deployment{},
-		"DeploymentPage":    DeploymentPage{},
-		"DeploymentEvent":   DeploymentEvent{},
-		"DeploymentDetail":  DeploymentDetail{},
-		"Placement":         Placement{},
-		"LogEntry":          LogEntry{},
-		"LogPage":           LogPage{},
-		"Domain":            Domain{},
-		"Node":              Node{},
-		"CreateProject":     CreateProjectInput{},
-		"ApiToken":          APIToken{},
-		"CreateApiToken":    CreateAPITokenInput{},
-		"CreatedApiToken":   CreatedAPIToken{},
-		"ResolvedVariables": ResolvedVariables{},
+		"Project":            Project{},
+		"ProjectDetail":      ProjectDetail{},
+		"Environment":        Environment{},
+		"Service":            Service{},
+		"CreatedService":     CreatedService{},
+		"ServiceConfig":      ServiceConfig{},
+		"NetworkingConfig":   NetworkingConfig{},
+		"Variable":           Variable{},
+		"VariablesPut":       VariablesPut{},
+		"VariableSetEntry":   VariableSet{},
+		"VariablesPutResult": VariablesPutResult{},
+		"VariableWarning":    VariableWarning{},
+		"Build":              Build{},
+		"Deployment":         Deployment{},
+		"DeploymentPage":     DeploymentPage{},
+		"DeploymentEvent":    DeploymentEvent{},
+		"DeploymentDetail":   DeploymentDetail{},
+		"Placement":          Placement{},
+		"LogEntry":           LogEntry{},
+		"LogPage":            LogPage{},
+		"Domain":             Domain{},
+		"Node":               Node{},
+		"CreateProject":      CreateProjectInput{},
+		"ApiToken":           APIToken{},
+		"CreateApiToken":     CreateAPITokenInput{},
+		"CreatedApiToken":    CreatedAPIToken{},
+		"ResolvedVariables":  ResolvedVariables{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
@@ -229,5 +232,18 @@ func TestQueryParamsExist(t *testing.T) {
 		if !slices.Contains(op.Parameters, param{In: "query", Name: c.param}) {
 			t.Errorf("%s: no query parameter %q", c.route, c.param)
 		}
+	}
+}
+
+// TestVariableTiersMatchAPI keeps the tiers the CLI sends and recognises in
+// step with the API's VariableTier enum.
+func TestVariableTiersMatchAPI(t *testing.T) {
+	doc := loadOpenAPI(t)
+	s := doc.Components.Schemas["VariableTier"]
+	if s == nil {
+		t.Fatal("schema VariableTier missing from the OpenAPI document")
+	}
+	if want := []string{TierPlain, TierSecret}; !slices.Equal(s.Enum, want) {
+		t.Errorf("tiers = %v, API enum = %v", want, s.Enum)
 	}
 }

@@ -1,6 +1,6 @@
-KEY            VALUE
-API_KEY        •••••••• (secret)
-DATABASE_URL   postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.ROUNDHOUSE_PRIVATE_DOMAIN}}:${{db.PORT}}/shop
-LISTEN         0.0.0.0:${{PORT}}
-NODE_ENV       production
-REGION         ${{shared.REGION}}
+KEY            TIER             VALUE
+API_KEY        secret (build)   <secret fp:b628e375>
+DATABASE_URL   plain            postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.ROUNDHOUSE_PRIVATE_DOMAIN}}:${{db.PORT}}/shop
+LISTEN         plain            0.0.0.0:${{PORT}}
+NODE_ENV       plain            production
+REGION         plain            ${{shared.REGION}}

@@ -7,11 +7,14 @@
 // matter to a client: session cookies and their refresh, workspace API
 // tokens with their workspace and scopes, the same-origin guard on /v1
 // mutations, Better Auth's Origin check on cookie-bearing POSTs, the
-// realtime socket's Origin check and close codes, slug suffixing, and
-// `${{…}}` syntax validation and resolution.
+// realtime socket's Origin check and close codes, slug suffixing,
+// `${{…}}` syntax validation and resolution, and write-only secrets: tiers
+// picked by a subset of the API's classifier, confirmations for keys
+// becoming secret, and no route that returns a secret's value.
 package apitest
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -64,9 +67,13 @@ type Request struct {
 }
 
 type variable struct {
-	value   string
-	secret  bool
-	version int
+	value     string
+	secret    bool
+	locked    bool
+	build     bool
+	file      bool
+	version   int
+	updatedBy string
 }
 
 // Fake is a running fake control plane.
@@ -86,7 +93,6 @@ type Fake struct {
 	domains     []api.Domain
 	nodes       []api.Node
 	requests    []Request
-	reveals     [][]string
 	seq         int
 	tokens      []*apiToken
 	tokenSeq    int
@@ -177,7 +183,7 @@ func (f *Fake) seed() {
 	f.vars[varKey(APIServiceID, ProductionID)] = map[string]*variable{
 		"NODE_ENV":     {value: "production", version: 1},
 		"DATABASE_URL": {value: "postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.ROUNDHOUSE_PRIVATE_DOMAIN}}:${{db.PORT}}/shop", version: 2},
-		"API_KEY":      {value: SecretValue, secret: true, version: 1},
+		"API_KEY":      {value: SecretValue, secret: true, build: true, version: 1},
 		"REGION":       {value: "${{shared.REGION}}", version: 1},
 		"LISTEN":       {value: "0.0.0.0:${{PORT}}", version: 1},
 	}
@@ -263,11 +269,25 @@ func (f *Fake) Requests() []Request {
 	return slices.Clone(f.requests)
 }
 
-// Reveals returns the key lists of every reveal call, in order.
-func (f *Fake) Reveals() [][]string {
+// StoredVariable is a variable as the fake stores it, secret value included.
+type StoredVariable struct {
+	Value            string
+	Tier             string
+	Locked           bool
+	AvailableAtBuild bool
+	MountAsFile      bool
+	Version          int
+}
+
+// Stored returns a stored variable with its value and settings.
+func (f *Fake) Stored(scopeID, envID, key string) (StoredVariable, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Clone(f.reveals)
+	v, ok := f.vars[varKey(scopeID, envID)][key]
+	if !ok {
+		return StoredVariable{}, false
+	}
+	return StoredVariable{Value: v.value, Tier: v.tier(), Locked: v.locked, AvailableAtBuild: v.build, MountAsFile: v.file, Version: v.version}, true
 }
 
 // Variable returns a stored variable's raw value and secret flag.
@@ -533,11 +553,9 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteServiceConfig:   {"services:read", f.serviceConfig},
 		api.RouteServiceVars:     {"variables:read", f.listVars},
 		api.RoutePutServiceVars:  {"variables:manage", f.putVars},
-		api.RouteRevealService:   {"variables:reveal", f.revealVars},
 		api.RouteResolveVars:     {"variables:read_plain", f.resolveVars},
 		api.RouteSharedVars:      {"variables:read", f.listVars},
 		api.RoutePutSharedVars:   {"variables:manage", f.putVars},
-		api.RouteRevealShared:    {"variables:reveal", f.revealVars},
 		api.RouteListDeployments: {"services:read", f.listDeployments},
 		api.RouteCreateDeploy:    {"deployments:create", f.createDeployment},
 		api.RouteGetDeployment:   {"services:read", f.getDeployment},
@@ -887,13 +905,23 @@ func (f *Fake) varScope(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return varKey(scopeID, env), true
 }
 
-func (f *Fake) listed(key string) []api.Variable {
+func (v *variable) tier() string {
+	if v.secret {
+		return api.TierSecret
+	}
+	return api.TierPlain
+}
+
+// listed is a scope's variables as the API lists them: never a secret's
+// value, and a plain one only when plain is set.
+func (f *Fake) listed(key string, plain bool) []api.Variable {
 	out := []api.Variable{}
 	vars := f.vars[key]
 	for _, k := range slices.Sorted(mapKeys(vars)) {
 		v := vars[k]
-		item := api.Variable{Key: k, IsSecret: v.secret, Version: v.version, UpdatedAt: Now}
-		if !v.secret {
+		item := api.Variable{Key: k, Tier: v.tier(), Locked: v.locked, Fingerprint: str(fingerprint(v.value)),
+			AvailableAtBuild: v.build, MountAsFile: v.file, Version: v.version, UpdatedAt: Now, UpdatedBy: str(cmp.Or(v.updatedBy, f.user.ID))}
+		if !v.secret && plain {
 			item.Value = str(v.value)
 		}
 		out = append(out, item)
@@ -903,7 +931,7 @@ func (f *Fake) listed(key string) []api.Variable {
 
 func (f *Fake) listVars(w http.ResponseWriter, r *http.Request) {
 	if key, ok := f.varScope(w, r); ok {
-		writeJSON(w, http.StatusOK, map[string]any{"variables": f.listed(key)})
+		writeJSON(w, http.StatusOK, map[string]any{"variables": f.listed(key, callerOf(r).can("variables:read_plain"))})
 	}
 }
 
@@ -914,25 +942,32 @@ func utf16Offset(s string, b int) int {
 	return len(utf16.Encode([]rune(s[:b])))
 }
 
+// putVars mirrors putVariables in apps/api/src/lib/variables.ts: the whole
+// write is refused, nothing stored, for a malformed reference, a stale
+// expected_version, a tier the classifier forbids, an unacknowledged public
+// credential, or a key becoming secret without confirm_write_only.
 func (f *Fake) putVars(w http.ResponseWriter, r *http.Request) {
 	key, ok := f.varScope(w, r)
 	if !ok {
 		return
 	}
 	var in api.VariablesPut
-	if decode(r, &in) != nil || len(in.Set) > 256 || len(in.Delete) > 256 {
+	if decode(r, &in) != nil || len(in.Set) > 256 || len(in.Delete) > 256 || len(in.AcknowledgePublic) > 256 {
 		apiError(w, http.StatusBadRequest, "invalid_request", "invalid body")
 		return
 	}
 	var details []api.ErrorDetail
 	for _, s := range in.Set {
-		if !keyPattern.MatchString(s.Key) {
-			apiError(w, http.StatusBadRequest, "invalid_request", "set.key: expected a name like DATABASE_URL")
+		if !keyPattern.MatchString(s.Key) || (s.Tier != "" && s.Tier != api.TierPlain && s.Tier != api.TierSecret) {
+			apiError(w, http.StatusBadRequest, "invalid_request", "set: expected a name like DATABASE_URL and a tier of plain or secret")
 			return
 		}
-		_, errs := parseValue(s.Value)
+		if s.Value == nil {
+			continue
+		}
+		_, errs := parseValue(*s.Value)
 		for _, e := range errs {
-			start, end := utf16Offset(s.Value, e.start), utf16Offset(s.Value, e.end)
+			start, end := utf16Offset(*s.Value, e.start), utf16Offset(*s.Value, e.end)
 			details = append(details, api.ErrorDetail{Field: s.Key, Code: e.code, Message: e.message, Start: &start, End: &end})
 		}
 	}
@@ -941,47 +976,100 @@ func (f *Fake) putVars(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "invalid_reference", fmt.Sprintf("%s: %s (at %d-%d)", d.Field, d.Message, *d.Start, *d.End), details...)
 		return
 	}
+
+	type plannedWrite struct {
+		set    api.VariableSet
+		value  string
+		secret bool
+		locked bool
+	}
+	var planned []plannedWrite
+	var problems []api.ErrorDetail
+	var needAck, needConfirm []string
+	warnings := []api.VariableWarning{}
+	for _, s := range in.Set {
+		prior := f.vars[key][s.Key]
+		if s.ExpectedVersion != nil && prior != nil && prior.version != *s.ExpectedVersion {
+			apiError(w, http.StatusConflict, "conflict", fmt.Sprintf("%s changed since version %d", s.Key, *s.ExpectedVersion))
+			return
+		}
+		if s.Value == nil && prior == nil {
+			problems = append(problems, api.ErrorDetail{Field: s.Key, Code: "value_required", Message: "A new variable needs a value"})
+			continue
+		}
+		value := ""
+		if s.Value != nil {
+			value = *s.Value
+		} else {
+			value = prior.value
+		}
+		c := classify(s.Key, value)
+		secret, problem := decideTier(c, s.Tier, prior, s.Value != nil)
+		if problem != nil {
+			problems = append(problems, api.ErrorDetail{Field: s.Key, Code: problem.code, Message: problem.message})
+			continue
+		}
+		for _, wn := range c.warnings {
+			if wn.code == "public_prefix_secret_value" && !slices.Contains(in.AcknowledgePublic, s.Key) {
+				needAck = append(needAck, s.Key)
+			}
+			warnings = append(warnings, api.VariableWarning{Key: s.Key, Code: wn.code, Message: wn.message})
+		}
+		if secret && len([]rune(value)) > 0 && len([]rune(value)) < 6 {
+			warnings = append(warnings, api.VariableWarning{Key: s.Key, Code: "secret_too_short_to_redact",
+				Message: s.Key + " is shorter than 6 characters, so it can't be redacted from logs"})
+		}
+		if secret && (prior == nil || !prior.secret) {
+			needConfirm = append(needConfirm, s.Key)
+		}
+		planned = append(planned, plannedWrite{set: s, value: value, secret: secret, locked: c.locked})
+	}
+	if len(problems) > 0 {
+		p := problems[0]
+		apiError(w, http.StatusBadRequest, p.Code, p.Field+": "+p.Message, problems...)
+		return
+	}
+	if len(needAck) > 0 {
+		ack := make([]api.ErrorDetail, len(needAck))
+		for i, k := range needAck {
+			ack[i] = api.ErrorDetail{Field: k, Code: "public_prefix_secret_value", Message: "Looks like a credential"}
+		}
+		apiError(w, http.StatusBadRequest, "public_prefix_secret_value",
+			strings.Join(needAck, ", ")+" will ship to every browser but looks like a credential; add it to acknowledge_public to store anyway", ack...)
+		return
+	}
+	if len(needConfirm) > 0 && !in.ConfirmWriteOnly {
+		confirm := make([]api.ErrorDetail, len(needConfirm))
+		for i, k := range needConfirm {
+			confirm[i] = api.ErrorDetail{Field: k, Code: "confirmation_required", Message: "Becomes write-only"}
+		}
+		apiError(w, http.StatusBadRequest, "confirmation_required",
+			strings.Join(needConfirm, ", ")+" will be write-only: nobody can read it back. Resend with confirm_write_only to continue", confirm...)
+		return
+	}
+
 	if f.vars[key] == nil {
 		f.vars[key] = map[string]*variable{}
 	}
-	for _, s := range in.Set {
-		v := f.vars[key][s.Key]
+	for _, p := range planned {
+		v := f.vars[key][p.set.Key]
 		if v == nil {
 			v = &variable{}
-			f.vars[key][s.Key] = v
+			f.vars[key][p.set.Key] = v
 		}
-		v.value = s.Value
+		v.value, v.secret, v.locked, v.updatedBy = p.value, p.secret, p.locked, f.user.ID
+		if p.set.AvailableAtBuild != nil {
+			v.build = *p.set.AvailableAtBuild
+		}
+		if p.set.MountAsFile != nil {
+			v.file = *p.set.MountAsFile
+		}
 		v.version++
-		if s.IsSecret != nil {
-			v.secret = *s.IsSecret
-		}
 	}
 	for _, k := range in.Delete {
 		delete(f.vars[key], k)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"variables": f.listed(key)})
-}
-
-func (f *Fake) revealVars(w http.ResponseWriter, r *http.Request) {
-	key, ok := f.varScope(w, r)
-	if !ok {
-		return
-	}
-	var in struct {
-		Keys []string `json:"keys"`
-	}
-	if decode(r, &in) != nil || len(in.Keys) == 0 || len(in.Keys) > 256 {
-		apiError(w, http.StatusBadRequest, "invalid_request", "keys: expected 1-256 keys")
-		return
-	}
-	f.reveals = append(f.reveals, slices.Clone(in.Keys))
-	out := []api.RevealedVariable{}
-	for _, k := range in.Keys {
-		if v, ok := f.vars[key][k]; ok {
-			out = append(out, api.RevealedVariable{Key: k, Value: v.value})
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"variables": out})
+	writeJSON(w, http.StatusOK, api.VariablesPutResult{Variables: f.listed(key, callerOf(r).can("variables:read_plain")), Warnings: warnings})
 }
 
 // resolveVars mirrors the resolved route in apps/api/src/routes/variables.ts:

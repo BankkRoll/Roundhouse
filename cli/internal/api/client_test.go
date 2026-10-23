@@ -120,7 +120,7 @@ func TestTraceRedactsSecrets(t *testing.T) {
 		Logger:          slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		OnSessionCookie: func(ck *http.Cookie) { rotated = ck },
 	})
-	if _, err := c.RevealVariables(context.Background(), VariableScope{ServiceID: "svc"}, "env", []string{"K"}); err != nil {
+	if _, err := c.ListVariables(context.Background(), VariableScope{ServiceID: "svc"}, "env"); err != nil {
 		t.Fatal(err)
 	}
 	out := logs.String()

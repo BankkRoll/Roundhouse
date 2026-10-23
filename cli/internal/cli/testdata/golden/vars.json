@@ -1,37 +1,62 @@
 [
   {
     "key": "API_KEY",
+    "tier": "secret",
+    "locked": false,
     "value": null,
-    "is_secret": true,
+    "fingerprint": "b628e375",
+    "available_at_build": true,
+    "mount_as_file": false,
     "version": 1,
-    "updated_at": 1792670400000
+    "updated_at": 1792670400000,
+    "updated_by": "usr_ada"
   },
   {
     "key": "DATABASE_URL",
+    "tier": "plain",
+    "locked": false,
     "value": "postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.ROUNDHOUSE_PRIVATE_DOMAIN}}:${{db.PORT}}/shop",
-    "is_secret": false,
+    "fingerprint": "48b4796f",
+    "available_at_build": false,
+    "mount_as_file": false,
     "version": 2,
-    "updated_at": 1792670400000
+    "updated_at": 1792670400000,
+    "updated_by": "usr_ada"
   },
   {
     "key": "LISTEN",
+    "tier": "plain",
+    "locked": false,
     "value": "0.0.0.0:${{PORT}}",
-    "is_secret": false,
+    "fingerprint": "9a3c883e",
+    "available_at_build": false,
+    "mount_as_file": false,
     "version": 1,
-    "updated_at": 1792670400000
+    "updated_at": 1792670400000,
+    "updated_by": "usr_ada"
   },
   {
     "key": "NODE_ENV",
+    "tier": "plain",
+    "locked": false,
     "value": "production",
-    "is_secret": false,
+    "fingerprint": "16cb4f13",
+    "available_at_build": false,
+    "mount_as_file": false,
     "version": 1,
-    "updated_at": 1792670400000
+    "updated_at": 1792670400000,
+    "updated_by": "usr_ada"
   },
   {
     "key": "REGION",
+    "tier": "plain",
+    "locked": false,
     "value": "${{shared.REGION}}",
-    "is_secret": false,
+    "fingerprint": "26327a9c",
+    "available_at_build": false,
+    "mount_as_file": false,
     "version": 1,
-    "updated_at": 1792670400000
+    "updated_at": 1792670400000,
+    "updated_by": "usr_ada"
   }
 ]

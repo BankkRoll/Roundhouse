@@ -303,8 +303,9 @@ var redactedHeaders = map[string]bool{
 
 // tracingTransport logs each request and response with secrets redacted.
 //
-// SECURITY: bodies are never logged: they carry passwords, variable values
-// and revealed secrets. Credential headers are replaced with "[REDACTED]".
+// SECURITY: bodies are never logged: they carry passwords, variable values,
+// secrets being written and token secrets. Credential headers are replaced
+// with "[REDACTED]".
 type tracingTransport struct {
 	next http.RoundTripper
 	log  *slog.Logger

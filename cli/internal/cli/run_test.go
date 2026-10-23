@@ -61,7 +61,7 @@ func TestRunInjectsResolvedVariables(t *testing.T) {
 		t.Errorf("env order = %v", h.execEnv)
 	}
 
-	// One audited resolve call, no reveals and no client-side resolution.
+	// One audited resolve call and no client-side resolution.
 	var resolves int
 	for _, req := range h.fake.Requests() {
 		switch req.Pattern {
@@ -70,12 +70,12 @@ func TestRunInjectsResolvedVariables(t *testing.T) {
 			if req.Path != "/v1/services/svc_api/variables/resolved" || req.Query != "environment_id="+apitest.ProductionID || req.Body != "" {
 				t.Errorf("resolve request = %+v", req)
 			}
-		case "POST /v1/services/{serviceId}/variables/reveal", "GET /v1/services/{serviceId}/variables", "GET /v1/projects/{projectId}/variables":
+		case "GET /v1/services/{serviceId}/variables", "GET /v1/projects/{projectId}/variables":
 			t.Errorf("run fetched %s; the control plane resolves", req.Pattern)
 		}
 	}
-	if resolves != 1 || len(h.fake.Reveals()) != 0 {
-		t.Errorf("%d resolve calls, %d reveals", resolves, len(h.fake.Reveals()))
+	if resolves != 1 {
+		t.Errorf("%d resolve calls, want 1", resolves)
 	}
 	contains(t, r.stderr, "warning: .env does not set 2 secret variables, which the control plane never sends: API_KEY, DATABASE_URL")
 	contains(t, r.stderr, "warning: injecting 10 variables from API (production) into `node`; resolved by the control plane (audited)")

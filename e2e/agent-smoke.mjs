@@ -151,6 +151,9 @@ try {
     "smoke-node",
     "--config",
     config,
+    // The Linux default is /var/lib/roundhouse, which an unprivileged CI user can't create.
+    "--data-dir",
+    join(work, "agent", "data"),
   ]);
 
   log("running agent");

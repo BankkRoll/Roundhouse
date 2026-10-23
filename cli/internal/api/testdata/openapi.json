@@ -146,9 +146,34 @@
               "github.app_created",
               "github.installation_added",
               "github.installation_rejected",
+              "github.installation_released",
               "instance.settings_updated",
+              "instance.admin_granted",
+              "instance.admin_revoked",
+              "instance.key_rotation_started",
+              "instance.key_rotation_completed",
+              "instance.key_rotation_failed",
               "token.created",
-              "token.revoked"
+              "token.revoked",
+              "workspace.access_settings_updated",
+              "team.created",
+              "team.updated",
+              "team.deleted",
+              "team.member_added",
+              "team.member_removed",
+              "access.granted",
+              "access.changed",
+              "access.revoked",
+              "environment.protection_updated",
+              "node.encryption_key_registered",
+              "auth.sign_in_succeeded",
+              "auth.sign_in_failed",
+              "auth.account_locked",
+              "auth.reauthenticated",
+              "auth.two_factor_enabled",
+              "auth.two_factor_disabled",
+              "auth.backup_codes_regenerated",
+              "auth.two_factor_failed"
             ],
             "type": "string"
           },
@@ -340,6 +365,21 @@
           "dockerfile_path": {
             "example": "apps/web",
             "type": "string"
+          },
+          "secret_build_args": {
+            "description": "Names of build_args whose values are secret. The builder passes them as BuildKit secrets (read them with RUN --mount=type=secret,id=NAME,env=NAME), never as build args, so they stay out of the image and its history, and redacts them from build logs.",
+            "example": [
+              "NPM_TOKEN"
+            ],
+            "items": {
+              "example": "DATABASE_URL",
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
           }
         },
         "required": [
@@ -367,7 +407,7 @@
             "items": {
               "$ref": "#/components/schemas/ApiTokenScope"
             },
-            "maxItems": 17,
+            "maxItems": 20,
             "minItems": 1,
             "type": "array"
           }
@@ -473,6 +513,21 @@
                   "dockerfile_path": {
                     "example": "apps/web",
                     "type": "string"
+                  },
+                  "secret_build_args": {
+                    "description": "Names of build_args whose values are secret. The builder passes them as BuildKit secrets (read them with RUN --mount=type=secret,id=NAME,env=NAME), never as build args, so they stay out of the image and its history, and redacts them from build logs.",
+                    "example": [
+                      "NPM_TOKEN"
+                    ],
+                    "items": {
+                      "example": "DATABASE_URL",
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
                   }
                 },
                 "type": "object"
@@ -1879,32 +1934,6 @@
         ],
         "type": "object"
       },
-      "RevealedVariables": {
-        "properties": {
-          "variables": {
-            "items": {
-              "properties": {
-                "key": {
-                  "type": "string"
-                },
-                "value": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "key",
-                "value"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "variables"
-        ],
-        "type": "object"
-      },
       "Role": {
         "enum": [
           "owner",
@@ -2051,6 +2080,21 @@
               "dockerfile_path": {
                 "example": "apps/web",
                 "type": "string"
+              },
+              "secret_build_args": {
+                "description": "Names of build_args whose values are secret. The builder passes them as BuildKit secrets (read them with RUN --mount=type=secret,id=NAME,env=NAME), never as build args, so they stay out of the image and its history, and redacts them from build logs.",
+                "example": [
+                  "NPM_TOKEN"
+                ],
+                "items": {
+                  "example": "DATABASE_URL",
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": "array"
               }
             },
             "type": "object"
@@ -2172,10 +2216,10 @@
               "branch": {
                 "maxLength": 255,
                 "minLength": 1,
-                "pattern": "^[A-Za-z0-9._/-]+$",
                 "type": "string"
               },
               "github_installation_id": {
+                "description": "Our ID (ghi_…) of a GitHub App installation the service's workspace claimed and that can read repo_url, which must then be https://github.com/<owner>/<repo>. Tokens minted for it are scoped to that one repository.",
                 "type": "string"
               },
               "repo_url": {
@@ -2334,16 +2378,37 @@
       },
       "Variable": {
         "properties": {
-          "is_secret": {
+          "available_at_build": {
             "type": "boolean"
+          },
+          "fingerprint": {
+            "pattern": "^[a-f0-9]{8}$",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "key": {
             "type": "string"
           },
+          "locked": {
+            "type": "boolean"
+          },
+          "mount_as_file": {
+            "type": "boolean"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/VariableTier"
+          },
           "updated_at": {
             "description": "Unix time in milliseconds",
-            "example": 1767225600000,
             "type": "integer"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "value": {
             "type": [
@@ -2358,10 +2423,15 @@
         },
         "required": [
           "key",
+          "tier",
+          "locked",
           "value",
-          "is_secret",
+          "fingerprint",
+          "available_at_build",
+          "mount_as_file",
           "version",
-          "updated_at"
+          "updated_at",
+          "updated_by"
         ],
         "type": "object"
       },
@@ -2379,8 +2449,86 @@
         ],
         "type": "object"
       },
+      "VariableSetEntry": {
+        "properties": {
+          "available_at_build": {
+            "type": "boolean"
+          },
+          "expected_version": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "key": {
+            "example": "DATABASE_URL",
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "mount_as_file": {
+            "type": "boolean"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/VariableTier"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "VariableTier": {
+        "enum": [
+          "plain",
+          "secret"
+        ],
+        "type": "string"
+      },
+      "VariableWarning": {
+        "properties": {
+          "code": {
+            "enum": [
+              "public_prefix_secret_value",
+              "public_prefix_secret_name",
+              "secret_too_short_to_redact"
+            ],
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
       "VariablesPut": {
         "properties": {
+          "acknowledge_public": {
+            "default": [],
+            "items": {
+              "example": "DATABASE_URL",
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "confirm_write_only": {
+            "default": false,
+            "type": "boolean"
+          },
           "delete": {
             "default": [],
             "items": {
@@ -2396,26 +2544,7 @@
           "set": {
             "default": [],
             "items": {
-              "properties": {
-                "is_secret": {
-                  "type": "boolean"
-                },
-                "key": {
-                  "example": "DATABASE_URL",
-                  "maxLength": 256,
-                  "minLength": 1,
-                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-                  "type": "string"
-                },
-                "value": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "key",
-                "value"
-              ],
-              "type": "object"
+              "$ref": "#/components/schemas/VariableSetEntry"
             },
             "maxItems": 256,
             "type": "array"
@@ -2423,23 +2552,24 @@
         },
         "type": "object"
       },
-      "VariablesReveal": {
+      "VariablesPutResult": {
         "properties": {
-          "keys": {
+          "variables": {
             "items": {
-              "example": "DATABASE_URL",
-              "maxLength": 256,
-              "minLength": 1,
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-              "type": "string"
+              "$ref": "#/components/schemas/Variable"
             },
-            "maxItems": 256,
-            "minItems": 1,
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/VariableWarning"
+            },
             "type": "array"
           }
         },
         "required": [
-          "keys"
+          "variables",
+          "warnings"
         ],
         "type": "object"
       },
@@ -3035,7 +3165,7 @@
           "github"
         ],
         "x-roundhouse-policy": {
-          "action": "projects:manage",
+          "action": "github:manage",
           "audit": [
             "github.app_created",
             "github.installation_added",
@@ -3121,7 +3251,8 @@
         "x-roundhouse-policy": {
           "action": "instance:manage",
           "audit": [],
-          "auth": "session_only"
+          "auth": "session_only",
+          "reauth": true
         }
       }
     },
@@ -3139,6 +3270,14 @@
           {
             "in": "query",
             "name": "installation_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_id",
             "required": false,
             "schema": {
               "type": "string"
@@ -3304,7 +3443,7 @@
           "github"
         ],
         "x-roundhouse-policy": {
-          "action": "projects:read",
+          "action": "workspace:read",
           "audit": [],
           "auth": "session"
         }
@@ -3426,7 +3565,8 @@
           "audit": [
             "instance.settings_updated"
           ],
-          "auth": "session_only"
+          "auth": "session_only",
+          "reauth": true
         }
       }
     },
@@ -3654,6 +3794,9 @@
                             "null"
                           ]
                         },
+                        "instance_admin": {
+                          "type": "boolean"
+                        },
                         "name": {
                           "type": "string"
                         }
@@ -3662,7 +3805,8 @@
                         "id",
                         "name",
                         "email",
-                        "image"
+                        "image",
+                        "instance_admin"
                       ],
                       "type": "object"
                     },
@@ -3768,6 +3912,10 @@
                       "builder"
                     ],
                     "type": "object"
+                  },
+                  "encryption_public_key": {
+                    "pattern": "^[A-Za-z0-9+/]{43}=$",
+                    "type": "string"
                   },
                   "hardware": {
                     "properties": {
@@ -4587,6 +4735,16 @@
               }
             },
             "description": "Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
           }
         },
         "security": [
@@ -4825,7 +4983,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/VariableList"
+                  "$ref": "#/components/schemas/VariablesPutResult"
                 }
               }
             },
@@ -4862,6 +5020,16 @@
             "description": "Error"
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4888,109 +5056,6 @@
           "action": "variables:manage",
           "audit": [
             "variables.updated"
-          ],
-          "auth": "session"
-        }
-      }
-    },
-    "/v1/projects/{projectId}/variables/reveal": {
-      "post": {
-        "parameters": [
-          {
-            "in": "path",
-            "name": "projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "environment_id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/VariablesReveal"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RevealedVariables"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "security": [
-          {
-            "session": []
-          },
-          {
-            "api_token": []
-          }
-        ],
-        "summary": "Reveal shared secret values",
-        "tags": [
-          "variables"
-        ],
-        "x-roundhouse-policy": {
-          "action": "variables:reveal",
-          "audit": [
-            "variables.revealed"
           ],
           "auth": "session"
         }
@@ -5207,6 +5272,16 @@
             "description": "Error"
           },
           "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "502": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5777,7 +5852,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/VariableList"
+                  "$ref": "#/components/schemas/VariablesPutResult"
                 }
               }
             },
@@ -5814,6 +5889,16 @@
             "description": "Error"
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5925,7 +6010,7 @@
             "api_token": []
           }
         ],
-        "summary": "Resolve a service's plain environment",
+        "summary": "Resolve a service's plain variables for local runs",
         "tags": [
           "variables"
         ],
@@ -5933,109 +6018,6 @@
           "action": "variables:read_plain",
           "audit": [
             "variables.resolved"
-          ],
-          "auth": "session"
-        }
-      }
-    },
-    "/v1/services/{serviceId}/variables/reveal": {
-      "post": {
-        "parameters": [
-          {
-            "in": "path",
-            "name": "serviceId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "environment_id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/VariablesReveal"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RevealedVariables"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "security": [
-          {
-            "session": []
-          },
-          {
-            "api_token": []
-          }
-        ],
-        "summary": "Reveal a service's secret values",
-        "tags": [
-          "variables"
-        ],
-        "x-roundhouse-policy": {
-          "action": "variables:reveal",
-          "audit": [
-            "variables.revealed"
           ],
           "auth": "session"
         }
@@ -7502,6 +7484,16 @@
             },
             "description": "OK"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
           "401": {
             "content": {
               "application/json": {
@@ -7647,7 +7639,7 @@
           "projects"
         ],
         "x-roundhouse-policy": {
-          "action": "projects:manage",
+          "action": "projects:create",
           "audit": [
             "project.created"
           ],

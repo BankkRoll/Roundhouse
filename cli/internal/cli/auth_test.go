@@ -190,8 +190,8 @@ func TestBearerTokenEndToEnd(t *testing.T) {
 	}
 
 	// Outside its scopes: 403 with a hint about the token.
-	r = h.expect(exitcode.Forbidden, "", "vars", "--reveal", "--insecure")
-	contains(t, r.stderr, "lacks the variables:reveal scope")
+	r = h.expect(exitcode.Forbidden, "", "servers", "add", "--insecure")
+	contains(t, r.stderr, "lacks the nodes:manage scope")
 	contains(t, r.stderr, "hint: the API token lacks a scope")
 
 	// Revoked: 401 with a hint about the token, not about logging in.

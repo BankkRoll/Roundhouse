@@ -22,11 +22,9 @@ var (
 	RouteServiceConfig   = Route{http.MethodGet, "/v1/services/{serviceId}/config"}
 	RouteServiceVars     = Route{http.MethodGet, "/v1/services/{serviceId}/variables"}
 	RoutePutServiceVars  = Route{http.MethodPut, "/v1/services/{serviceId}/variables"}
-	RouteRevealService   = Route{http.MethodPost, "/v1/services/{serviceId}/variables/reveal"}
 	RouteResolveVars     = Route{http.MethodGet, "/v1/services/{serviceId}/variables/resolved"}
 	RouteSharedVars      = Route{http.MethodGet, "/v1/projects/{projectId}/variables"}
 	RoutePutSharedVars   = Route{http.MethodPut, "/v1/projects/{projectId}/variables"}
-	RouteRevealShared    = Route{http.MethodPost, "/v1/projects/{projectId}/variables/reveal"}
 	RouteListDeployments = Route{http.MethodGet, "/v1/services/{serviceId}/deployments"}
 	RouteCreateDeploy    = Route{http.MethodPost, "/v1/services/{serviceId}/deployments"}
 	RouteGetDeployment   = Route{http.MethodGet, "/v1/deployments/{deploymentId}"}
@@ -54,8 +52,8 @@ var (
 var Routes = []Route{
 	RouteMe, RouteListProjects, RouteCreateProject, RouteGetProject, RouteDeleteProject,
 	RouteListServices, RouteCreateService, RouteGetService, RouteDeleteService, RouteServiceConfig,
-	RouteServiceVars, RoutePutServiceVars, RouteRevealService, RouteResolveVars,
-	RouteSharedVars, RoutePutSharedVars, RouteRevealShared,
+	RouteServiceVars, RoutePutServiceVars, RouteResolveVars,
+	RouteSharedVars, RoutePutSharedVars,
 	RouteListDeployments, RouteCreateDeploy, RouteGetDeployment, RouteRollback, RouteCancel,
 	RouteDeploymentLogs, RouteBuildLogs, RouteListDomains, RouteListNodes, RouteJoinToken,
 	RouteRealtime, RouteListTokens, RouteCreateToken, RouteRevokeToken,
@@ -233,16 +231,17 @@ type VariableScope struct {
 	ProjectID string
 }
 
-func (s VariableScope) routes() (list, put, reveal Route, id string) {
+func (s VariableScope) routes() (list, put Route, id string) {
 	if s.ServiceID != "" {
-		return RouteServiceVars, RoutePutServiceVars, RouteRevealService, s.ServiceID
+		return RouteServiceVars, RoutePutServiceVars, s.ServiceID
 	}
-	return RouteSharedVars, RoutePutSharedVars, RouteRevealShared, s.ProjectID
+	return RouteSharedVars, RoutePutSharedVars, s.ProjectID
 }
 
-// ListVariables lists a scope's variables with secrets masked.
+// ListVariables lists a scope's variables. Secret values are never returned,
+// and plain ones only to callers with variables:read_plain.
 func (c *Client) ListVariables(ctx context.Context, scope VariableScope, environmentID string) ([]Variable, error) {
-	list, _, _, id := scope.routes()
+	list, _, id := scope.routes()
 	var out struct {
 		Variables []Variable `json:"variables"`
 	}
@@ -252,36 +251,18 @@ func (c *Client) ListVariables(ctx context.Context, scope VariableScope, environ
 	return out.Variables, nil
 }
 
-// PutVariables sets and deletes variables in one transaction and returns
-// the scope's full masked list.
-func (c *Client) PutVariables(ctx context.Context, scope VariableScope, environmentID string, in VariablesPut) ([]Variable, error) {
-	_, put, _, id := scope.routes()
+// PutVariables sets and deletes variables in one transaction and returns the
+// scope's full list with the classifier's warnings. Nothing is stored when
+// the API refuses any entry.
+func (c *Client) PutVariables(ctx context.Context, scope VariableScope, environmentID string, in VariablesPut) (*VariablesPutResult, error) {
+	_, put, id := scope.routes()
 	if in.Set == nil {
 		in.Set = []VariableSet{}
 	}
 	if in.Delete == nil {
 		in.Delete = []string{}
 	}
-	var out struct {
-		Variables []Variable `json:"variables"`
-	}
-	if err := c.call(ctx, put, envQuery(environmentID), in, &out, id); err != nil {
-		return nil, err
-	}
-	return out.Variables, nil
-}
-
-// RevealVariables returns plaintext for keys. The control plane audits
-// every reveal (keys only, never values).
-func (c *Client) RevealVariables(ctx context.Context, scope VariableScope, environmentID string, keys []string) ([]RevealedVariable, error) {
-	_, _, reveal, id := scope.routes()
-	var out struct {
-		Variables []RevealedVariable `json:"variables"`
-	}
-	if err := c.call(ctx, reveal, envQuery(environmentID), map[string]any{"keys": keys}, &out, id); err != nil {
-		return nil, err
-	}
-	return out.Variables, nil
+	return fetch[VariablesPutResult](ctx, c, put, envQuery(environmentID), in, id)
 }
 
 // ResolveVariables returns a service's plain environment as a deployment in

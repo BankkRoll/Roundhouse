@@ -467,8 +467,13 @@ func (a *App) errorHint(err error) string {
 	switch {
 	case errors.As(err, &apiErr):
 		status = apiErr.Status
-		if strings.HasPrefix(apiErr.Code, "invalid_email") {
+		switch {
+		case strings.HasPrefix(apiErr.Code, "invalid_email"):
 			return ""
+		case apiErr.Code == "confirmation_required":
+			return "secrets are write-only; pass --yes to store them as secrets anyway, or --plain to keep them readable"
+		case apiErr.Code == "public_prefix_secret_value":
+			return "public-prefix variables are bundled into client code; pass --acknowledge-public to store them anyway, or drop the prefix and store a secret"
 		}
 	case errors.As(err, &closed) && closed.Code == api.CloseUnauthorized:
 		status = http.StatusUnauthorized

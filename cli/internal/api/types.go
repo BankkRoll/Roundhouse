@@ -128,33 +128,86 @@ type CreatedService struct {
 	Configs []ServiceConfig `json:"configs"`
 }
 
-// Variable is a variable as listed. Value is nil for secrets until revealed.
+// Variable tiers, from VARIABLE_TIERS in packages/shared.
+const (
+	// TierPlain values are readable by callers with variables:read_plain.
+	TierPlain = "plain"
+	// TierSecret values are write-only: no route ever returns them.
+	TierSecret = "secret"
+)
+
+// Variable is a variable as listed. Value is set only for plain variables,
+// and only when the caller may read plain values; a secret's value never
+// leaves the control plane.
 type Variable struct {
-	Key       string  `json:"key"`
-	Value     *string `json:"value"`
-	IsSecret  bool    `json:"is_secret"`
-	Version   int     `json:"version"`
-	UpdatedAt int64   `json:"updated_at"`
+	Key string `json:"key"`
+	// Tier is [TierPlain] or [TierSecret].
+	Tier string `json:"tier"`
+	// Locked means the classifier fixed the tier (a public prefix or a known
+	// credential format) and no write can change it.
+	Locked bool    `json:"locked"`
+	Value  *string `json:"value"`
+	// Fingerprint is 8 hex characters of a keyed hash of the value, equal
+	// for equal values within a project, so values can be told apart
+	// without being shown. Nil until the control plane has computed it.
+	Fingerprint *string `json:"fingerprint"`
+	// AvailableAtBuild passes the variable to builds: plain ones as build
+	// args, secrets as BuildKit secrets.
+	AvailableAtBuild bool `json:"available_at_build"`
+	// MountAsFile delivers the value as the file /run/secrets/KEY instead
+	// of an environment variable.
+	MountAsFile bool  `json:"mount_as_file"`
+	Version     int   `json:"version"`
+	UpdatedAt   int64 `json:"updated_at"`
+	// UpdatedBy is the ID of the user who last wrote the variable.
+	UpdatedBy *string `json:"updated_by"`
 }
 
-// VariableSet is one entry of [VariablesPut.Set].
+// Secret reports whether v is write-only.
+func (v Variable) Secret() bool { return v.Tier == TierSecret }
+
+// VariableSet is one entry of [VariablesPut.Set]. Nil and empty fields keep
+// the stored setting; for a new variable the control plane's classifier
+// picks the tier and the flags default to false.
 type VariableSet struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
-	// IsSecret nil keeps an existing variable's flag (false for new ones).
-	IsSecret *bool `json:"is_secret,omitempty"`
+	Key string `json:"key"`
+	// Value nil changes only the tier or flags of an existing variable.
+	Value *string `json:"value,omitempty"`
+	// Tier is [TierPlain], [TierSecret], or "" to let the classifier decide.
+	Tier             string `json:"tier,omitempty"`
+	AvailableAtBuild *bool  `json:"available_at_build,omitempty"`
+	MountAsFile      *bool  `json:"mount_as_file,omitempty"`
+	// ExpectedVersion, when set, fails the write with 409 if the variable
+	// changed since that version.
+	ExpectedVersion *int `json:"expected_version,omitempty"`
 }
 
 // VariablesPut is a bulk change to the variables of one scope.
 type VariablesPut struct {
 	Set    []VariableSet `json:"set"`
 	Delete []string      `json:"delete"`
+	// ConfirmWriteOnly acknowledges that keys becoming secret can never be
+	// read back. Without it such a write fails with confirmation_required.
+	ConfirmWriteOnly bool `json:"confirm_write_only,omitempty"`
+	// AcknowledgePublic lists public-prefix keys (VITE_, NEXT_PUBLIC_, …)
+	// to store although their value looks like a credential.
+	AcknowledgePublic []string `json:"acknowledge_public,omitempty"`
 }
 
-// RevealedVariable is a plaintext value returned by a reveal route.
-type RevealedVariable struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
+// VariableWarning is a classifier note about one written variable.
+type VariableWarning struct {
+	Key string `json:"key"`
+	// Code is public_prefix_secret_value, public_prefix_secret_name or
+	// secret_too_short_to_redact.
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// VariablesPutResult is the response of a variables write: the scope's
+// full list and the classifier's warnings.
+type VariablesPutResult struct {
+	Variables []Variable        `json:"variables"`
+	Warnings  []VariableWarning `json:"warnings"`
 }
 
 // Build is an image build.
