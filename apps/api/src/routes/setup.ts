@@ -12,6 +12,7 @@ import { recordAudit } from "../lib/audit";
 import { forwardCookies } from "../lib/cookies";
 import { constantTimeEqual, isValidMasterKey } from "../lib/crypto";
 import { ApiError } from "../lib/errors";
+import { hasPublicOrigin, publicOrigin } from "../lib/origin";
 import {
   claimSetupLock,
   createSigningKey,
@@ -22,7 +23,12 @@ import {
 import { createWorkspace } from "../lib/workspaces";
 import { body, errors, json } from "../schemas";
 
-const SetupStatus = z.object({ needs_setup: z.boolean(), master_key_configured: z.boolean() });
+const SetupStatus = z.object({
+  needs_setup: z.boolean(),
+  master_key_configured: z.boolean(),
+  /** `PUBLIC_ORIGIN` is valid (or development falls back to the request origin). */
+  public_origin_configured: z.boolean(),
+});
 
 const SetupBody = z.object({
   /** Proves the caller controls this install; see the SECURITY note in the handler. */
@@ -60,12 +66,14 @@ export const setupRoutes = createRouter()
       {
         needs_setup: !(await isSetupComplete(c.get("db"))),
         master_key_configured: isValidMasterKey(c.env.MASTER_KEY),
+        public_origin_configured: hasPublicOrigin(c.env),
       },
       200,
     );
   })
   .openapi(runSetup, async (c) => {
     const masterKey = requireMasterKey(c);
+    publicOrigin(c);
     const db = c.get("db");
     const input = c.req.valid("json");
 

@@ -21,6 +21,7 @@ export type ErrorCode =
   | "already_setup"
   | "setup_incomplete"
   | "master_key_missing"
+  | "public_origin_missing"
   | "invalid_token"
   | "account_exists"
   | "email_mismatch"

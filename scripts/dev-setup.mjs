@@ -2,7 +2,8 @@
 /**
  * One-time local setup that works the same in PowerShell, cmd, and POSIX
  * shells: creates `apps/api/.dev.vars` with a fresh MASTER_KEY (unless one is
- * already set) and applies the local D1 migrations.
+ * already set) and ROUNDHOUSE_DEV=1 (so PUBLIC_ORIGIN may stay unset locally),
+ * and applies the local D1 migrations.
  *
  * Usage: `pnpm setup:dev`
  */
@@ -16,7 +17,13 @@ const vars = join(apiDir, ".dev.vars");
 
 if (!existsSync(vars)) copyFileSync(join(apiDir, ".dev.vars.example"), vars);
 
-const current = readFileSync(vars, "utf8");
+let current = readFileSync(vars, "utf8");
+// .dev.vars files from before PUBLIC_ORIGIN existed lack the development flag
+// that lets the control plane fall back to the request origin.
+if (!/^ROUNDHOUSE_DEV=/m.test(current)) {
+  current = `${current.trimEnd()}\nROUNDHOUSE_DEV=1\n`;
+  writeFileSync(vars, current);
+}
 const existing = current.match(/^MASTER_KEY=(.+)$/m)?.[1]?.trim();
 let key = existing;
 if (!key) {

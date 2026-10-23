@@ -2,3 +2,13 @@
 # is derived from it, so losing it means losing access to encrypted data.
 # Generate with: openssl rand -base64 32
 MASTER_KEY=
+
+# The control plane's public URL (scheme, host, port; no path). Links,
+# cookies, OAuth metadata and the same-origin check use it, never the
+# request's Host. Leave it empty in development: with ROUNDHOUSE_DEV=1 the
+# request's own origin is used instead (the Vite proxy on :5173 keeps Host).
+PUBLIC_ORIGIN=
+
+# Local development only: allows the request-origin fallback above and lets
+# agents connect over ws://. Never set it on a deployed control plane.
+ROUNDHOUSE_DEV=1

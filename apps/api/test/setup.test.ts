@@ -22,7 +22,11 @@ describe("setup", () => {
   it("reports that setup is needed on a fresh install", async () => {
     const res = await call("/v1/setup");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ needs_setup: true, master_key_configured: true });
+    expect(await res.json()).toEqual({
+      needs_setup: true,
+      master_key_configured: true,
+      public_origin_configured: true,
+    });
   });
 
   it("creates the owner, signs them in, and closes setup", async () => {
@@ -104,7 +108,11 @@ describe("setup", () => {
     try {
       (env as { MASTER_KEY?: string }).MASTER_KEY = undefined;
       const status = await (await call("/v1/setup")).json();
-      expect(status).toEqual({ needs_setup: true, master_key_configured: false });
+      expect(status).toEqual({
+        needs_setup: true,
+        master_key_configured: false,
+        public_origin_configured: true,
+      });
 
       const res = await call("/v1/setup", {
         method: "POST",
