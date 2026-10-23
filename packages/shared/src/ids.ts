@@ -68,6 +68,8 @@ export const ID_PREFIXES = {
   dbQuery: "dbq",
   /** A published TCP port of a single-replica service (ADR 0004). */
   tcpProxy: "tcp",
+  /** One run of a cron service (ADR 0010); also its workflow instance ID. */
+  cronRun: "crn",
 } as const;
 
 /** An entity kind that has an ID prefix. */

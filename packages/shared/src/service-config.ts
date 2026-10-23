@@ -8,6 +8,7 @@
  *
  * @module
  */
+import type { CronConfig } from "./cron-jobs";
 
 /** Run an image reference as-is: no build. */
 export interface ImageSource {
@@ -144,6 +145,11 @@ export interface ServiceConfigSpec {
   healthcheck: HealthcheckConfig | null;
   networking: NetworkingConfig;
   placement: PlacementConfig;
+  /**
+   * Schedule and run rules of a `cron` service (ADR 0010); `null` (or
+   * absent, in versions written before it existed) for every other kind.
+   */
+  cron?: CronConfig | null;
 }
 
 /** PID limit applied to every replica; not user-configurable in Phase 1. */
