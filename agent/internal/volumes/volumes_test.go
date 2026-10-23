@@ -3,6 +3,7 @@ package volumes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -67,6 +68,16 @@ func eventually(t *testing.T, what string, cond func() bool) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// assignableOwner returns a uid:gid the test process may chown to: a foreign
+// owner as root, its own ids otherwise (an unprivileged chown to another user
+// fails with EPERM, as on CI runners).
+func assignableOwner() string {
+	if uid := os.Geteuid(); uid > 0 {
+		return fmt.Sprintf("%d:%d", uid, os.Getegid())
+	}
+	return "999:998"
 }
 
 func runManager(t *testing.T, m *Manager) {
@@ -183,7 +194,7 @@ func TestNoneModeCreatesOrphansAndDeletesOnlyOnRequest(t *testing.T) {
 func TestStatePersistsAcrossRestartsWithoutOrphaning(t *testing.T) {
 	leaktest.Check(t)
 	root := t.TempDir()
-	owner := "999:998"
+	owner := assignableOwner()
 	m := newManager(t, root, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -193,6 +204,11 @@ func TestStatePersistsAcrossRestartsWithoutOrphaning(t *testing.T) {
 	s.Owner = &owner
 	m.Apply(7, []protocol.VolumeSpec{s, spec("vol_c", 256)})
 	eventually(t, "both ready", func() bool {
+		for _, r := range m.Statuses() {
+			if r.State == protocol.VolumeError {
+				t.Fatalf("%s: %s", r.VolumeID, r.Message)
+			}
+		}
 		a, _ := m.VolumeReady("vol_b")
 		b, _ := m.VolumeReady("vol_c")
 		return a && b
