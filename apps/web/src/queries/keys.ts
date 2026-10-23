@@ -50,4 +50,5 @@ export const queryKeys = {
   deployment: (deploymentId: string) => ["deployments", deploymentId] as const,
   logs: (source: "deployment" | "build", id: string) => ["logs", source, id] as const,
   instanceSettings: ["instance", "settings"] as const,
+  signingKeys: ["instance", "signing-keys"] as const,
 };

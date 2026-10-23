@@ -39,6 +39,7 @@ import { type DbAuditEntry, type DbInvite, type DbMembership, db, nextId } from 
 import { deployHandlers } from "./deploy-handlers";
 import { domainHandlers } from "./domains-mock";
 import { providerHandlers } from "./providers-handlers";
+import { signingKeyHandlers } from "./signing-keys-mock";
 import { templateHandlers } from "./templates-handlers";
 
 export { apiError } from "./common";
@@ -722,7 +723,7 @@ const phase0Handlers = [
   }),
 ];
 
-/** Every route the dashboard calls: Phase 0 first, then the deploy pipeline, cloud providers and templates. */
+/** Every route the dashboard calls: Phase 0 first, then the deploy pipeline, cloud providers, templates, change sets and signing keys. */
 export const handlers = [
   ...phase0Handlers,
   ...deployHandlers,
@@ -730,4 +731,5 @@ export const handlers = [
   ...providerHandlers,
   ...templateHandlers,
   ...changeHandlers,
+  ...signingKeyHandlers,
 ];

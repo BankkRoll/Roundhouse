@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { http } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { db, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
+import { db, SIGNING_KID, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
 import { apiError } from "../../mocks/handlers";
 import { server } from "../../mocks/server";
 import { findPageHeading, renderApp } from "../../test/render";
@@ -126,6 +126,75 @@ describe("platform settings", () => {
       action: "instance.settings_updated",
       metadata: { log_retention_days: 30 },
     });
+  });
+
+  it("schedules, cancels and completes a signing key rollover", async () => {
+    const { user } = renderApp(PLATFORM);
+    const section = (await screen.findByRole("heading", { name: "Signing keys" })).closest(
+      "section",
+    ) as HTMLElement;
+    expect(await within(section).findByText(SIGNING_KID)).toBeInTheDocument();
+    expect(within(section).getByText("No rollover scheduled.")).toBeInTheDocument();
+
+    await user.selectOptions(within(section).getByLabelText("Switch after"), "72");
+    await user.click(within(section).getByRole("button", { name: "Schedule rollover" }));
+    expect(await screen.findByText("Signing key rollover scheduled")).toBeInTheDocument();
+    const next = db.signingKeys.next;
+    expect(next).not.toBeNull();
+    expect((next?.not_before ?? 0) - (next?.scheduled_at ?? 0)).toBe(72 * 3_600_000);
+    expect(await within(section).findByText(next?.kid ?? "")).toBeInTheDocument();
+    expect(within(section).getByText("Rollover scheduled")).toBeInTheDocument();
+    // The pending server hasn't connected, so it is listed as not ready.
+    expect(within(section).getByRole("list", { name: "Servers not ready" })).toHaveTextContent(
+      "Not connected yet",
+    );
+
+    await user.click(within(section).getByRole("button", { name: "Cancel rollover" }));
+    expect(await screen.findByText("Signing key rollover cancelled")).toBeInTheDocument();
+    expect(db.signingKeys.next).toBeNull();
+
+    await user.click(await within(section).findByRole("button", { name: "Schedule rollover" }));
+    await screen.findByText("Rollover scheduled");
+    const due = db.signingKeys.next;
+    if (due) due.not_before = Date.now() - 1;
+    await user.click(within(section).getByRole("button", { name: "Cancel rollover" }));
+    expect(await within(section).findByRole("alert")).toHaveTextContent(/already in use/);
+  });
+
+  it("completes a due rollover only once the admin accepts the servers left behind", async () => {
+    db.signingKeys.next = {
+      kid: "knext",
+      public_key: "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=",
+      not_before: Date.now() - 1000,
+      scheduled_at: Date.now() - 86_400_000,
+    };
+    const { user } = renderApp(PLATFORM);
+    const complete = await screen.findByRole("button", { name: "Complete rollover" });
+    expect(screen.getByText("Rollover due")).toBeInTheDocument();
+    expect(complete).toBeDisabled();
+    await user.click(screen.getByLabelText("Complete anyway"));
+    await user.click(complete);
+    expect(await screen.findByText("Signing key rollover completed")).toBeInTheDocument();
+    expect(db.signingKeys).toMatchObject({
+      current: { kid: "knext" },
+      next: null,
+      retired: { kid: SIGNING_KID },
+    });
+    expect(await screen.findByText(/Servers still pinned to it must re-join/)).toBeInTheDocument();
+  });
+
+  it("explains a refused rollover that needs a fresh sign-in", async () => {
+    server.use(
+      http.post("*/v1/instance/signing-keys/rotate", () =>
+        apiError(403, "reauth_required", "Confirm your password to continue"),
+      ),
+    );
+    const { user } = renderApp(PLATFORM);
+    await user.click(await screen.findByRole("button", { name: "Schedule rollover" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Confirm your password to continue Sign in again, then retry.",
+    );
+    expect(db.signingKeys.next).toBeNull();
   });
 
   it("shows the GitHub App, its installations and the install link", async () => {

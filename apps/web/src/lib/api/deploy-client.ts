@@ -11,6 +11,7 @@
 import { request } from "./client";
 import type {
   ApiToken,
+  CompleteSigningKeyRolloverBody,
   CreateApiTokenBody,
   CreateDeploymentBody,
   CreatedApiToken,
@@ -33,8 +34,10 @@ import type {
   ProjectDetail,
   ProjectSummary,
   ResolvedVariables,
+  ScheduleSigningKeyRolloverBody,
   Service,
   ServiceConfig,
+  SigningKeyStatus,
   UpdatedService,
   UpdateProjectBody,
   UpdateServiceBody,
@@ -404,6 +407,37 @@ export const deployApi = {
    */
   updateInstanceSettings: (body: InstanceSettingsPatch) =>
     request<InstanceSettings>("PATCH", "/v1/instance/settings", { body }),
+  /**
+   * Reads the control-plane signing keys and each server's pinned kids. Instance admins only.
+   *
+   * @param signal - Abort signal.
+   * @returns The status.
+   */
+  getSigningKeys: (signal?: AbortSignal) =>
+    request<SigningKeyStatus>("GET", "/v1/instance/signing-keys", { signal }),
+  /**
+   * Generates a successor signing key and schedules the switch. Needs a fresh session.
+   *
+   * @param body - Hours until the switch; 24 when omitted.
+   * @returns The status afterwards.
+   */
+  scheduleSigningKeyRollover: (body: ScheduleSigningKeyRolloverBody) =>
+    request<SigningKeyStatus>("POST", "/v1/instance/signing-keys/rotate", { body }),
+  /**
+   * Promotes the due successor and deletes the old private key. Needs a fresh session.
+   *
+   * @param body - `force` to complete while servers don't pin the new key.
+   * @returns The status afterwards.
+   */
+  completeSigningKeyRollover: (body: CompleteSigningKeyRolloverBody) =>
+    request<SigningKeyStatus>("POST", "/v1/instance/signing-keys/complete", { body }),
+  /**
+   * Withdraws a scheduled successor before it is used. Needs a fresh session.
+   *
+   * @returns The status afterwards.
+   */
+  cancelSigningKeyRollover: () =>
+    request<SigningKeyStatus>("DELETE", "/v1/instance/signing-keys/next"),
   /**
    * Reads whether a GitHub App exists and where it is installed.
    *

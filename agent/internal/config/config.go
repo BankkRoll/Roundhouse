@@ -43,6 +43,10 @@ type Config struct {
 	// StateFile holds state that must survive restarts, such as the observed
 	// desired-state generation.
 	StateFile string `yaml:"state_file"`
+	// ControlKeysFile holds the control-plane signing keys the node trusts,
+	// including successors announced for a rollover. Empty in configs
+	// written before rollover; see [Config.ControlKeysPath].
+	ControlKeysFile string `yaml:"control_keys_file,omitempty"`
 	// ControlKeyID is the envelope kid of ControlPublicKey, pinned from the
 	// first verified welcome. Empty until then.
 	ControlKeyID string `yaml:"control_key_id,omitempty"`
@@ -107,6 +111,9 @@ func (c Config) WithDataDir(dir, registration string) Config {
 	}
 	if c.StateFile == "" {
 		c.StateFile = filepath.Join(dir, "state"+suffix+".json")
+	}
+	if c.ControlKeysFile == "" {
+		c.ControlKeysFile = filepath.Join(dir, "control-keys"+suffix+".json")
 	}
 	if c.DataDir == "" {
 		c.DataDir = dir
@@ -214,4 +221,13 @@ func (c Config) RuntimeDir() string {
 		return c.DataDir
 	}
 	return filepath.Dir(c.StateFile)
+}
+
+// ControlKeysPath returns ControlKeysFile, or for configs written before it
+// existed a file named after StateFile, so each registration keeps its own.
+func (c Config) ControlKeysPath() string {
+	if c.ControlKeysFile != "" {
+		return c.ControlKeysFile
+	}
+	return strings.TrimSuffix(c.StateFile, filepath.Ext(c.StateFile)) + ".control-keys.json"
 }

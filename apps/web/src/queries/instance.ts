@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { deployApi } from "../lib/api/deploy-client";
-import type { GithubManifestBody, InstanceSettingsPatch } from "../lib/api/deploy-types";
+import type {
+  CompleteSigningKeyRolloverBody,
+  GithubManifestBody,
+  InstanceSettingsPatch,
+  ScheduleSigningKeyRolloverBody,
+} from "../lib/api/deploy-types";
 import { queryKeys } from "./keys";
 
 /**
@@ -71,4 +76,44 @@ export function useCreateGithubManifest() {
   return useMutation({
     mutationFn: (body: GithubManifestBody) => deployApi.createGithubManifest(body),
   });
+}
+
+/**
+ * Reads the control-plane signing keys and rollover status. Instance admins only.
+ *
+ * @param enabled - Skip for callers without `instance:manage`.
+ * @returns The status query.
+ */
+export function useSigningKeys(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.signingKeys,
+    queryFn: ({ signal }) => deployApi.getSigningKeys(signal),
+    enabled,
+    // NOTE: servers pick up an announced key as they reconnect, so the list moves on its own.
+    refetchInterval: 30_000,
+  });
+}
+
+/**
+ * Schedules, completes or cancels a signing-key rollover and caches the resulting status.
+ *
+ * @returns One mutation per action.
+ */
+export function useSigningKeyRollover() {
+  const queryClient = useQueryClient();
+  const onSuccess = (status: Awaited<ReturnType<typeof deployApi.getSigningKeys>>) =>
+    queryClient.setQueryData(queryKeys.signingKeys, status);
+  return {
+    schedule: useMutation({
+      mutationFn: (body: ScheduleSigningKeyRolloverBody) =>
+        deployApi.scheduleSigningKeyRollover(body),
+      onSuccess,
+    }),
+    complete: useMutation({
+      mutationFn: (body: CompleteSigningKeyRolloverBody) =>
+        deployApi.completeSigningKeyRollover(body),
+      onSuccess,
+    }),
+    cancel: useMutation({ mutationFn: () => deployApi.cancelSigningKeyRollover(), onSuccess }),
+  };
 }
