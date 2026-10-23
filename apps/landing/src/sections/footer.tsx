@@ -68,32 +68,42 @@ function inkExtents(text: SVGTextElement): { ascent: number; descent: number } |
   return ascent > 0 ? { ascent, descent } : null;
 }
 
+/** Gap between the mark and the name, as a fraction of the mark's size. */
+const MARK_GAP = 0.14;
+
+/** Ink extents before the font has loaded, close to Inter Bold's at {@link WORDMARK_FONT_SIZE}. */
+const FALLBACK_INK = { ascent: 182, descent: 4 };
+
 /**
- * The product name stretched across the panel. The SVG view box is measured from the glyphs
- * themselves once the font has loaded, so no font metric guess can crop the tops of letters.
+ * The logo mark and the product name stretched across the footer. The mark is as tall as the
+ * letters, and both share one view box measured from the glyphs once the font has loaded, so
+ * no font metric guess can crop the tops of letters.
  *
  * @returns The wordmark.
  */
 function Wordmark() {
   const textRef = useRef<SVGTextElement>(null);
-  const [box, setBox] = useState("0 -230 1000 300");
+  const [ink, setInk] = useState(FALLBACK_INK);
 
   useLayoutEffect(() => {
     const measure = () => {
       const text = textRef.current;
-      if (!text || typeof text.getBBox !== "function") return;
-      const { x, y, width, height } = text.getBBox();
-      if (!width || !height) return;
-      const ink = inkExtents(text);
-      const top = ink ? -ink.ascent : y;
-      const inkHeight = ink ? ink.ascent + ink.descent : height;
-      setBox(
-        `${x - WORDMARK_PAD_X} ${top - WORDMARK_PAD_Y} ${width + WORDMARK_PAD_X * 2} ${inkHeight + WORDMARK_PAD_Y * 2}`,
-      );
+      if (!text) return;
+      const measured = inkExtents(text);
+      if (measured) setInk(measured);
     };
     measure();
     document.fonts?.ready.then(measure);
   }, []);
+
+  const size = ink.ascent + ink.descent;
+  const textX = size * (1 + MARK_GAP);
+  const box = [
+    -WORDMARK_PAD_X,
+    -ink.ascent - WORDMARK_PAD_Y,
+    textX + 1000 + WORDMARK_PAD_X * 2,
+    size + WORDMARK_PAD_Y * 2,
+  ].join(" ");
 
   return (
     <svg
@@ -103,13 +113,26 @@ function Wordmark() {
       className="block h-auto w-full overflow-visible"
       data-testid="wordmark"
     >
+      {/* The mark's artwork spans 96–416 of its 512 grid; scale that span to the letter height. */}
+      <g
+        transform={`translate(0 ${-ink.ascent}) scale(${size / 320}) translate(-96 -96)`}
+        className="fill-accent-text stroke-accent-text"
+        data-testid="wordmark-mark"
+      >
+        <path d="M160 160 352 352M352 160 160 352" fill="none" strokeWidth="44" />
+        <rect x="104" y="104" width="96" height="96" rx="20" stroke="none" />
+        <rect x="312" y="104" width="96" height="96" rx="20" stroke="none" />
+        <rect x="104" y="312" width="96" height="96" rx="20" stroke="none" />
+        <rect x="312" y="312" width="96" height="96" rx="20" stroke="none" />
+        <rect x="220" y="220" width="72" height="72" rx="14" stroke="none" />
+      </g>
       <text
         ref={textRef}
-        x="0"
+        x={textX}
         y="0"
         textLength="1000"
         lengthAdjust="spacingAndGlyphs"
-        className="fill-background font-sans font-bold"
+        className="fill-foreground font-sans font-bold"
         style={{ fontSize: WORDMARK_FONT_SIZE, letterSpacing: "-0.04em" }}
       >
         {PRODUCT_NAME}
@@ -208,7 +231,7 @@ export function SiteFooter() {
           />
         </ExternalLink>
         <div
-          className="col-span-2 rounded-lg bg-foreground px-[7%] lg:col-span-12"
+          className="col-span-2 pt-[clamp(32px,6vw,96px)] pb-[clamp(24px,4vw,64px)] lg:col-span-12"
           data-testid="wordmark-panel"
         >
           <Wordmark />
