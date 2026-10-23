@@ -36,8 +36,37 @@ function onSectionClick(event: MouseEvent<HTMLAnchorElement>) {
   if (id && goToSection(id)) event.preventDefault();
 }
 
-/** Space added around the glyph box so ascenders and the dot of the i never touch an edge. */
-const WORDMARK_PAD = 6;
+/** Font size of the wordmark in view box units; the text is stretched to 1000 units wide. */
+const WORDMARK_FONT_SIZE = 250;
+
+/** Horizontal slack in view box units, so stretched glyph edges never clip. */
+const WORDMARK_PAD_X = 6;
+
+/**
+ * Vertical space in view box units. The panel pads only its sides, so this is the whole gap
+ * above and below the letters; kept well under the side margin so the panel stays short.
+ */
+const WORDMARK_PAD_Y = 28;
+
+/**
+ * Ink ascent and descent of the wordmark, from canvas text metrics.
+ *
+ * `getBBox` returns the font's whole line box, which leaves a band of empty descender space
+ * under a word with no descenders; the canvas reports the glyphs' actual bounds.
+ *
+ * @param text - The rendered text element, for its computed font.
+ * @returns The ink extents at {@link WORDMARK_FONT_SIZE}, or `null` without canvas support.
+ */
+function inkExtents(text: SVGTextElement): { ascent: number; descent: number } | null {
+  const context = document.createElement("canvas").getContext?.("2d");
+  if (!context) return null;
+  const style = getComputedStyle(text);
+  context.font = `${style.fontWeight} ${WORDMARK_FONT_SIZE}px ${style.fontFamily}`;
+  const metrics = context.measureText(PRODUCT_NAME);
+  const ascent = metrics.actualBoundingBoxAscent;
+  const descent = metrics.actualBoundingBoxDescent;
+  return ascent > 0 ? { ascent, descent } : null;
+}
 
 /**
  * The product name stretched across the panel. The SVG view box is measured from the glyphs
@@ -47,7 +76,7 @@ const WORDMARK_PAD = 6;
  */
 function Wordmark() {
   const textRef = useRef<SVGTextElement>(null);
-  const [box, setBox] = useState("0 -40 1000 300");
+  const [box, setBox] = useState("0 -230 1000 300");
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -55,8 +84,11 @@ function Wordmark() {
       if (!text || typeof text.getBBox !== "function") return;
       const { x, y, width, height } = text.getBBox();
       if (!width || !height) return;
+      const ink = inkExtents(text);
+      const top = ink ? -ink.ascent : y;
+      const inkHeight = ink ? ink.ascent + ink.descent : height;
       setBox(
-        `${x - WORDMARK_PAD} ${y - WORDMARK_PAD} ${width + WORDMARK_PAD * 2} ${height + WORDMARK_PAD * 2}`,
+        `${x - WORDMARK_PAD_X} ${top - WORDMARK_PAD_Y} ${width + WORDMARK_PAD_X * 2} ${inkHeight + WORDMARK_PAD_Y * 2}`,
       );
     };
     measure();
@@ -78,7 +110,7 @@ function Wordmark() {
         textLength="1000"
         lengthAdjust="spacingAndGlyphs"
         className="fill-background font-sans font-bold"
-        style={{ fontSize: 250, letterSpacing: "-0.04em" }}
+        style={{ fontSize: WORDMARK_FONT_SIZE, letterSpacing: "-0.04em" }}
       >
         {PRODUCT_NAME}
       </text>
@@ -176,7 +208,7 @@ export function SiteFooter() {
           />
         </ExternalLink>
         <div
-          className="col-span-2 rounded-lg bg-foreground px-[3%] py-[3%] lg:col-span-12"
+          className="col-span-2 rounded-lg bg-foreground px-[7%] lg:col-span-12"
           data-testid="wordmark-panel"
         >
           <Wordmark />
