@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BankkRoll/Roundhouse/agent/internal/sealtest"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
@@ -35,6 +36,10 @@ const (
 	itRegistryAddr  = "127.0.0.1:5055"
 	itProxyPort     = 5056
 	itToken         = "ghs_integrationTestToken0123456789abcdef"
+	// itNode is the node ID build secrets are sealed to.
+	itNode = "node_it"
+	// itProject owns the test builds' BuildKit daemon.
+	itProject = "prj_IT"
 )
 
 var (
@@ -57,7 +62,7 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	if os.Getenv("ROUNDHOUSE_IT_KEEP") != "1" {
 		_ = d.removeContainer(ctx, itRegistryName)
-		_ = d.removeContainer(ctx, ContainerName)
+		_ = d.removeContainer(ctx, DaemonName(itProject))
 		_ = d.do(ctx, http.MethodDelete, "/networks/"+NetworkName, nil, nil, nil)
 	}
 	os.Exit(code)
@@ -195,6 +200,8 @@ func newTestBuilder(t *testing.T, mutate func(*Options)) Builder {
 		AllowLoopbackHTTP: true,
 		MinFreeBytes:      1 << 30,
 		CacheMaxBytes:     10 << 30,
+		EncryptionKey:     sealtest.Key(),
+		NodeID:            itNode,
 	}
 	if mutate != nil {
 		mutate(&opts)
@@ -220,12 +227,14 @@ func testJob(builder protocol.Builder, repoURL, sha string) protocol.BuildJob {
 		Type:            protocol.TypeBuildJob,
 		BuildID:         fmt.Sprintf("bld_it%d%d", time.Now().Unix(), n),
 		DeploymentID:    "dep_it",
+		ProjectID:       itProject,
+		ServiceID:       "svc_IT",
 		Source:          protocol.GitBuildSource{Type: "git", URL: repoURL, CommitSHA: sha},
 		Builder:         builder,
 		ContextDir:      ".",
 		BuildArgs:       map[string]string{},
-		ImageRepository: protocol.LocalImageRepository("prj_IT", "svc_IT"),
-		CacheKey:        "svc_IT",
+		ImageRepository: protocol.LocalImageRepository(itProject, "svc_IT"),
+		CacheKey:        protocol.BuildCacheKey(itProject, "svc_IT"),
 		TimeoutS:        900,
 	}
 }
@@ -325,7 +334,8 @@ func TestIntegrationDockerfilePrivateRepo(t *testing.T) {
 	})
 	job := testJob(protocol.BuilderDockerfile, repoURL, sha)
 	job.Source.Token = itToken
-	job.BuildArgs = map[string]string{"GREETING": "hello-roundhouse", "API_TOKEN": "s3cr3t-build-arg-value"}
+	job.BuildArgs = map[string]string{"GREETING": "hello-roundhouse"}
+	sealtest.SealBuildSecrets(t, sealtest.Key().PublicKey(), itNode, &job, map[string]string{"API_TOKEN": "s3cr3t-build-arg-value"})
 
 	b := newTestBuilder(t, nil)
 	res, logs := runBuild(t, b, job)
@@ -344,7 +354,7 @@ func TestIntegrationDockerfilePrivateRepo(t *testing.T) {
 		}
 	}
 	if !strings.Contains(logs, "token="+redactedText) {
-		t.Errorf("secret build arg not redacted in logs")
+		t.Errorf("sealed build secret not redacted in logs")
 	}
 
 	got, err := manifestDigest(context.Background(), http.DefaultClient, itRegistryAddr, "prj_it/svc_it", job.BuildID)

@@ -96,8 +96,8 @@ func originPrefix(raw string) string {
 }
 
 // env builds git's environment from scratch so nothing from the agent's own
-// environment (GIT_DIR, GIT_TRACE, proxies set for other purposes, ...) leaks
-// in.
+// environment (GIT_DIR, GIT_TRACE, credentials, ...) leaks in: only
+// [hostEnv] is inherited.
 func (g *gitSource) env() []string {
 	allowed := "https"
 	if g.allowHTTP {
@@ -116,11 +116,7 @@ func (g *gitSource) env() []string {
 		"GIT_LFS_SKIP_SMUDGE=1",
 		"GIT_ALLOW_PROTOCOL=" + allowed,
 	}
-	for _, k := range []string{"PATH", "SYSTEMROOT", "TMPDIR", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"} {
-		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
-		}
-	}
+	env = append(env, hostEnv()...)
 	cfg := g.gitConfig()
 	env = append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(len(cfg)))
 	for i, kv := range cfg {
@@ -154,15 +150,21 @@ func (g *gitSource) run(ctx context.Context, dir string, args ...string) (string
 }
 
 // fetchArgs are the arguments of the shallow fetch of one commit.
+//
+// SECURITY: --end-of-options keeps a URL or ref that starts with "-" from
+// being parsed as an option (ADR 0014 M2), on top of their validation.
 func fetchArgs(repoURL, sha string) []string {
-	return []string{"fetch", "--depth=1", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", repoURL, sha}
+	return []string{"fetch", "--depth=1", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
+		"--end-of-options", repoURL, sha}
 }
 
 // fallbackFetchArgs fetch ref, or every branch, for servers that refuse to
-// serve an unadvertised commit by SHA.
+// serve an unadvertised commit by SHA. The commit is still what is checked
+// out; ref only narrows what is downloaded, and is ignored unless it passes
+// [protocol.IsSafeGitRef].
 func fallbackFetchArgs(repoURL, ref string) []string {
-	args := []string{"fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", repoURL}
-	if ref != "" {
+	args := []string{"fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "--end-of-options", repoURL}
+	if ref != "" && protocol.IsSafeGitRef(ref) {
 		return append(args, ref)
 	}
 	return append(args, "+refs/heads/*:refs/remotes/origin/*")

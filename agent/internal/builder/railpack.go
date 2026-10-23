@@ -52,24 +52,39 @@ func prepareArgs(contextDir, planPath, infoPath string, buildArgs map[string]str
 	return args
 }
 
-// prepareEnv is Railpack's environment: a fixed minimal base plus the build
-// args, which `--env NAME` reads from here.
+// prepareEnv is Railpack's environment: a fixed minimal base, [hostEnv] and
+// the job's build args and secrets, which `--env NAME` reads from here.
 func prepareEnv(home string, buildArgs map[string]string) []string {
 	env := []string{"HOME=" + home, "XDG_CACHE_HOME=" + filepath.Join(home, ".cache"), "NO_COLOR=1", "TERM=dumb"}
-	for _, k := range []string{"PATH", "SYSTEMROOT", "TMPDIR", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"} {
-		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
-		}
-	}
+	env = append(env, hostEnv()...)
 	for k, v := range buildArgs {
 		env = append(env, k+"="+v)
 	}
 	return env
 }
 
+// checkPrepareEnvNames refuses build args and secrets whose names
+// [isReservedEnvName] reserves, before any reach Railpack's environment.
+func checkPrepareEnvNames(buildArgs map[string]string) error {
+	var reserved []string
+	for k := range buildArgs {
+		if isReservedEnvName(k) {
+			reserved = append(reserved, k)
+		}
+	}
+	if len(reserved) == 0 {
+		return nil
+	}
+	sort.Strings(reserved)
+	return userErrorf("build arguments %s use reserved names; rename them (Railpack builds can't set PATH, HOME, proxy, LD_*, GIT_* or similar variables)", strings.Join(reserved, ", "))
+}
+
 // prepare writes the plan to planDir/railpack-plan.json. A failure to plan
 // the app is a [userError] built from Railpack's info file.
 func (r *railpackPlanner) prepare(ctx context.Context, contextDir, planDir, contextLabel string, buildArgs map[string]string) error {
+	if err := checkPrepareEnvNames(buildArgs); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(planDir, 0o700); err != nil {
 		return err
 	}

@@ -57,9 +57,11 @@ role in `/etc/roundhouse/agent.yaml`; later re-runs read it from there. To turn
 an existing node into a builder, re-run with `--rejoin --builder` and a new
 token. Builders need 20 GiB free on `/var/lib`.
 
-The builder runs BuildKit rootless in the `sys_buildkitd` container on its
-own bridge network (`roundhouse-bk0`), so build steps cannot reach host
-loopback services such as Caddy's admin API or the registry. It pushes
+The builder runs BuildKit rootless, one `sys_buildkitd-<project>` container
+per project (at most two running, each stopped after 10 idle minutes), on
+its own bridge network (`roundhouse-bk0`), so build steps cannot reach host
+loopback services such as Caddy's admin API or the registry, and one
+project's build cache is never visible to another's builds. It pushes
 through a per-build, password-protected proxy the agent opens on that
 network's gateway, port 5001.
 

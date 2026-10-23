@@ -14,17 +14,25 @@ LimitNOFILE=65536
 UMask=0077
 
 # Runs as root so it owns its files and can open /var/run/docker.sock
-# (root:docker 0660) as the socket's owner. It needs no capabilities: Docker
-# API calls run in the daemon, and every file it touches is root-owned.
-# Later phases that manage WireGuard will add CAP_NET_ADMIN here. On builder
+# (root:docker 0660) as the socket's owner. Docker API calls run in the
+# daemon, and every file it touches is root-owned. Its only capabilities
+# are CAP_NET_ADMIN and CAP_NET_RAW, for the iptables rules in DOCKER-USER
+# that keep containers away from the cloud metadata endpoint. On builder
 # nodes it also runs git and railpack, which inherit this sandbox; their
 # checkouts live in the state directory and are removed after each build.
-CapabilityBoundingSet=
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 StateDirectory=roundhouse
 StateDirectoryMode=0700
+# /run/roundhouse/secrets holds mount_as_file values on the tmpfs, bind-
+# mounted into running containers, so it must outlive an agent restart.
+RuntimeDirectory=roundhouse
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 # The agent records the control plane's key id in its config after the
 # first verified welcome.
 ReadWritePaths=-/etc/roundhouse
+# iptables-legacy serialises on this lock; iptables-nft does not use it.
+ReadWritePaths=-/run/xtables.lock
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

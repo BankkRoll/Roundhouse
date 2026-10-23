@@ -199,7 +199,7 @@ func TestAppArmorProfileIsCachedUntilForgotten(t *testing.T) {
 func TestContainerSpecAppArmor(t *testing.T) {
 	d := &daemon{image: BuildKitImage}
 	for _, profile := range []string{"unconfined", AppArmorProfile} {
-		opts := d.containerSpec("172.30.0.1", profile, "h")["HostConfig"].(map[string]any)["SecurityOpt"].([]string)
+		opts := d.containerSpec("prj_A", "172.30.0.1", profile, "h")["HostConfig"].(map[string]any)["SecurityOpt"].([]string)
 		if len(opts) != 2 || opts[0] != "seccomp=unconfined" || opts[1] != "apparmor="+profile {
 			t.Errorf("SecurityOpt for %s = %q", profile, opts)
 		}

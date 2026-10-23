@@ -583,3 +583,22 @@ func TestAgentOutdatedRetriesAtMaxBackoff(t *testing.T) {
 		t.Error("other closes are not agent_outdated")
 	}
 }
+
+func TestPlaintextRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		url    string
+		dev    bool
+		refuse bool
+	}{
+		{"wss://cp.example.com/v1/nodes/n/connect", false, false},
+		{"ws://cp.example.com/v1/nodes/n/connect", false, true},
+		{"WS://cp.example.com/v1/nodes/n/connect", false, true},
+		{"ws://127.0.0.1:8787/v1/nodes/n/connect", false, true},
+		{"ws://cp.example.com/v1/nodes/n/connect", true, false},
+		{"wss://cp.example.com/v1/nodes/n/connect", true, false},
+	} {
+		if got := PlaintextRefusal(tc.url, tc.dev) != ""; got != tc.refuse {
+			t.Errorf("PlaintextRefusal(%q, dev=%v) refuses = %v, want %v", tc.url, tc.dev, got, tc.refuse)
+		}
+	}
+}

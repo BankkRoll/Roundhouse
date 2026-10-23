@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/BankkRoll/Roundhouse/agent/internal/config"
 )
 
 func TestResolveToken(t *testing.T) {
@@ -78,5 +80,30 @@ func TestUnknownAndMissingCommand(t *testing.T) {
 	}
 	if err := run([]string{"bogus"}, slog.New(slog.DiscardHandler), io.Discard, io.Discard); err == nil {
 		t.Error("expected an error for an unknown command")
+	}
+}
+
+func TestLoadEncryptionKeyCreatesAndRecordsIt(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent.yaml")
+	cfg := config.Config{NodeID: "node_1", IdentityKeyFile: filepath.Join(dir, "identity-ab12.key")}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.DiscardHandler)
+	key, err := loadEncryptionKey(cfgPath, &cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "encryption-ab12.key")
+	if cfg.EncryptionKeyFile != want {
+		t.Fatalf("path %q, want %q", cfg.EncryptionKeyFile, want)
+	}
+	if saved, _ := config.Load(cfgPath); saved.EncryptionKeyFile != want {
+		t.Fatalf("config not updated: %+v", saved)
+	}
+	again, err := loadEncryptionKey(cfgPath, &cfg, log)
+	if err != nil || !again.Equal(key) {
+		t.Fatalf("second start changed the key: %v", err)
 	}
 }

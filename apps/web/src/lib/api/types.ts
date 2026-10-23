@@ -163,6 +163,8 @@ export interface Node {
   provider_server_id: string | null;
   /** When the provider was first found to no longer have the server. */
   provider_server_missing_at: Millis | null;
+  /** Why the node gets no workloads or builds; `null` when it can run them or hasn't connected. */
+  workloads_blocked: "upgrade_agent" | "no_encryption_key" | null;
   region: string | null;
   public_ip: string | null;
   os: string | null;

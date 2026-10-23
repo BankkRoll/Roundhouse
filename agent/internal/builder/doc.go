@@ -6,9 +6,12 @@
 //     binary, keeping any access token out of argv, .git/config and logs;
 //   - confine the build context and Dockerfile to the checkout, symlinks
 //     included;
-//   - run BuildKit as the long-lived rootless container sys_buildkitd and
-//     drive it with the BuildKit Go client over `buildctl dial-stdio`, so the
-//     daemon never listens on a network socket;
+//   - open the job's sealed build secrets and pass them, like secret build
+//     args, only as BuildKit secrets; redact exactly the job's secret values;
+//   - run BuildKit rootless, one daemon container per project started on
+//     demand (sys_buildkitd-<project>), and drive it with the BuildKit Go
+//     client over `buildctl dial-stdio`, so no daemon listens on a network
+//     socket;
 //   - build with the Dockerfile frontend, or plan with `railpack prepare` and
 //     build with the pinned Railpack frontend;
 //   - push through a per-build, credential-protected registry proxy and read

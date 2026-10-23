@@ -7,13 +7,15 @@ import { env, introspectWorkflow } from "cloudflare:test";
 import {
   CREDENTIAL_FRAME_TTL_MS,
   type DesiredState,
+  encryptionKeySignaturePayload,
   MAX_AGENT_FRAME_BYTES,
   MIN_PROTOCOL_VERSION,
+  nodeEncryptionKeyId,
   PROTOCOL_VERSION,
 } from "@roundhouse/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CloseCode } from "../src/durable/node-connection";
-import { connectAgent, hello, install, joinNode } from "./helpers";
+import { connectAgent, hello, install, joinNode, NODE_ENCRYPTION_PUBLIC_KEY } from "./helpers";
 import {
   COMMIT_SHA,
   connectWorkloadAgent,
@@ -35,6 +37,39 @@ afterEach(async () => {
 
 const nodeStub = (nodeId: string) =>
   env.NODE_CONNECTION.get(env.NODE_CONNECTION.idFromName(nodeId));
+
+// RFC 7748 section 6.1 (Alice): a second valid public key, test-only.
+const OTHER_ENCRYPTION_PUBLIC_KEY = "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=";
+
+// RFC 8032 section 7.1 test 1: the seed of the identity key `joinBody`
+// registers ("11qYAYKx…"), wrapped as PKCS#8 for WebCrypto.
+const IDENTITY_PKCS8 = Uint8Array.from(
+  "302e020100300506032b6570042204209d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60".match(
+    /../g,
+  )!,
+  (h) => Number.parseInt(h, 16),
+);
+
+/** `hello.encryption_key` for `publicKey`, signed as `nodeId` with the test identity key. */
+async function signedEncryptionKey(nodeId: string, publicKey: string) {
+  const identity = await crypto.subtle.importKey(
+    "pkcs8",
+    IDENTITY_PKCS8,
+    { name: "Ed25519" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign(
+    "Ed25519",
+    identity,
+    encryptionKeySignaturePayload(nodeId, publicKey) as Uint8Array<ArrayBuffer>,
+  );
+  return {
+    public_key: publicKey,
+    kid: await nodeEncryptionKeyId(publicKey),
+    sig: btoa(String.fromCharCode(...new Uint8Array(sig))),
+  };
+}
 
 describe("protocol versions", () => {
   it("accepts pre-sealing agents but sends them no workloads, registry or builds", async () => {
@@ -84,9 +119,82 @@ describe("protocol versions", () => {
     expect(agent.desired()!.registry).toBeNull();
   });
 
-  // TODO(api-secrets-crypto): a signed hello.encryption_key registers a key
-  // once for a node that has none, and is ignored when one is stored.
-  it.todo("registers a signed encryption key from hello, once");
+  it("registers a signed encryption key from hello, once", async () => {
+    const s = await stage();
+    const late = await joinNode(s.owner, s.workspaceId, {
+      name: "late-1",
+      encryption_public_key: undefined,
+    });
+    const stored = () =>
+      env.DB.prepare(
+        "SELECT encryption_public_key AS k, encryption_key_id AS kid FROM nodes WHERE id = ?",
+      )
+        .bind(late.node_id)
+        .first<{ k: string | null; kid: string | null }>();
+
+    // Signed for another node: a replayed hello can't register a key here.
+    const forged = await connectWorkloadAgent(
+      late,
+      {},
+      {
+        encryption_key: await signedEncryptionKey("node_other", NODE_ENCRYPTION_PUBLIC_KEY),
+      },
+    );
+    expect(forged.desired()!.registry).toBeNull();
+    expect(await stored()).toEqual({ k: null, kid: null });
+    forged.ws.close();
+
+    const agent = await connectWorkloadAgent(
+      late,
+      {},
+      {
+        encryption_key: await signedEncryptionKey(late.node_id, NODE_ENCRYPTION_PUBLIC_KEY),
+      },
+    );
+    const kid = await nodeEncryptionKeyId(NODE_ENCRYPTION_PUBLIC_KEY);
+    expect(await stored()).toEqual({ k: NODE_ENCRYPTION_PUBLIC_KEY, kid });
+    // The very welcome that registered the key already counts it.
+    expect(agent.desired()!.registry).not.toBeNull();
+    const audit = await env.DB.prepare(
+      "SELECT actor_type, metadata FROM audit_logs WHERE action = 'node.encryption_key_registered' AND target_id = ?",
+    )
+      .bind(late.node_id)
+      .all<{ actor_type: string; metadata: string }>();
+    expect(audit.results).toHaveLength(1);
+    expect(audit.results[0]!.actor_type).toBe("node");
+    expect(JSON.parse(audit.results[0]!.metadata)).toMatchObject({ kid });
+    agent.ws.close();
+
+    // A validly signed replacement is ignored: only a re-join changes a key.
+    await connectWorkloadAgent(
+      late,
+      {},
+      {
+        encryption_key: await signedEncryptionKey(late.node_id, OTHER_ENCRYPTION_PUBLIC_KEY),
+      },
+    );
+    expect(await stored()).toEqual({ k: NODE_ENCRYPTION_PUBLIC_KEY, kid });
+  });
+
+  it("ignores hello.encryption_key from pre-sealing agents", async () => {
+    const s = await stage();
+    const late = await joinNode(s.owner, s.workspaceId, {
+      name: "late-2",
+      encryption_public_key: undefined,
+    });
+    await connectWorkloadAgent(
+      late,
+      {},
+      {
+        protocol_version: MIN_PROTOCOL_VERSION,
+        encryption_key: await signedEncryptionKey(late.node_id, NODE_ENCRYPTION_PUBLIC_KEY),
+      },
+    );
+    const row = await env.DB.prepare("SELECT encryption_public_key AS k FROM nodes WHERE id = ?")
+      .bind(late.node_id)
+      .first<{ k: string | null }>();
+    expect(row?.k).toBeNull();
+  });
 
   it("never places workloads on a pre-sealing node", async () => {
     const s = await stage();
@@ -96,6 +204,29 @@ describe("protocol versions", () => {
     const active = await waitForStatus(s.owner, d.id, ["active"]);
     expect(active.placements!.every((p) => p.node_id === s.joined.node_id)).toBe(true);
     expect(v3.received.filter(isDesired).every((m) => m.workloads.length === 0)).toBe(true);
+  });
+
+  it("says why a node gets no workloads", async () => {
+    const s = await stage();
+    const blocked = async (nodeId: string) =>
+      (
+        await s.owner.json<{ workloads_blocked: string | null }>(
+          `/v1/workspaces/${s.workspaceId}/nodes/${nodeId}`,
+        )
+      ).body.workloads_blocked;
+    expect(await blocked(s.joined.node_id)).toBeNull();
+
+    const old = await joinNode(s.owner, s.workspaceId, { name: "old-2" });
+    expect(await blocked(old.node_id)).toBeNull(); // not connected yet
+    await connectWorkloadAgent(old, {}, { protocol_version: MIN_PROTOCOL_VERSION });
+    expect(await blocked(old.node_id)).toBe("upgrade_agent");
+
+    const keyless = await joinNode(s.owner, s.workspaceId, {
+      name: "keyless-2",
+      encryption_public_key: undefined,
+    });
+    await connectWorkloadAgent(keyless);
+    expect(await blocked(keyless.node_id)).toBe("no_encryption_key");
   });
 
   it.each([0, PROTOCOL_VERSION + 1])("rejects protocol version %i", async (version) => {

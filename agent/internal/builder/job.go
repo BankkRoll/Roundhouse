@@ -31,11 +31,17 @@ func validateJob(job *protocol.BuildJob, allowLoopbackHTTP bool) error {
 	if !idRE.MatchString(job.BuildID) {
 		return userErrorf("invalid build id %q", job.BuildID)
 	}
+	if !idRE.MatchString(job.ProjectID) || !idRE.MatchString(job.ServiceID) {
+		return userErrorf("invalid project or service id")
+	}
 	if err := validateGitURL(job.Source.URL, allowLoopbackHTTP); err != nil {
 		return err
 	}
 	if !commitRE.MatchString(job.Source.CommitSHA) {
 		return userErrorf("invalid commit SHA %q: expected a full 40 or 64 character hex SHA", job.Source.CommitSHA)
+	}
+	if job.Source.Ref != "" && !protocol.IsSafeGitRef(job.Source.Ref) {
+		return userErrorf("invalid git ref %q", job.Source.Ref)
 	}
 	switch job.Builder {
 	case protocol.BuilderDockerfile:
@@ -63,7 +69,14 @@ func validateJob(job *protocol.BuildJob, allowLoopbackHTTP bool) error {
 	if _, err := repositoryPath(job.ImageRepository); err != nil {
 		return err
 	}
-	if !cacheKeyRE.MatchString(job.CacheKey) {
+	// SECURITY: the repository and cache key are pushed to through a proxy
+	// that admits only them, so binding both to the job's project and
+	// service keeps one project from overwriting another's images or
+	// cache (ADR 0014 H3).
+	if job.ImageRepository != protocol.LocalImageRepository(job.ProjectID, job.ServiceID) {
+		return userErrorf("image repository %q is not the service's repository", job.ImageRepository)
+	}
+	if !cacheKeyRE.MatchString(job.CacheKey) || job.CacheKey != protocol.BuildCacheKey(job.ProjectID, job.ServiceID) {
 		return userErrorf("invalid cache key %q", job.CacheKey)
 	}
 	if job.TimeoutS <= 0 {

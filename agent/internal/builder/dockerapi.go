@@ -282,6 +282,55 @@ func (d *dockerAPI) removeContainer(ctx context.Context, id string) error {
 	return err
 }
 
+// stopContainer stops a container, killing it after grace. Stopping a
+// stopped or missing container is not an error.
+func (d *dockerAPI) stopContainer(ctx context.Context, id string, grace time.Duration) error {
+	err := d.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/stop",
+		url.Values{"t": {fmt.Sprint(int(grace / time.Second))}}, nil, nil)
+	var de *dockerError
+	if isNotFound(err) || (errors.As(err, &de) && de.status == http.StatusNotModified) {
+		return nil
+	}
+	return err
+}
+
+// containerSummary is one entry of GET /containers/json.
+type containerSummary struct {
+	ID     string            `json:"Id"`
+	Names  []string          `json:"Names"`
+	State  string            `json:"State"`
+	Labels map[string]string `json:"Labels"`
+}
+
+// name returns the container's name without the leading slash.
+func (c containerSummary) name() string {
+	if len(c.Names) == 0 {
+		return ""
+	}
+	return strings.TrimPrefix(c.Names[0], "/")
+}
+
+// listContainers lists every container, running or not, carrying label
+// ("key=value").
+func (d *dockerAPI) listContainers(ctx context.Context, label string) ([]containerSummary, error) {
+	filters, err := json.Marshal(map[string][]string{"label": {label}})
+	if err != nil {
+		return nil, err
+	}
+	var out []containerSummary
+	err = d.do(ctx, http.MethodGet, "/containers/json", url.Values{"all": {"1"}, "filters": {string(filters)}}, nil, &out)
+	return out, err
+}
+
+// removeVolume removes a volume. A missing volume is not an error.
+func (d *dockerAPI) removeVolume(ctx context.Context, name string) error {
+	err := d.do(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), nil, nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
 // containerLogs returns the last lines of a container's output, for error
 // messages when it fails to start.
 func (d *dockerAPI) containerLogs(ctx context.Context, id string, tail int) string {

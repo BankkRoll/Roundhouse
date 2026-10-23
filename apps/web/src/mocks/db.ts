@@ -108,6 +108,7 @@ export function makeNode(overrides: Partial<Node> = {}): Node {
     provider: "hetzner",
     provider_server_id: null,
     provider_server_missing_at: null,
+    workloads_blocked: null,
     region: "hel1",
     public_ip: "203.0.113.10",
     os: "linux",

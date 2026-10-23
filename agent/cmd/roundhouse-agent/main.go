@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdh"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"github.com/BankkRoll/Roundhouse/agent/internal/conn"
 	"github.com/BankkRoll/Roundhouse/agent/internal/enroll"
 	"github.com/BankkRoll/Roundhouse/agent/internal/facts"
+	"github.com/BankkRoll/Roundhouse/agent/internal/nodekey"
 	"github.com/BankkRoll/Roundhouse/agent/internal/state"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
@@ -99,7 +101,7 @@ func cmdJoin(args []string, logger *slog.Logger, stderr io.Writer) error {
 	tokenFile := fset.String("token-file", "", "read the join token from this file (alternatively set ROUNDHOUSE_JOIN_TOKEN)")
 	name := fset.String("name", "", "node display name (default: hostname)")
 	cfgPath := fset.String("config", config.DefaultPath(), "config file to write")
-	dataDir := fset.String("data-dir", "", "directory for credential, identity key and state (default: /var/lib/roundhouse on Linux, next to --config elsewhere)")
+	dataDir := fset.String("data-dir", "", "directory for credential, keys and state (default: /var/lib/roundhouse on Linux, next to --config elsewhere)")
 	force := fset.Bool("force", false, "replace an existing joined config")
 	insecure := fset.Bool("insecure", false, "allow plaintext http:// and ws:// to a non-loopback control plane (testing only)")
 	builderNode := fset.Bool("builder", false, "make this node a builder: run the local image registry and accept build jobs")
@@ -169,12 +171,18 @@ func cmdRun(args []string, logger *slog.Logger, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read credential: %w", err)
 	}
-	// NOTE: the identity key is not used yet; it is reserved for node-to-node
-	// WireGuard and mutual authentication in a later phase. Requiring it now
-	// catches a half-restored data directory early.
-	if _, err := os.Stat(cfg.IdentityKeyFile); err != nil {
+	identity, err := nodekey.LoadIdentity(cfg.IdentityKeyFile)
+	if err != nil {
 		return fmt.Errorf("identity key: %w", err)
 	}
+	encryption, err := loadEncryptionKey(*cfgPath, &cfg, logger)
+	if err != nil {
+		return fmt.Errorf("encryption key: %w", err)
+	}
+	// NOTE: sent in every hello. The control plane stores it only for a node
+	// that has no key yet (one that joined before sealing) and ignores it
+	// otherwise, so a stolen credential alone can't swap in another key.
+	encryptionKey := protocol.NewNodeEncryptionKey(identity, cfg.NodeID, encryption.PublicKey())
 	controlKey, err := protocol.ParsePublicKey(cfg.ControlPublicKey)
 	if err != nil {
 		return err
@@ -209,13 +217,14 @@ func cmdRun(args []string, logger *slog.Logger, stderr io.Writer) error {
 		State:  state.NewStore(cfg.StateFile),
 		Logger: logger,
 	}
-	a, err := newAgent(cfg, client, logger)
+	a, err := newAgent(cfg, client, encryption, logger)
 	if err != nil {
 		return err
 	}
 	client.Hello = func(ctx context.Context, observed int64) protocol.Hello {
 		h := f.Hello(ctx, cfg.NodeID, version, observed)
 		h.Statuses = a.runtime.Statuses()
+		h.EncryptionKey = &encryptionKey
 		return h
 	}
 	start := time.Now()
@@ -252,6 +261,41 @@ func resolveToken(token *string, tokenFile string) error {
 func warnInsecure(logger *slog.Logger) {
 	logger.Warn("INSECURE MODE: plaintext http:// and ws:// are allowed to a non-loopback control plane; " +
 		"the join token, node credential and control traffic can be read and tampered with in transit. Never use this in production.")
+}
+
+// loadEncryptionKey loads the node's X25519 key, creating it on the first
+// start of a node that joined before encryption keys existed and recording
+// its path in the config at cfgPath (and in cfg).
+func loadEncryptionKey(cfgPath string, cfg *config.Config, logger *slog.Logger) (*ecdh.PrivateKey, error) {
+	recorded := cfg.EncryptionKeyFile != ""
+	path := cfg.EncryptionKeyFile
+	if !recorded {
+		path = nodekey.EncryptionKeyPath(cfg.IdentityKeyFile)
+	}
+	key, created, err := nodekey.LoadOrCreateEncryptionKey(path)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case created && recorded:
+		logger.Warn("the encryption key file was missing, so a new key was created; the control plane keeps the key "+
+			"this node registered, so workloads can't start until the node re-joins with `roundhouse-agent join --force`",
+			"path", path)
+	case created:
+		logger.Info("created this node's encryption key; it is registered with the control plane on connect", "path", path)
+	}
+	if !recorded {
+		saved, err := config.Load(cfgPath)
+		if err != nil {
+			return nil, err
+		}
+		saved.EncryptionKeyFile = path
+		if err := config.Save(cfgPath, saved); err != nil {
+			return nil, fmt.Errorf("record encryption key path in %s: %w", cfgPath, err)
+		}
+		cfg.EncryptionKeyFile = path
+	}
+	return key, nil
 }
 
 // pinKeyID records the control plane's key id in the config so later

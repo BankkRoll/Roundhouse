@@ -1,9 +1,9 @@
 // Package enroll performs the one-time join handshake that turns a fresh host
-// into a registered node: it creates the node's identity key, exchanges a
-// join token for a credential, and writes the resulting config.
+// into a registered node: it creates the node's identity and encryption keys,
+// exchanges a join token for a credential, and writes the resulting config.
 //
 // A join either fully succeeds or leaves any previous registration intact.
-// Each registration writes its identity key, credential and state under
+// Each registration writes its keys, credential and state under
 // names unique to it, and the atomic config write that points at them is
 // the only commit point; the previous registration's files are removed only
 // after that write.
@@ -12,13 +12,10 @@ package enroll
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -27,12 +24,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"time"
 	"unicode/utf8"
 
 	"github.com/BankkRoll/Roundhouse/agent/internal/clock"
 	"github.com/BankkRoll/Roundhouse/agent/internal/config"
 	"github.com/BankkRoll/Roundhouse/agent/internal/facts"
+	"github.com/BankkRoll/Roundhouse/agent/internal/nodekey"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
@@ -109,28 +108,35 @@ func Join(ctx context.Context, opts Options) (config.Config, error) {
 	defer func() {
 		if !committed {
 			os.Remove(cfg.IdentityKeyFile)
+			os.Remove(cfg.EncryptionKeyFile)
 			os.Remove(cfg.CredentialFile)
 		}
 	}()
 
-	// NOTE: the key is persisted before the request so a successful join can
-	// never leave the node without the private half of the key it registered.
-	pub, err := createIdentity(cfg.IdentityKeyFile)
+	// NOTE: the keys are persisted before the request so a successful join
+	// can never leave the node without the private half of a key it
+	// registered.
+	pub, err := nodekey.CreateIdentity(cfg.IdentityKeyFile)
 	if err != nil {
 		return config.Config{}, fmt.Errorf("create identity key: %w", err)
 	}
+	enc, err := nodekey.CreateEncryptionKey(cfg.EncryptionKeyFile)
+	if err != nil {
+		return config.Config{}, fmt.Errorf("create encryption key: %w", err)
+	}
 
 	resp, err := postJoin(ctx, opts.httpClient(), opts.logger(), base, protocol.JoinRequest{
-		Token:        opts.Token,
-		Name:         name,
-		Hostname:     opts.Facts.Hostname,
-		AgentVersion: opts.AgentVersion,
-		OS:           opts.Facts.OS,
-		Arch:         opts.Facts.Arch,
-		PublicKey:    base64.StdEncoding.EncodeToString(pub),
-		PublicIP:     opts.Facts.PublicIP,
-		Hardware:     opts.Facts.Hardware,
-		Capabilities: capabilities(opts),
+		Token:               opts.Token,
+		Name:                name,
+		Hostname:            opts.Facts.Hostname,
+		AgentVersion:        opts.AgentVersion,
+		OS:                  opts.Facts.OS,
+		Arch:                opts.Facts.Arch,
+		PublicKey:           base64.StdEncoding.EncodeToString(pub),
+		EncryptionPublicKey: base64.StdEncoding.EncodeToString(enc.PublicKey().Bytes()),
+		PublicIP:            opts.Facts.PublicIP,
+		Hardware:            opts.Facts.Hardware,
+		Capabilities:        capabilities(opts),
 	})
 	if err != nil {
 		return config.Config{}, err
@@ -156,8 +162,9 @@ func Join(ctx context.Context, opts Options) (config.Config, error) {
 
 	// The new registration has its own, empty state file, so the previous
 	// node's observed generation cannot make the agent ignore desired state.
-	for _, old := range []string{previous.IdentityKeyFile, previous.CredentialFile, previous.StateFile} {
-		if old == "" || old == cfg.IdentityKeyFile || old == cfg.CredentialFile || old == cfg.StateFile {
+	current := []string{cfg.IdentityKeyFile, cfg.EncryptionKeyFile, cfg.CredentialFile, cfg.StateFile}
+	for _, old := range []string{previous.IdentityKeyFile, previous.EncryptionKeyFile, previous.CredentialFile, previous.StateFile} {
+		if old == "" || slices.Contains(current, old) {
 			continue
 		}
 		if err := os.Remove(old); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -196,23 +203,6 @@ func (o Options) logger() *slog.Logger {
 		return o.Logger
 	}
 	return slog.New(slog.DiscardHandler)
-}
-
-// createIdentity generates an Ed25519 keypair and stores the private key as
-// PEM-encoded PKCS#8, a format openssl and other tooling can read.
-func createIdentity(path string) (ed25519.PublicKey, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return nil, err
-	}
-	if err := config.WriteSecret(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})); err != nil {
-		return nil, err
-	}
-	return pub, nil
 }
 
 func postJoin(ctx context.Context, client *http.Client, logger *slog.Logger, base *url.URL, body protocol.JoinRequest) (protocol.JoinResponse, error) {

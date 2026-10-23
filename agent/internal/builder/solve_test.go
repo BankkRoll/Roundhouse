@@ -21,14 +21,14 @@ func TestSolveSpecs(t *testing.T) {
 	job.BuildArgs = map[string]string{"API_TOKEN": "secret-value", "NODE_ENV": "production"}
 	paths := buildPaths{context: "/w/src", dockerfileDir: "/w/src/docker", dockerfileName: "Dockerfile.prod"}
 
-	df := dockerfileSolve(&job, paths)
+	df := dockerfileSolve(&job, paths, nil)
 	if df.frontend != "dockerfile.v0" || df.attrs["filename"] != "Dockerfile.prod" ||
 		df.attrs["build-arg:NODE_ENV"] != "production" || df.mounts["dockerfile"] != "/w/src/docker" {
 		t.Fatalf("dockerfile spec %+v", df)
 	}
 
 	job.Builder = protocol.BuilderRailpack
-	rp := railpackSolve(&job, paths, "/w/plan", RailpackFrontendImage)
+	rp := railpackSolve(&job, paths, "/w/plan", RailpackFrontendImage, nil)
 	if rp.frontend != "gateway.v0" || rp.attrs["source"] != RailpackFrontendImage || rp.attrs["filename"] != railpackPlanFile ||
 		rp.attrs["build-arg:cache-key"] != job.CacheKey || rp.mounts["dockerfile"] != "/w/plan" {
 		t.Fatalf("railpack spec %+v", rp)
@@ -49,7 +49,7 @@ func TestDockerfileSecretArgs(t *testing.T) {
 	job := validJob()
 	job.BuildArgs = map[string]string{"LICENSE_KEY": "lk-value", "NODE_ENV": "production"}
 	job.SecretBuildArgs = []string{"LICENSE_KEY"}
-	df := dockerfileSolve(&job, buildPaths{context: "/w/src", dockerfileDir: "/w/src", dockerfileName: "Dockerfile"})
+	df := dockerfileSolve(&job, buildPaths{context: "/w/src", dockerfileDir: "/w/src", dockerfileName: "Dockerfile"}, nil)
 	if _, ok := df.attrs["build-arg:LICENSE_KEY"]; ok {
 		t.Fatal("secret build arg passed as a build arg")
 	}
@@ -78,7 +78,7 @@ func TestSecretsHash(t *testing.T) {
 
 func TestProgressPrinter(t *testing.T) {
 	sink := newFrameSink()
-	b := newLogBatcher("bld_1", sink.emit, newRedactor("", map[string]string{"API_TOKEN": "hunter2-secret"}, nil),
+	b := newLogBatcher("bld_1", sink.emit, newRedactor("", []string{"hunter2-secret"}),
 		&fakeTicker{ch: make(chan time.Time)})
 	p := newProgressPrinter(b)
 	t0 := time.Unix(100, 0)
@@ -190,7 +190,7 @@ func TestDaemonConfig(t *testing.T) {
 			t.Errorf("config missing %q:\n%s", want, cfg)
 		}
 	}
-	spec := d.containerSpec("172.30.0.1", AppArmorProfile, "hash")
+	spec := d.containerSpec("prj_A", "172.30.0.1", AppArmorProfile, "hash")
 	host := spec["HostConfig"].(map[string]any)
 	if host["NetworkMode"] != NetworkName || host["Privileged"] != nil {
 		t.Errorf("host config %+v", host)

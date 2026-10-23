@@ -13,27 +13,23 @@ import (
 )
 
 func TestRedactor(t *testing.T) {
-	r := newRedactor(testToken, map[string]string{
-		"API_TOKEN":    "tok-value-1234",
-		"DB_PASSWORD":  "line-one\nline-two-secret",
-		"NODE_ENV":     "production",
-		"SHORT_SECRET": "abc",
-		"STRIPE_KEY":   "sk_live_abcdef",
-		"LICENSE":      "plain-looking-but-marked",
-	}, []string{"LICENSE"})
+	r := newRedactor(testToken, []string{"tok-value-1234", "line-one-x\nline-two-secret", "abc", "plain-looking-but-marked"})
 	basic := base64.StdEncoding.EncodeToString([]byte(gitTokenUser + ":" + testToken))
 	cases := map[string]string{
 		"token " + testToken + " here":       "token " + redactedText + " here",
 		"Authorization: Basic " + basic:      "Authorization: Basic " + redactedText,
 		"export API_TOKEN=tok-value-1234":    "export API_TOKEN=" + redactedText,
+		"b64 dG9rLXZhbHVlLTEyMzQ=":           "b64 " + redactedText,
+		"hex 746f6b2d76616c75652d31323334":   "hex " + redactedText,
 		"line-two-secret":                    redactedText,
-		"key sk_live_abcdef":                 "key " + redactedText,
 		"NODE_ENV=production":                "NODE_ENV=production",
 		"license plain-looking-but-marked":   "license " + redactedText,
 		"abc is too short to be a secret":    "abc is too short to be a secret",
 		testToken + testToken:                redactedText + redactedText,
 		"nothing to see":                     "nothing to see",
 		"url https://" + testToken + "@host": "url https://" + redactedText + "@host",
+		// Names alone never mark a value secret.
+		"key sk_live_abcdef": "key sk_live_abcdef",
 	}
 	for in, want := range cases {
 		if got := r.redact(in); got != want {
@@ -178,7 +174,7 @@ func TestLogBatcherRealTickerFlushesWithinASecond(t *testing.T) {
 
 func TestLogBatcherRedactsAndCloses(t *testing.T) {
 	sink := newFrameSink()
-	b := newLogBatcher("bld_1", sink.emit, newRedactor(testToken, nil, nil), nil)
+	b := newLogBatcher("bld_1", sink.emit, newRedactor(testToken, nil), nil)
 	b.add(protocol.StreamStderr, "fatal: "+testToken)
 	b.Close()
 	b.Close()

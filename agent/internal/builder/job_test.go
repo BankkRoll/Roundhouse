@@ -14,12 +14,14 @@ func validJob() protocol.BuildJob {
 		Type:            protocol.TypeBuildJob,
 		BuildID:         "bld_01J8Z",
 		DeploymentID:    "dep_01J8Z",
+		ProjectID:       "prj_A",
+		ServiceID:       "svc_B",
 		Source:          protocol.GitBuildSource{Type: "git", URL: "https://github.com/acme/app.git", CommitSHA: strings.Repeat("a", 40)},
 		Builder:         protocol.BuilderDockerfile,
 		ContextDir:      ".",
 		BuildArgs:       map[string]string{"NODE_ENV": "production"},
 		ImageRepository: protocol.LocalImageRepository("prj_A", "svc_B"),
-		CacheKey:        "svc_B",
+		CacheKey:        protocol.BuildCacheKey("prj_A", "svc_B"),
 		TimeoutS:        600,
 	}
 }
@@ -54,6 +56,20 @@ func TestValidateJob(t *testing.T) {
 		{"uppercase repository", func(j *protocol.BuildJob) { j.ImageRepository = "127.0.0.1:5000/Prj/Svc" }, "not in the local registry"},
 		{"bad cache key", func(j *protocol.BuildJob) { j.CacheKey = "a b" }, "invalid cache key"},
 		{"no timeout", func(j *protocol.BuildJob) { j.TimeoutS = 0 }, "timeout_s"},
+		{"other service's repository", func(j *protocol.BuildJob) {
+			j.ImageRepository = protocol.LocalImageRepository("prj_A", "svc_other")
+		}, "not the service's repository"},
+		{"other project's repository", func(j *protocol.BuildJob) {
+			j.ImageRepository = protocol.LocalImageRepository("prj_other", "svc_B")
+		}, "not the service's repository"},
+		{"other project's cache", func(j *protocol.BuildJob) { j.CacheKey = protocol.BuildCacheKey("prj_other", "svc_B") }, "invalid cache key"},
+		{"service-only cache key", func(j *protocol.BuildJob) { j.CacheKey = "svc_B" }, "invalid cache key"},
+		{"missing project", func(j *protocol.BuildJob) { j.ProjectID = "" }, "invalid project or service id"},
+		{"bad service", func(j *protocol.BuildJob) { j.ServiceID = "../svc" }, "invalid project or service id"},
+		{"safe ref", func(j *protocol.BuildJob) { j.Source.Ref = "refs/heads/main" }, ""},
+		{"option ref", func(j *protocol.BuildJob) { j.Source.Ref = "--upload-pack=evil" }, "invalid git ref"},
+		{"dotdot ref", func(j *protocol.BuildJob) { j.Source.Ref = "a/../b" }, "invalid git ref"},
+		{"space ref", func(j *protocol.BuildJob) { j.Source.Ref = "main branch" }, "invalid git ref"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -14,17 +14,25 @@
 //     drain_s, then it is removed;
 //   - run health probes and the restart policy itself, with crash-loop
 //     backoff, so every crash is seen and reported;
+//   - open each workload's sealed environment for its frame's generation,
+//     and refuse (leave pending, with the reason) workloads whose box
+//     doesn't open or that name a network or local image outside their own
+//     project, environment and service;
 //   - keep one bridge network per environment, remove the ones no longer
-//     used, report workload_status on every state change, and
-//     garbage-collect unused images under disk pressure.
+//     used, serve no route that two projects claim, report workload_status
+//     on every state change, and garbage-collect unused images under disk
+//     pressure.
 //
 // Nothing secret is written to disk: environment values live only in the
-// engine's container config and in memory.
+// engine's container config and in memory, and mount_as_file values on the
+// host's /run tmpfs while a container mounts them.
 package runtime
 
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -123,6 +131,28 @@ type Options struct {
 	// removed, so it is still drained and removed after its workload is
 	// dropped. Requires Namespace.
 	AdoptUnlabelled bool
+	// OpenEnv opens a service workload's sealed environment for the
+	// generation of the desired state carrying it, filling Env and
+	// SecretFiles ([protocol.OpenWorkloadEnv] with the node's key). A
+	// workload whose environment doesn't open stays pending with the reason
+	// as its status message. Nil runs workloads with the Env they carry,
+	// which only tests do: Env never comes off the wire.
+	OpenEnv func(generation int64, w *protocol.WorkloadSpec) error
+	// SecretsDir holds each workload's mount_as_file values in a
+	// subdirectory named after the workload ([DefaultSecretsDir] on a node),
+	// bind-mounted read-only at [SecretsMountPath]. Runtimes sharing a host
+	// need distinct directories, since each removes the subdirectories of
+	// workloads it doesn't run. Empty refuses workloads with secret files.
+	SecretsDir string
+	// SystemLog, when set, receives lines the agent writes into a
+	// workload's runtime logs, such as a route conflict. It is called with
+	// the runtime's lock held and must not block.
+	SystemLog func(workloadID, deploymentID, text string)
+	// OnNetwork, when set, is called with every network the runtime is
+	// about to attach containers to, once per process, before the first
+	// container joins it: the agent installs its firewall rules for the
+	// network's bridge there.
+	OnNetwork func(ctx context.Context, n docker.Network)
 }
 
 // Runtime is the reconciler. Create it with [New], feed it desired states
@@ -139,12 +169,18 @@ type Runtime struct {
 	ctx context.Context
 	wg  sync.WaitGroup
 
-	mu        sync.Mutex
-	desired   *protocol.DesiredState
-	instances map[string]*instance  // by container ID
-	workloads map[string]*workState // by workload ID
-	networks  map[string]bool       // known to exist
-	lastErr   string                // last engine error logged, to avoid repeats
+	mu      sync.Mutex
+	desired *protocol.DesiredState
+	// blocked holds, by workload ID, why a workload of desired may not
+	// start: its environment did not open, or [admit] refused it.
+	blocked map[string]string
+	// conflictsLogged holds the route conflicts already logged, so each is
+	// logged once rather than on every pass.
+	conflictsLogged map[routeKey]bool
+	instances       map[string]*instance  // by container ID
+	workloads       map[string]*workState // by workload ID
+	networks        map[string]bool       // known to exist
+	lastErr         string                // last engine error logged, to avoid repeats
 	// listSeq numbers container listings; passSeq is the one the current
 	// pass works from. An operation that finished at or after the listing a
 	// pass uses may not be reflected in it, which the pass must not mistake
@@ -240,16 +276,40 @@ func New(opts Options) *Runtime {
 	return r
 }
 
-// Apply hands the runtime a verified desired state. A state whose
-// generation is not newer than the current one is ignored, and Apply
-// reports whether ds was accepted.
+// Apply hands the runtime a verified desired state, which it then owns. A
+// state whose generation is not newer than the current one is ignored, and
+// Apply reports whether ds was accepted. Each workload's sealed environment
+// is opened here, for ds's generation; a workload that is refused or whose
+// environment doesn't open is kept, pending with the reason, so its
+// existing containers are left alone.
 func (r *Runtime) Apply(ds *protocol.DesiredState) bool {
+	r.mu.Lock()
+	stale := r.desired != nil && ds.Generation <= r.desired.Generation
+	r.mu.Unlock()
+	if stale {
+		return false
+	}
+	blocked := map[string]string{}
+	for i := range ds.Workloads {
+		w := &ds.Workloads[i]
+		reason := admit(w)
+		if reason == "" && r.opts.OpenEnv != nil {
+			if err := r.opts.OpenEnv(ds.Generation, w); err != nil {
+				reason = envFailure(err)
+			}
+		}
+		if reason != "" {
+			w.Env, w.SecretFiles = nil, nil
+			blocked[w.ID] = reason
+			r.log.Error("not starting workload", "workload_id", w.ID, "generation", ds.Generation, "reason", reason)
+		}
+	}
 	r.mu.Lock()
 	if r.desired != nil && ds.Generation <= r.desired.Generation {
 		r.mu.Unlock()
 		return false
 	}
-	r.desired = ds
+	r.desired, r.blocked = ds, blocked
 	r.mu.Unlock()
 	r.poke()
 	return true
@@ -423,6 +483,8 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 
 	now := time.Now()
 	r.mu.Lock()
+	assignLabelAliases(specs)
+	conflicts := r.markRouteConflicts(specs)
 	for _, s := range specs {
 		if d := r.reconcileWorkload(s, now); d > 0 {
 			next = min(next, d)
@@ -432,7 +494,8 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 	if d > 0 {
 		next = min(next, d)
 	}
-	cfg := r.ingressConfig(ds, specs)
+	cfg := r.ingressConfig(ds, specs, conflicts)
+	r.collectSecretDirs(specs)
 	r.mu.Unlock()
 
 	// Zero-downtime order: routes leave the old containers before their
@@ -462,7 +525,9 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 func (r *Runtime) wantSpecs(ds *protocol.DesiredState) []*wantSpec {
 	specs := make([]*wantSpec, 0, len(ds.Workloads)+1)
 	for i := range ds.Workloads {
-		specs = append(specs, &wantSpec{WorkloadSpec: ds.Workloads[i], generation: ds.Generation})
+		specs = append(specs, &wantSpec{
+			WorkloadSpec: ds.Workloads[i], generation: ds.Generation, blocked: r.blocked[ds.Workloads[i].ID],
+		})
 	}
 	if ds.Registry != nil {
 		specs = append(specs, registrySpec(ds.Registry, r.opts.DataDir, ds.Generation))
@@ -579,6 +644,10 @@ func (r *Runtime) reconcileWorkload(s *wantSpec, now time.Time) time.Duration {
 		return 0
 	}
 	if cur == nil {
+		if s.blocked != "" {
+			ws.phase, ws.message = protocol.StatePending, s.blocked
+			return 0
+		}
 		if s.exclusive && r.hasObsolete(s) {
 			return 0
 		}
@@ -765,8 +834,8 @@ func short(id string) string {
 // probe is failing, since a degraded answer beats none. Every desired route
 // is listed with its port even while nothing serves it, so the ingress
 // keeps the route (and Caddy's config) stable. Caller holds r.mu.
-func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec) ingress.Config {
-	type key struct{ host, prefix string }
+func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec, conflicts map[routeKey]bool) ingress.Config {
+	type key = routeKey
 	healthy := map[key][]string{}
 	old := map[key][]string{}
 	degraded := map[key][]string{}
@@ -793,6 +862,9 @@ func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec) in
 	for _, s := range specs {
 		wanted[s.ID] = s
 		for _, rt := range s.Routes {
+			if conflicts[keyOf(rt.Hostname, rt.PathPrefix)] {
+				continue
+			}
 			hosts = append(hosts, rt.Hostname)
 			k := key{rt.Hostname, rt.PathPrefix}
 			note(k)
@@ -835,6 +907,9 @@ func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec) in
 
 	cfg := ingress.Config{TLSMode: ds.TLSMode, AllowedHosts: hosts}
 	for _, k := range keys {
+		if conflicts[keyOf(k.host, k.prefix)] {
+			continue
+		}
 		ups := healthy[k]
 		if len(ups) == 0 {
 			ups = old[k]
@@ -891,8 +966,12 @@ func (r *Runtime) createContainer(ctx context.Context, s *wantSpec) error {
 		return err
 	}
 	r.setPhase(s, protocol.StateStarting)
+	secrets, err := r.writeSecretFiles(s)
+	if err != nil {
+		return fmt.Errorf("secret files: %w", err)
+	}
 	name := containerName(s)
-	id, err := r.d.CreateContainer(ctx, name, r.containerCreate(s))
+	id, err := r.d.CreateContainer(ctx, name, r.containerCreate(s, secrets))
 	if docker.IsConflict(err) {
 		// The name embeds the spec hash, so the existing container runs this
 		// very spec: adopt it if it runs, replace it if an interrupted
@@ -903,7 +982,7 @@ func (r *Runtime) createContainer(ctx context.Context, s *wantSpec) error {
 		if rmErr := r.d.RemoveContainer(ctx, name); rmErr != nil {
 			return fmt.Errorf("create container: %w", err)
 		}
-		id, err = r.d.CreateContainer(ctx, name, r.containerCreate(s))
+		id, err = r.d.CreateContainer(ctx, name, r.containerCreate(s, secrets))
 	}
 	if err != nil {
 		if docker.IsNotFound(err) {
@@ -925,10 +1004,16 @@ func (r *Runtime) createContainer(ctx context.Context, s *wantSpec) error {
 // ensureImage makes s.Image available locally. A digest reference that is
 // already present is never re-pulled; a tag is pulled so a moved tag is
 // picked up, falling back to the local copy if the registry is unreachable.
+//
+// SECURITY: a workload with registry_auth is always pulled, never run from
+// the local cache, so the registry checks its credentials every time: a
+// private image cached for one project must not start for another project
+// that names it without access (ADR 0014 H2).
 func (r *Runtime) ensureImage(ctx context.Context, s *wantSpec) error {
 	ref := docker.ParseReference(s.Image)
+	private := s.RegistryAuth != nil
 	_, inspectErr := r.d.InspectImage(ctx, s.Image)
-	if inspectErr == nil && ref.Digest != "" {
+	if inspectErr == nil && ref.Digest != "" && !private {
 		return nil
 	}
 	auth, ok := pullAuth(s)
@@ -940,7 +1025,7 @@ func (r *Runtime) ensureImage(ctx context.Context, s *wantSpec) error {
 	if err == nil {
 		return nil
 	}
-	if inspectErr == nil {
+	if inspectErr == nil && !private {
 		r.log.Warn("pull failed; using the local copy", "workload_id", s.ID, "image", s.Image, "err", err)
 		return nil
 	}
@@ -1058,7 +1143,7 @@ func (r *Runtime) ensureNetworks(ctx context.Context, specs []*wantSpec) {
 		r.mu.Lock()
 		known := r.networks[s.Network]
 		r.mu.Unlock()
-		if known {
+		if known || s.blocked != "" {
 			continue
 		}
 		if err := r.ensureNetwork(ctx, s); err != nil {
@@ -1073,11 +1158,28 @@ func (r *Runtime) ensureNetworks(ctx context.Context, specs []*wantSpec) {
 	}
 }
 
+// ensureNetwork creates s's network if it is missing, then hands it to
+// [Options.OnNetwork] before any container joins it.
 func (r *Runtime) ensureNetwork(ctx context.Context, s *wantSpec) error {
-	_, err := r.d.InspectNetwork(ctx, s.Network)
-	if err == nil || !docker.IsNotFound(err) {
+	n, err := r.d.InspectNetwork(ctx, s.Network)
+	if err != nil && !docker.IsNotFound(err) {
 		return err
 	}
+	if err != nil {
+		if err := r.createNetwork(ctx, s); err != nil {
+			return err
+		}
+		if n, err = r.d.InspectNetwork(ctx, s.Network); err != nil {
+			return err
+		}
+	}
+	if r.opts.OnNetwork != nil {
+		r.opts.OnNetwork(ctx, n)
+	}
+	return nil
+}
+
+func (r *Runtime) createNetwork(ctx context.Context, s *wantSpec) error {
 	labels := map[string]string{LabelManaged: "true"}
 	if s.ProjectID != nil {
 		labels[LabelProjectID] = *s.ProjectID
@@ -1088,7 +1190,10 @@ func (r *Runtime) ensureNetwork(ctx context.Context, s *wantSpec) error {
 	if r.opts.Namespace != "" {
 		labels[LabelNamespace] = r.opts.Namespace
 	}
-	_, err = r.d.CreateNetwork(ctx, docker.NetworkCreate{Name: s.Network, Driver: "bridge", Labels: labels})
+	_, err := r.d.CreateNetwork(ctx, docker.NetworkCreate{
+		Name: s.Network, Driver: "bridge", Labels: labels,
+		Options: map[string]string{docker.BridgeNameOption: BridgeInterface(s.Network)},
+	})
 	if docker.IsConflict(err) {
 		return nil
 	}
@@ -1096,6 +1201,14 @@ func (r *Runtime) ensureNetwork(ctx context.Context, s *wantSpec) error {
 		r.log.Info("created network", "network", s.Network)
 	}
 	return err
+}
+
+// BridgeInterface returns the host interface name the runtime gives a
+// network it creates: "rh-" and 12 hex characters of the name's SHA-256,
+// within Linux's 15-character limit and recognisable on the host.
+func BridgeInterface(network string) string {
+	sum := sha256.Sum256([]byte(network))
+	return "rh-" + hex.EncodeToString(sum[:6])
 }
 
 // -----------------------------------------------------------------------------
@@ -1189,6 +1302,9 @@ func (r *Runtime) statusOf(s *wantSpec) protocol.WorkloadStatusReport {
 			rep.Message = strings.TrimPrefix(fmt.Sprintf("%s; gave up after %d restarts", rep.Message, cur.restarts), "; ")
 		}
 	}
+	if s.note != "" {
+		rep.Message = appendNote(rep.Message, s.note)
+	}
 	return rep
 }
 
@@ -1228,9 +1344,13 @@ func stopReason(inst *instance) string {
 	return ""
 }
 
-// containerCreate is [containerCreate] plus the runtime's namespace label.
-func (r *Runtime) containerCreate(s *wantSpec) docker.ContainerCreate {
+// containerCreate is [containerCreate] plus the runtime's namespace label and,
+// when secretsBind is set, the bind mount of the workload's secret files.
+func (r *Runtime) containerCreate(s *wantSpec, secretsBind string) docker.ContainerCreate {
 	cc := containerCreate(s)
+	if secretsBind != "" {
+		cc.HostConfig.Binds = append(slices.Clip(cc.HostConfig.Binds), secretsBind)
+	}
 	if r.opts.Namespace != "" {
 		cc.Labels[LabelNamespace] = r.opts.Namespace
 	}

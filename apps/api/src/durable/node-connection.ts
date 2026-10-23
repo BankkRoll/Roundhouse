@@ -6,6 +6,8 @@
  * - validate every agent frame against the protocol schemas, with size and
  *   per-type rate limits, and close agents below `MIN_PROTOCOL_VERSION`
  *   with `agent_outdated`;
+ * - register the signed `hello.encryption_key` of a node that joined
+ *   without one (only while it has none);
  * - persist heartbeat snapshots and detect silent nodes with an alarm;
  * - apply `workload_status` (and `hello.statuses`) to placements, move
  *   deployments between `active` and `crashed`, and wake deploy workflows;
@@ -54,10 +56,12 @@ import {
   MAX_AGENT_FRAME_BYTES,
   MAX_CONTROL_FRAME_BYTES,
   MIN_PROTOCOL_VERSION,
+  type NodeEncryptionKey,
   PROTOCOL_VERSION,
   SEALED_ENV_PROTOCOL_VERSION,
   SECRET_BUILD_ARGS_PROTOCOL_VERSION,
   signEnvelope,
+  verifyNodeEncryptionKey,
   WORKLOADS_PROTOCOL_VERSION,
   type WorkloadState,
   type WorkloadStatusReport,
@@ -489,8 +493,22 @@ export class NodeConnection extends DurableObject<Env> {
         lastHeartbeatAt: new Date(now),
       })
       .where(and(eq(nodes.id, attachment.nodeId), isNull(nodes.deletedAt)))
-      .returning({ id: nodes.id });
+      .returning({
+        id: nodes.id,
+        workspaceId: nodes.workspaceId,
+        identityPublicKey: nodes.identityPublicKey,
+        encryptionPublicKey: nodes.encryptionPublicKey,
+      });
     if (!node) return ws.close(CloseCode.removed, "node removed");
+    // Registered before the desired state below is computed, so a node that
+    // just gained a key gets its workloads in this very frame.
+    if (
+      hello.encryption_key &&
+      node.encryptionPublicKey === null &&
+      hello.protocol_version >= SEALED_ENV_PROTOCOL_VERSION
+    ) {
+      await this.registerEncryptionKey(node, hello.encryption_key);
+    }
 
     await this.ctx.storage.put({ node_id: attachment.nodeId, last_seen: now });
     await this.ctx.storage.setAlarm(now + OFFLINE_AFTER_MS);
@@ -504,6 +522,48 @@ export class NodeConnection extends DurableObject<Env> {
     if (hello.statuses?.length && hello.protocol_version >= WORKLOADS_PROTOCOL_VERSION) {
       await this.applyStatuses(attachment.nodeId, hello.statuses);
     }
+  }
+
+  /**
+   * Stores the X25519 key a node that joined without one sends in
+   * `hello.encryption_key`, once it verifies against the identity key the
+   * node registered at join.
+   *
+   * SECURITY: a key is stored only while the node has none (the update is
+   * conditional, so two racing hellos can't both win). Replacing a key needs
+   * a re-join: a stolen node credential alone must not be able to swap in an
+   * attacker's key and receive the node's secrets (ADR 0014, "Keys").
+   *
+   * @param node - The node's row as `onHello` updated it.
+   * @param key - The signed key from hello.
+   */
+  private async registerEncryptionKey(
+    node: { id: string; workspaceId: string; identityPublicKey: string },
+    key: NodeEncryptionKey,
+  ): Promise<void> {
+    if (!(await verifyNodeEncryptionKey(node.identityPublicKey, node.id, key))) {
+      console.warn(`node ${node.id}: hello.encryption_key does not verify; ignoring it`);
+      return;
+    }
+    const [stored] = await this.db
+      .update(nodes)
+      .set({
+        encryptionPublicKey: key.public_key,
+        encryptionKeyId: key.kid,
+        encryptionKeyRegisteredAt: new Date(),
+      })
+      .where(and(eq(nodes.id, node.id), isNull(nodes.deletedAt), isNull(nodes.encryptionPublicKey)))
+      .returning({ id: nodes.id });
+    if (!stored) return;
+    await recordAudit(this.db, {
+      workspaceId: node.workspaceId,
+      actorType: "node",
+      actorId: node.id,
+      action: "node.encryption_key_registered",
+      targetType: "node",
+      targetId: node.id,
+      metadata: { kid: key.kid, source: "hello" },
+    });
   }
 
   private async onHeartbeat(nodeId: string, hb: Heartbeat): Promise<void> {

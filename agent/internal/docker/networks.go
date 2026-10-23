@@ -12,6 +12,27 @@ type Network struct {
 	Name   string            `json:"Name"`
 	Driver string            `json:"Driver"`
 	Labels map[string]string `json:"Labels"`
+	// Options are the driver options, such as the bridge's interface name.
+	Options map[string]string `json:"Options"`
+}
+
+// BridgeNameOption names a bridge network's host interface.
+const BridgeNameOption = "com.docker.network.bridge.name"
+
+// BridgeInterface returns the host interface of a bridge network: the one
+// its options name, or the engine's default "br-" and the first 12
+// characters of its ID. It is "" for other drivers.
+func (n Network) BridgeInterface() string {
+	if n.Driver != "bridge" {
+		return ""
+	}
+	if name := n.Options[BridgeNameOption]; name != "" {
+		return name
+	}
+	if len(n.ID) < 12 {
+		return ""
+	}
+	return "br-" + n.ID[:12]
 }
 
 // NetworkCreate is the body of POST /networks/create.
@@ -21,6 +42,8 @@ type NetworkCreate struct {
 	Labels map[string]string `json:"Labels,omitempty"`
 	// Internal networks have no route to the outside world.
 	Internal bool `json:"Internal,omitempty"`
+	// Options are driver options, such as [BridgeNameOption].
+	Options map[string]string `json:"Options,omitempty"`
 }
 
 // CreateNetwork creates a network and returns its ID. The engine answers

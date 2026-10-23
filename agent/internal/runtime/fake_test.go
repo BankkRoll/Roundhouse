@@ -269,7 +269,7 @@ func (f *fakeDocker) CreateNetwork(_ context.Context, spec docker.NetworkCreate)
 	if _, ok := f.networks[spec.Name]; ok {
 		return "", &docker.Error{Status: 409, Message: "exists"}
 	}
-	f.networks[spec.Name] = docker.Network{ID: "net-" + spec.Name, Name: spec.Name, Driver: spec.Driver, Labels: spec.Labels}
+	f.networks[spec.Name] = docker.Network{ID: "net-" + spec.Name, Name: spec.Name, Driver: spec.Driver, Labels: spec.Labels, Options: spec.Options}
 	f.op("network %s", spec.Name)
 	return "net-" + spec.Name, nil
 }

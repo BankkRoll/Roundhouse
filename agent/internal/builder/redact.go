@@ -2,59 +2,45 @@ package builder
 
 import (
 	"encoding/base64"
-	"regexp"
-	"slices"
 	"strings"
+
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
-// redactedText replaces every secret in build output and error messages.
-const redactedText = "********"
+// redactedText replaces every secret in build output and error messages; it
+// is the marker the control plane uses for runtime logs.
+const redactedText = protocol.Redacted
 
-// minSecretLen is the shortest value redacted. Shorter values ("1", "on")
-// would mangle unrelated output while protecting nothing.
-const minSecretLen = 4
-
-// secretArgName matches build argument names whose values are treated as
-// secret even when the job does not mark them: a fallback for args a user
-// forgot to mark, on top of the control plane's own redaction of known
-// secret values.
-var secretArgName = regexp.MustCompile(`(?i)(secret|token|passw|pwd|private|credential|api_?key|access_?key|auth|signing|cookie|session|dsn|database_url|_key$)`)
-
-// redactor replaces known secret values in text.
+// redactor replaces a job's secret values, and the encodings they take in
+// output, in text.
 type redactor struct {
-	// secrets is sorted longest first so a secret containing another is
-	// replaced whole.
-	secrets []string
+	// needles come from [protocol.RedactionNeedles], longest first, so a
+	// secret containing another is replaced whole.
+	needles []string
 }
 
-// newRedactor returns a redactor for the job's git token, the build args it
-// marks secret, and the values of secret-looking build args. Encodings a
-// token takes on the wire (HTTP Basic credentials) are redacted too.
-func newRedactor(token string, buildArgs map[string]string, secretArgs []string) *redactor {
-	r := &redactor{}
+// newRedactor returns a redactor for the job's git token and its secret
+// values: the build args the job marks secret and the opened
+// build_secrets_sealed. Only values the job declares secret are redacted;
+// names are never guessed at (ADR 0014, "Redaction").
+//
+// Each value is redacted in every encoding [protocol.RedactionNeedles]
+// covers, each line of a multi-line value on its own (build output is
+// printed a line at a time), and the token also as the HTTP Basic
+// credentials git sends.
+func newRedactor(token string, secrets []string) *redactor {
+	var values []string
 	if token != "" {
-		r.add(token)
-		r.add(base64.StdEncoding.EncodeToString([]byte(gitTokenUser + ":" + token)))
-		r.add(base64.StdEncoding.EncodeToString([]byte(token)))
+		values = append(values, token, gitTokenUser+":"+token,
+			base64.StdEncoding.EncodeToString([]byte(gitTokenUser+":"+token)))
 	}
-	for k, v := range buildArgs {
-		if slices.Contains(secretArgs, k) || secretArgName.MatchString(k) {
-			r.add(v)
-			// A value spanning lines is printed one line at a time.
-			for line := range strings.SplitSeq(v, "\n") {
-				r.add(strings.TrimSpace(line))
-			}
+	for _, v := range secrets {
+		values = append(values, v)
+		for line := range strings.SplitSeq(v, "\n") {
+			values = append(values, strings.TrimSpace(line))
 		}
 	}
-	return r
-}
-
-func (r *redactor) add(s string) {
-	if len(s) < minSecretLen || slices.Contains(r.secrets, s) {
-		return
-	}
-	r.secrets = append(r.secrets, s)
-	slices.SortFunc(r.secrets, func(a, b string) int { return len(b) - len(a) })
+	return &redactor{needles: protocol.RedactionNeedles(values)}
 }
 
 // redact returns s with every secret replaced by [redactedText].
@@ -62,10 +48,18 @@ func (r *redactor) redact(s string) string {
 	if r == nil {
 		return s
 	}
-	for _, secret := range r.secrets {
-		if strings.Contains(s, secret) {
-			s = strings.ReplaceAll(s, secret, redactedText)
-		}
+	return protocol.Redact(s, r.needles)
+}
+
+// jobSecrets returns the values of the job's secret build args followed by
+// its sealed secrets.
+func jobSecrets(job *protocol.BuildJob, sealed map[string]string) []string {
+	var out []string
+	for _, k := range job.SecretBuildArgs {
+		out = append(out, job.BuildArgs[k])
 	}
-	return s
+	for _, v := range sealed {
+		out = append(out, v)
+	}
+	return out
 }

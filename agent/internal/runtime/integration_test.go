@@ -17,8 +17,12 @@ import (
 	"github.com/BankkRoll/Roundhouse/agent/internal/dockertest"
 	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
 	"github.com/BankkRoll/Roundhouse/agent/internal/runtime"
+	"github.com/BankkRoll/Roundhouse/agent/internal/sealtest"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
+
+// itNode is the node ID workload environments are sealed to.
+const itNode = "node_it"
 
 func ptr[T any](v T) *T { return &v }
 
@@ -122,6 +126,7 @@ func newHarness(t *testing.T) *harness {
 		MaxRestartBackoff: time.Second,
 		Namespace:         ns,
 		MinDrain:          ingress.SwitchDelay,
+		OpenEnv:           sealtest.Opener(sealtest.Key(), itNode),
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
@@ -172,8 +177,9 @@ func rehash(w protocol.WorkloadSpec) protocol.WorkloadSpec {
 func (h *harness) apply(ws ...protocol.WorkloadSpec) {
 	h.gen++
 	ds := &protocol.DesiredState{Type: protocol.TypeDesiredState, Generation: h.gen, Workloads: ws, TLSMode: protocol.TLSOff}
-	for _, w := range ws {
-		if err := w.Validate(); err != nil {
+	for i := range ws {
+		sealtest.SealWorkload(h.t, sealtest.Key().PublicKey(), itNode, h.gen, &ws[i], ws[i].Env, nil)
+		if err := ws[i].Validate(); err != nil {
 			h.t.Fatalf("invalid workload: %v", err)
 		}
 	}
@@ -277,6 +283,10 @@ func TestWorkloadLifecycleWithZeroDowntime(t *testing.T) {
 		}
 	}()
 	next := h.workload(id, map[string]string{"GREETING": "bonjour"})
+	// NOTE: env is outside the spec hash (a workload ID's environment never
+	// changes), so a hashed field drives the rollout.
+	next.Labels["rev"] = "2"
+	next = rehash(next)
 	h.apply(next)
 	var newID string
 	dockertest.Eventually(t, 2*time.Minute, "the replacement to take over and the old container to go", func() bool {

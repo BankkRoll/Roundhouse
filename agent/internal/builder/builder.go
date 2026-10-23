@@ -2,15 +2,16 @@ package builder
 
 import (
 	"context"
+	"crypto/ecdh"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,8 +70,18 @@ type Options struct {
 	// PruneInterval is how often the cache is trimmed to CacheMaxBytes
 	// between builds. Default [DefaultPruneInterval].
 	PruneInterval time.Duration
-	// MemoryBytes limits sys_buildkitd's memory; 0 means no limit.
+	// MemoryBytes limits each BuildKit daemon's memory. Default
+	// [DefaultDaemonMemoryBytes].
 	MemoryBytes int64
+	// NanoCPUs limits each BuildKit daemon's CPU, in billionths of a core.
+	// Default [DefaultDaemonCPUs] cores.
+	NanoCPUs int64
+	// MaxDaemons is how many per-project BuildKit daemons may run at once.
+	// Default [DefaultMaxDaemons].
+	MaxDaemons int
+	// DaemonIdle is how long a BuildKit daemon runs after its last build.
+	// Default [DefaultDaemonIdle].
+	DaemonIdle time.Duration
 	// AppArmorProfile is the AppArmor profile sys_buildkitd runs under,
 	// such as "unconfined" or a site-specific profile. Empty picks
 	// [AppArmorProfile] when the engine's host has it loaded and
@@ -79,6 +90,12 @@ type Options struct {
 	// RegistryProxyPort is where the per-build registry proxy listens on the
 	// build network's gateway. Default [DefaultRegistryProxyPort].
 	RegistryProxyPort int
+
+	// EncryptionKey is the node's X25519 key, which opens a job's
+	// build_secrets_sealed. Without it, jobs with sealed secrets fail.
+	EncryptionKey *ecdh.PrivateKey
+	// NodeID is this node's ID, part of the sealed secrets' AAD.
+	NodeID string
 
 	// AllowLoopbackHTTP permits http:// repository URLs whose host is
 	// loopback. Tests only: control-plane jobs are always https.
@@ -93,8 +110,9 @@ type builder struct {
 
 	// busy admits one build at a time.
 	busy sync.Mutex
-	// lastPrune is guarded by busy.
-	lastPrune time.Time
+	// lastPrune is when each project's cache was last trimmed, by project
+	// ID; guarded by busy.
+	lastPrune map[string]time.Time
 }
 
 // New returns a Builder. It validates opts but does not touch Docker: the
@@ -161,17 +179,22 @@ func New(opts Options) (Builder, error) {
 			cacheMaxBytes: opts.CacheMaxBytes,
 			minFreeBytes:  opts.MinFreeBytes,
 			memoryBytes:   opts.MemoryBytes,
+			nanoCPUs:      opts.NanoCPUs,
+			maxRunning:    opts.MaxDaemons,
+			idleAfter:     opts.DaemonIdle,
 
 			apparmorOverride: opts.AppArmorProfile,
 		},
-		http: &http.Client{Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}},
+		http:      &http.Client{Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}},
+		lastPrune: map[string]time.Time{},
 	}, nil
 }
 
 // Run implements [Builder].
 func (b *builder) Run(ctx context.Context, job protocol.BuildJob, emit func(protocol.Logs)) protocol.BuildResult {
 	start := time.Now()
-	red := newRedactor(job.Source.Token, job.BuildArgs, job.SecretBuildArgs)
+	secrets, openErr := b.openSecrets(&job)
+	red := newRedactor(job.Source.Token, jobSecrets(&job, secrets))
 	timeout := buildTimeout(&job, b.opts.Timeout)
 	if timeout <= 0 {
 		timeout = b.opts.Timeout
@@ -185,7 +208,11 @@ func (b *builder) Run(ctx context.Context, job protocol.BuildJob, emit func(prot
 	defer b.busy.Unlock()
 
 	logs := newLogBatcher(job.BuildID, emit, red, nil)
-	image, err := b.build(ctx, &job, logs)
+	var image *protocol.BuiltImage
+	err := openErr
+	if err == nil {
+		image, err = b.build(ctx, &job, secrets, logs)
+	}
 	elapsed := time.Since(start)
 	res := buildResult(ctx, &job, image, err, timeout, elapsed, red)
 	if res.OK {
@@ -207,7 +234,7 @@ func errString(err error) string {
 }
 
 // build runs every stage of one job and returns the pushed image.
-func (b *builder) build(ctx context.Context, job *protocol.BuildJob, logs *logBatcher) (*protocol.BuiltImage, error) {
+func (b *builder) build(ctx context.Context, job *protocol.BuildJob, secrets map[string]string, logs *logBatcher) (*protocol.BuiltImage, error) {
 	if err := validateJob(job, b.opts.AllowLoopbackHTTP); err != nil {
 		return nil, err
 	}
@@ -239,12 +266,17 @@ func (b *builder) build(ctx context.Context, job *protocol.BuildJob, logs *logBa
 		}
 	}()
 
-	// Starting or repairing sys_buildkitd (possibly pulling its image)
-	// overlaps with fetching and planning; the result is awaited before the
-	// solve, and always before returning.
+	// Starting or repairing the project's BuildKit daemon (possibly pulling
+	// its image) overlaps with fetching and planning; the result is awaited
+	// before the solve, and always before returning.
 	ensureCtx, cancelEnsure := context.WithCancel(ctx)
 	ensured := make(chan error, 1)
-	go func() { ensured <- b.daemon.ensure(ensureCtx) }()
+	var daemonName string
+	go func() {
+		var err error
+		daemonName, err = b.daemon.ensure(ensureCtx, job.ProjectID)
+		ensured <- err
+	}()
 	var ensureErr error
 	ensureDone := false
 	waitEnsure := func() error {
@@ -256,6 +288,7 @@ func (b *builder) build(ctx context.Context, job *protocol.BuildJob, logs *logBa
 	defer func() {
 		cancelEnsure()
 		_ = waitEnsure()
+		b.daemon.release(job.ProjectID)
 	}()
 
 	src := filepath.Join(work, "src")
@@ -302,20 +335,21 @@ func (b *builder) build(ctx context.Context, job *protocol.BuildJob, logs *logBa
 	switch job.Builder {
 	case protocol.BuilderDockerfile:
 		logs.system(fmt.Sprintf("Building %s with Dockerfile %s", describePath(job.ContextDir), paths.dockerfileName))
-		if len(job.SecretBuildArgs) > 0 {
-			names := slices.Sorted(slices.Values(job.SecretBuildArgs))
-			logs.system(fmt.Sprintf("Secret build args %s are BuildKit secrets, not ARGs: read one with "+
-				"RUN --mount=type=secret,id=%s,env=%s", strings.Join(names, ", "), names[0], names[0]))
+		if names := secretNames(job, secrets); len(names) > 0 {
+			logs.system(secretHint(names))
 		}
-		spec = dockerfileSolve(job, paths)
+		spec = dockerfileSolve(job, paths, secrets)
 	case protocol.BuilderRailpack:
-		if err := checkRailpackArgs(job.BuildArgs); err != nil {
+		planEnv := make(map[string]string, len(job.BuildArgs)+len(secrets))
+		maps.Copy(planEnv, job.BuildArgs)
+		maps.Copy(planEnv, secrets)
+		if err := checkRailpackArgs(planEnv); err != nil {
 			return nil, err
 		}
 		logs.system(fmt.Sprintf("Planning %s with Railpack %s", describePath(job.ContextDir), RailpackVersion))
 		planner := &railpackPlanner{bin: b.opts.RailpackPath, home: filepath.Join(work, "railpack-home"), stdout: stdout, stderr: stderr}
 		planDir := filepath.Join(work, "plan")
-		err := planner.prepare(ctx, paths.context, planDir, describePath(job.ContextDir), job.BuildArgs)
+		err := planner.prepare(ctx, paths.context, planDir, describePath(job.ContextDir), planEnv)
 		stdout.Flush()
 		stderr.Flush()
 		if errors.Is(err, exec.ErrNotFound) {
@@ -324,7 +358,7 @@ func (b *builder) build(ctx context.Context, job *protocol.BuildJob, logs *logBa
 		if err != nil {
 			return nil, err
 		}
-		spec = railpackSolve(job, paths, planDir, b.opts.RailpackFrontendImage)
+		spec = railpackSolve(job, paths, planDir, b.opts.RailpackFrontendImage, secrets)
 	}
 
 	if err := waitEnsure(); err != nil {
@@ -344,7 +378,7 @@ func (b *builder) build(ctx context.Context, job *protocol.BuildJob, logs *logBa
 	spec.imageRef = proxy.authHost() + "/" + repoPath + ":" + job.BuildID
 	spec.cacheRef = proxy.authHost() + "/" + cacheRepositoryPath(job.CacheKey) + ":buildcache"
 
-	client, err := b.daemon.connect(ctx, slogWriter{b.log})
+	client, err := b.daemon.connect(ctx, daemonName, slogWriter{b.log})
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, context.Cause(ctx)
@@ -353,13 +387,13 @@ func (b *builder) build(ctx context.Context, job *protocol.BuildJob, logs *logBa
 	}
 	defer client.Close()
 
-	if time.Since(b.lastPrune) > b.opts.PruneInterval {
+	if time.Since(b.lastPrune[job.ProjectID]) > b.opts.PruneInterval {
 		pctx, pcancel := context.WithTimeout(ctx, 2*time.Minute)
 		if err := b.daemon.prune(pctx, client); err != nil && ctx.Err() == nil {
 			b.log.Warn("BuildKit cache prune failed", "error", err)
 		}
 		pcancel()
-		b.lastPrune = time.Now()
+		b.lastPrune[job.ProjectID] = time.Now()
 	}
 
 	dgst, err := solve(ctx, client, spec, logs)

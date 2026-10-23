@@ -6,6 +6,7 @@
  * @module
  */
 import type { nodes } from "@roundhouse/db";
+import { SEALED_ENV_PROTOCOL_VERSION } from "@roundhouse/protocol";
 import { type NodeStatus, OFFLINE_AFTER_MS } from "@roundhouse/shared";
 
 type NodeRow = typeof nodes.$inferSelect;
@@ -55,6 +56,7 @@ export function toApiNode(node: NodeRow, now = Date.now()) {
     kernel: node.kernel,
     docker_version: node.dockerVersion,
     agent_version: node.agentVersion,
+    workloads_blocked: workloadsBlocked(node),
     capabilities: node.capabilities,
     cpu_total: node.cpuTotal,
     mem_total: node.memTotal,
@@ -66,6 +68,22 @@ export function toApiNode(node: NodeRow, now = Date.now()) {
     last_heartbeat_at: node.lastHeartbeatAt ? +node.lastHeartbeatAt : null,
     created_at: +node.createdAt,
   };
+}
+
+/**
+ * Why a node gets no workloads or builds, mirroring `runsSealedWorkloads`:
+ * its agent predates sealing ("upgrade agent"), or it has no encryption key
+ * ("no encryption key"; re-join it, or upgrade so its hello registers one).
+ * A node that never connected reports nothing yet.
+ *
+ * @param node - Stored node row.
+ * @returns The reason, or `null` when the node can run workloads.
+ */
+export function workloadsBlocked(node: NodeRow): "upgrade_agent" | "no_encryption_key" | null {
+  if (node.lastHeartbeatAt === null) return null;
+  if (node.protocolVersion < SEALED_ENV_PROTOCOL_VERSION) return "upgrade_agent";
+  if (node.encryptionPublicKey === null) return "no_encryption_key";
+  return null;
 }
 
 /**

@@ -201,12 +201,17 @@ console.log(JSON.stringify(out));`;
   return JSON.parse(stdout.trim().split("\n").pop());
 }
 
-/** Command lines of every process in BuildKit's container, build steps included. */
+/**
+ * Command lines of every process in the BuildKit daemons (one per project),
+ * build steps included.
+ */
 async function buildkitProcesses() {
-  const { stdout } = await docker(["exec", "sys_buildkitd", "ps", "-o", "args"], {
-    allowFail: true,
-  });
-  return stdout;
+  let out = "";
+  for (const id of await running("roundhouse.system=buildkitd")) {
+    const { stdout } = await docker(["exec", id, "ps", "-o", "args"], { allowFail: true });
+    out += stdout;
+  }
+  return out;
 }
 
 after(() => writeArtifact("evidence.json", E));

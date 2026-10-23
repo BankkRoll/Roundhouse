@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/BankkRoll/Roundhouse/agent/internal/config"
 	"github.com/BankkRoll/Roundhouse/agent/internal/facts"
+	"github.com/BankkRoll/Roundhouse/agent/internal/nodekey"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
@@ -154,8 +156,18 @@ func TestJoin(t *testing.T) {
 	if _, ok := key.(ed25519.PrivateKey); !ok {
 		t.Fatalf("identity key has type %T", key)
 	}
-	if files := snapshot(t, opts); len(files) != 3 {
-		t.Fatalf("expected key, credential and config only, got %v", keys(files))
+	enc, err := nodekey.LoadEncryptionKey(cfg.EncryptionKeyFile)
+	if err != nil {
+		t.Fatalf("encryption key: %v", err)
+	}
+	if want := base64.StdEncoding.EncodeToString(enc.PublicKey().Bytes()); cp.got.EncryptionPublicKey != want {
+		t.Errorf("join sent encryption key %q, want %q", cp.got.EncryptionPublicKey, want)
+	}
+	if cp.got.EncryptionPublicKey == cp.got.PublicKey {
+		t.Error("identity and encryption keys must differ")
+	}
+	if files := snapshot(t, opts); len(files) != 4 {
+		t.Fatalf("expected two keys, credential and config only, got %v", keys(files))
 	}
 
 	if _, err := Join(context.Background(), opts); !errors.Is(err, ErrAlreadyJoined) {
@@ -187,7 +199,11 @@ func TestForcedRejoinResetsState(t *testing.T) {
 	if _, err := os.Stat(next.StateFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("new registration did not start with fresh state: %v", err)
 	}
-	for _, old := range []string{cfg.IdentityKeyFile, cfg.CredentialFile, cfg.StateFile} {
+	oldEnc, _ := os.ReadFile(cfg.EncryptionKeyFile)
+	if newEnc, _ := os.ReadFile(next.EncryptionKeyFile); bytes.Equal(oldEnc, newEnc) {
+		t.Fatal("re-join kept the old encryption key")
+	}
+	for _, old := range []string{cfg.IdentityKeyFile, cfg.EncryptionKeyFile, cfg.CredentialFile, cfg.StateFile} {
 		if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("previous registration file %s survived: %v", old, err)
 		}

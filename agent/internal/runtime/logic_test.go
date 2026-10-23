@@ -202,7 +202,7 @@ func TestIngressSelection(t *testing.T) {
 	}
 	ds := desired(1, w)
 	cfg := func() []string {
-		c := rt.ingressConfig(ds, []*wantSpec{ws})
+		c := rt.ingressConfig(ds, []*wantSpec{ws}, nil)
 		if len(c.Routes) == 0 {
 			return nil
 		}
@@ -330,23 +330,122 @@ func TestCommandAndEntrypointMapping(t *testing.T) {
 	}
 }
 
-func TestPrivateDomainAlias(t *testing.T) {
-	w := spec("wl_a", "svc_web")
-	w.Labels = map[string]string{LabelPrivateDomain: "api.production.internal"}
-	cc := containerCreate(&wantSpec{WorkloadSpec: rehash(w)})
-	got := cc.NetworkingConfig.EndpointsConfig[w.Network].Aliases
-	if !slices.Equal(got, []string{"api.production.internal"}) {
-		t.Fatalf("aliases %v", got)
-	}
-	for _, bad := range []string{"", "Not A Host", "nodot"} {
-		w.Labels[LabelPrivateDomain] = bad
-		if a := networkAliases(&wantSpec{WorkloadSpec: w}); a != nil {
-			t.Errorf("%q gave aliases %v", bad, a)
+func TestPrivateDomainAliases(t *testing.T) {
+	svcAlias := protocol.PrivateServiceAlias("svc_web")
+	mk := func(id, service, domain, network string) *wantSpec {
+		w := spec(id, service)
+		w.Labels = map[string]string{}
+		if domain != "" {
+			w.Labels[LabelPrivateDomain] = domain
 		}
+		if network != "" {
+			w.Network = network
+		}
+		return &wantSpec{WorkloadSpec: rehash(w)}
+	}
+	aliases := func(specs ...*wantSpec) [][]string {
+		assignLabelAliases(specs)
+		var out [][]string
+		for _, s := range specs {
+			out = append(out, containerCreate(s).NetworkingConfig.EndpointsConfig[s.Network].Aliases)
+		}
+		return out
+	}
+	cases := []struct {
+		name  string
+		specs []*wantSpec
+		want  [][]string
+	}{
+		{"service alias always", []*wantSpec{mk("wl_a", "svc_web", "", "")}, [][]string{{svcAlias}}},
+		{"valid label", []*wantSpec{mk("wl_a", "svc_web", "api.production.internal", "")},
+			[][]string{{svcAlias, "api.production.internal"}}},
+		{"not a private domain", []*wantSpec{mk("wl_a", "svc_web", "api.example.com", "")}, [][]string{{svcAlias}}},
+		{"too many labels", []*wantSpec{mk("wl_a", "svc_web", "a.b.production.internal", "")}, [][]string{{svcAlias}}},
+		{"garbage", []*wantSpec{mk("wl_a", "svc_web", "Not A Host", "")}, [][]string{{svcAlias}}},
+		{"replicas share it", []*wantSpec{
+			mk("wl_a", "svc_web", "api.production.internal", ""), mk("wl_b", "svc_web", "api.production.internal", ""),
+		}, [][]string{{svcAlias, "api.production.internal"}, {svcAlias, "api.production.internal"}}},
+		{"lowest workload ID wins between services", []*wantSpec{
+			mk("wl_b", "svc_web", "api.production.internal", ""), mk("wl_a", "svc_evil", "api.production.internal", ""),
+		}, [][]string{{svcAlias}, {protocol.PrivateServiceAlias("svc_evil"), "api.production.internal"}}},
+		{"other networks don't contend", []*wantSpec{
+			mk("wl_b", "svc_web", "api.production.internal", ""),
+			mk("wl_a", "svc_other", "api.production.internal", protocol.ProjectNetworkName("prj_1")),
+		}, [][]string{{svcAlias, "api.production.internal"}, {protocol.PrivateServiceAlias("svc_other"), "api.production.internal"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := aliases(tc.specs...)
+			if !slices.EqualFunc(got, tc.want, slices.Equal) {
+				t.Fatalf("aliases %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	loser := mk("wl_b", "svc_web", "api.production.internal", "")
+	aliases(loser, mk("wl_a", "svc_evil", "api.production.internal", ""))
+	if !strings.Contains(loser.note, "claimed by another service") {
+		t.Fatalf("note %q", loser.note)
 	}
 	sys := registrySpec(&protocol.RegistryConfig{Storage: protocol.RegistryStorage{Type: protocol.StorageFilesystem}}, "/d", 1)
 	sys.Labels[LabelPrivateDomain] = "registry.system.internal"
 	if a := networkAliases(sys); a != nil {
 		t.Fatalf("system workload aliases %v", a)
+	}
+}
+
+func TestRouteConflictsBetweenProjects(t *testing.T) {
+	route := func(id, project, host, prefix string) *wantSpec {
+		w := spec(id, "svc_"+id)
+		w.ProjectID = ptr(project)
+		w.Network = protocol.EnvironmentNetworkName(project, "env_1")
+		w.Routes = []protocol.WorkloadRoute{{Hostname: host, ContainerPort: 80, PathPrefix: prefix}}
+		return &wantSpec{WorkloadSpec: rehash(w)}
+	}
+	cases := []struct {
+		name      string
+		specs     []*wantSpec
+		conflicts []routeKey
+	}{
+		{"one project", []*wantSpec{route("wl_a", "prj_1", "a.example.com", ""), route("wl_b", "prj_1", "a.example.com", "")}, nil},
+		{"two projects, same host", []*wantSpec{route("wl_a", "prj_1", "a.example.com", ""), route("wl_b", "prj_2", "a.example.com", "/")},
+			[]routeKey{{"a.example.com", "/"}}},
+		{"two projects, other prefixes", []*wantSpec{route("wl_a", "prj_1", "a.example.com", "/api"), route("wl_b", "prj_2", "a.example.com", "/")}, nil},
+		{"two projects, same prefix", []*wantSpec{route("wl_a", "prj_1", "a.example.com", "/api"), route("wl_b", "prj_2", "a.example.com", "/api")},
+			[]routeKey{{"a.example.com", "/api"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var lines []string
+			rt := New(Options{SystemLog: func(wl, dep, text string) { lines = append(lines, wl+": "+text) }})
+			got := rt.markRouteConflicts(tc.specs)
+			if len(got) != len(tc.conflicts) {
+				t.Fatalf("conflicts %v, want %v", got, tc.conflicts)
+			}
+			for _, k := range tc.conflicts {
+				if !got[k] {
+					t.Fatalf("conflicts %v, want %v", got, tc.conflicts)
+				}
+			}
+			if len(tc.conflicts) == 0 {
+				return
+			}
+			for _, s := range tc.specs {
+				if !strings.Contains(s.note, "another project claims it") {
+					t.Errorf("%s note %q", s.ID, s.note)
+				}
+			}
+			if len(lines) != 2 || strings.Contains(strings.Join(lines, "\n"), "prj_") {
+				t.Fatalf("system lines %q: one per workload, never naming the other project", lines)
+			}
+			cfg := rt.ingressConfig(desired(1), tc.specs, got)
+			if len(cfg.Routes) != 0 || len(cfg.AllowedHosts) != 0 {
+				t.Fatalf("conflicting route served: %+v", cfg)
+			}
+			rt.markRouteConflicts(tc.specs)
+			if len(lines) != 2 {
+				t.Fatal("conflict logged again on the next pass")
+			}
+		})
 	}
 }

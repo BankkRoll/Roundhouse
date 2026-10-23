@@ -159,6 +159,12 @@ export const NodeSchema = z
     kernel: z.string().nullable(),
     docker_version: z.string().nullable(),
     agent_version: z.string().nullable(),
+    /**
+     * Why the node gets no workloads or builds: `upgrade_agent` (its agent
+     * predates sealed variables) or `no_encryption_key` (it registered no
+     * key to seal them to); `null` when it can run them, or hasn't connected.
+     */
+    workloads_blocked: z.enum(["upgrade_agent", "no_encryption_key"]).nullable(),
     capabilities: CapabilitiesSchema.nullable(),
     cpu_total: z.number().nullable(),
     mem_total: z.number().nullable(),

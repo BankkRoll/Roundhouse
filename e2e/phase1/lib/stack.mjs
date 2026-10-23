@@ -13,7 +13,8 @@
  * commands use the real host network.
  *
  * Everything is named `roundhouse-e2e-*` (plus what the agent itself creates:
- * `sys_registry`, `sys_buildkitd`, `roundhouse-build`, `roundhouse-buildkit` and
+ * `sys_registry`, the `sys_buildkitd-<project>` daemons and their volumes,
+ * `roundhouse-build` and
  * the environment networks), so a teardown can find it after a crash.
  *
  * @module
@@ -461,6 +462,10 @@ export async function startAgent() {
     "--name",
     NAMES.agent,
     ...agentMounts(),
+    // The control plane under `wrangler dev` is plain HTTP, so the agent
+    // connects over ws://, where it applies workloads only in dev mode.
+    "-e",
+    "ROUNDHOUSE_DEV=1",
     NAMES.nodeImage,
     "run",
     "--config",
@@ -480,6 +485,19 @@ export async function containersWithLabel(label) {
 }
 
 /**
+ * Names of the agent's BuildKit daemons (one per project), running or not.
+ *
+ * @returns {Promise<string[]>}
+ */
+async function buildkitDaemons() {
+  const res = await docker(
+    ["ps", "-a", "--filter", "label=roundhouse.system=buildkitd", "--format", "{{.Names}}"],
+    { allowFail: true },
+  );
+  return res.stdout.split("\n").filter(Boolean);
+}
+
+/**
  * Collects what explains a failure: agent, Caddy and git server logs, the
  * live Caddy config, managed containers and the tail of wrangler's output.
  *
@@ -493,8 +511,9 @@ export async function dumpDiagnostics(opts = {}) {
     ["agent.log", NAMES.agent],
     ["caddy.log", NAMES.caddy],
     ["git-server.log", NAMES.git],
-    ["sys_buildkitd.log", "sys_buildkitd"],
     ["sys_registry.log", "sys_registry"],
+    // One BuildKit daemon per project.
+    ...(await buildkitDaemons()).map((name) => [`${name}.log`, name]),
   ]) {
     const res = await docker(["logs", "--timestamps", container], { allowFail: true });
     save(name, res.stdout + res.stderr);
@@ -586,7 +605,9 @@ export async function teardown() {
     .filter(([id, ns, test]) => id && nodeOwned(ns, test))
     .map(([id]) => id);
   const named = [NAMES.caddy, NAMES.git, NAMES.probe, "sys_registry", "sys_buildkitd"];
-  await docker(["rm", "-f", "-v", ...named, ...ids], { allowFail: true });
+  await docker(["rm", "-f", "-v", ...named, ...(await buildkitDaemons()), ...ids], {
+    allowFail: true,
+  });
 
   const nets = await docker(
     [
@@ -608,7 +629,12 @@ export async function teardown() {
     await docker(["network", "rm", net], { allowFail: true });
   }
   if (process.env.PHASE1_KEEP_BUILD_CACHE !== "1") {
-    await docker(["volume", "rm", "-f", "roundhouse-buildkit"], { allowFail: true });
+    const caches = await docker(
+      ["volume", "ls", "-q", "--filter", "label=roundhouse.system=buildkitd"],
+      { allowFail: true },
+    );
+    const volumes = caches.stdout.split("\n").filter(Boolean);
+    await docker(["volume", "rm", "-f", "roundhouse-buildkit", ...volumes], { allowFail: true });
   }
   await docker(["volume", "rm", "-f", NAMES.certs, NAMES.caddyData], { allowFail: true });
   const tools = await docker(["image", "inspect", NAMES.toolsImage], { allowFail: true });

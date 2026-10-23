@@ -1,9 +1,10 @@
 // Package config loads and saves the agent's on-disk configuration and the
 // secret files it points to.
 //
-// The YAML config holds only non-secret settings. The bearer credential and
-// the node's Ed25519 identity key live in separate 0600 files referenced by
-// path, so the config can be inspected or backed up without leaking them.
+// The YAML config holds only non-secret settings. The bearer credential, the
+// node's Ed25519 identity key and its X25519 encryption key live in separate
+// 0600 files referenced by path, so the config can be inspected or backed up
+// without leaking them.
 package config
 
 import (
@@ -35,6 +36,10 @@ type Config struct {
 	CredentialFile string `yaml:"credential_file"`
 	// IdentityKeyFile holds the node's PEM-encoded PKCS#8 Ed25519 private key.
 	IdentityKeyFile string `yaml:"identity_key_file"`
+	// EncryptionKeyFile holds the node's raw X25519 private key, which opens
+	// sealed environments and build secrets. Empty in configs written before
+	// sealing; `run` then creates the key and records its path.
+	EncryptionKeyFile string `yaml:"encryption_key_file,omitempty"`
 	// StateFile holds state that must survive restarts, such as the observed
 	// desired-state generation.
 	StateFile string `yaml:"state_file"`
@@ -62,8 +67,8 @@ func DefaultPath() string {
 	return filepath.Join(userDir(), "agent.yaml")
 }
 
-// DefaultDataDir returns the directory for the credential, identity key and
-// state files belonging to the config at configPath: /var/lib/roundhouse on
+// DefaultDataDir returns the directory for the credential, key and state
+// files belonging to the config at configPath: /var/lib/roundhouse on
 // Linux, and a sibling of the config elsewhere, so local agents started with
 // different --config paths never share a credential.
 func DefaultDataDir(configPath string) string {
@@ -96,6 +101,9 @@ func (c Config) WithDataDir(dir, registration string) Config {
 	}
 	if c.IdentityKeyFile == "" {
 		c.IdentityKeyFile = filepath.Join(dir, "identity"+suffix+".key")
+	}
+	if c.EncryptionKeyFile == "" {
+		c.EncryptionKeyFile = filepath.Join(dir, "encryption"+suffix+".key")
 	}
 	if c.StateFile == "" {
 		c.StateFile = filepath.Join(dir, "state"+suffix+".json")

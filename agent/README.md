@@ -161,10 +161,15 @@ into an image in the local registry and answers with `build_result`.
    (`secret_build_args`) only as BuildKit secrets with the arg's name as ID
    (`RUN --mount=type=secret,id=NAME,env=NAME`), so they never reach the
    image or its history.
-3. **Build.** BuildKit runs rootless as `sys_buildkitd`
-   (`moby/buildkit:v0.34.1-rootless`, pinned by digest) on its own bridge
-   network `roundhouse-build`, with its cache in the `roundhouse-buildkit`
-   volume, capped by BuildKit's GC and a periodic prune. It has no network
+3. **Build.** BuildKit runs rootless, one daemon per project
+   (`sys_buildkitd-<project>`, `moby/buildkit:v0.34.1-rootless` pinned by
+   digest), since its cache mounts can't be scoped to a tenant inside one
+   daemon. Daemons start on demand, at most two run (the least recently used
+   stops first), each stops after 10 idle minutes and is limited to 4 GiB,
+   2 CPUs and 4096 PIDs. They sit on their own bridge network
+   `roundhouse-build`, each with its cache in its own
+   `roundhouse-buildkit-<project>` volume, capped by BuildKit's GC and a
+   periodic prune; the cache all projects shared before is removed. It has no network
    listener: the agent reaches it with the BuildKit Go client over
    `buildctl dial-stdio`, run through the Docker exec API. Dockerfile builds
    use BuildKit's built-in frontend; Railpack builds use
@@ -186,7 +191,10 @@ into an image in the local registry and answers with `build_result`.
    the registry.
 
 Output streams as batched `logs` frames, with the git token, every secret
-build arg and any arg whose name looks secret redacted. One build runs at a
+build arg and every sealed build secret redacted (also base64, hex,
+percent- and JSON-encoded; names are never guessed at). Sealed build
+secrets (`build_secrets_sealed`) are opened with the node's X25519 key and
+reach the build only as BuildKit secrets with the key as ID. One build runs at a
 time, the job's `timeout_s` (capped by `Options.Timeout`) is enforced, and
 errors are written for the person who pushed the code.
 

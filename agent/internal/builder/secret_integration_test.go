@@ -226,15 +226,15 @@ func buildkitProcesses(t *testing.T) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	conn, err := itDocker.execStdio(ctx, ContainerName, []string{"ps", "-o", "args"}, io.Discard)
+	conn, err := itDocker.execStdio(ctx, DaemonName(itProject), []string{"ps", "-o", "args"}, io.Discard)
 	if err != nil {
-		t.Fatalf("exec ps in %s: %v", ContainerName, err)
+		t.Fatalf("exec ps in %s: %v", DaemonName(itProject), err)
 	}
 	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	out, _ := io.ReadAll(conn)
 	if !strings.Contains(string(out), "buildkitd") {
-		t.Fatalf("ps in %s did not list buildkitd:\n%s", ContainerName, out)
+		t.Fatalf("ps in %s did not list buildkitd:\n%s", DaemonName(itProject), out)
 	}
 	return string(out)
 }

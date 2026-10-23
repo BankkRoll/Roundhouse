@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -43,6 +44,16 @@ type wantSpec struct {
 	// would fight over a host port), so the old one is removed before the
 	// new one is created.
 	exclusive bool
+	// blocked is why the workload may not start, "" when it may; see
+	// [Runtime.Apply].
+	blocked string
+	// note explains, in the status message, something refused about a
+	// running workload: a route or alias another project or service also
+	// claims.
+	note string
+	// labelAlias grants the label's private domain as a network alias; see
+	// [assignLabelAliases].
+	labelAlias bool
 }
 
 // containerName is unique per workload and spec, so a replacement can be
@@ -83,9 +94,12 @@ func containerCreate(s *wantSpec) docker.ContainerCreate {
 			// crash, reports it and applies its own backoff.
 			RestartPolicy: docker.RestartPolicy{Name: "no"},
 			Binds:         s.binds,
-			SecurityOpt:   []string{"no-new-privileges:true"},
-			CapDrop:       []string{"ALL"},
-			CapAdd:        DefaultCapAdd,
+			// SECURITY: no seccomp or apparmor option, so the engine applies its
+			// default seccomp profile and docker-default AppArmor profile wherever
+			// the host supports them; workloads are never unconfined (ADR 0014 H4).
+			SecurityOpt: []string{"no-new-privileges:true"},
+			CapDrop:     []string{"ALL"},
+			CapAdd:      DefaultCapAdd,
 			LogConfig: docker.LogConfig{Type: "json-file", Config: map[string]string{
 				"max-size": logMaxSize,
 				"max-file": logMaxFiles,
@@ -122,16 +136,72 @@ func pullAuth(s *wantSpec) (*docker.AuthConfig, bool) {
 // alias so other containers of the same environment resolve it.
 const LabelPrivateDomain = "roundhouse.private_domain"
 
-// networkAliases returns the DNS aliases s answers to on its network.
+// networkAliases returns the DNS aliases s answers to on its network: the
+// alias derived from its service ID and, when [assignLabelAliases] granted
+// it, the private domain of its label.
 //
 // Aliases live on the replica's environment network only, so Docker's
 // embedded DNS answers them only to containers of that environment: a
 // staging container asking for "api.production.internal" gets NXDOMAIN, and
 // has no route to production's addresses either.
 func networkAliases(s *wantSpec) []string {
-	d := s.Labels[LabelPrivateDomain]
-	if s.Kind != protocol.WorkloadService || !protocol.IsHostname(d) {
+	if s.Kind != protocol.WorkloadService || s.ServiceID == nil {
 		return nil
 	}
-	return []string{d}
+	aliases := []string{protocol.PrivateServiceAlias(*s.ServiceID)}
+	if s.labelAlias {
+		aliases = append(aliases, s.Labels[LabelPrivateDomain])
+	}
+	return aliases
+}
+
+// assignLabelAliases decides which service workloads get their label's
+// private domain as an alias (ADR 0014 M4). The label is free-form, so one
+// service could name another's domain and take its traffic: a label alias
+// is granted only when it passes [protocol.IsPrivateDomain] and no other
+// service on the same network claims it. Of several, the service of the
+// lowest workload ID keeps it; all replicas of that service share it.
+func assignLabelAliases(specs []*wantSpec) {
+	type claim struct{ network, alias string }
+	owner := map[claim]*wantSpec{}
+	contested := map[claim]bool{}
+	for _, s := range specs {
+		d := s.Labels[LabelPrivateDomain]
+		if s.Kind != protocol.WorkloadService || s.ServiceID == nil || s.blocked != "" || !protocol.IsPrivateDomain(d) {
+			continue
+		}
+		c := claim{s.Network, d}
+		cur := owner[c]
+		switch {
+		case cur == nil:
+			owner[c] = s
+		case *cur.ServiceID != *s.ServiceID:
+			contested[c] = true
+			if s.ID < cur.ID {
+				owner[c] = s
+			}
+		case s.ID < cur.ID:
+			owner[c] = s
+		}
+	}
+	for _, s := range specs {
+		d := s.Labels[LabelPrivateDomain]
+		if s.Kind != protocol.WorkloadService || s.ServiceID == nil || s.blocked != "" || !protocol.IsPrivateDomain(d) {
+			continue
+		}
+		c := claim{s.Network, d}
+		s.labelAlias = *owner[c].ServiceID == *s.ServiceID
+		if contested[c] && !s.labelAlias {
+			s.note = appendNote(s.note, fmt.Sprintf("private domain %s is claimed by another service on this network; "+
+				"this service answers only at %s", d, protocol.PrivateServiceAlias(*s.ServiceID)))
+		}
+	}
+}
+
+// appendNote joins status notes with "; ".
+func appendNote(note, more string) string {
+	if note == "" {
+		return more
+	}
+	return note + "; " + more
 }

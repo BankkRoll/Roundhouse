@@ -41,20 +41,18 @@ type solveSpec struct {
 // built into BuildKit.
 //
 // SECURITY: a build arg ends up in the image's history (every RUN after its
-// ARG records "|N NAME=value"), so args the job marks secret are passed only
-// as BuildKit secrets, with their name as the ID, which a Dockerfile reads
-// with RUN --mount=type=secret,id=NAME[,env=NAME] and which leave no trace
-// in the image.
-func dockerfileSolve(job *protocol.BuildJob, paths buildPaths) solveSpec {
+// ARG records "|N NAME=value"), so args the job marks secret, and the sealed
+// build secrets, are passed only as BuildKit secrets, with their name as the
+// ID, which a Dockerfile reads with RUN --mount=type=secret,id=NAME[,env=NAME]
+// and which leave no trace in the image.
+func dockerfileSolve(job *protocol.BuildJob, paths buildPaths, sealed map[string]string) solveSpec {
 	attrs := map[string]string{"filename": paths.dockerfileName}
-	secrets := map[string][]byte{}
 	for k, v := range job.BuildArgs {
-		if job.IsSecretArg(k) {
-			secrets[k] = []byte(v)
-			continue
+		if !job.IsSecretArg(k) {
+			attrs["build-arg:"+k] = v
 		}
-		attrs["build-arg:"+k] = v
 	}
+	secrets := buildKitSecrets(job, sealed, false)
 	return solveSpec{
 		frontend: "dockerfile.v0",
 		attrs:    attrs,
@@ -64,13 +62,14 @@ func dockerfileSolve(job *protocol.BuildJob, paths buildPaths) solveSpec {
 }
 
 // railpackSolve builds a plan prepared by `railpack prepare` with the pinned
-// Railpack frontend. Every build arg, secret or not, reaches the build as a
-// BuildKit secret, which Railpack exposes to build steps without baking it
-// into the image.
-func railpackSolve(job *protocol.BuildJob, paths buildPaths, planDir, frontendImage string) solveSpec {
-	secrets := make(map[string][]byte, len(job.BuildArgs))
-	for k, v := range job.BuildArgs {
-		secrets[k] = []byte(v)
+// Railpack frontend. Every build arg, secret or not, and every sealed build
+// secret reaches the build as a BuildKit secret, which Railpack exposes to
+// build steps without baking it into the image.
+func railpackSolve(job *protocol.BuildJob, paths buildPaths, planDir, frontendImage string, sealed map[string]string) solveSpec {
+	secrets := buildKitSecrets(job, sealed, true)
+	hashed := make(map[string]string, len(secrets))
+	for k, v := range secrets {
+		hashed[k] = string(v)
 	}
 	return solveSpec{
 		frontend: "gateway.v0",
@@ -78,7 +77,7 @@ func railpackSolve(job *protocol.BuildJob, paths buildPaths, planDir, frontendIm
 			"source":                 frontendImage,
 			"filename":               railpackPlanFile,
 			"build-arg:cache-key":    job.CacheKey,
-			"build-arg:secrets-hash": secretsHash(job.BuildArgs),
+			"build-arg:secrets-hash": secretsHash(hashed),
 		},
 		mounts:  map[string]string{"context": paths.context, "dockerfile": planDir},
 		secrets: secrets,
@@ -323,7 +322,7 @@ func cleanSolveError(s string) string {
 // Helpers
 // -----------------------------------------------------------------------------
 
-// secretsHash identifies the build args' values so Railpack invalidates the
+// secretsHash identifies the secrets' values so Railpack invalidates the
 // layers that read them when a value changes, without the values themselves
 // appearing in the build definition.
 func secretsHash(args map[string]string) string {
