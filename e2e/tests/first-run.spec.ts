@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, test } from "@playwright/test";
+import { type Cookie, expect, type Page, test } from "@playwright/test";
 import { E2E_MASTER_KEY } from "../constants.mjs";
 import { secretFromUri, TotpSource } from "../two-factor.mjs";
 
@@ -26,6 +26,8 @@ const OWNER = { name: "Mara Okafor", email: "mara@example.com", password: "corre
 /** The admin's authenticator and backup codes, set when setup enrolls them. */
 let codes: TotpSource | undefined;
 let backupCodes: string[] = [];
+/** The admin's session cookies, from the first sign-in through the form. */
+let session: Cookie[] = [];
 
 let agent: ChildProcess | undefined;
 let agentDir: string;
@@ -205,8 +207,15 @@ test.describe
       await audit(page, "add server: this computer");
       await dialog.getByRole("tab", { name: "This computer" }).press("ArrowLeft");
       await expect(dialog.getByRole("tab", { name: "Cloud-init" })).toBeFocused();
-      await expect(page.getByRole("tooltip")).toContainText("Coming soon");
-      await shot(page, "07d-add-server-hetzner-soon");
+      await dialog.getByRole("tab", { name: "Cloud-init" }).press("ArrowLeft");
+      const cloud = dialog.getByRole("tab", { name: "Cloud provider" });
+      await expect(cloud).toBeFocused();
+      await expect(cloud).toHaveAttribute("aria-selected", "true");
+      // No provider is connected on a fresh install, so the tab asks for the first one's token.
+      await expect(dialog.getByRole("form", { name: "Connect Hetzner Cloud" })).toBeVisible();
+      await expect(dialog.getByLabel("Hetzner Cloud API token")).toBeVisible();
+      await shot(page, "07d-add-server-cloud-provider");
+      await audit(page, "add server: cloud provider");
       await dialog.getByRole("tab", { name: "Linux server" }).click();
 
       const config = join(agentDir, "agent.yaml");
@@ -276,10 +285,17 @@ test.describe
       await audit(page, "deployment detail");
       await page.goBack();
 
+      // The canvas is the project's default view; the list is its accessible alternative.
       await page.goto(new URL(page.url()).pathname.replace(/\/s\/.*$/, ""));
+      const view = page.getByRole("radiogroup", { name: "View" });
+      await expect(view.getByRole("radio", { name: "Canvas" })).toBeChecked();
+      await shot(page, "18a-project-canvas");
+      await audit(page, "project: canvas");
+      await view.getByRole("radio", { name: "List" }).click();
+      await expect(page).toHaveURL(/[?&]view=list/);
       await expect(page.getByRole("list", { name: "Services" })).toBeVisible();
       await shot(page, "18-project");
-      await audit(page, "project");
+      await audit(page, "project: list");
 
       await page.goto("/dashboard");
       await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
@@ -400,16 +416,18 @@ test.describe
         .last()
         .click();
       const url = await page
-        .getByText(/\/invite\//)
+        .getByText(/\/invite#token=/)
         .first()
         .textContent();
-      expect(url).toContain("/invite/inv_");
+      // The token rides in the fragment, which browsers never send to a server.
+      expect(url).toMatch(/\/invite#token=inv_/);
       await shot(page, "13-invite-created");
 
       const other = await browser.newContext();
       const invitee = await other.newPage();
       await invitee.goto(url!.trim());
       await expect(invitee.getByText(/Nightjar Labs/)).toBeVisible();
+      await expect(invitee).not.toHaveURL(/#/);
       await shot(invitee, "14-invite-accept");
       await invitee.getByLabel(/name/i).first().fill("Priya Nair");
       await invitee
@@ -428,14 +446,27 @@ test.describe
     });
   });
 
+/**
+ * Signs the admin in: through the form and the two-factor step the first time, then by
+ * restoring that session's cookies.
+ *
+ * NOTE: Each form sign-in costs two requests against the per-IP auth limit (10 a
+ * minute), so signing in through the UI in every test trips it once the suite is quick.
+ */
 async function signIn(page: Page) {
+  if (session.length > 0) {
+    await page.context().addCookies(session);
+    await page.goto("/dashboard");
+    await expect(page).not.toHaveURL(/\/(login|setup)/);
+    return;
+  }
   await page.goto("/login");
-  if (!page.url().includes("/login")) return;
   await page.getByLabel("Email").fill(OWNER.email);
   await page.getByLabel("Password").fill(OWNER.password);
   await page.getByRole("button", { name: /sign in|log in/i }).click();
   await completeSecondFactor(page);
   await expect(page).not.toHaveURL(/\/login/);
+  session = await page.context().cookies();
 }
 
 /**
