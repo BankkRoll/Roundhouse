@@ -14,6 +14,8 @@
  *
  * @module
  */
+
+import { isProviderId, PROVIDERS } from "@roundhouse/providers";
 import {
   isRole,
   JOIN_TOKEN_TTL_MS,
@@ -34,6 +36,7 @@ import {
 } from "./common";
 import { type DbAuditEntry, type DbInvite, type DbMembership, db, nextId } from "./db";
 import { deployHandlers } from "./deploy-handlers";
+import { providerHandlers } from "./providers-handlers";
 
 export { apiError } from "./common";
 
@@ -633,15 +636,40 @@ const phase0Handlers = [
     return row ? HttpResponse.json(toApiNode(row)) : notFound("Server");
   }),
 
-  http.delete("*/v1/workspaces/:workspaceId/nodes/:nodeId", ({ params }) => {
+  http.delete("*/v1/workspaces/:workspaceId/nodes/:nodeId", ({ params, request }) => {
     const workspaceId = String(params.workspaceId);
+    const keepServer = new URL(request.url).searchParams.get("keep_server") === "true";
     const access = requireWorkspace(workspaceId, "nodes:manage");
     if (!access.ok) return access.response;
     const row = db.nodes.find(
       (node) => node.id === params.nodeId && node.workspace_id === workspaceId,
     );
     if (!row) return notFound("Server");
+    const deprovision = row.provider_server_id !== null && !keepServer;
+    if (deprovision) {
+      const connected = db.providers.integrations.some(
+        (entry) => entry.workspace_id === workspaceId && entry.provider === row.provider,
+      );
+      if (!connected) {
+        return apiError(
+          409,
+          "provider_not_connected",
+          `Connect ${isProviderId(row.provider) ? PROVIDERS[row.provider].displayName : row.provider} to this workspace first`,
+        );
+      }
+    }
     db.nodes = db.nodes.filter((node) => node !== row);
+    if (deprovision) {
+      recordAudit({
+        workspaceId,
+        actorType: "user",
+        actorId: access.user.id,
+        action: "node.deprovisioned",
+        targetType: "node",
+        targetId: row.id,
+        metadata: { provider: row.provider, server_id: row.provider_server_id, deleted: true },
+      });
+    }
     recordAudit({
       workspaceId,
       actorType: "user",
@@ -684,5 +712,5 @@ const phase0Handlers = [
   }),
 ];
 
-/** Every route the dashboard calls: Phase 0 first, then the deploy pipeline. */
-export const handlers = [...phase0Handlers, ...deployHandlers];
+/** Every route the dashboard calls: Phase 0 first, then the deploy pipeline and cloud providers. */
+export const handlers = [...phase0Handlers, ...deployHandlers, ...providerHandlers];

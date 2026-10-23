@@ -75,6 +75,12 @@ export const AUDIT_ACTIONS = [
   "auth.two_factor_disabled",
   "auth.backup_codes_regenerated",
   "auth.two_factor_failed",
+  "provider.connected",
+  "provider.disconnected",
+  "node.provision_requested",
+  "node.provisioned",
+  "node.provision_failed",
+  "node.deprovisioned",
 ] as const;
 
 /** An audited action name. */

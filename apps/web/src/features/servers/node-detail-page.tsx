@@ -1,8 +1,17 @@
-import { Badge, Button, EmptyState, MeterRow, Skeleton, StatusBadge, toast } from "@roundhouse/ui";
+import {
+  Badge,
+  Button,
+  Checkbox,
+  EmptyState,
+  MeterRow,
+  Skeleton,
+  StatusBadge,
+  toast,
+} from "@roundhouse/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeftIcon, ServerOffIcon, Trash2Icon } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { ArrowLeftIcon, ServerOffIcon, Trash2Icon, TriangleAlertIcon } from "lucide-react";
+import { type ReactNode, useId, useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
 import { ErrorState } from "../../components/error-state";
 import { SectionHeader } from "../../components/section-header";
@@ -20,6 +29,7 @@ import { usePermissions } from "../../lib/permissions";
 import { useNow } from "../../lib/use-now";
 import { forgetNode, useDeleteNode, useNode } from "../../queries/nodes";
 import { nodeMeterRows, nodeSubtitle } from "./node-metrics";
+import { managedProvider, ProviderBadges } from "./provider-badge";
 
 function BackLink({ workspaceId }: { workspaceId: string }) {
   return (
@@ -54,6 +64,7 @@ function Capability({ name, enabled }: { name: string; enabled: boolean | undefi
 }
 
 function NodeFacts({ node, now }: { node: Node; now: number }) {
+  const managed = managedProvider(node);
   return (
     <dl className="grid border-t border-border/70 md:grid-cols-2 md:gap-x-10">
       <Fact label="Hostname">
@@ -62,7 +73,12 @@ function NodeFacts({ node, now }: { node: Node; now: number }) {
       <Fact label="Public IP">
         <span className="font-mono">{node.public_ip ?? EMPTY}</span>
       </Fact>
-      <Fact label="Provider">{node.provider}</Fact>
+      <Fact label="Provider">{managed ? managed.displayName : node.provider}</Fact>
+      {managed ? (
+        <Fact label="Server ID">
+          <span className="font-mono">{node.provider_server_id}</span>
+        </Fact>
+      ) : null}
       <Fact label="Region">{node.region ?? EMPTY}</Fact>
       <Fact label="Platform">{formatPlatform(node.os, node.arch)}</Fact>
       <Fact label="Kernel">
@@ -87,6 +103,13 @@ function NodeFacts({ node, now }: { node: Node; now: number }) {
   );
 }
 
+function removeErrorMessage(error: unknown, provider: string | undefined): string {
+  if (isApiError(error, "provider_not_connected") && provider) {
+    return `${errorMessage(error)} Reconnect ${provider} under Add server → Cloud provider, or keep the server.`;
+  }
+  return errorMessage(error);
+}
+
 /**
  * Detail view for one server: usage, hardware facts, capabilities and removal.
  *
@@ -101,6 +124,8 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
   const { can } = usePermissions(workspaceId);
   const now = useNow(5000);
   const [confirming, setConfirming] = useState(false);
+  const [keepServer, setKeepServer] = useState(false);
+  const keepId = useId();
 
   if (node.isPending) {
     return (
@@ -133,18 +158,24 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
   }
 
   const data = node.data;
+  const managed = managedProvider(data);
+  const gone = data.provider_server_missing_at !== null;
+  const destroys = managed !== null && !gone && !keepServer;
 
   function confirmRemove() {
-    remove.mutate(data.id, {
-      onSuccess: async () => {
-        setConfirming(false);
-        toast({ title: `${data.name} removed`, tone: "success" });
-        // NOTE: Leave first. Dropping the cached node while this page is mounted makes it
-        // refetch, get a 404, and flash "Server not found" on the way out.
-        await navigate({ to: "/w/$workspaceId/servers", params: { workspaceId } });
-        forgetNode(queryClient, workspaceId, data.id);
+    remove.mutate(
+      { nodeId: data.id, keepServer: managed !== null && keepServer },
+      {
+        onSuccess: async () => {
+          setConfirming(false);
+          toast({ title: `${data.name} removed`, tone: "success" });
+          // NOTE: Leave first. Dropping the cached node while this page is mounted makes it
+          // refetch, get a 404, and flash "Server not found" on the way out.
+          await navigate({ to: "/w/$workspaceId/servers", params: { workspaceId } });
+          forgetNode(queryClient, workspaceId, data.id);
+        },
       },
-    });
+    );
   }
 
   return (
@@ -157,6 +188,7 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
               {data.name}
             </h1>
             <StatusBadge status={data.status} />
+            <ProviderBadges node={data} />
           </div>
           <p className="mt-1 text-sm text-muted-foreground">{nodeSubtitle(data)}</p>
         </div>
@@ -167,6 +199,20 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
           </Button>
         ) : null}
       </div>
+
+      {managed && gone ? (
+        <p
+          role="status"
+          className="-mt-4 mb-8 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-foreground"
+        >
+          <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+          <span>
+            {managed.displayName} no longer has this server (noticed{" "}
+            {formatRelativeTime(data.provider_server_missing_at, now)}). Remove it here to stop
+            waiting for its agent.
+          </span>
+        </p>
+      ) : null}
 
       <div className="grid gap-12">
         <section aria-labelledby="usage-heading">
@@ -208,15 +254,44 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
         open={confirming}
         onOpenChange={(open) => {
           setConfirming(open);
-          if (!open) remove.reset();
+          if (!open) {
+            remove.reset();
+            setKeepServer(false);
+          }
         }}
         title={`Remove ${data.name}?`}
-        description="The server is removed from this workspace and its agent can no longer connect. To add it back you will need a new join token."
-        confirmLabel="Remove server"
+        description={
+          !managed
+            ? "The server is removed from this workspace and its agent can no longer connect. To add it back you will need a new join token."
+            : gone
+              ? `${managed.displayName} already deleted this server, so this only removes it from the workspace.`
+              : destroys
+                ? `This destroys the server at ${managed.displayName}: its disk and everything on it are deleted and billing stops. The node is removed from this workspace.`
+                : `The server keeps running, and billing, at ${managed.displayName}. Only the node is removed from this workspace, and its agent can no longer connect.`
+        }
+        confirmLabel={destroys ? "Destroy server" : "Remove server"}
         onConfirm={confirmRemove}
         pending={remove.isPending}
-        error={remove.isError ? errorMessage(remove.error) : null}
-      />
+        error={remove.isError ? removeErrorMessage(remove.error, managed?.displayName) : null}
+      >
+        {managed && !gone ? (
+          <div className="flex items-start gap-2">
+            <Checkbox
+              id={keepId}
+              checked={keepServer}
+              onChange={(event) => setKeepServer(event.target.checked)}
+              className="mt-0.5"
+            />
+            <label htmlFor={keepId} className="cursor-pointer text-sm text-foreground">
+              Keep the server at {managed.displayName}
+              <span className="block text-xs text-muted-foreground">
+                Server <span className="font-mono">{data.provider_server_id}</span> stays running;
+                delete it there yourself later.
+              </span>
+            </label>
+          </div>
+        ) : null}
+      </ConfirmDialog>
     </>
   );
 }

@@ -44,6 +44,10 @@ export const ID_PREFIXES = {
   githubClaim: "ghc",
   /** One run of the master key rotation workflow. */
   keyRotation: "krot",
+  /** A workspace's sealed cloud provider API token. */
+  providerCredential: "pcr",
+  /** One one-click provisioning run; also its workflow instance ID. */
+  nodeProvision: "prov",
 } as const;
 
 /** An entity kind that has an ID prefix. */

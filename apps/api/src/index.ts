@@ -4,17 +4,21 @@
  * Responsibilities:
  * - REST API under `/v1` (OpenAPI document at `/v1/openapi.json`)
  * - Better Auth under `/api/auth/*`
+ * - The MCP server for coding agents at `/mcp` (`mcp/route.ts`)
  * - Agent join/connect endpoints and the install script
  * - The project realtime socket (`ProjectRoom`), the audit chain sealer
  *   (`AuditChain`), and the deploy and key rotation workflows
- *   (`DeployWorkflow`, `KeyRotationWorkflow`), exported for their bindings
+ *   (`DeployWorkflow`, `KeyRotationWorkflow`), and one-click server
+ *   provisioning (`ProvisionWorkflow`), exported for their bindings
  * - `Cache-Control: no-store` on every API and auth response, and the
  *   two-factor gate in front of `/v1/*` mutations (ADR 0014)
- * - The hourly retention job (Cron Trigger), see `lib/retention.ts`
+ * - The hourly retention job (Cron Trigger), see `lib/retention.ts`, and the
+ *   cloud provider reconcile, see `lib/provisioning.ts`
  * - Static SPA assets (served by the platform for everything else)
  *
  * @module
  */
+import { createDb } from "@roundhouse/db";
 import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import { authFor, createRouter, withDb } from "./context";
@@ -22,8 +26,10 @@ import type { Env } from "./env";
 import { noStore } from "./lib/cache-control";
 import { ApiError, errorBody, errorCodeForStatus } from "./lib/errors";
 import { rateLimitSecrets, sameOriginMutations } from "./lib/guards";
+import { reconcileProviders } from "./lib/provisioning";
 import { runRetention } from "./lib/retention";
 import { twoFactorGate } from "./lib/two-factor-gate";
+import { mcpRoutes } from "./mcp/route";
 import { accessRoutes } from "./routes/access";
 import { agentRoutes } from "./routes/agent";
 import { auditRoutes } from "./routes/audit";
@@ -36,6 +42,7 @@ import { inviteRoutes } from "./routes/invites";
 import { keyRoutes } from "./routes/keys";
 import { nodeRoutes } from "./routes/nodes";
 import { projectRoutes } from "./routes/projects";
+import { providerRoutes } from "./routes/providers";
 import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
 import { serviceRoutes } from "./routes/services";
 import { setupRoutes } from "./routes/setup";
@@ -49,6 +56,7 @@ export { NodeConnection } from "./durable/node-connection";
 export { ProjectRoom } from "./durable/project-room";
 export { DeployWorkflow } from "./workflows/deploy";
 export { KeyRotationWorkflow } from "./workflows/key-rotation";
+export { ProvisionWorkflow } from "./workflows/provision";
 
 /** Version of the REST API advertised in the OpenAPI document. */
 const API_VERSION = "0.1.0";
@@ -70,6 +78,7 @@ app.use("*", (c, next) =>
 );
 app.use("/v1/*", noStore);
 app.use("/api/auth/*", noStore);
+app.use("/mcp", noStore);
 app.use("*", withDb);
 app.use("*", rateLimitSecrets);
 app.use("/v1/*", sameOriginMutations);
@@ -95,7 +104,9 @@ app
   .route("/", accessRoutes)
   .route("/", authSecurityRoutes)
   .route("/", instanceAdminRoutes)
-  .route("/", keyRoutes);
+  .route("/", keyRoutes)
+  .route("/", providerRoutes)
+  .route("/", mcpRoutes);
 
 app.openAPIRegistry.registerComponent("securitySchemes", SESSION_SCHEME, {
   type: "apiKey",
@@ -141,5 +152,12 @@ export default {
   async scheduled(controller, env) {
     const report = await runRetention(env, controller.scheduledTime);
     console.log("retention", JSON.stringify(report));
+    // NOTE: Separate from retention so a provider outage never blocks cleanup.
+    try {
+      const reconciled = await reconcileProviders(createDb(env.DB), env);
+      console.log("provider reconcile", JSON.stringify(reconciled));
+    } catch (err) {
+      console.error("provider reconcile failed", err instanceof Error ? err.name : "error");
+    }
   },
 } satisfies ExportedHandler<Env>;

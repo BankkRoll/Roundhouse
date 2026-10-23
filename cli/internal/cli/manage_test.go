@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
+	"github.com/BankkRoll/Roundhouse/cli/internal/api"
 	"github.com/BankkRoll/Roundhouse/cli/internal/apitest"
 	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
 	"github.com/BankkRoll/Roundhouse/cli/internal/ui"
@@ -88,6 +90,7 @@ func TestServers(t *testing.T) {
 	r = h.ok("", "servers", "list")
 	contains(t, r.stdout, "edge-1")
 	contains(t, r.stdout, "203.0.113.10")
+	contains(t, r.stdout, "manual")
 
 	r = h.ok("", "servers", "add", "--json")
 	h.golden("servers-add.json", r.stdout)
@@ -175,4 +178,168 @@ func TestNonTTYOutputIsPlain(t *testing.T) {
 			t.Errorf("%v wrote escape codes without a TTY:\n%q", args, r.stdout+r.stderr)
 		}
 	}
+}
+
+// provisionSteps advances every provisioning run one step per poll and ends
+// it in final.
+func provisionSteps(final string) func(*api.NodeProvision) {
+	steps := []struct{ status, step string }{
+		{api.ProvisionCreating, "create_server"}, {api.ProvisionBooting, "wait_until_running"}, {final, ""},
+	}
+	n := 0
+	return func(p *api.NodeProvision) {
+		if n >= len(steps) {
+			return
+		}
+		s := steps[n]
+		n++
+		p.Status, p.Step, p.UpdatedAt = s.status, nil, apitest.Now+int64(n)*1000
+		if s.step != "" {
+			p.Step = new(s.step)
+		}
+		p.ServerID, p.IPv4 = new("srv_42"), new("198.51.100.7")
+		switch final {
+		case api.ProvisionJoined:
+			if n == len(steps) {
+				p.NodeID, p.FinishedAt = new("node_0002"), new(p.UpdatedAt)
+			}
+		default:
+			if n == len(steps) {
+				p.FailureReason, p.FailureMessage, p.FinishedAt = new("join_timeout"), new("The agent did not join within 10 minutes"), new(p.UpdatedAt)
+			}
+		}
+	}
+}
+
+func provisionBody(t *testing.T, h *harness) (api.ProvisionNodeInput, int) {
+	t.Helper()
+	var in api.ProvisionNodeInput
+	n := 0
+	for _, req := range h.fake.Requests() {
+		if req.Pattern == "POST /v1/workspaces/{workspaceId}/nodes/provision" {
+			n++
+			if err := json.Unmarshal([]byte(req.Body), &in); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return in, n
+}
+
+func requested(h *harness, route api.Route) bool {
+	for _, req := range h.fake.Requests() {
+		if req.Pattern == route.Method+" "+route.Path {
+			return true
+		}
+	}
+	return false
+}
+
+func TestServersAddProvisionRecommended(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.OnGetNodeProvision = provisionSteps(api.ProvisionJoined)
+	r := h.ok("", "servers", "add", "--provider", "hetzner", "--name", "web-1", "--json")
+	h.golden("servers-provision.json", r.stdout)
+	contains(t, r.stderr, "Using cx23 in nbg1 (Nuremberg): 2 vCPU, 4 GiB RAM, 40 GB disk, amd64, 4.49 EUR/month — Cheapest node plan")
+	contains(t, r.stderr, "Provisioning web-1 (cx23 in nbg1) on Hetzner Cloud")
+	for _, want := range []string{"queued", "creating (create_server)", "booting (wait_until_running)", "joined"} {
+		contains(t, r.stderr, "  "+want+"\n")
+	}
+	in, _ := provisionBody(t, h)
+	if in != (api.ProvisionNodeInput{Provider: "hetzner", Plan: "cx23", Region: "nbg1", Name: "web-1"}) {
+		t.Errorf("provision body = %+v", in)
+	}
+
+	h.fake.OnGetNodeProvision = provisionSteps(api.ProvisionJoined)
+	r = h.ok("", "servers", "add", "--provider", "hetzner")
+	if !regexp.MustCompile(`^✓ server-[a-z0-9]{4} joined as node_0002 \(198\.51\.100\.7\)\n$`).MatchString(r.stdout) {
+		t.Errorf("stdout = %q", r.stdout)
+	}
+}
+
+func TestServersAddProvisionPicks(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+
+	r := h.ok("", "servers", "add", "--provider", "hetzner", "--region", "fsn1", "--name", "a", "--no-wait")
+	contains(t, r.stderr, "Using cx23 in fsn1 (Falkenstein)")
+	contains(t, r.stdout, "Started prv_")
+	if in, _ := provisionBody(t, h); in.Plan != "cx23" || in.Region != "fsn1" {
+		t.Errorf("--region fsn1 picked %s in %s", in.Plan, in.Region)
+	}
+
+	r = h.ok("", "servers", "add", "--provider", "hetzner", "--builder", "--name", "b", "--no-wait")
+	contains(t, r.stderr, "Using cpx31 in fsn1")
+	if in, _ := provisionBody(t, h); in.Plan != "cpx31" || !in.Builder {
+		t.Errorf("--builder body = %+v", in)
+	}
+
+	r = h.ok("", "servers", "add", "--provider", "hetzner", "--plan", "cx23", "--name", "c", "--no-wait")
+	contains(t, r.stderr, "Using cx23 in nbg1")
+
+	r = h.expect(exitcode.NotFound, "", "servers", "add", "--provider", "hetzner", "--plan", "cx99", "--name", "d")
+	contains(t, r.stderr, "Hetzner Cloud has no node offer for plan cx99")
+}
+
+func TestServersAddProvisionExplicit(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	r := h.ok("", "servers", "add", "--provider", "hetzner", "--plan", "cpx31", "--region", "nbg1", "--name", "web-2", "--no-wait", "--json")
+	var p api.NodeProvision
+	if err := json.Unmarshal([]byte(r.stdout), &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Status != api.ProvisionQueued || p.Plan != "cpx31" || p.Region != "nbg1" || p.Name != "web-2" {
+		t.Errorf("provision = %+v", p)
+	}
+	if requested(h, api.RouteProviderOffers) {
+		t.Error("fetched offers although --plan and --region were given")
+	}
+	if requested(h, api.RouteNodeProvision) {
+		t.Error("polled the run with --no-wait")
+	}
+	r = h.expect(exitcode.Conflict, "", "servers", "add", "--provider", "hetzner", "--plan", "cpx31", "--region", "nbg1", "--name", "web-2")
+	contains(t, r.stderr, "already exists")
+}
+
+func TestServersAddProvisionFailure(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.OnGetNodeProvision = provisionSteps(api.ProvisionFailed)
+	r := h.expect(exitcode.ProvisionFailed, "", "servers", "add", "--provider", "hetzner", "--name", "web-1")
+	contains(t, r.stderr, "error: provisioning web-1 failed: join_timeout: The agent did not join within 10 minutes")
+	if strings.Contains(r.stderr, "may still exist") {
+		t.Errorf("failed run warned about a leftover server:\n%s", r.stderr)
+	}
+
+	h.fake.OnGetNodeProvision = provisionSteps(api.ProvisionCleanupFailed)
+	r = h.expect(exitcode.ProvisionFailed, "", "servers", "add", "--provider", "hetzner", "--name", "web-2", "--json")
+	contains(t, r.stderr, "warning: server srv_42 could not be deleted and may still exist and bill")
+	var p api.NodeProvision
+	if err := json.Unmarshal([]byte(r.stdout), &p); err != nil || p.Status != api.ProvisionCleanupFailed {
+		t.Errorf("--json stdout = %q (%v)", r.stdout, err)
+	}
+}
+
+func TestServersAddProvisionErrors(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	r := h.expect(exitcode.Conflict, "", "servers", "add", "--provider", "vultr")
+	contains(t, r.stderr, "error: Vultr is not connected to workspace")
+	contains(t, r.stderr, "hint: provider tokens are accepted only in the dashboard: Servers → Add server → Cloud provider")
+	if _, n := provisionBody(t, h); n != 0 {
+		t.Error("provisioned on a provider that is not connected")
+	}
+
+	h.expect(exitcode.Usage, "", "servers", "add", "--provider", "aws")
+	h.expect(exitcode.Usage, "", "servers", "add", "--plan", "cx23")
+	h.expect(exitcode.Usage, "", "servers", "add", "--no-wait")
+	h.expect(exitcode.Usage, "", "servers", "add", "--provider", "hetzner", "--name", "Web_1")
+	h.expect(exitcode.Usage, "", "servers", "add", "--provider", "hetzner", "--name", "-web")
+
+	h.env[EnvURL] = h.fake.URL
+	h.env[EnvToken] = h.fake.AddToken("ci", "nodes:read", "nodes:manage", "workspace:read")
+	r = h.expect(exitcode.Forbidden, "", "servers", "add", "--provider", "hetzner", "--plan", "cx23", "--region", "fsn1", "--insecure")
+	contains(t, r.stderr, "hint: API tokens cannot provision servers")
 }

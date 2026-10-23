@@ -1,8 +1,9 @@
 /**
  * The ways to join a server to this control plane, as the add-server flow offers them,
- * and what each one needs: the Linux one-liner, cloud-init user data (built by
- * `@roundhouse/providers`'s `buildUserData`, which keeps the token out of every command
- * line), and the local Docker node for development.
+ * and what each one needs: the Linux one-liner, a server created at a cloud provider in
+ * one click, cloud-init user data (built by `@roundhouse/providers`'s `buildUserData`,
+ * which keeps the token out of every command line), and the local Docker node for
+ * development.
  *
  * Pure, so the generated text is unit-tested directly.
  *
@@ -10,14 +11,31 @@
  */
 import { buildUserData, ProvisionError } from "@roundhouse/providers";
 
-/** An install method tab. `hetzner` is shown but not available yet. */
-export type InstallMethod = "linux" | "cloud-init" | "local" | "hetzner";
+/** An install method tab. `cloud` creates the server at a connected cloud provider. */
+export type InstallMethod = "linux" | "cloud" | "cloud-init" | "local";
 
-/** Methods that can be picked today. */
-export const AVAILABLE_METHODS: readonly InstallMethod[] = ["linux", "cloud-init", "local"];
+/** Every method, in tab order. */
+export const AVAILABLE_METHODS: readonly InstallMethod[] = [
+  "linux",
+  "cloud",
+  "cloud-init",
+  "local",
+];
 
 /** localStorage key remembering the last method picked. */
 export const INSTALL_METHOD_STORAGE_KEY = "roundhouse.add-server.method";
+
+/**
+ * The methods a dashboard open at `origin` can offer: the local Docker node only when the
+ * dashboard runs on this machine.
+ *
+ * @param origin - Page origin.
+ * @returns Methods in tab order.
+ */
+export function offeredMethods(origin: string): InstallMethod[] {
+  const local = isLocalOrigin(origin);
+  return AVAILABLE_METHODS.filter((method) => method !== "local" || local);
+}
 
 /**
  * Whether an origin points at this machine, where the local Docker node can reach it.
@@ -130,7 +148,7 @@ export function defaultNodeName(random: () => number = Math.random): string {
 export function readStoredMethod(offered: readonly InstallMethod[]): InstallMethod {
   try {
     const stored = window.localStorage.getItem(INSTALL_METHOD_STORAGE_KEY);
-    return offered.find((method) => method === stored && method !== "hetzner") ?? "linux";
+    return offered.find((method) => method === stored) ?? "linux";
   } catch {
     // NOTE: Storage throws in some private modes and sandboxed frames; the default is fine.
     return "linux";

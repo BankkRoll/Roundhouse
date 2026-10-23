@@ -384,14 +384,18 @@ export const api = {
       signal,
     }),
   /**
-   * Removes a server and revokes its credential.
+   * Removes a server and revokes its credential. For a server Roundhouse provisioned,
+   * this also deletes it at the provider unless `keepServer`.
    *
    * @param workspaceId - Workspace id.
    * @param nodeId - Node id.
+   * @param keepServer - Leave a provisioned cloud server running.
    * @returns Resolves on 204.
    */
-  deleteNode: (workspaceId: string, nodeId: string) =>
-    request<void>("DELETE", `/v1/workspaces/${seg(workspaceId)}/nodes/${seg(nodeId)}`),
+  deleteNode: (workspaceId: string, nodeId: string, keepServer = false) =>
+    request<void>("DELETE", `/v1/workspaces/${seg(workspaceId)}/nodes/${seg(nodeId)}`, {
+      query: { keep_server: keepServer ? "true" : undefined },
+    }),
   /**
    * Mints a single-use join token that expires after `JOIN_TOKEN_TTL_MS`.
    *

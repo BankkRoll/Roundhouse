@@ -1,6 +1,7 @@
 // Package apitest is an in-memory fake of the control plane for tests: the
 // REST routes the CLI calls, Better Auth sign-in and sign-out, and the
-// project realtime socket.
+// project realtime socket. Cloud provider offers and provisioning runs are
+// canned: tests connect providers and advance runs themselves.
 //
 // Responses use the CLI's wire types, whose fields are checked against the
 // API's OpenAPI document, and the fake enforces the API's request rules that
@@ -92,6 +93,9 @@ type Fake struct {
 	logs        map[string][]api.LogEntry
 	domains     []api.Domain
 	nodes       []api.Node
+	providers   map[string]bool
+	offers      []api.ProviderOffer
+	provisions  []*api.NodeProvision
 	requests    []Request
 	seq         int
 	tokens      []*apiToken
@@ -106,6 +110,10 @@ type Fake struct {
 	// OnGetDeployment runs on every GET of a deployment, under the lock,
 	// so tests can advance its status between polls.
 	OnGetDeployment func(d *api.DeploymentDetail)
+
+	// OnGetNodeProvision runs on every GET of a provisioning run, under the
+	// lock, so tests can advance it between polls.
+	OnGetNodeProvision func(p *api.NodeProvision)
 
 	hub *hub
 }
@@ -231,6 +239,42 @@ func (f *Fake) seed() {
 	f.nodes = []api.Node{{ID: NodeID, Name: "edge-1", Hostname: str("edge-1"), Status: "online", Provider: "manual", PublicIP: str("203.0.113.10"),
 		OS: str("linux"), Arch: str("amd64"), AgentVersion: str("0.4.0"), Capabilities: json.RawMessage(`{"docker":true,"builder":true}`),
 		LastHeartbeatAt: i64(Now - 5000), CreatedAt: Now - 86400000}}
+	f.providers = map[string]bool{"hetzner": true}
+	offer := func(plan, region, regionName string, vcpus, memMiB, disk, cents int) api.ProviderOffer {
+		return api.ProviderOffer{ID: plan + "@" + region, Plan: plan, Description: strings.ToUpper(plan), Category: str("shared"),
+			Region: region, RegionName: regionName, Country: str("DE"), VCPUs: vcpus, MemoryMiB: memMiB, DiskGB: disk,
+			Arch: "amd64", MonthlyCents: cents, Currency: "EUR"}
+	}
+	f.offers = []api.ProviderOffer{
+		offer("cx23", "fsn1", "Falkenstein", 2, 4096, 40, 449),
+		offer("cx23", "nbg1", "Nuremberg", 2, 4096, 40, 449),
+		offer("cpx31", "fsn1", "Falkenstein", 4, 8192, 160, 1490),
+	}
+}
+
+// ProviderDisplayNames are the providers' names, from PROVIDERS in
+// packages/providers.
+var ProviderDisplayNames = map[string]string{
+	"hetzner": "Hetzner Cloud", "digitalocean": "DigitalOcean", "vultr": "Vultr", "linode": "Akamai Cloud (Linode)",
+}
+
+// SetProviderConnected connects or disconnects the workspace from a cloud
+// provider. Only hetzner is connected in the seed.
+func (f *Fake) SetProviderConnected(provider string, connected bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.providers[provider] = connected
+}
+
+// NodeProvisions returns copies of the provisioning runs started so far.
+func (f *Fake) NodeProvisions() []api.NodeProvision {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]api.NodeProvision, len(f.provisions))
+	for i, p := range f.provisions {
+		out[i] = *p
+	}
+	return out
 }
 
 func config(serviceID, envID string, src api.ServiceSource, port *int) *api.ServiceConfig {
@@ -566,6 +610,10 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteListDomains:     {"services:read", f.listDomains},
 		api.RouteListNodes:       {"nodes:read", f.listNodes},
 		api.RouteJoinToken:       {"nodes:manage", f.joinToken},
+		api.RouteIntegrations:    {"nodes:manage", f.listIntegrations},
+		api.RouteProviderOffers:  {"nodes:manage", f.providerOffers},
+		api.RouteProvisionNode:   {"nodes:manage", f.provisionNode},
+		api.RouteNodeProvision:   {"nodes:read", f.getNodeProvision},
 		api.RouteListTokens:      {"tokens:manage", f.listTokens},
 		api.RouteCreateToken:     {"tokens:manage", f.createToken},
 		api.RouteRevokeToken:     {"tokens:manage", f.revokeToken},
@@ -1382,6 +1430,123 @@ func (f *Fake) joinToken(w http.ResponseWriter, r *http.Request) {
 	if f.workspace(w, r) {
 		writeJSON(w, http.StatusCreated, api.JoinToken{Token: JoinToken, ExpiresAt: Now + 3600000, InstallCommand: InstallScript})
 	}
+}
+
+// -----------------------------------------------------------------------------
+// Cloud providers
+// -----------------------------------------------------------------------------
+
+func (f *Fake) listIntegrations(w http.ResponseWriter, r *http.Request) {
+	if !f.workspace(w, r) {
+		return
+	}
+	out := []api.ProviderIntegration{}
+	for _, id := range api.ProviderIDs {
+		in := api.ProviderIntegration{Provider: id, DisplayName: ProviderDisplayNames[id], Connected: f.providers[id]}
+		if in.Connected {
+			in.AccountLabel, in.TokenFingerprint, in.TokenLast4 = str("ada@example.com"), str("fp_0001"), str("x7k2")
+			in.LastValidatedAt, in.UpdatedAt = i64(Now-60000), i64(Now-86400000)
+		}
+		out = append(out, in)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"integrations": out})
+}
+
+// connected answers 400 for an unknown provider and 409
+// provider_not_connected for one the workspace has no token for.
+func (f *Fake) connected(w http.ResponseWriter, provider string) bool {
+	if !slices.Contains(api.ProviderIDs, provider) {
+		apiError(w, http.StatusBadRequest, "invalid_request", "provider: invalid enum value")
+		return false
+	}
+	if !f.providers[provider] {
+		apiError(w, http.StatusConflict, "provider_not_connected", "Connect "+ProviderDisplayNames[provider]+" to this workspace first")
+		return false
+	}
+	return true
+}
+
+// providerOffers serves the seeded offers for any connected provider. The
+// node role is recommended the cheapest offers, Nuremberg first; the
+// builder role the larger plan.
+func (f *Fake) providerOffers(w http.ResponseWriter, r *http.Request) {
+	if !f.workspace(w, r) || !f.connected(w, r.PathValue("provider")) {
+		return
+	}
+	role := cmp.Or(r.URL.Query().Get("role"), "node")
+	if role != "node" && role != "builder" {
+		apiError(w, http.StatusBadRequest, "invalid_request", "role: invalid enum value")
+		return
+	}
+	region := r.URL.Query().Get("region")
+	offers := []api.ProviderOffer{}
+	for _, o := range f.offers {
+		if region == "" || o.Region == region {
+			offers = append(offers, o)
+		}
+	}
+	recommended := []string{"cx23@nbg1", "cx23@fsn1"}
+	if role == "builder" {
+		recommended = []string{"cpx31@fsn1"}
+	}
+	recs := []api.OfferRecommendation{}
+	for _, id := range recommended {
+		if slices.ContainsFunc(offers, func(o api.ProviderOffer) bool { return o.ID == id }) {
+			recs = append(recs, api.OfferRecommendation{OfferID: id, Reason: "Cheapest " + role + " plan"})
+		}
+	}
+	writeJSON(w, http.StatusOK, api.ProviderOffers{Provider: r.PathValue("provider"), Role: role, Offers: offers, Recommendations: recs, FetchedAt: Now})
+}
+
+var serverName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// provisionNode starts a run in status queued. Like the API's fresh-session
+// check, it refuses API tokens: they are never a recent sign-in.
+func (f *Fake) provisionNode(w http.ResponseWriter, r *http.Request) {
+	if !f.workspace(w, r) {
+		return
+	}
+	if callerOf(r).token != nil {
+		apiError(w, http.StatusForbidden, "reauth_required", "Confirm your password to continue")
+		return
+	}
+	var in api.ProvisionNodeInput
+	if err := decode(r, &in); err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON body")
+		return
+	}
+	if !f.connected(w, in.Provider) {
+		return
+	}
+	if !serverName.MatchString(in.Name) || in.Plan == "" || in.Region == "" {
+		apiError(w, http.StatusBadRequest, "invalid_request", "name, plan and region are required")
+		return
+	}
+	if slices.ContainsFunc(f.nodes, func(n api.Node) bool { return n.Name == in.Name }) ||
+		slices.ContainsFunc(f.provisions, func(p *api.NodeProvision) bool { return p.Name == in.Name && p.Status != api.ProvisionFailed }) {
+		apiError(w, http.StatusConflict, "conflict", "A server named "+in.Name+" already exists")
+		return
+	}
+	p := &api.NodeProvision{ID: f.nextID("prv"), Provider: in.Provider, Name: in.Name, Plan: in.Plan, Region: in.Region,
+		Builder: in.Builder, Status: api.ProvisionQueued, CreatedAt: Now, UpdatedAt: Now}
+	f.provisions = append(f.provisions, p)
+	writeJSON(w, http.StatusAccepted, p)
+}
+
+func (f *Fake) getNodeProvision(w http.ResponseWriter, r *http.Request) {
+	if !f.workspace(w, r) {
+		return
+	}
+	for _, p := range f.provisions {
+		if p.ID == r.PathValue("provisionId") {
+			if f.OnGetNodeProvision != nil {
+				f.OnGetNodeProvision(p)
+			}
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
+	}
+	apiError(w, http.StatusNotFound, "not_found", "Provisioning run not found")
 }
 
 func mapKeys[V any](m map[string]V) func(func(string) bool) {

@@ -1,0 +1,19 @@
+{
+  "id": "prv_0004",
+  "provider": "hetzner",
+  "name": "web-1",
+  "plan": "cx23",
+  "region": "nbg1",
+  "builder": false,
+  "status": "joined",
+  "step": null,
+  "failure_reason": null,
+  "failure_message": null,
+  "server_id": "srv_42",
+  "ipv4": "198.51.100.7",
+  "ipv6": null,
+  "node_id": "node_0002",
+  "created_at": 1792670400000,
+  "updated_at": 1792670403000,
+  "finished_at": 1792670403000
+}

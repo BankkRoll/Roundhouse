@@ -70,6 +70,7 @@ export * from "./schemas/access";
 export * from "./schemas/auth";
 export * from "./schemas/instance";
 export * from "./schemas/keys";
+export * from "./schemas/providers";
 export * from "./schemas/variables";
 
 /** Error envelope returned by every non-2xx response. */
@@ -145,8 +146,13 @@ export const NodeSchema = z
     name: z.string(),
     hostname: z.string().nullable(),
     status: z.enum(NODE_STATUSES),
+    /** `server` for machines joined by hand, else the cloud provider that created it. */
     provider: z.string(),
     region: z.string().nullable(),
+    /** The provider's server ID, for servers Roundhouse provisioned (deleting the node deletes it). */
+    provider_server_id: z.string().nullable(),
+    /** When the provider was first found to no longer have the server. */
+    provider_server_missing_at: Millis.nullable(),
     public_ip: z.string().nullable(),
     os: z.string().nullable(),
     arch: z.string().nullable(),

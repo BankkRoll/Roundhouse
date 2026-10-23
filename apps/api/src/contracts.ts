@@ -84,6 +84,7 @@ export * from "./contracts/instance";
 export * from "./contracts/keys";
 export * from "./contracts/params";
 export * from "./contracts/policy";
+export * from "./contracts/providers";
 export * from "./contracts/variables";
 
 // -----------------------------------------------------------------------------

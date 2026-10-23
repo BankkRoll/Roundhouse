@@ -113,33 +113,38 @@ func jsonFields(t reflect.Type) []string {
 func TestWireTypesMatchSchemas(t *testing.T) {
 	doc := loadOpenAPI(t)
 	for name, v := range map[string]any{
-		"Project":            Project{},
-		"ProjectDetail":      ProjectDetail{},
-		"Environment":        Environment{},
-		"Service":            Service{},
-		"CreatedService":     CreatedService{},
-		"ServiceConfig":      ServiceConfig{},
-		"NetworkingConfig":   NetworkingConfig{},
-		"Variable":           Variable{},
-		"VariablesPut":       VariablesPut{},
-		"VariableSetEntry":   VariableSet{},
-		"VariablesPutResult": VariablesPutResult{},
-		"VariableWarning":    VariableWarning{},
-		"Build":              Build{},
-		"Deployment":         Deployment{},
-		"DeploymentPage":     DeploymentPage{},
-		"DeploymentEvent":    DeploymentEvent{},
-		"DeploymentDetail":   DeploymentDetail{},
-		"Placement":          Placement{},
-		"LogEntry":           LogEntry{},
-		"LogPage":            LogPage{},
-		"Domain":             Domain{},
-		"Node":               Node{},
-		"CreateProject":      CreateProjectInput{},
-		"ApiToken":           APIToken{},
-		"CreateApiToken":     CreateAPITokenInput{},
-		"CreatedApiToken":    CreatedAPIToken{},
-		"ResolvedVariables":  ResolvedVariables{},
+		"Project":             Project{},
+		"ProjectDetail":       ProjectDetail{},
+		"Environment":         Environment{},
+		"Service":             Service{},
+		"CreatedService":      CreatedService{},
+		"ServiceConfig":       ServiceConfig{},
+		"NetworkingConfig":    NetworkingConfig{},
+		"Variable":            Variable{},
+		"VariablesPut":        VariablesPut{},
+		"VariableSetEntry":    VariableSet{},
+		"VariablesPutResult":  VariablesPutResult{},
+		"VariableWarning":     VariableWarning{},
+		"Build":               Build{},
+		"Deployment":          Deployment{},
+		"DeploymentPage":      DeploymentPage{},
+		"DeploymentEvent":     DeploymentEvent{},
+		"DeploymentDetail":    DeploymentDetail{},
+		"Placement":           Placement{},
+		"LogEntry":            LogEntry{},
+		"LogPage":             LogPage{},
+		"Domain":              Domain{},
+		"Node":                Node{},
+		"CreateProject":       CreateProjectInput{},
+		"ApiToken":            APIToken{},
+		"CreateApiToken":      CreateAPITokenInput{},
+		"CreatedApiToken":     CreatedAPIToken{},
+		"ResolvedVariables":   ResolvedVariables{},
+		"ProviderIntegration": ProviderIntegration{},
+		"ProviderOffer":       ProviderOffer{},
+		"ProviderOffers":      ProviderOffers{},
+		"ProvisionNode":       ProvisionNodeInput{},
+		"NodeProvision":       NodeProvision{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
@@ -227,7 +232,8 @@ func TestQueryParamsExist(t *testing.T) {
 	for _, c := range []struct {
 		route Route
 		param string
-	}{{RouteListProjects, "slug"}, {RouteRealtime, "client"}, {RouteResolveVars, "environment_id"}} {
+	}{{RouteListProjects, "slug"}, {RouteRealtime, "client"}, {RouteResolveVars, "environment_id"},
+		{RouteProviderOffers, "role"}, {RouteProviderOffers, "region"}} {
 		op := doc.Paths[c.route.Path][strings.ToLower(c.route.Method)]
 		if !slices.Contains(op.Parameters, param{In: "query", Name: c.param}) {
 			t.Errorf("%s: no query parameter %q", c.route, c.param)
@@ -245,5 +251,21 @@ func TestVariableTiersMatchAPI(t *testing.T) {
 	}
 	if want := []string{TierPlain, TierSecret}; !slices.Equal(s.Enum, want) {
 		t.Errorf("tiers = %v, API enum = %v", want, s.Enum)
+	}
+}
+
+// TestProviderEnumsMatchAPI keeps the providers `servers add --provider`
+// accepts and the provisioning statuses it waits on in step with the API.
+func TestProviderEnumsMatchAPI(t *testing.T) {
+	doc := loadOpenAPI(t)
+	if s := doc.Components.Schemas["ProviderId"]; s == nil {
+		t.Error("schema ProviderId missing from the OpenAPI document")
+	} else if !slices.Equal(s.Enum, ProviderIDs) {
+		t.Errorf("ProviderIDs = %v\nAPI enum    = %v", ProviderIDs, s.Enum)
+	}
+	if s := doc.Components.Schemas["NodeProvision"]; s == nil || s.Properties["status"] == nil {
+		t.Error("NodeProvision.status missing from the OpenAPI document")
+	} else if !slices.Equal(s.Properties["status"].Enum, ProvisionStatuses) {
+		t.Errorf("ProvisionStatuses = %v\nAPI enum          = %v", ProvisionStatuses, s.Properties["status"].Enum)
 	}
 }

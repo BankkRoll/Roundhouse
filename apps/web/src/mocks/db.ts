@@ -17,6 +17,7 @@ import type {
   Workspace,
 } from "../lib/api/types";
 import { type DeployDb, emptyDeploy, seedDeploy } from "./deploy-db";
+import { emptyProviders, type ProvidersDb } from "./providers-db";
 
 /** A stored user, including the password the sign-in handler checks. */
 export interface DbUser extends User {
@@ -58,6 +59,8 @@ export interface MockDb {
   audit: DbAuditEntry[];
   /** Projects, services, deployments and the rest of the deploy pipeline. */
   deploy: DeployDb;
+  /** Cloud provider integrations and provisioning runs. */
+  providers: ProvidersDb;
   counter: number;
 }
 
@@ -103,6 +106,8 @@ export function makeNode(overrides: Partial<Node> = {}): Node {
     hostname: "hel-1.example.com",
     status: "online",
     provider: "hetzner",
+    provider_server_id: null,
+    provider_server_missing_at: null,
     region: "hel1",
     public_ip: "203.0.113.10",
     os: "linux",
@@ -243,6 +248,7 @@ function seed(): MockDb {
       }),
     ].map((entry) => ({ ...entry, workspace_id: WORKSPACE_ID })),
     deploy: seedDeploy(WORKSPACE_ID, now),
+    providers: emptyProviders(),
     counter: 0,
   };
 }

@@ -267,34 +267,26 @@ describe("install method tabs", () => {
     }
   });
 
-  it("shows Hetzner as coming soon and never selects it", async () => {
+  it("offers a cloud provider tab without the join token countdown", async () => {
     const { user } = await openFlow();
-    const hetzner = screen.getByRole("tab", { name: /Hetzner/ });
-    expect(hetzner).toHaveAccessibleName("Hetzner soon");
-    expect(hetzner).toHaveAttribute("aria-disabled", "true");
-    await user.hover(hetzner);
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      "Coming soon: connect Hetzner to create servers in one click.",
-    );
-    await user.click(hetzner);
-    expect(hetzner).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByRole("tab", { name: "Linux server" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    await user.click(screen.getByRole("tab", { name: "Cloud provider" }));
+    expect(await screen.findByRole("combobox", { name: "Provider" })).toHaveValue("hetzner");
+    expect(screen.queryByText(/Expires in/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Waiting for the server to connect…")).not.toBeInTheDocument();
+    expect(localStorage.getItem(INSTALL_METHOD_STORAGE_KEY)).toBe("cloud");
   });
 
   it("moves between tabs with the arrow keys", async () => {
     const { user } = await openFlow("http://localhost:5173");
     screen.getByRole("tab", { name: "Linux server" }).focus();
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("tab", { name: "Cloud-init" })).toHaveFocus();
-    expect(screen.getByRole("tab", { name: "Cloud-init" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "Cloud provider" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Cloud provider" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
     await user.keyboard("{ArrowRight}{ArrowRight}");
-    expect(screen.getByRole("tab", { name: /Hetzner/ })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "This computer" })).toHaveFocus();
     expect(screen.getByRole("tab", { name: "This computer" })).toHaveAttribute(
       "aria-selected",
       "true",

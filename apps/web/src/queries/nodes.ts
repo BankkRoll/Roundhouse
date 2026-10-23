@@ -53,12 +53,14 @@ export function useNode(
  * flashes "not found".
  *
  * @param workspaceId - Workspace id.
- * @returns A mutation taking the node id.
+ * @returns A mutation taking the node id and, for a provisioned server, whether to keep
+ *   it running at the provider.
  */
 export function useDeleteNode(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (nodeId: string) => api.deleteNode(workspaceId, nodeId),
+    mutationFn: ({ nodeId, keepServer = false }: { nodeId: string; keepServer?: boolean }) =>
+      api.deleteNode(workspaceId, nodeId, keepServer),
     onSuccess: () =>
       // NOTE: exact, because node detail keys extend the list key and would refetch too.
       queryClient.invalidateQueries({ queryKey: queryKeys.nodes(workspaceId), exact: true }),

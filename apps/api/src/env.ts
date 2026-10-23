@@ -9,6 +9,7 @@ import type { NodeConnection } from "./durable/node-connection";
 import type { ProjectRoom } from "./durable/project-room";
 import type { DeployParams } from "./workflows/deploy";
 import type { KeyRotationParams } from "./workflows/key-rotation";
+import type { ProvisionParams } from "./workflows/provision";
 
 /** Worker bindings declared in `wrangler.jsonc`. */
 export interface Env {
@@ -28,6 +29,8 @@ export interface Env {
   AUTH_LIMITER?: RateLimit;
   /** Per-IP limiter for the GitHub webhook receiver. Optional like `AUTH_LIMITER`. */
   WEBHOOK_LIMITER?: RateLimit;
+  /** Per-token limiter for MCP tool calls (60 a minute, ADR 0012). Optional like `AUTH_LIMITER`. */
+  MCP_LIMITER?: RateLimit;
   /** Optional: absent in local dev and tests. */
   METRICS?: AnalyticsEngineDataset;
   /** Base64 32-byte root secret. Missing until the operator sets it; setup refuses to run without it. */
@@ -49,6 +52,14 @@ export interface Env {
   AUDIT_CHAIN: DurableObjectNamespace<AuditChain>;
   /** Runs one master key rotation per instance (instance ID = rotation ID). */
   KEY_ROTATION_WORKFLOW: Workflow<KeyRotationParams>;
+  /** Runs one-click server provisioning, one instance per run (instance ID = `prov_…`). */
+  PROVISION_WORKFLOW: Workflow<ProvisionParams>;
+  /**
+   * Seconds a provisioned server gets to join, overriding `JOIN_TIMEOUT_MS`;
+   * and seconds between join checks. For development and tests; unset in production.
+   */
+  PROVISION_JOIN_TIMEOUT_S?: string;
+  PROVISION_JOIN_POLL_S?: string;
   /**
    * Seconds a rollout waits for healthy replicas, overriding
    * `ROLLOUT_TIMEOUT_MS`. For development and tests (the end-to-end suite

@@ -47,6 +47,8 @@ export function toApiNode(node: NodeRow, now = Date.now()) {
     status: effectiveStatus(node, now),
     provider: node.provider,
     region: node.region,
+    provider_server_id: node.providerServerId,
+    provider_server_missing_at: node.providerServerMissingAt ? +node.providerServerMissingAt : null,
     public_ip: node.publicIp,
     os: node.os,
     arch: node.arch,

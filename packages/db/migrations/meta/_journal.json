@@ -36,6 +36,13 @@
       "when": 1792711436754,
       "tag": "0004_security_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792725617036,
+      "tag": "0005_cloud_providers",
+      "breakpoints": true
     }
   ]
 }

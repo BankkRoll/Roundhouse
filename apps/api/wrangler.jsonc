@@ -11,7 +11,7 @@
     "directory": "../web/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/v1/*", "/api/*", "/install.sh"]
+    "run_worker_first": ["/v1/*", "/api/*", "/install.sh", "/mcp"]
   },
   // NOTE: No `database_id` on purpose: `wrangler deploy` provisions the D1
   // database on the first deploy and reuses it afterwards, so a self-hoster
@@ -45,6 +45,11 @@
       "name": "roundhouse-key-rotation",
       "binding": "KEY_ROTATION_WORKFLOW",
       "class_name": "KeyRotationWorkflow"
+    },
+    {
+      "name": "roundhouse-provision",
+      "binding": "PROVISION_WORKFLOW",
+      "class_name": "ProvisionWorkflow"
     }
   ],
   // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
@@ -62,6 +67,12 @@
       "name": "WEBHOOK_LIMITER",
       "namespace_id": "730214592",
       "simple": { "limit": 300, "period": 60 }
+    },
+    {
+      // MCP tool calls, keyed by API token (ADR 0012).
+      "name": "MCP_LIMITER",
+      "namespace_id": "730214593",
+      "simple": { "limit": 60, "period": 60 }
     }
   ],
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "roundhouse_metrics" }],

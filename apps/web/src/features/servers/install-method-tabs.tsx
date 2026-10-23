@@ -1,16 +1,10 @@
-import {
-  Checkbox,
-  CodeBlock,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-  Tooltip,
-} from "@roundhouse/ui";
-import { CloudIcon, LaptopIcon, ServerIcon, TerminalIcon } from "lucide-react";
-import { useId, useState } from "react";
+import { CodeBlock, Tabs, TabsContent, TabsList, TabsTrigger } from "@roundhouse/ui";
+import { CloudIcon, FileCodeIcon, LaptopIcon, TerminalIcon } from "lucide-react";
+import { useState } from "react";
 import { FormField } from "../../components/form-field";
 import type { JoinToken } from "../../lib/api/types";
+import { BuilderCheckbox } from "./builder-checkbox";
+import { CloudProviderPanel } from "./cloud-provider-panel";
 import {
   cloudInitUserData,
   defaultNodeName,
@@ -18,46 +12,27 @@ import {
   isLocalOrigin,
   linuxInstallCommand,
   localNodeCommand,
-  readStoredMethod,
   storeMethod,
 } from "./install-methods";
 
 /** Props for {@link InstallMethodTabs}. */
 export interface InstallMethodTabsProps {
-  /** The join token every tab uses; one per open flow. */
+  /** Workspace the new server joins. */
+  workspaceId: string;
+  /** The join token the manual tabs use; one per open flow. */
   token: JoinToken;
-  /** Origin servers reach the control plane at. Defaults to the page's origin. */
-  origin?: string;
-}
-
-function BuilderCheckbox({
-  checked,
-  onChange,
-}: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  const id = useId();
-  const hintId = `${id}-hint`;
-  return (
-    <div className="flex items-start gap-2">
-      <Checkbox
-        id={id}
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        aria-describedby={hintId}
-        className="mt-0.5"
-      />
-      <div className="grid gap-0.5">
-        <label htmlFor={id} className="cursor-pointer text-sm text-foreground">
-          Builder node
-        </label>
-        <p id={hintId} className="text-xs text-muted-foreground">
-          Also builds images from git repositories. Give it a few spare CPU cores and disk.
-        </p>
-      </div>
-    </div>
-  );
+  /** Origin servers reach the control plane at. */
+  origin: string;
+  /** Methods to show, in tab order (see `offeredMethods`). */
+  offered: readonly InstallMethod[];
+  /** Selected method. */
+  method: InstallMethod;
+  /** Called when another tab is picked. The pick is also remembered. */
+  onMethodChange: (method: InstallMethod) => void;
+  /** Label of the button shown once a cloud server joined. */
+  doneLabel: string;
+  /** Called when the user finishes after a cloud server joined. */
+  onDone: () => void;
 }
 
 function CloudInitPanel({
@@ -121,27 +96,30 @@ function CloudInitPanel({
 }
 
 /**
- * The ways to add a server, as tabs sharing one join token: a Linux one-liner, cloud-init
- * user data for any provider, a local Docker node (only when the dashboard runs on this
- * machine), and Hetzner, which isn't available yet. The last tab picked is remembered.
+ * The ways to add a server, as tabs: a Linux one-liner, a server created at a connected
+ * cloud provider, cloud-init user data for any provider, and a local Docker node (only
+ * when the dashboard runs on this machine). The manual tabs share one join token; the
+ * cloud tab provisions with its own. The last tab picked is remembered.
  *
- * @param props - The join token and, for tests, the origin.
+ * @param props - Workspace, join token, origin and the controlled method.
  * @returns The tabs.
  */
 export function InstallMethodTabs({
+  workspaceId,
   token,
-  origin = window.location.origin,
+  origin,
+  offered,
+  method,
+  onMethodChange,
+  doneLabel,
+  onDone,
 }: InstallMethodTabsProps) {
-  const local = isLocalOrigin(origin);
-  const offered: InstallMethod[] = local
-    ? ["linux", "cloud-init", "local"]
-    : ["linux", "cloud-init"];
-  const [method, setMethod] = useState<InstallMethod>(() => readStoredMethod(offered));
+  const local = offered.includes("local");
   const [builder, setBuilder] = useState(false);
 
   function choose(next: string) {
     const picked = next as InstallMethod;
-    setMethod(picked);
+    onMethodChange(picked);
     storeMethod(picked);
   }
 
@@ -152,8 +130,12 @@ export function InstallMethodTabs({
           <TerminalIcon aria-hidden="true" />
           Linux server
         </TabsTrigger>
-        <TabsTrigger value="cloud-init">
+        <TabsTrigger value="cloud">
           <CloudIcon aria-hidden="true" />
+          Cloud provider
+        </TabsTrigger>
+        <TabsTrigger value="cloud-init">
+          <FileCodeIcon aria-hidden="true" />
           Cloud-init
         </TabsTrigger>
         {local ? (
@@ -162,17 +144,7 @@ export function InstallMethodTabs({
             This computer
           </TabsTrigger>
         ) : null}
-        <Tooltip content="Coming soon: connect Hetzner to create servers in one click.">
-          <TabsTrigger value="hetzner" disabled aria-label="Hetzner soon">
-            <ServerIcon aria-hidden="true" />
-            Hetzner{" "}
-            <span className="rounded-sm border border-border-strong px-1 text-[11px] text-muted-foreground">
-              soon
-            </span>
-          </TabsTrigger>
-        </Tooltip>
       </TabsList>
-
       <TabsContent value="linux" className="grid gap-3">
         <p className="text-sm text-muted-foreground">
           Run this on a fresh Linux server with root access. It installs Docker if needed, then the
@@ -186,6 +158,16 @@ export function InstallMethodTabs({
           code={linuxInstallCommand(token.install_command, builder)}
           label="Install command"
           prompt
+        />
+      </TabsContent>
+
+      <TabsContent value="cloud">
+        <CloudProviderPanel
+          workspaceId={workspaceId}
+          builder={builder}
+          onBuilderChange={setBuilder}
+          doneLabel={doneLabel}
+          onDone={onDone}
         />
       </TabsContent>
 

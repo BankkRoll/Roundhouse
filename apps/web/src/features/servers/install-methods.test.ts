@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  AVAILABLE_METHODS,
   cloudInitUserData,
   defaultNodeName,
+  INSTALL_METHOD_STORAGE_KEY,
   isLocalOrigin,
   linuxInstallCommand,
   localNodeCommand,
+  offeredMethods,
+  readStoredMethod,
 } from "./install-methods";
 
 const TOKEN = "njt_0123456789abcdefABCDEF";
@@ -60,5 +64,20 @@ describe("install methods", () => {
         builder: false,
       }),
     ).toMatchObject({ ok: false, reason: "invalid", message: expect.stringContaining("-bad") });
+  });
+
+  it("offers the cloud provider everywhere and the local node only on this machine", () => {
+    expect(AVAILABLE_METHODS).toEqual(["linux", "cloud", "cloud-init", "local"]);
+    expect(offeredMethods("https://cp.example.com")).toEqual(["linux", "cloud", "cloud-init"]);
+    expect(offeredMethods("http://localhost:5173")).toEqual(AVAILABLE_METHODS);
+  });
+
+  it("restores a stored method only when it is offered", () => {
+    localStorage.setItem(INSTALL_METHOD_STORAGE_KEY, "cloud");
+    expect(readStoredMethod(offeredMethods("https://cp.example.com"))).toBe("cloud");
+    localStorage.setItem(INSTALL_METHOD_STORAGE_KEY, "local");
+    expect(readStoredMethod(offeredMethods("https://cp.example.com"))).toBe("linux");
+    localStorage.setItem(INSTALL_METHOD_STORAGE_KEY, "hetzner");
+    expect(readStoredMethod(AVAILABLE_METHODS)).toBe("linux");
   });
 });

@@ -13,6 +13,12 @@ export const queryKeys = {
   node: (workspaceId: string, nodeId: string) =>
     ["workspaces", workspaceId, "nodes", nodeId] as const,
   audit: (workspaceId: string) => ["workspaces", workspaceId, "audit"] as const,
+  integrations: (workspaceId: string) => ["workspaces", workspaceId, "integrations"] as const,
+  providerOffers: (workspaceId: string, provider: string, role: string) =>
+    ["workspaces", workspaceId, "integrations", provider, "offers", role] as const,
+  nodeProvisions: (workspaceId: string) => ["workspaces", workspaceId, "node-provisions"] as const,
+  nodeProvision: (workspaceId: string, provisionId: string) =>
+    ["workspaces", workspaceId, "node-provisions", provisionId] as const,
   projects: (workspaceId: string) => ["workspaces", workspaceId, "projects"] as const,
   projectSummaries: (workspaceId: string) =>
     ["workspaces", workspaceId, "projects", "summary"] as const,

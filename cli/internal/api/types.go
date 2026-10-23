@@ -317,28 +317,33 @@ type Domain struct {
 
 // Node is a server running the node agent.
 type Node struct {
-	ID              string          `json:"id"`
-	Name            string          `json:"name"`
-	Hostname        *string         `json:"hostname"`
-	Status          string          `json:"status"`
-	Provider        string          `json:"provider"`
-	Region          *string         `json:"region"`
-	PublicIP        *string         `json:"public_ip"`
-	OS              *string         `json:"os"`
-	Arch            *string         `json:"arch"`
-	Kernel          *string         `json:"kernel"`
-	DockerVersion   *string         `json:"docker_version"`
-	AgentVersion    *string         `json:"agent_version"`
-	Capabilities    json.RawMessage `json:"capabilities"`
-	CPUTotal        *float64        `json:"cpu_total"`
-	MemTotal        *float64        `json:"mem_total"`
-	DiskTotal       *float64        `json:"disk_total"`
-	CPUPercent      *float64        `json:"cpu_percent"`
-	MemUsed         *float64        `json:"mem_used"`
-	DiskUsed        *float64        `json:"disk_used"`
-	Load1           *float64        `json:"load1"`
-	LastHeartbeatAt *int64          `json:"last_heartbeat_at"`
-	CreatedAt       int64           `json:"created_at"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Hostname *string `json:"hostname"`
+	Status   string  `json:"status"`
+	Provider string  `json:"provider"`
+	Region   *string `json:"region"`
+	// ProviderServerID is the cloud server's ID when Roundhouse provisioned it.
+	ProviderServerID *string `json:"provider_server_id"`
+	// ProviderServerMissingAt is when the provider first reported that
+	// server gone, in Unix milliseconds.
+	ProviderServerMissingAt *int64          `json:"provider_server_missing_at"`
+	PublicIP                *string         `json:"public_ip"`
+	OS                      *string         `json:"os"`
+	Arch                    *string         `json:"arch"`
+	Kernel                  *string         `json:"kernel"`
+	DockerVersion           *string         `json:"docker_version"`
+	AgentVersion            *string         `json:"agent_version"`
+	Capabilities            json.RawMessage `json:"capabilities"`
+	CPUTotal                *float64        `json:"cpu_total"`
+	MemTotal                *float64        `json:"mem_total"`
+	DiskTotal               *float64        `json:"disk_total"`
+	CPUPercent              *float64        `json:"cpu_percent"`
+	MemUsed                 *float64        `json:"mem_used"`
+	DiskUsed                *float64        `json:"disk_used"`
+	Load1                   *float64        `json:"load1"`
+	LastHeartbeatAt         *int64          `json:"last_heartbeat_at"`
+	CreatedAt               int64           `json:"created_at"`
 }
 
 // JoinToken is a single-use node join token and the command that uses it.
@@ -489,4 +494,133 @@ func IsRollbackSource(status string) bool {
 // IsBuildFinished reports whether a build status is terminal.
 func IsBuildFinished(status string) bool {
 	return status == "succeeded" || status == "failed" || status == "cancelled"
+}
+
+// -----------------------------------------------------------------------------
+// Cloud providers
+// -----------------------------------------------------------------------------
+
+// ProviderIDs are the cloud providers the control plane can provision on,
+// from PROVIDER_IDS in packages/providers.
+var ProviderIDs = []string{"hetzner", "digitalocean", "vultr", "linode"}
+
+// ProviderIntegration is a workspace's connection to one cloud provider. The
+// token itself is write-only and never returned.
+type ProviderIntegration struct {
+	Provider    string `json:"provider"`
+	DisplayName string `json:"display_name"`
+	Connected   bool   `json:"connected"`
+	// AccountLabel is the account name or email the provider reported.
+	AccountLabel     *string `json:"account_label"`
+	TokenFingerprint *string `json:"token_fingerprint"`
+	TokenLast4       *string `json:"token_last4"`
+	LastValidatedAt  *int64  `json:"last_validated_at"`
+	UpdatedAt        *int64  `json:"updated_at"`
+}
+
+// ProviderOffer is one orderable plan in one region, priced as the provider
+// bills it.
+type ProviderOffer struct {
+	ID          string  `json:"id"`
+	Plan        string  `json:"plan"`
+	Description string  `json:"description"`
+	Category    *string `json:"category"`
+	Region      string  `json:"region"`
+	RegionName  string  `json:"region_name"`
+	Country     *string `json:"country"`
+	VCPUs       int     `json:"vcpus"`
+	MemoryMiB   int     `json:"memory_mib"`
+	DiskGB      int     `json:"disk_gb"`
+	Arch        string  `json:"arch"`
+	Dedicated   bool    `json:"dedicated"`
+	// MonthlyCents is the monthly price in the smallest unit of Currency.
+	MonthlyCents      int      `json:"monthly_cents"`
+	Currency          string   `json:"currency"`
+	IncludedTrafficTB *float64 `json:"included_traffic_tb"`
+	Deprecated        bool     `json:"deprecated"`
+	UnavailableAfter  *string  `json:"unavailable_after"`
+}
+
+// OfferRecommendation suggests one offer, with why.
+type OfferRecommendation struct {
+	OfferID string `json:"offer_id"`
+	Reason  string `json:"reason"`
+}
+
+// ProviderOffers is a provider's live offers for a role and the recommended
+// picks, the first being the default.
+type ProviderOffers struct {
+	Provider        string                `json:"provider"`
+	Role            string                `json:"role"`
+	Offers          []ProviderOffer       `json:"offers"`
+	Recommendations []OfferRecommendation `json:"recommendations"`
+	FetchedAt       int64                 `json:"fetched_at"`
+}
+
+// Offer returns the offer with this ID, or nil.
+func (o *ProviderOffers) Offer(id string) *ProviderOffer {
+	for i := range o.Offers {
+		if o.Offers[i].ID == id {
+			return &o.Offers[i]
+		}
+	}
+	return nil
+}
+
+// ProvisionNodeInput is the body of POST
+// /v1/workspaces/{workspaceId}/nodes/provision.
+type ProvisionNodeInput struct {
+	Provider string `json:"provider"`
+	Plan     string `json:"plan"`
+	Region   string `json:"region"`
+	// Name is the server's name: a lowercase DNS label.
+	Name    string `json:"name"`
+	Builder bool   `json:"builder"`
+}
+
+// NodeProvision is one one-click provisioning run.
+type NodeProvision struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	Name     string `json:"name"`
+	Plan     string `json:"plan"`
+	Region   string `json:"region"`
+	Builder  bool   `json:"builder"`
+	// Status is one of the ProvisionStatus constants.
+	Status string `json:"status"`
+	// Step is the latest provider step, e.g. "create_server".
+	Step           *string `json:"step"`
+	FailureReason  *string `json:"failure_reason"`
+	FailureMessage *string `json:"failure_message"`
+	// ServerID is the cloud server's ID once the provider created it.
+	ServerID *string `json:"server_id"`
+	IPv4     *string `json:"ipv4"`
+	IPv6     *string `json:"ipv6"`
+	// NodeID is set once the server's agent joined.
+	NodeID     *string `json:"node_id"`
+	CreatedAt  int64   `json:"created_at"`
+	UpdatedAt  int64   `json:"updated_at"`
+	FinishedAt *int64  `json:"finished_at"`
+}
+
+// Provisioning run statuses, from NODE_PROVISION_STATUSES.
+const (
+	ProvisionQueued        = "queued"
+	ProvisionCreating      = "creating"
+	ProvisionBooting       = "booting"
+	ProvisionJoined        = "joined"
+	ProvisionFailed        = "failed"
+	ProvisionCleanupFailed = "cleanup_failed"
+)
+
+// ProvisionStatuses lists every provisioning run status.
+var ProvisionStatuses = []string{
+	ProvisionQueued, ProvisionCreating, ProvisionBooting,
+	ProvisionJoined, ProvisionFailed, ProvisionCleanupFailed,
+}
+
+// IsProvisionFinished reports whether a provisioning run has stopped: the
+// server joined, or the run failed.
+func IsProvisionFinished(status string) bool {
+	return status == ProvisionJoined || status == ProvisionFailed || status == ProvisionCleanupFailed
 }

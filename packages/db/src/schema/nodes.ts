@@ -10,8 +10,11 @@ import { users } from "./auth";
 import { id, json, timestamp, timestamps } from "./columns";
 import { workspaces } from "./workspaces";
 
-/** Where a node's compute comes from. */
-export type NodeProvider = "server" | "hetzner";
+/**
+ * Where a node's compute comes from: `server` for machines joined by hand,
+ * otherwise the cloud provider (`@roundhouse/providers` ID) that created it.
+ */
+export type NodeProvider = "server" | "hetzner" | "digitalocean" | "vultr" | "linode";
 
 /** A machine running the node agent. */
 export const nodes = sqliteTable(
@@ -25,6 +28,13 @@ export const nodes = sqliteTable(
     hostname: text("hostname"),
     provider: text("provider").$type<NodeProvider>().notNull().default("server"),
     region: text("region"),
+    /** The provider's server ID, for nodes Roundhouse provisioned; deleting the node deletes it. */
+    providerServerId: text("provider_server_id"),
+    /**
+     * When reconciliation first found the provider no longer has the server
+     * (deleted in the provider's console); cleared when it reappears.
+     */
+    providerServerMissingAt: timestamp("provider_server_missing_at"),
     labels: json<Record<string, string>>("labels")
       .notNull()
       .$defaultFn(() => ({})),

@@ -5,13 +5,16 @@ import { PageHeader } from "../../components/page-header";
 import { errorMessage } from "../../lib/api/client";
 import { usePermissions } from "../../lib/permissions";
 import { useNodes } from "../../queries/nodes";
+import { useNodeProvisions } from "../../queries/providers";
 import { useShellActions } from "../shell/shell-actions";
 import { CapacitySection } from "./capacity-section";
+import { pendingProvisions } from "./cloud-offers";
 import { fleetHeadline, summarizeFleet } from "./node-metrics";
 import { ServerGrid, ServerGridSkeleton } from "./server-grid";
 
 /**
- * Servers overview: live cards for every node plus capacity planning.
+ * Servers overview: live cards for every node, servers still being created at a cloud
+ * provider, and capacity planning.
  *
  * @param props - Workspace id.
  * @returns The page.
@@ -21,6 +24,8 @@ export function ServersPage({ workspaceId }: { workspaceId: string }) {
   const { can } = usePermissions(workspaceId);
   const { openAddServer } = useShellActions();
   const canManage = can("nodes:manage");
+  const provisions = useNodeProvisions(workspaceId, can("nodes:read"));
+  const pending = nodes.data ? pendingProvisions(provisions.data ?? [], nodes.data) : [];
 
   const addButton = canManage ? (
     <Button variant="primary" onClick={openAddServer}>
@@ -40,7 +45,7 @@ export function ServersPage({ workspaceId }: { workspaceId: string }) {
         <ServerGridSkeleton />
       ) : nodes.isError ? (
         <ErrorState message={errorMessage(nodes.error)} onRetry={() => void nodes.refetch()} />
-      ) : nodes.data.length === 0 ? (
+      ) : nodes.data.length === 0 && pending.length === 0 ? (
         <EmptyState
           icon={<ServerIcon />}
           title="No servers yet"
@@ -50,7 +55,7 @@ export function ServersPage({ workspaceId }: { workspaceId: string }) {
         />
       ) : (
         <>
-          <ServerGrid workspaceId={workspaceId} nodes={nodes.data} />
+          <ServerGrid workspaceId={workspaceId} nodes={nodes.data} provisions={pending} />
           <CapacitySection nodes={nodes.data} />
         </>
       )}

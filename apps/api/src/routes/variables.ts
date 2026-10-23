@@ -15,7 +15,6 @@
  *
  * @module
  */
-import { secretDerivedVariables } from "@roundhouse/shared";
 import { clientIp, createRouter, requireMasterKey } from "../context";
 import {
   listServiceVariables,
@@ -26,13 +25,11 @@ import {
   resolveServiceVariables,
 } from "../contracts";
 import { recordAudit } from "../lib/audit";
-import { ApiError } from "../lib/errors";
-import { resolveServiceEnvironment } from "../lib/resolve-env";
+import { resolvePlainEnvironment } from "../lib/plain-env";
 import { environmentOf, projectScope, serviceScope } from "../lib/scope";
 import {
   assertValidReferences,
   listVariables,
-  loadEnvironmentVariables,
   projectKey,
   putVariables,
   type VariableTarget,
@@ -113,44 +110,11 @@ export const variableRoutes = createRouter()
     const environment = await environmentOf(c, project.id, environment_id);
     const db = c.get("db");
     const key = await projectKey(db, requireMasterKey(c), project.id);
-    const vars = await loadEnvironmentVariables(db, key, project.id, environment.id);
-    const result = await resolveServiceEnvironment(
-      db,
-      key,
-      { projectId: project.id, serviceId, environment },
-      { variables: vars },
-    );
-    if (!result.ok) {
-      const first = result.errors[0]!;
-      throw new ApiError(
-        400,
-        "invalid_reference",
-        `${first.variable.namespace}.${first.variable.name}: ${first.message}`,
-        result.errors.map((e) => ({
-          field: `${e.variable.namespace}.${e.variable.name}`,
-          code: e.code,
-          message: e.message,
-          ...(e.start !== undefined ? { start: e.start, end: e.end } : {}),
-        })),
-      );
-    }
-    // SECURITY: Secret values are write-only (ADR 0014), and a plain value
-    // that references one carries it once resolved, so both stay local.
-    const taint = secretDerivedVariables({
-      services: vars.services,
-      shared: vars.shared,
-      secretServiceKeys: vars.secretKeys,
-      secretSharedKeys: vars.sharedSecretKeys,
+    const { variables, localKeys } = await resolvePlainEnvironment(db, key, {
+      projectId: project.id,
+      service,
+      environment,
     });
-    const local = new Set([
-      ...(vars.secretKeys[service.slug] ?? []),
-      ...(taint.services[service.slug] ?? []),
-    ]);
-    const variables: Record<string, string> = {};
-    for (const k of Object.keys(result.env).sort()) {
-      if (!local.has(k)) variables[k] = result.env[k]!;
-    }
-    const localKeys = [...local].sort();
     await recordAudit(db, {
       workspaceId: project.workspaceId,
       ...caller.actor,

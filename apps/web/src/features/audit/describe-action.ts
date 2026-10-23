@@ -1,8 +1,10 @@
+import { isProviderId, PROVIDERS } from "@roundhouse/providers";
 import type { AuditAction } from "@roundhouse/shared";
 import type { LucideIcon } from "lucide-react";
 import {
   ActivityIcon,
   Building2Icon,
+  CloudIcon,
   KeyRoundIcon,
   ServerIcon,
   UserPlusIcon,
@@ -36,6 +38,12 @@ const VERBS: Record<AuditAction, string> = {
   "node.joined": "connected",
   "node.removed": "removed server",
   "node.went_offline": "lost contact with a server",
+  "node.provision_requested": "started creating server",
+  "node.provisioned": "created server",
+  "node.provision_failed": "failed to create server",
+  "node.deprovisioned": "deleted cloud server",
+  "provider.connected": "connected",
+  "provider.disconnected": "disconnected",
   "project.created": "created project",
   "project.updated": "updated project",
   "project.deleted": "deleted project",
@@ -98,6 +106,8 @@ const TARGETS: Partial<Record<AuditAction, (metadata: Metadata) => string | null
     return role ? `as ${role}` : null;
   },
   "member.left": () => null,
+  "provider.connected": providerName,
+  "provider.disconnected": providerName,
   "github.installation_rejected": (metadata) => {
     const reason = stringField(metadata, "reason") ?? stringField(metadata, "code");
     return reason ? `(${reason.replace(/_/g, " ")})` : null;
@@ -114,6 +124,7 @@ const ICONS: Record<string, LucideIcon> = {
   member: UsersIcon,
   invite: UserPlusIcon,
   workspace: Building2Icon,
+  provider: CloudIcon,
   api_token: KeyRoundIcon,
   token: KeyRoundIcon,
 };
@@ -121,6 +132,12 @@ const ICONS: Record<string, LucideIcon> = {
 function stringField(metadata: Metadata, key: string): string | null {
   const value = metadata?.[key];
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function providerName(metadata: Metadata): string | null {
+  const provider = stringField(metadata, "provider");
+  if (!provider) return null;
+  return isProviderId(provider) ? PROVIDERS[provider].displayName : provider;
 }
 
 /**

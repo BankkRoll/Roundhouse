@@ -1,7 +1,14 @@
 package cli
 
 import (
+	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
+	"net/http"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -162,13 +169,13 @@ func (a *App) serversCmd() *cobra.Command {
 				fmt.Fprintf(a.IO.Out, "No servers in %s. Add one with `roundhouse servers add`.\n", ws.Name)
 				return nil
 			}
-			t := a.newTable("name", "id", "ip", "arch", "agent", "last seen", "status")
+			t := a.newTable("name", "id", "provider", "ip", "arch", "agent", "last seen", "status")
 			for _, n := range nodes {
 				seen := "-"
 				if n.LastHeartbeatAt != nil {
 					seen = ago(a.Now(), *n.LastHeartbeatAt)
 				}
-				t.row(n.Name, n.ID, orDash(deref(n.PublicIP)), orDash(deref(n.Arch)), orDash(deref(n.AgentVersion)), seen, a.IO.OutColor().Status(n.Status))
+				t.row(n.Name, n.ID, orDash(n.Provider), orDash(deref(n.PublicIP)), orDash(deref(n.Arch)), orDash(deref(n.AgentVersion)), seen, a.IO.OutColor().Status(n.Status))
 			}
 			t.flush()
 			return nil
@@ -177,16 +184,37 @@ func (a *App) serversCmd() *cobra.Command {
 	list.Flags().StringVarP(&workspace, "workspace", "w", "", "workspace ID, slug or name")
 
 	var addWorkspace string
+	var pf provisionFlags
 	add := &cobra.Command{
 		Use:   "add",
-		Short: "Mint a join token and print the install command",
-		Long: `Create a single-use join token and print the one-line command that
-installs the agent on a new server and joins it to the workspace. Run the
-command on the server as root. The token expires if unused.`,
+		Short: "Add a server: print an install command, or provision one in the cloud",
+		Long: `Without --provider, create a single-use join token and print the
+one-line command that installs the agent on a new server and joins it to the
+workspace. Run the command on the server as root. The token expires if unused.
+
+With --provider, create a cloud server on a provider connected to the
+workspace; it installs the agent and joins on first boot. Without --plan or
+--region the provider's recommended offer is used. The command waits until
+the server joins unless --no-wait is given. Connect a provider in the
+dashboard first (Servers → Add server → Cloud provider): the CLI never
+handles provider tokens. Provisioning needs a recent "roundhouse login";
+API tokens cannot provision.`,
 		Example: `  roundhouse servers add
-  roundhouse servers add --workspace acme --json | jq -r .install_command`,
+  roundhouse servers add --workspace acme --json | jq -r .install_command
+  roundhouse servers add --provider hetzner
+  roundhouse servers add --provider hetzner --plan cx23 --region fsn1 --name web-1
+  roundhouse servers add --provider digitalocean --builder --no-wait --json`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if pf.provider == "" {
+				for _, name := range []string{"plan", "region", "name", "builder", "no-wait"} {
+					if cmd.Flags().Changed(name) {
+						return exitcode.New(exitcode.Usage, "--%s needs --provider", name)
+					}
+				}
+			} else if err := pf.validate(); err != nil {
+				return err
+			}
 			ctx := cmd.Context()
 			sess, err := a.connect()
 			if err != nil {
@@ -195,6 +223,9 @@ command on the server as root. The token expires if unused.`,
 			ws, err := a.findWorkspace(ctx, sess.client, addWorkspace)
 			if err != nil {
 				return err
+			}
+			if pf.provider != "" {
+				return a.provisionServer(ctx, sess.client, ws, pf)
 			}
 			tok, err := sess.client.CreateJoinToken(ctx, ws.ID)
 			if err != nil {
@@ -211,8 +242,238 @@ command on the server as root. The token expires if unused.`,
 		},
 	}
 	add.Flags().StringVarP(&addWorkspace, "workspace", "w", "", "workspace ID, slug or name")
+	pf.register(add)
 	cmd.AddCommand(list, add)
 	return cmd
+}
+
+// provisionFlags are the `servers add` flags that provision a cloud server.
+type provisionFlags struct {
+	provider, plan, region, name string
+	builder, noWait              bool
+}
+
+func (f *provisionFlags) register(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&f.provider, "provider", "", "provision on this connected cloud provider: "+strings.Join(api.ProviderIDs, ", "))
+	cmd.Flags().StringVar(&f.plan, "plan", "", "with --provider, the provider's plan, e.g. cx23 (default: the recommended one)")
+	cmd.Flags().StringVar(&f.region, "region", "", "with --provider, the provider's region, e.g. fsn1 (default: the recommended one)")
+	cmd.Flags().StringVar(&f.name, "name", "", "with --provider, the server's name, a lowercase DNS label (default: server-<random>)")
+	cmd.Flags().BoolVar(&f.builder, "builder", false, "with --provider, size and use the server for builds")
+	cmd.Flags().BoolVar(&f.noWait, "no-wait", false, "with --provider, return once provisioning starts instead of waiting for the server to join")
+}
+
+var (
+	serverNameRE   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	planOrRegionRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+)
+
+// validate checks the flags as the API would, so a typo fails before any
+// request, and fills in a generated name when none was given.
+func (f *provisionFlags) validate() error {
+	if !slices.Contains(api.ProviderIDs, f.provider) {
+		return exitcode.New(exitcode.Usage, "unknown provider %q; use one of %s", f.provider, strings.Join(api.ProviderIDs, ", "))
+	}
+	if f.plan != "" && !planOrRegionRE.MatchString(f.plan) {
+		return exitcode.New(exitcode.Usage, "invalid --plan %q", f.plan)
+	}
+	if f.region != "" && !planOrRegionRE.MatchString(f.region) {
+		return exitcode.New(exitcode.Usage, "invalid --region %q", f.region)
+	}
+	if f.name == "" {
+		f.name = randomServerName()
+	} else if !serverNameRE.MatchString(f.name) {
+		return exitcode.New(exitcode.Usage, "invalid --name %q: use 1-63 lowercase letters, digits or hyphens, not starting or ending with a hyphen", f.name)
+	}
+	return nil
+}
+
+// randomServerName returns "server-" and four random lowercase letters or
+// digits.
+func randomServerName() string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	for i := range b {
+		b[i] = alphabet[int(b[i])%len(alphabet)]
+	}
+	return "server-" + string(b)
+}
+
+// provisionServer runs `servers add --provider`: it checks the provider is
+// connected, picks an offer when --plan or --region is missing, starts the
+// run and, unless --no-wait, waits for the server to join.
+func (a *App) provisionServer(ctx context.Context, c *api.Client, ws *api.Membership, f provisionFlags) error {
+	integrations, err := c.ListIntegrations(ctx, ws.ID)
+	if err != nil {
+		return err
+	}
+	display, connected := f.provider, false
+	for _, in := range integrations {
+		if in.Provider == f.provider {
+			display, connected = in.DisplayName, in.Connected
+		}
+	}
+	if !connected {
+		// Shaped like the API's own 409 so --json and the hint match the
+		// error a later call would get.
+		return &api.Error{Status: http.StatusConflict, Code: "provider_not_connected",
+			Message: fmt.Sprintf("%s is not connected to workspace %s", display, ws.Name)}
+	}
+
+	if f.plan == "" || f.region == "" {
+		role := "node"
+		if f.builder {
+			role = "builder"
+		}
+		offers, err := c.ProviderOffers(ctx, ws.ID, f.provider, role, f.region)
+		if err != nil {
+			return err
+		}
+		o, reason := pickOffer(offers, f.plan, f.region)
+		if o == nil {
+			return exitcode.New(exitcode.NotFound, "%s has no %s offer%s", display, role, offerFilter(f.plan, f.region))
+		}
+		f.plan, f.region = o.Plan, o.Region
+		fmt.Fprintf(a.IO.Err, "Using %s\n", describeOffer(o, reason))
+	}
+
+	p, err := c.ProvisionNode(ctx, ws.ID, api.ProvisionNodeInput{
+		Provider: f.provider, Plan: f.plan, Region: f.region, Name: f.name, Builder: f.builder,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.IO.Err, "Provisioning %s (%s in %s) on %s\n", p.Name, p.Plan, p.Region, display)
+	if f.noWait {
+		if a.jsonOut {
+			return a.printJSON(p)
+		}
+		fmt.Fprintf(a.IO.Out, "Started %s; %s joins %s on first boot\n", p.ID, p.Name, ws.Name)
+		return nil
+	}
+	if p, err = a.watchProvision(ctx, c, ws.ID, p); err != nil {
+		return err
+	}
+	return a.reportProvision(p)
+}
+
+// pickOffer returns the first recommended offer matching plan and region
+// (each ignored when empty) with the recommendation's reason, or else the
+// first matching offer that is not deprecated.
+func pickOffer(offers *api.ProviderOffers, plan, region string) (*api.ProviderOffer, string) {
+	matches := func(o *api.ProviderOffer) bool {
+		return o != nil && (plan == "" || o.Plan == plan) && (region == "" || o.Region == region)
+	}
+	for _, r := range offers.Recommendations {
+		if o := offers.Offer(r.OfferID); matches(o) {
+			return o, r.Reason
+		}
+	}
+	for i := range offers.Offers {
+		if o := &offers.Offers[i]; matches(o) && !o.Deprecated {
+			return o, ""
+		}
+	}
+	return nil, ""
+}
+
+func offerFilter(plan, region string) string {
+	switch {
+	case plan != "" && region != "":
+		return fmt.Sprintf(" for plan %s in %s", plan, region)
+	case plan != "":
+		return " for plan " + plan
+	case region != "":
+		return " in " + region
+	}
+	return ""
+}
+
+func describeOffer(o *api.ProviderOffer, reason string) string {
+	s := fmt.Sprintf("%s in %s (%s): %d vCPU, %s GiB RAM, %d GB disk, %s, %.2f %s/month",
+		o.Plan, o.Region, o.RegionName, o.VCPUs, strconv.FormatFloat(float64(o.MemoryMiB)/1024, 'f', -1, 64),
+		o.DiskGB, o.Arch, float64(o.MonthlyCents)/100, o.Currency)
+	if reason != "" {
+		s += " — " + reason
+	}
+	return s
+}
+
+// watchProvision polls a provisioning run until it finishes, printing each
+// status or step change to stderr.
+func (a *App) watchProvision(ctx context.Context, c *api.Client, workspaceID string, p *api.NodeProvision) (*api.NodeProvision, error) {
+	spin := a.IO.StartSpinner("Waiting for " + p.Name)
+	defer spin.Stop()
+	pal := a.IO.ErrColor()
+	last := ""
+	failures := 0
+	for {
+		if key := p.Status + "/" + deref(p.Step); key != last {
+			last = key
+			line := p.Status
+			if p.Step != nil {
+				line += " (" + *p.Step + ")"
+			}
+			spin.Println(a.IO.Err, fmt.Sprintf("  %s  %s", pal.Dim(millis(p.UpdatedAt).Local().Format("15:04:05")), line))
+			spin.Update(fmt.Sprintf("%s is %s", p.Name, p.Status))
+		}
+		if api.IsProvisionFinished(p.Status) {
+			return p, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(a.PollInterval):
+		}
+		next, err := c.GetNodeProvision(ctx, workspaceID, p.ID)
+		switch {
+		case err == nil:
+			failures = 0
+			p = next
+		case ctx.Err() != nil:
+			return nil, ctx.Err()
+		default:
+			var netErr *api.NetworkError
+			if !errors.As(err, &netErr) || failures >= maxPollFailures {
+				return nil, err
+			}
+			failures++
+		}
+	}
+}
+
+// reportProvision prints a finished run and returns
+// [exitcode.ProvisionFailed] unless the server joined.
+func (a *App) reportProvision(p *api.NodeProvision) error {
+	if a.jsonOut {
+		writeJSON(a.IO.Out, p)
+	} else if p.Status == api.ProvisionJoined {
+		fmt.Fprintf(a.IO.Out, "%s %s joined as %s", a.IO.OutColor().Green("✓"), p.Name, deref(p.NodeID))
+		if p.IPv4 != nil {
+			fmt.Fprintf(a.IO.Out, " (%s)", *p.IPv4)
+		}
+		fmt.Fprintln(a.IO.Out)
+	}
+	if p.Status == api.ProvisionJoined {
+		return nil
+	}
+	reason := deref(p.FailureMessage)
+	if code := deref(p.FailureReason); code != "" && reason != "" {
+		reason = code + ": " + reason
+	} else if reason == "" {
+		reason = code
+	}
+	if reason == "" {
+		reason = "no reason recorded"
+	}
+	if p.Status == api.ProvisionCleanupFailed {
+		server := "the server"
+		if p.ServerID != nil {
+			server = "server " + *p.ServerID
+		}
+		a.IO.Warn("%s could not be deleted and may still exist and bill; delete it in the %s console", server, p.Provider)
+	}
+	return exitcode.New(exitcode.ProvisionFailed, "provisioning %s %s: %s", p.Name, p.Status, reason)
 }
 
 // -----------------------------------------------------------------------------

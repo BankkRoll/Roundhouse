@@ -172,7 +172,8 @@ Exit codes:
   0 ok, 1 error, 2 usage, 3 not signed in, 4 forbidden, 5 not found,
   6 conflict, 7 invalid input, 8 deployment failed, 9 not linked,
   10 not available on this control plane yet, 11 network or server error,
-  12 input required in non-interactive mode, 130 interrupted`
+  12 input required in non-interactive mode, 13 server provisioning failed,
+  130 interrupted`
 
 func (a *App) rootCommand() *cobra.Command {
 	root := &cobra.Command{
@@ -474,6 +475,14 @@ func (a *App) errorHint(err error) string {
 			return "secrets are write-only; pass --yes to store them as secrets anyway, or --plain to keep them readable"
 		case apiErr.Code == "public_prefix_secret_value":
 			return "public-prefix variables are bundled into client code; pass --acknowledge-public to store them anyway, or drop the prefix and store a secret"
+		case apiErr.Code == "provider_not_connected":
+			return "provider tokens are accepted only in the dashboard: Servers → Add server → Cloud provider"
+		case apiErr.Code == "provider_read_only":
+			return "the stored provider token cannot create servers; connect a read-write one in the dashboard: Servers → Add server → Cloud provider"
+		case apiErr.Code == "reauth_required" && a.apiToken:
+			return "API tokens cannot provision servers; unset " + EnvToken + " and sign in with `roundhouse login`"
+		case apiErr.Code == "reauth_required":
+			return "provisioning needs a recent sign-in; run `roundhouse login` again, then retry"
 		}
 	case errors.As(err, &closed) && closed.Code == api.CloseUnauthorized:
 		status = http.StatusUnauthorized

@@ -18,6 +18,9 @@ export default defineConfig(async () => {
             // Fixed test-only key; never used outside the test runtime.
             MASTER_KEY: "dGVzdC1tYXN0ZXIta2V5LWRvLW5vdC11c2UtMDAwMDA=",
             TEST_MIGRATIONS: migrations,
+            // Provisioned test servers join (or time out) in seconds, not minutes.
+            PROVISION_JOIN_TIMEOUT_S: "8",
+            PROVISION_JOIN_POLL_S: "1",
           },
         },
       }),

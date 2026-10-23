@@ -35,6 +35,10 @@ var (
 	RouteListDomains     = Route{http.MethodGet, "/v1/services/{serviceId}/domains"}
 	RouteListNodes       = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/nodes"}
 	RouteJoinToken       = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/nodes/join-tokens"}
+	RouteIntegrations    = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/integrations"}
+	RouteProviderOffers  = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/providers/{provider}/offers"}
+	RouteProvisionNode   = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/nodes/provision"}
+	RouteNodeProvision   = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/node-provisions/{provisionId}"}
 	RouteRealtime        = Route{http.MethodGet, "/v1/projects/{projectId}/realtime"}
 	RouteListTokens      = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/tokens"}
 	RouteCreateToken     = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/tokens"}
@@ -56,6 +60,7 @@ var Routes = []Route{
 	RouteSharedVars, RoutePutSharedVars,
 	RouteListDeployments, RouteCreateDeploy, RouteGetDeployment, RouteRollback, RouteCancel,
 	RouteDeploymentLogs, RouteBuildLogs, RouteListDomains, RouteListNodes, RouteJoinToken,
+	RouteIntegrations, RouteProviderOffers, RouteProvisionNode, RouteNodeProvision,
 	RouteRealtime, RouteListTokens, RouteCreateToken, RouteRevokeToken,
 }
 
@@ -348,6 +353,39 @@ func (c *Client) ListNodes(ctx context.Context, workspaceID string) ([]Node, err
 // CreateJoinToken mints a single-use join token and its install command.
 func (c *Client) CreateJoinToken(ctx context.Context, workspaceID string) (*JoinToken, error) {
 	return fetch[JoinToken](ctx, c, RouteJoinToken, nil, nil, workspaceID)
+}
+
+// ListIntegrations lists every cloud provider and whether the workspace is
+// connected to it.
+func (c *Client) ListIntegrations(ctx context.Context, workspaceID string) ([]ProviderIntegration, error) {
+	var out struct {
+		Integrations []ProviderIntegration `json:"integrations"`
+	}
+	if err := c.call(ctx, RouteIntegrations, nil, nil, &out, workspaceID); err != nil {
+		return nil, err
+	}
+	return out.Integrations, nil
+}
+
+// ProviderOffers lists a connected provider's plans and regions with prices
+// for role ("node" or "builder"), in one region when region is not empty.
+func (c *Client) ProviderOffers(ctx context.Context, workspaceID, provider, role, region string) (*ProviderOffers, error) {
+	q := url.Values{"role": {role}}
+	if region != "" {
+		q.Set("region", region)
+	}
+	return fetch[ProviderOffers](ctx, c, RouteProviderOffers, q, nil, workspaceID, provider)
+}
+
+// ProvisionNode starts creating a cloud server that joins the workspace on
+// first boot. Poll the returned run with [Client.GetNodeProvision].
+func (c *Client) ProvisionNode(ctx context.Context, workspaceID string, in ProvisionNodeInput) (*NodeProvision, error) {
+	return fetch[NodeProvision](ctx, c, RouteProvisionNode, nil, in, workspaceID)
+}
+
+// GetNodeProvision returns one provisioning run.
+func (c *Client) GetNodeProvision(ctx context.Context, workspaceID, provisionID string) (*NodeProvision, error) {
+	return fetch[NodeProvision](ctx, c, RouteNodeProvision, nil, nil, workspaceID, provisionID)
 }
 
 // -----------------------------------------------------------------------------

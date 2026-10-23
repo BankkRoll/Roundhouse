@@ -5,15 +5,23 @@
  * @module
  */
 import { createRoute, z } from "@hono/zod-openapi";
-import { nodeJoinTokens, nodes } from "@roundhouse/db";
-import { JOIN_TOKEN_TTL_MS, newId } from "@roundhouse/shared";
+import { nodes } from "@roundhouse/db";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { clientIp, createRouter, originOf, requireWorkspace } from "../context";
 import { recordAudit } from "../lib/audit";
-import { hashToken, randomToken } from "../lib/crypto";
 import { notFound } from "../lib/errors";
+import { mintJoinToken } from "../lib/join-tokens";
 import { installCommand, toApiNode } from "../lib/nodes";
-import { errors, json, Millis, NodeSchema, sessionAuth, WorkspaceParams } from "../schemas";
+import { deprovisionNodeServer } from "../lib/provisioning";
+import {
+  errors,
+  json,
+  Millis,
+  NodeSchema,
+  RemoveNodeQuery,
+  sessionAuth,
+  WorkspaceParams,
+} from "../schemas";
 
 const NodeParams = WorkspaceParams.extend({ nodeId: z.string() });
 
@@ -42,9 +50,11 @@ const remove = createRoute({
   path: "/v1/workspaces/{workspaceId}/nodes/{nodeId}",
   tags: ["nodes"],
   summary: "Remove a server and revoke its credential",
+  description:
+    "For servers Roundhouse provisioned, also deletes the cloud server unless `keep_server=true`.",
   security: sessionAuth,
-  request: { params: NodeParams },
-  responses: { 204: { description: "Removed" }, ...errors(401, 403, 404) },
+  request: { params: NodeParams, query: RemoveNodeQuery },
+  responses: { 204: { description: "Removed" }, ...errors(401, 403, 404, 409, 429, 502) },
 });
 
 const createJoinToken = createRoute({
@@ -89,7 +99,13 @@ export const nodeRoutes = createRouter()
   })
   .openapi(remove, async (c) => {
     const { workspaceId, nodeId } = c.req.valid("param");
+    const { keep_server: keepServer } = c.req.valid("query");
     const m = await requireWorkspace(c, workspaceId, "nodes:manage");
+    const [live] = await c.get("db").select().from(nodes).where(liveNode(workspaceId, nodeId));
+    if (!live) throw notFound("Server");
+    // Delete the cloud server first: if the provider refuses, the node stays
+    // listed so the operator can retry instead of losing track of a billing server.
+    const deprovisioned = keepServer ? null : await deprovisionNodeServer(c.get("db"), c.env, live);
     const [row] = await c
       .get("db")
       .update(nodes)
@@ -109,24 +125,30 @@ export const nodeRoutes = createRouter()
       metadata: { name: row.name },
       ip: clientIp(c),
     });
+    if (deprovisioned) {
+      await recordAudit(c.get("db"), {
+        workspaceId,
+        ...m.actor,
+        action: "node.deprovisioned",
+        targetType: "node",
+        targetId: nodeId,
+        metadata: {
+          provider: deprovisioned.provider,
+          server_id: deprovisioned.serverId,
+          deleted: deprovisioned.deleted,
+        },
+        ip: clientIp(c),
+      });
+    }
     return c.body(null, 204);
   })
   .openapi(createJoinToken, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const m = await requireWorkspace(c, workspaceId, "nodes:manage");
-    const token = randomToken("njt");
-    const id = newId("joinToken");
-    const expiresAt = new Date(Date.now() + JOIN_TOKEN_TTL_MS);
-    await c
-      .get("db")
-      .insert(nodeJoinTokens)
-      .values({
-        id,
-        workspaceId,
-        tokenHash: await hashToken(token),
-        createdBy: m.user.id,
-        expiresAt,
-      });
+    const { id, token, expiresAt } = await mintJoinToken(c.get("db"), {
+      workspaceId,
+      createdBy: m.user.id,
+    });
     await recordAudit(c.get("db"), {
       workspaceId,
       ...m.actor,

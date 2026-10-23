@@ -157,8 +157,12 @@ export interface Node {
   name: string;
   hostname: string | null;
   status: NodeStatus;
-  /** Hosting provider label; `"server"` when the agent could not tell. */
+  /** `"server"` for machines joined by hand, else the cloud provider that created it. */
   provider: string;
+  /** The provider's server id when Roundhouse provisioned it; deleting the node deletes it. */
+  provider_server_id: string | null;
+  /** When the provider was first found to no longer have the server. */
+  provider_server_missing_at: Millis | null;
   region: string | null;
   public_ip: string | null;
   os: string | null;

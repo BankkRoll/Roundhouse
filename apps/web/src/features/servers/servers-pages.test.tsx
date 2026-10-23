@@ -261,3 +261,133 @@ describe("node detail page", () => {
     );
   });
 });
+
+describe("provider-managed servers", () => {
+  function addManaged(overrides: Partial<Parameters<typeof makeNode>[0]> = {}) {
+    db.nodes.push({
+      ...makeNode({
+        id: "node_web1",
+        name: "web-1",
+        provider: "hetzner",
+        provider_server_id: "48000001",
+        ...overrides,
+      }),
+      workspace_id: WORKSPACE_ID,
+    });
+  }
+
+  function connectHetzner() {
+    db.providers.integrations.push({
+      workspace_id: WORKSPACE_ID,
+      provider: "hetzner",
+      account_label: "demo@example.com",
+      token_fingerprint: "a1b2c3d4",
+      token_last4: "cdef",
+      last_validated_at: Date.now(),
+      updated_at: Date.now(),
+    });
+  }
+
+  it("badges the provider, and warns when it deleted the server", async () => {
+    addManaged({ provider_server_missing_at: Date.now() - 60_000 });
+    renderApp(SERVERS);
+    await screen.findByRole("heading", { name: "web-1" });
+    const web = card("web-1");
+    expect(web.getByText("Hetzner Cloud")).toBeInTheDocument();
+    expect(web.getByText("Deleted at provider")).toBeInTheDocument();
+    expect(card("hel-1").queryByText("Hetzner Cloud")).not.toBeInTheDocument();
+    expect(card("fsn-1").queryByText("Deleted at provider")).not.toBeInTheDocument();
+  });
+
+  it("lists servers still being created as pending rows", async () => {
+    const now = Date.now();
+    const run = {
+      provider: "hetzner" as const,
+      plan: "cx22",
+      region: "fsn1",
+      builder: false,
+      failure_reason: null,
+      failure_message: null,
+      ipv4: null,
+      ipv6: null,
+      node_id: null,
+      created_at: now,
+      updated_at: now,
+      finished_at: null,
+      workspace_id: WORKSPACE_ID,
+    };
+    db.providers.provisions.push(
+      {
+        ...run,
+        id: "npr_1",
+        name: "web-2",
+        status: "creating",
+        step: "create_server",
+        server_id: null,
+      },
+      { ...run, id: "npr_2", name: "web-3", status: "cleanup_failed", step: null, server_id: "77" },
+      { ...run, id: "npr_3", name: "web-4", status: "failed", step: null, server_id: null },
+    );
+    renderApp(SERVERS);
+    const creating = await screen.findByRole("article", { name: "web-2 (creating server)" });
+    expect(creating).toHaveTextContent("Hetzner Cloud · cx22 · fsn1");
+    expect(creating).toHaveTextContent("Creating the server");
+    expect(screen.getByRole("article", { name: "web-3 (cleanup failed)" })).toHaveTextContent(
+      /may still exist at Hetzner Cloud and keep billing \(server 77\)/,
+    );
+    expect(screen.queryByText("web-4")).not.toBeInTheDocument();
+  });
+
+  it("shows the provider on the detail page and the missing-server notice", async () => {
+    addManaged({ provider_server_missing_at: Date.now() - 60_000 });
+    renderApp(`${SERVERS}/node_web1`);
+    expect(await findPageHeading("web-1")).toBeInTheDocument();
+    expect(screen.getAllByText("Hetzner Cloud").length).toBeGreaterThan(0);
+    expect(screen.getByText("48000001")).toBeInTheDocument();
+    expect(screen.getByText(/Hetzner Cloud no longer has this server/)).toBeInTheDocument();
+  });
+
+  it("warns that removing destroys the cloud server, unless it is kept", async () => {
+    addManaged();
+    connectHetzner();
+    const requests: string[] = [];
+    server.events.on("request:start", ({ request }) => {
+      if (request.method === "DELETE") requests.push(new URL(request.url).search);
+    });
+    const { router, user } = renderApp(`${SERVERS}/node_web1`);
+    await user.click(await screen.findByRole("button", { name: "Remove server" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove web-1?" });
+    expect(dialog).toHaveTextContent(/destroys the server at Hetzner Cloud/);
+    expect(within(dialog).getByRole("button", { name: "Destroy server" })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("checkbox", { name: /Keep the server at Hetzner/ }));
+    expect(dialog).toHaveTextContent(/keeps running, and billing, at Hetzner Cloud/);
+    await user.click(within(dialog).getByRole("button", { name: "Remove server" }));
+    await expectPath(router, SERVERS);
+    expect(requests).toEqual(["?keep_server=true"]);
+    expect(db.audit.some((entry) => entry.action === "node.deprovisioned")).toBe(false);
+    server.events.removeAllListeners();
+  });
+
+  it("destroys the cloud server by default", async () => {
+    addManaged();
+    connectHetzner();
+    const { router, user } = renderApp(`${SERVERS}/node_web1`);
+    await user.click(await screen.findByRole("button", { name: "Remove server" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove web-1?" });
+    await user.click(within(dialog).getByRole("button", { name: "Destroy server" }));
+    await expectPath(router, SERVERS);
+    expect(db.audit.some((entry) => entry.action === "node.deprovisioned")).toBe(true);
+  });
+
+  it("explains how to recover when the provider is no longer connected", async () => {
+    addManaged();
+    const { user } = renderApp(`${SERVERS}/node_web1`);
+    await user.click(await screen.findByRole("button", { name: "Remove server" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove web-1?" });
+    await user.click(within(dialog).getByRole("button", { name: "Destroy server" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      /Connect Hetzner Cloud to this workspace first.*or keep the server/,
+    );
+  });
+});

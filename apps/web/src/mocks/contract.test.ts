@@ -78,6 +78,7 @@ const ROUTE_MODULES = [
   "instance",
   "realtime",
   "tokens",
+  "providers",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -1449,6 +1450,134 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
+  it("cloud providers: connect, offers, provision until joined, disconnect", async () => {
+    await fresh(async () => {
+      const token = "hcloud-0123456789abcdef";
+      const list = await call("GET", `${WS}/integrations`);
+      expect(list.status).toBe(200);
+      expect(
+        (list.body as { integrations: { provider: string; connected: boolean }[] }).integrations,
+      ).toEqual([
+        expect.objectContaining({ provider: "hetzner", connected: false }),
+        expect.objectContaining({ provider: "digitalocean", connected: false }),
+        expect.objectContaining({ provider: "vultr", connected: false }),
+        expect.objectContaining({ provider: "linode", connected: false }),
+      ]);
+      expect((await call("GET", `${WS}/integrations/hetzner`)).status).toBe(200);
+      expect(await call("GET", `${WS}/providers/hetzner/offers`)).toMatchObject({
+        status: 409,
+        body: { error: { code: "provider_not_connected" } },
+      });
+
+      expect((await call("PUT", `${WS}/integrations/hetzner`, { token: "short" })).status).toBe(
+        400,
+      );
+      expect(
+        await call("PUT", `${WS}/integrations/hetzner`, { token: "bad-0123456789abcdef" }),
+      ).toMatchObject({ status: 400, body: { error: { code: "provider_token_invalid" } } });
+      expect(
+        await call("PUT", `${WS}/integrations/hetzner`, { token: "ro-0123456789abcdef" }),
+      ).toMatchObject({ status: 409, body: { error: { code: "provider_read_only" } } });
+      const connected = await call("PUT", `${WS}/integrations/hetzner`, { token });
+      expect(connected).toMatchObject({
+        status: 200,
+        body: { connected: true, account_label: "demo@example.com", token_last4: "cdef" },
+      });
+      expect(JSON.stringify(connected.body)).not.toContain(token);
+
+      const offers = await call("GET", `${WS}/providers/hetzner/offers?role=builder`);
+      expect(offers.status).toBe(200);
+      const { recommendations } = offers.body as { recommendations: { offer_id: string }[] };
+      expect(recommendations[0]?.offer_id).toBe("cx22@fsn1");
+      expect((await call("GET", `${WS}/providers/hetzner/offers?role=boss`)).status).toBe(400);
+
+      const body = { provider: "hetzner", plan: "cx22", region: "fsn1", name: "web-1" };
+      expect((await call("POST", `${WS}/nodes/provision`, { ...body, name: "Web 1" })).status).toBe(
+        400,
+      );
+      expect(
+        await call("POST", `${WS}/nodes/provision`, { ...body, provider: "vultr" }),
+      ).toMatchObject({ status: 409, body: { error: { code: "provider_not_connected" } } });
+      expect(await call("POST", `${WS}/nodes/provision`, { ...body, name: "hel-1" })).toMatchObject(
+        { status: 409, body: { error: { code: "conflict" } } },
+      );
+      const started = await call("POST", `${WS}/nodes/provision`, body);
+      expect(started).toMatchObject({ status: 202, body: { status: "queued", name: "web-1" } });
+      const id = (started.body as ProvisionBody).id;
+      expect((await call("GET", `${WS}/node-provisions`)).body).toMatchObject({
+        provisions: [{ id }],
+      });
+      const runs: ProvisionBody[] = [];
+      for (let i = 0; i < 3; i++) {
+        runs.push((await call("GET", `${WS}/node-provisions/${id}`)).body as ProvisionBody);
+      }
+      expect(runs.map((run) => run.status)).toEqual(["creating", "booting", "joined"]);
+      const joined = runs[2] as ProvisionBody;
+      expect(db.nodes.find((node) => node.id === joined.node_id)).toMatchObject({
+        provider: "hetzner",
+        provider_server_id: joined.server_id,
+      });
+      expect((await call("GET", `${WS}/node-provisions/npr_nope`)).status).toBe(404);
+
+      expect(await call("DELETE", `${WS}/integrations/hetzner`)).toMatchObject({
+        status: 409,
+        body: { error: { code: "conflict" } },
+      });
+      expect((await call("DELETE", `${WS}/integrations/hetzner?force=true`)).status).toBe(204);
+      expect((await call("DELETE", `${WS}/integrations/hetzner`)).status).toBe(404);
+      expect(await call("DELETE", `${WS}/nodes/${joined.node_id}`)).toMatchObject({
+        status: 409,
+        body: { error: { code: "provider_not_connected" } },
+      });
+      expect((await call("DELETE", `${WS}/nodes/${joined.node_id}?keep_server=true`)).status).toBe(
+        204,
+      );
+
+      expect((await call("PUT", `${WS}/integrations/vultr`, { token })).status).toBe(200);
+      db.nodes.push({
+        ...makeNode({
+          id: "node_vultr",
+          name: "ewr-1",
+          provider: "vultr",
+          provider_server_id: "v1",
+        }),
+        workspace_id: WORKSPACE_ID,
+      });
+      expect((await call("DELETE", `${WS}/nodes/node_vultr`)).status).toBe(204);
+      expect(db.audit.some((entry) => entry.action === "node.deprovisioned")).toBe(true);
+
+      const leaking = await call("POST", `${WS}/nodes/provision`, {
+        provider: "vultr",
+        plan: "vc2-1c-2gb",
+        region: "ewr",
+        name: "leak-1",
+        builder: true,
+      });
+      const leakingId = (leaking.body as ProvisionBody).id;
+      let last: ProvisionBody | undefined;
+      for (let i = 0; i < 3; i++) {
+        last = (await call("GET", `${WS}/node-provisions/${leakingId}`)).body as ProvisionBody;
+      }
+      expect(last?.status).toBe("cleanup_failed");
+
+      as("member");
+      expect((await call("GET", `${WS}/integrations`)).status).toBe(403);
+      expect((await call("GET", `${WS}/integrations/hetzner`)).status).toBe(403);
+      expect((await call("PUT", `${WS}/integrations/hetzner`, { token })).status).toBe(403);
+      expect((await call("DELETE", `${WS}/integrations/vultr`)).status).toBe(403);
+      expect((await call("GET", `${WS}/providers/vultr/offers`)).status).toBe(403);
+      expect((await call("POST", `${WS}/nodes/provision`, body)).status).toBe(403);
+      expect((await call("GET", `${WS}/node-provisions`)).status).toBe(200);
+      expect((await call("GET", `${WS}/node-provisions/${leakingId}`)).status).toBe(200);
+      as(null);
+      expect((await call("GET", `${WS}/integrations`)).status).toBe(401);
+      expect((await call("GET", `${WS}/node-provisions`)).status).toBe(401);
+      as("owner");
+      expect((await call("GET", `${OTHER_WS}/integrations`)).status).toBe(404);
+      expect((await call("GET", `${OTHER_WS}/node-provisions/${leakingId}`)).status).toBe(404);
+    });
+  });
+
   it("produced only responses the API declares", () => {
     expect(failures).toEqual([]);
   });
@@ -1490,6 +1619,13 @@ async function hmac(secret: string, body: string): Promise<string> {
   );
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
   return [...new Uint8Array(signature)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+interface ProvisionBody {
+  id: string;
+  status: string;
+  node_id: string | null;
+  server_id: string | null;
 }
 
 interface JoinTokenBody {

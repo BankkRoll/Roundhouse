@@ -37,6 +37,8 @@ export interface ConfirmDialogProps {
   confirmText?: string;
   /** Paints the confirm button as destructive. Defaults to `true`. */
   destructive?: boolean;
+  /** Extra controls between the description and the buttons, e.g. an opt-out checkbox. */
+  children?: ReactNode;
 }
 
 /**
@@ -57,6 +59,7 @@ export function ConfirmDialog({
   error,
   confirmText,
   destructive = true,
+  children,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState("");
   const inputId = useId();
@@ -81,6 +84,7 @@ export function ConfirmDialog({
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>{description}</DialogDescription>
           </DialogHeader>
+          {children}
           {confirmText !== undefined ? (
             <div className="grid gap-1.5">
               <Label htmlFor={inputId}>

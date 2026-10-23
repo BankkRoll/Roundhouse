@@ -34,6 +34,9 @@ export type ErrorCode =
   | "installation_not_in_workspace"
   | "repository_not_in_installation"
   | "upstream_error"
+  | "provider_not_connected"
+  | "provider_token_invalid"
+  | "provider_read_only"
   | "internal";
 
 /**

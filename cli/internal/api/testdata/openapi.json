@@ -173,7 +173,13 @@
               "auth.two_factor_enabled",
               "auth.two_factor_disabled",
               "auth.backup_codes_regenerated",
-              "auth.two_factor_failed"
+              "auth.two_factor_failed",
+              "provider.connected",
+              "provider.disconnected",
+              "node.provision_requested",
+              "node.provisioned",
+              "node.provision_failed",
+              "node.deprovisioned"
             ],
             "type": "string"
           },
@@ -385,6 +391,21 @@
         "required": [
           "builder",
           "build_args"
+        ],
+        "type": "object"
+      },
+      "ConnectProvider": {
+        "properties": {
+          "token": {
+            "description": "Provider API token. Write-only: never returned.",
+            "maxLength": 512,
+            "minLength": 16,
+            "pattern": "^[\\x21-\\x7e]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
         ],
         "type": "object"
       },
@@ -1661,6 +1682,20 @@
           "provider": {
             "type": "string"
           },
+          "provider_server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_server_missing_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "public_ip": {
             "type": [
               "string",
@@ -1692,6 +1727,8 @@
           "status",
           "provider",
           "region",
+          "provider_server_id",
+          "provider_server_missing_at",
           "public_ip",
           "os",
           "arch",
@@ -1708,6 +1745,116 @@
           "load1",
           "last_heartbeat_at",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "NodeProvision": {
+        "properties": {
+          "builder": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "failure_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failure_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "description": "Unix time in milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "ipv4": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ipv6": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "region": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "creating",
+              "booting",
+              "joined",
+              "failed",
+              "cleanup_failed"
+            ],
+            "type": "string"
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "name",
+          "plan",
+          "region",
+          "builder",
+          "status",
+          "step",
+          "failure_reason",
+          "failure_message",
+          "server_id",
+          "ipv4",
+          "ipv6",
+          "node_id",
+          "created_at",
+          "updated_at",
+          "finished_at"
         ],
         "type": "object"
       },
@@ -1893,6 +2040,242 @@
             "type": "object"
           }
         ]
+      },
+      "ProviderId": {
+        "enum": [
+          "hetzner",
+          "digitalocean",
+          "vultr",
+          "linode"
+        ],
+        "type": "string"
+      },
+      "ProviderIntegration": {
+        "properties": {
+          "account_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "last_validated_at": {
+            "description": "Unix time in milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "token_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token_last4": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "description": "Unix time in milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "provider",
+          "display_name",
+          "connected",
+          "account_label",
+          "token_fingerprint",
+          "token_last4",
+          "last_validated_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ProviderOffer": {
+        "properties": {
+          "arch": {
+            "enum": [
+              "amd64",
+              "arm64"
+            ],
+            "type": "string"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": "string"
+          },
+          "dedicated": {
+            "type": "boolean"
+          },
+          "deprecated": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "disk_gb": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "included_traffic_tb": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "monthly_cents": {
+            "type": "integer"
+          },
+          "plan": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "region_name": {
+            "type": "string"
+          },
+          "unavailable_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vcpus": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "plan",
+          "description",
+          "category",
+          "region",
+          "region_name",
+          "country",
+          "vcpus",
+          "memory_mib",
+          "disk_gb",
+          "arch",
+          "dedicated",
+          "monthly_cents",
+          "currency",
+          "included_traffic_tb",
+          "deprecated",
+          "unavailable_after"
+        ],
+        "type": "object"
+      },
+      "ProviderOffers": {
+        "properties": {
+          "fetched_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "offers": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderOffer"
+            },
+            "type": "array"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "recommendations": {
+            "items": {
+              "properties": {
+                "offer_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "offer_id",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "role": {
+            "enum": [
+              "node",
+              "builder"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "role",
+          "offers",
+          "recommendations",
+          "fetched_at"
+        ],
+        "type": "object"
+      },
+      "ProvisionNode": {
+        "properties": {
+          "builder": {
+            "default": false,
+            "type": "boolean"
+          },
+          "name": {
+            "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "plan": {
+            "pattern": "^[A-Za-z0-9._-]{1,64}$",
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "region": {
+            "pattern": "^[A-Za-z0-9._-]{1,64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "plan",
+          "region",
+          "name"
+        ],
+        "type": "object"
       },
       "ResolvedVariables": {
         "properties": {
@@ -6591,6 +6974,396 @@
         ]
       }
     },
+    "/v1/workspaces/{workspaceId}/integrations": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "integrations": {
+                      "items": {
+                        "$ref": "#/components/schemas/ProviderIntegration"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "integrations"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List cloud provider integrations",
+        "tags": [
+          "providers"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/integrations/{provider}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderId"
+            }
+          },
+          {
+            "description": "Disconnect even though servers created with this token still exist; deleting them later then leaves the cloud servers running.",
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "description": "Disconnect even though servers created with this token still exist; deleting them later then leaves the cloud servers running.",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Disconnect a cloud provider",
+        "tags": [
+          "providers"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [
+            "provider.disconnected"
+          ],
+          "auth": "session_only",
+          "reauth": true
+        }
+      },
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderIntegration"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a cloud provider integration",
+        "tags": [
+          "providers"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectProvider"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderIntegration"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Connect a cloud provider",
+        "tags": [
+          "providers"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [
+            "provider.connected"
+          ],
+          "auth": "session_only",
+          "reauth": true
+        }
+      }
+    },
     "/v1/workspaces/{workspaceId}/invites": {
       "get": {
         "parameters": [
@@ -7131,6 +7904,171 @@
         ]
       }
     },
+    "/v1/workspaces/{workspaceId}/node-provisions": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "provisions": {
+                      "items": {
+                        "$ref": "#/components/schemas/NodeProvision"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "provisions"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List provisioning runs",
+        "tags": [
+          "providers"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/node-provisions/{provisionId}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "provisionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeProvision"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a provisioning run",
+        "tags": [
+          "providers"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/workspaces/{workspaceId}/nodes": {
       "get": {
         "parameters": [
@@ -7296,8 +8234,125 @@
         ]
       }
     },
+    "/v1/workspaces/{workspaceId}/nodes/provision": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisionNode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeProvision"
+                }
+              }
+            },
+            "description": "Started"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Provision a cloud server",
+        "tags": [
+          "providers"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [
+            "node.provision_requested"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
     "/v1/workspaces/{workspaceId}/nodes/{nodeId}": {
       "delete": {
+        "description": "For servers Roundhouse provisioned, also deletes the cloud server unless `keep_server=true`.",
         "parameters": [
           {
             "in": "path",
@@ -7312,6 +8367,20 @@
             "name": "nodeId",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "For servers Roundhouse provisioned: remove the node but leave the cloud server running.",
+            "in": "query",
+            "name": "keep_server",
+            "required": false,
+            "schema": {
+              "description": "For servers Roundhouse provisioned: remove the node but leave the cloud server running.",
+              "enum": [
+                "true",
+                "false"
+              ],
               "type": "string"
             }
           }
@@ -7341,6 +8410,36 @@
             "description": "Error"
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "502": {
             "content": {
               "application/json": {
                 "schema": {
@@ -7726,6 +8825,149 @@
         ],
         "x-roundhouse-policy": {
           "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/providers/{provider}/offers": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "default": "node",
+              "enum": [
+                "node",
+                "builder"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "region",
+            "required": false,
+            "schema": {
+              "pattern": "^[a-z0-9-]{1,32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderOffers"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List a provider's offers",
+        "tags": [
+          "providers"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
           "audit": [],
           "auth": "session"
         }

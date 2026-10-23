@@ -159,7 +159,7 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `projects list\|create\|delete`                     | Projects; deletes need the typed slug                    |
 | `services list\|create\|delete`                     | Services; deletes need the typed slug                    |
 | `domain [--all]`                                    | The service's domains                                    |
-| `servers list\|add`                                 | Servers; `add` prints the agent install command          |
+| `servers list\|add [--provider]`                    | Servers; `add` prints the install command, or provisions |
 | `tokens list\|create\|revoke`                       | Workspace API tokens for CI and scripts                  |
 | `version`, `completion`                             | Build info, shell completion                             |
 | `up`, `shell`, `db connect`                         | Not available on the control plane yet (exit 10)         |
@@ -189,6 +189,7 @@ names the flag to pass. Errors with `--json` are JSON on stderr.
 | 10   | Not available on this control plane yet               |
 | 11   | Network or server error                               |
 | 12   | Input required in non-interactive mode                |
+| 13   | Cloud server provisioning failed                      |
 | 130  | Interrupted                                           |
 
 ## Security notes

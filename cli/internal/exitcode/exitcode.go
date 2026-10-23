@@ -38,6 +38,8 @@ const (
 	Network = 11
 	// InputRequired means a prompt was needed but the session is non-interactive.
 	InputRequired = 12
+	// ProvisionFailed means a watched cloud server provisioning run failed.
+	ProvisionFailed = 13
 	// Interrupted means the user pressed Ctrl-C (128 + SIGINT, as shells report it).
 	Interrupted = 130
 )
