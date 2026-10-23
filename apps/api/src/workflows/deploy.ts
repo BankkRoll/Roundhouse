@@ -45,7 +45,7 @@ import {
   projects,
   serviceConfigs,
   services,
-} from "@openrail/db";
+} from "@roundhouse/db";
 import {
   buildCacheKey,
   EnvSchema,
@@ -53,7 +53,7 @@ import {
   MAX_WORKLOADS_PER_NODE,
   REGISTRY_LISTEN,
   SEALED_ENV_PROTOCOL_VERSION,
-} from "@openrail/protocol";
+} from "@roundhouse/protocol";
 import {
   BUILD_TIMEOUT_S,
   type BuiltinVariable,
@@ -63,7 +63,7 @@ import {
   resolveVariables,
   type SchedulerNode,
   schedule,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
@@ -150,7 +150,7 @@ const MAX_WAKEUPS = 100;
  * Key prefix that carries build args through variable resolution, so they
  * may reference variables like any other value.
  */
-const BUILD_ARG_PREFIX = "__OPENRAIL_BUILD_ARG__";
+const BUILD_ARG_PREFIX = "__ROUNDHOUSE_BUILD_ARG__";
 
 const DB_STEP = {
   retries: { limit: 3, delay: "2 seconds", backoff: "exponential" },
@@ -497,15 +497,15 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       const host = publicDomain.get(s.id);
       builtins[s.slug] = {
         ...(port ? { PORT: String(port) } : {}),
-        ...(host ? { OPENRAIL_PUBLIC_DOMAIN: host } : {}),
-        OPENRAIL_PRIVATE_DOMAIN: privateDomain(s.slug, plan.environmentSlug),
-        OPENRAIL_ENVIRONMENT: plan.environmentSlug,
-        OPENRAIL_SERVICE_NAME: s.name,
+        ...(host ? { ROUNDHOUSE_PUBLIC_DOMAIN: host } : {}),
+        ROUNDHOUSE_PRIVATE_DOMAIN: privateDomain(s.slug, plan.environmentSlug),
+        ROUNDHOUSE_ENVIRONMENT: plan.environmentSlug,
+        ROUNDHOUSE_SERVICE_NAME: s.name,
       };
     }
     const own = builtins[plan.serviceSlug] ?? {};
-    own.OPENRAIL_DEPLOYMENT_ID = plan.deploymentId;
-    if (plan.git) own.OPENRAIL_GIT_COMMIT_SHA = plan.git.commitSha;
+    own.ROUNDHOUSE_DEPLOYMENT_ID = plan.deploymentId;
+    if (plan.git) own.ROUNDHOUSE_GIT_COMMIT_SHA = plan.git.commitSha;
     builtins[plan.serviceSlug] = own;
 
     const buildArgs = plan.git ? (configOf.get(plan.serviceId)?.build.build_args ?? {}) : {};
@@ -1116,7 +1116,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         state,
         target_url: `${params.origin}/deployments/${plan.deploymentId}`,
         description,
-        context: `openrail/${plan.serviceSlug}/${plan.environmentSlug}`,
+        context: `roundhouse/${plan.serviceSlug}/${plan.environmentSlug}`,
       });
       return true;
     } catch (err) {

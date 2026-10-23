@@ -273,10 +273,10 @@ func TestIsSafeGitRef(t *testing.T) {
 }
 
 func TestNamingHelpers(t *testing.T) {
-	if got := EnvironmentNetworkName("prj_1", "env_1"); got != "openrail-prj_1-env_1" {
+	if got := EnvironmentNetworkName("prj_1", "env_1"); got != "roundhouse-prj_1-env_1" {
 		t.Errorf("network %q", got)
 	}
-	if got := PrivateServiceAlias("svc_01JAB"); got != "svc-01jab.openrail.internal" {
+	if got := PrivateServiceAlias("svc_01JAB"); got != "svc-01jab.roundhouse.internal" {
 		t.Errorf("alias %q", got)
 	}
 	if got := BuildCacheKey("prj_1", "svc_1"); got != "prj_1.svc_1" {

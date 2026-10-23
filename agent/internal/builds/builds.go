@@ -18,8 +18,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/builder"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/builder"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // deadlineGrace is added to a job's timeout_s before the dispatcher cancels

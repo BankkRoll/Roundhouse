@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/apitest"
-	"github.com/BankkRoll/Open-Rail/cli/internal/config"
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/apitest"
+	"github.com/BankkRoll/Roundhouse/cli/internal/config"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
 )
 
 func TestLoginStoresSession(t *testing.T) {

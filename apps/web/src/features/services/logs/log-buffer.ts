@@ -7,7 +7,7 @@
  *
  * @module
  */
-import { stripAnsi } from "@openrail/ui/controls";
+import { stripAnsi } from "@roundhouse/ui/controls";
 import type { LogEntry } from "../../../lib/api/deploy-types";
 
 /** Lines kept in memory; older ones are dropped as live lines arrive. */

@@ -1,4 +1,4 @@
-import { cn } from "@openrail/ui";
+import { cn } from "@roundhouse/ui";
 import { CheckIcon, ShieldCheckIcon, XIcon } from "lucide-react";
 import { type CSSProperties, useEffect, useId, useState } from "react";
 import { JOIN_TOKEN_MINUTES } from "../content";

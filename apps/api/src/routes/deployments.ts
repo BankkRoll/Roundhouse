@@ -5,8 +5,8 @@
  *
  * @module
  */
-import { builds, deploymentEvents, deployments, nodes, placements } from "@openrail/db";
-import { CANCELLABLE_DEPLOYMENT_STATUSES, ROLLBACK_SOURCE_STATUSES } from "@openrail/shared";
+import { builds, deploymentEvents, deployments, nodes, placements } from "@roundhouse/db";
+import { CANCELLABLE_DEPLOYMENT_STATUSES, ROLLBACK_SOURCE_STATUSES } from "@roundhouse/shared";
 import { and, asc, desc, eq, lt } from "drizzle-orm";
 import { clientIp, createRouter, originOf } from "../context";
 import {
@@ -32,7 +32,7 @@ import { toApiDeployment, toApiDeploymentEvent, toApiPlacement } from "../lib/se
 
 const ID_CURSOR_RE = /^dep_[0-9A-Za-z]{1,64}$/;
 
-async function withBuild(db: import("@openrail/db").Db, row: typeof deployments.$inferSelect) {
+async function withBuild(db: import("@roundhouse/db").Db, row: typeof deployments.$inferSelect) {
   const build = row.buildId
     ? ((await db.query.builds.findFirst({ where: eq(builds.id, row.buildId) })) ?? null)
     : null;

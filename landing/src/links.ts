@@ -5,7 +5,7 @@
  */
 
 /** Source repository. */
-export const REPO_URL = "https://github.com/BankkRoll/Open-Rail";
+export const REPO_URL = "https://github.com/BankkRoll/Roundhouse";
 
 /** Agent and dashboard releases. */
 export const RELEASES_URL = `${REPO_URL}/releases`;

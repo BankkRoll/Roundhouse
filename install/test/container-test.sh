@@ -65,12 +65,12 @@ mkdir -p /etc/systemd/system
 log "signed test release"
 rel="/tmp/rel/agent-v${VERSION}"
 mkdir -p "$rel"
-cp "/dist/openrail-agent-linux-${ARCH}" "$rel/"
+cp "/dist/roundhouse-agent-linux-${ARCH}" "$rel/"
 (
 	cd "$rel"
 	{
 		printf '# version: agent-v%s\n' "$VERSION"
-		sha256sum "openrail-agent-linux-${ARCH}"
+		sha256sum "roundhouse-agent-linux-${ARCH}"
 	} >SHA256SUMS
 	openssl genpkey -algorithm ed25519 -out /tmp/release.key 2>/dev/null
 	openssl pkey -in /tmp/release.key -pubout -out /tmp/release.pub
@@ -129,7 +129,7 @@ for _ in $(seq 50); do
 	sleep 0.1
 done
 
-export OPENRAIL_DOWNLOAD_BASE="http://127.0.0.1:${PORT}/rel"
+export ROUNDHOUSE_DOWNLOAD_BASE="http://127.0.0.1:${PORT}/rel"
 
 log "first install, as a builder"
 bash /tmp/install.sh --token njt_ci --name "$NODE" --builder
@@ -146,12 +146,12 @@ assert req["token"] == "njt_ci", "token not passed through"
 assert req["capabilities"]["builder"] is True, f"not joined as a builder: {req['capabilities']!r}"
 print("join request OK:", req["name"], req["agent_version"], req["os"], req["capabilities"])
 EOF
-[ "$(/usr/local/bin/openrail-agent version)" = "$VERSION" ] || fail "installed agent is not ${VERSION}"
-grep -q '^node_id: node_ci$' /etc/openrail/agent.yaml || fail "config not written"
-grep -q '^builder: true$' /etc/openrail/agent.yaml || fail "builder role not recorded in the config"
-cmp /etc/systemd/system/openrail-agent.service /src/install/openrail-agent.service ||
-	fail "installed unit differs from install/openrail-agent.service"
-grep -q 'restart openrail-agent.service' /tmp/systemctl.log || fail "service not restarted"
+[ "$(/usr/local/bin/roundhouse-agent version)" = "$VERSION" ] || fail "installed agent is not ${VERSION}"
+grep -q '^node_id: node_ci$' /etc/roundhouse/agent.yaml || fail "config not written"
+grep -q '^builder: true$' /etc/roundhouse/agent.yaml || fail "builder role not recorded in the config"
+cmp /etc/systemd/system/roundhouse-agent.service /src/install/roundhouse-agent.service ||
+	fail "installed unit differs from install/roundhouse-agent.service"
+grep -q 'restart roundhouse-agent.service' /tmp/systemctl.log || fail "service not restarted"
 if find /tmp -maxdepth 2 -name token -type f | grep -q .; then
 	fail "token temp file left behind"
 fi
@@ -163,7 +163,7 @@ command -v caddy >/dev/null || fail "caddy not installed"
 caddy version
 grep -q "signed-by=/etc/apt/keyrings/caddy-stable.asc" /etc/apt/sources.list.d/caddy-stable.list ||
 	fail "Caddy repository not configured with the pinned key"
-dropin=/etc/systemd/system/caddy.service.d/openrail.conf
+dropin=/etc/systemd/system/caddy.service.d/roundhouse.conf
 grep -qx 'ExecStart=/usr/bin/caddy run --environ --resume' "$dropin" || fail "Caddy not started with --resume"
 grep -qx 'Environment=CADDY_ADMIN=localhost:2019' "$dropin" || fail "Caddy admin API not pinned to localhost:2019"
 grep -qx 'ExecReload=' "$dropin" || fail "Caddy reload not disabled"
@@ -204,17 +204,17 @@ bash /tmp/install.sh
 [ "$(stat -c %Y /usr/local/bin/railpack)" = "$railpack_mtime" ] || fail "re-run reinstalled railpack"
 [ "$(grep -c '^pull ' /tmp/docker.log)" -eq 2 ] || fail "re-run pulled images again"
 [ "$(grep -c 'restart caddy.service' /tmp/systemctl.log)" -eq 1 ] || fail "re-run restarted caddy"
-grep -q '^builder: true$' /etc/openrail/agent.yaml || fail "re-run lost the builder role"
-[ "$(grep -c 'restart openrail-agent.service' /tmp/systemctl.log)" -eq 2 ] || fail "re-run did not restart the agent"
+grep -q '^builder: true$' /etc/roundhouse/agent.yaml || fail "re-run lost the builder role"
+[ "$(grep -c 'restart roundhouse-agent.service' /tmp/systemctl.log)" -eq 2 ] || fail "re-run did not restart the agent"
 
 log "a joined non-builder cannot become a builder without re-joining"
-cp /etc/openrail/agent.yaml /tmp/agent.yaml.bak
-sed -i '/^builder:/d' /etc/openrail/agent.yaml
+cp /etc/roundhouse/agent.yaml /tmp/agent.yaml.bak
+sed -i '/^builder:/d' /etc/roundhouse/agent.yaml
 if bash /tmp/install.sh --builder 2>/tmp/builder.log; then
 	fail "installer accepted --builder on a joined non-builder"
 fi
 grep -q "re-run with --rejoin --builder" /tmp/builder.log || fail "unexpected failure: $(cat /tmp/builder.log)"
-cp /tmp/agent.yaml.bak /etc/openrail/agent.yaml
+cp /tmp/agent.yaml.bak /etc/roundhouse/agent.yaml
 
 log "a pinned version must match the signed version line"
 # A correctly signed release served under another version's path, as a

@@ -30,8 +30,8 @@ const (
 	RailpackFrontendImage = "ghcr.io/railwayapp/railpack-frontend:v0.43.0@sha256:355ef61fae6f2551103cd8b10c710cb07167dd353d561f15c69b8d7ac1c676cc"
 )
 
-// Docker objects the builder owns. They are labelled openrail.system rather
-// than openrail.managed, so the workload reconciler never removes them.
+// Docker objects the builder owns. They are labelled roundhouse.system rather
+// than roundhouse.managed, so the workload reconciler never removes them.
 const (
 	// WorkloadID is the system workload ID of the BuildKit daemon.
 	WorkloadID = "sys_buildkitd"
@@ -39,24 +39,24 @@ const (
 	ContainerName = "sys_buildkitd"
 	// NetworkName is the bridge network the daemon, and therefore every RUN
 	// step, is confined to.
-	NetworkName = "openrail-build"
+	NetworkName = "roundhouse-build"
 	// BridgeInterface is the host interface of NetworkName.
-	BridgeInterface = "openrail-bk0"
+	BridgeInterface = "roundhouse-bk0"
 	// CacheVolumeName holds BuildKit's state and cache across restarts.
-	CacheVolumeName = "openrail-buildkit"
+	CacheVolumeName = "roundhouse-buildkit"
 	// DefaultRegistryProxyPort is where the per-build registry proxy listens
 	// on the build network's gateway.
 	DefaultRegistryProxyPort = 5001
 )
 
 const (
-	labelSystem     = "openrail.system"
-	labelConfigHash = "openrail.config-hash"
+	labelSystem     = "roundhouse.system"
+	labelConfigHash = "roundhouse.config-hash"
 
 	// registryProxyHost is the name sys_buildkitd uses for the agent's
 	// per-build registry proxy; /etc/hosts in the container maps it to the
 	// build network's gateway.
-	registryProxyHost = "openrail-registry.internal"
+	registryProxyHost = "roundhouse-registry.internal"
 
 	buildkitStateDir   = "/home/user/.local/share/buildkit"
 	buildkitConfigDir  = "/home/user"
@@ -100,7 +100,7 @@ type daemon struct {
 // daemonConfig renders buildkitd.toml.
 func (d *daemon) daemonConfig() string {
 	reserved := min(d.cacheMaxBytes/10, 2<<30)
-	return fmt.Sprintf(`# Managed by openrail-agent; changes are overwritten.
+	return fmt.Sprintf(`# Managed by roundhouse-agent; changes are overwritten.
 [log]
   format = "text"
 

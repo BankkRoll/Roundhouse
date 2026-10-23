@@ -1,4 +1,4 @@
-# @openrail/hetzner
+# @roundhouse/hetzner
 
 Creates Hetzner Cloud servers that join a control plane on first boot. The user
 pastes a Hetzner API token; the control plane lists live plans and prices,
@@ -9,7 +9,7 @@ Runtime-agnostic: only `fetch`, `AbortController`, timers, and WebCrypto, so it
 runs in the Worker. No dependencies.
 
 ```ts
-import { HetznerClient, listOffers, recommend, provisionServer } from "@openrail/hetzner";
+import { HetznerClient, listOffers, recommend, provisionServer } from "@roundhouse/hetzner";
 
 const hz = new HetznerClient({ token: hetznerToken });
 const offers = await listOffers(hz); // live types x locations, gross EUR
@@ -93,7 +93,7 @@ days. `SOURCES.md` lists the documentation each call was checked against.
 ## Test
 
 ```sh
-pnpm --filter @openrail/hetzner test
+pnpm --filter @roundhouse/hetzner test
 ```
 
 The tests run against an in-memory fake of the API (`test/fake-hetzner.ts`)

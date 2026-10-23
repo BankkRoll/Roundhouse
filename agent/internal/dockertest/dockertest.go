@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
 )
 
 // Images used by the integration tests, pinned so runs are reproducible.
@@ -27,7 +27,7 @@ const (
 )
 
 // TestLabel marks everything a test creates, so cleanup can find leftovers.
-const TestLabel = "openrail.test"
+const TestLabel = "roundhouse.test"
 
 // Client returns a client for DOCKER_HOST and fails the test if the engine
 // does not answer.

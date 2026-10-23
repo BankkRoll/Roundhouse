@@ -1,10 +1,10 @@
 /**
  * Project access grants: a project role given to a user or a team. The
- * effective role is resolved by `resolveAccess` in `@openrail/shared`.
+ * effective role is resolved by `resolveAccess` in `@roundhouse/shared`.
  *
  * @module
  */
-import type { ProjectRole } from "@openrail/shared";
+import type { ProjectRole } from "@roundhouse/shared";
 import { sql } from "drizzle-orm";
 import { check, index, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { users } from "./auth";

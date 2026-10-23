@@ -9,17 +9,17 @@ import (
 	"unicode/utf8"
 )
 
-// Redacted replaces redacted text. Mirrors REDACTED in @openrail/shared.
+// Redacted replaces redacted text. Mirrors REDACTED in @roundhouse/shared.
 const Redacted = "[REDACTED]"
 
 // MinRedactableSecretLength is the shortest secret (in code points) that is
-// redacted. Mirrors MIN_REDACTABLE_SECRET_LENGTH in @openrail/shared.
+// redacted. Mirrors MIN_REDACTABLE_SECRET_LENGTH in @roundhouse/shared.
 const MinRedactableSecretLength = 6
 
 // RedactionNeedles returns the strings to redact for secrets: each secret,
 // its standard base64 (padded and unpadded), base64url (unpadded), lower and
 // upper hex, percent-encoding (RFC 3986 unreserved kept) and JSON string
-// escaping, longest first. Mirrors redactionNeedles in @openrail/shared;
+// escaping, longest first. Mirrors redactionNeedles in @roundhouse/shared;
 // fixtures/redaction.json pins both.
 func RedactionNeedles(secrets []string) []string {
 	seen := map[string]bool{}

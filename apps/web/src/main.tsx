@@ -1,7 +1,7 @@
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
-import { PRODUCT_NAME } from "@openrail/shared";
+import { PRODUCT_NAME } from "@roundhouse/shared";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app";

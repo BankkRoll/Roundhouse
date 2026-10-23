@@ -1,12 +1,12 @@
-// Command openrail-agent runs on every OpenRail node. It joins the node to a
+// Command roundhouse-agent runs on every Roundhouse node. It joins the node to a
 // control plane once, then keeps a signed, authenticated WebSocket session
 // open to receive desired state and report health.
 //
 // Usage:
 //
-//	openrail-agent join --url <control-plane> (--token <token> | --token-file <path>) [--name <name>] [--config <path>] [--builder] [--force] [--insecure]
-//	openrail-agent run [--config <path>]
-//	openrail-agent version
+//	roundhouse-agent join --url <control-plane> (--token <token> | --token-file <path>) [--name <name>] [--config <path>] [--builder] [--force] [--insecure]
+//	roundhouse-agent run [--config <path>]
+//	roundhouse-agent version
 package main
 
 import (
@@ -22,25 +22,25 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/config"
-	"github.com/BankkRoll/Open-Rail/agent/internal/conn"
-	"github.com/BankkRoll/Open-Rail/agent/internal/enroll"
-	"github.com/BankkRoll/Open-Rail/agent/internal/facts"
-	"github.com/BankkRoll/Open-Rail/agent/internal/state"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/config"
+	"github.com/BankkRoll/Roundhouse/agent/internal/conn"
+	"github.com/BankkRoll/Roundhouse/agent/internal/enroll"
+	"github.com/BankkRoll/Roundhouse/agent/internal/facts"
+	"github.com/BankkRoll/Roundhouse/agent/internal/state"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // version is set at build time with -ldflags "-X main.version=<v>".
 var version = "dev"
 
-const usage = `Usage: openrail-agent <command> [flags]
+const usage = `Usage: roundhouse-agent <command> [flags]
 
 Commands:
   join      Register this host with a control plane
   run       Connect to the control plane and serve
   version   Print the agent version
 
-Run "openrail-agent <command> -h" for command flags.
+Run "roundhouse-agent <command> -h" for command flags.
 `
 
 func main() {
@@ -94,12 +94,12 @@ func dispatch(args []string, logger *slog.Logger, stdout, stderr io.Writer) erro
 func cmdJoin(args []string, logger *slog.Logger, stderr io.Writer) error {
 	fset := flag.NewFlagSet("join", flag.ContinueOnError)
 	fset.SetOutput(stderr)
-	cpURL := fset.String("url", "", "control plane URL, e.g. https://openrail.example.com")
+	cpURL := fset.String("url", "", "control plane URL, e.g. https://roundhouse.example.com")
 	token := fset.String("token", "", "single-use join token; visible in the process list, prefer --token-file")
-	tokenFile := fset.String("token-file", "", "read the join token from this file (alternatively set OPENRAIL_JOIN_TOKEN)")
+	tokenFile := fset.String("token-file", "", "read the join token from this file (alternatively set ROUNDHOUSE_JOIN_TOKEN)")
 	name := fset.String("name", "", "node display name (default: hostname)")
 	cfgPath := fset.String("config", config.DefaultPath(), "config file to write")
-	dataDir := fset.String("data-dir", "", "directory for credential, identity key and state (default: /var/lib/openrail on Linux, next to --config elsewhere)")
+	dataDir := fset.String("data-dir", "", "directory for credential, identity key and state (default: /var/lib/roundhouse on Linux, next to --config elsewhere)")
 	force := fset.Bool("force", false, "replace an existing joined config")
 	insecure := fset.Bool("insecure", false, "allow plaintext http:// and ws:// to a non-loopback control plane (testing only)")
 	builderNode := fset.Bool("builder", false, "make this node a builder: run the local image registry and accept build jobs")
@@ -111,7 +111,7 @@ func cmdJoin(args []string, logger *slog.Logger, stderr io.Writer) error {
 	}
 	if *cpURL == "" || *token == "" {
 		fset.Usage()
-		return errors.New("join requires --url and a token (--token, --token-file or OPENRAIL_JOIN_TOKEN)")
+		return errors.New("join requires --url and a token (--token, --token-file or ROUNDHOUSE_JOIN_TOKEN)")
 	}
 	if *dataDir == "" {
 		*dataDir = config.DefaultDataDir(*cfgPath)
@@ -157,7 +157,7 @@ func cmdRun(args []string, logger *slog.Logger, stderr io.Writer) error {
 
 	cfg, err := config.Load(*cfgPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("no config at %s: run `openrail-agent join` first", *cfgPath)
+		return fmt.Errorf("no config at %s: run `roundhouse-agent join` first", *cfgPath)
 	}
 	if err != nil {
 		return err
@@ -226,7 +226,7 @@ func cmdRun(args []string, logger *slog.Logger, stderr io.Writer) error {
 	return nil
 }
 
-// resolveToken fills token from tokenFile or OPENRAIL_JOIN_TOKEN when it was
+// resolveToken fills token from tokenFile or ROUNDHOUSE_JOIN_TOKEN when it was
 // not given on the command line.
 //
 // SECURITY: --token stays visible in the process list to every local user
@@ -244,7 +244,7 @@ func resolveToken(token *string, tokenFile string) error {
 		*token = t
 	}
 	if *token == "" {
-		*token = os.Getenv("OPENRAIL_JOIN_TOKEN")
+		*token = os.Getenv("ROUNDHOUSE_JOIN_TOKEN")
 	}
 	return nil
 }

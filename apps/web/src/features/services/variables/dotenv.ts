@@ -8,7 +8,7 @@
  *
  * @module
  */
-import { VARIABLE_NAME_RE } from "@openrail/shared";
+import { VARIABLE_NAME_RE } from "@roundhouse/shared";
 
 /** One parsed assignment. */
 export interface DotenvEntry {

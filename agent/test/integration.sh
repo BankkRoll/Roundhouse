@@ -40,8 +40,8 @@ fi
 exec docker run --rm \
 	-v "${socket}:/var/run/docker.sock" \
 	-v "${src}:/src" \
-	-v openrail-it-gomod:/go/pkg/mod \
-	-v openrail-it-gocache:/root/.cache/go-build \
+	-v roundhouse-it-gomod:/go/pkg/mod \
+	-v roundhouse-it-gocache:/root/.cache/go-build \
 	-w /src \
 	-e GOFLAGS=-buildvcs=false \
 	-e GOTOOLCHAIN=local \

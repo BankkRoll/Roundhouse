@@ -13,7 +13,7 @@
         "image": "127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab",
         "registry_auth": {
           "server": "127.0.0.1:5000",
-          "username": "openrail",
+          "username": "roundhouse",
           "password": "registry-secret"
         },
         "command": [
@@ -69,15 +69,15 @@
           "policy": "on_failure",
           "max_retries": 5
         },
-        "network": "openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "network": "roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
         "labels": {
-          "openrail.service_name": "api",
+          "roundhouse.service_name": "api",
           "com.example.team": "platform"
         },
         "drain_s": 30,
         "spec_hash": "3d018c2f94288a05672a9fbc76b70482b5807206c8a64ffab950630aefc03d33"
       },
-      "canonical": "{\"command\":[\"node\",\"server.js\"],\"deployment_id\":\"dep_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"entrypoint\":[\"/sbin/tini\",\"--\"],\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"interval_s\":10,\"path\":\"/healthz\",\"port\":3000,\"retries\":3,\"start_period_s\":15,\"timeout_s\":3,\"type\":\"http\"},\"id\":\"wl_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"image\":\"127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab\",\"kind\":\"service\",\"labels\":{\"com.example.team\":\"platform\",\"openrail.service_name\":\"api\"},\"network\":\"openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[{\"container_port\":3000,\"protocol\":\"http\"},{\"container_port\":9229,\"protocol\":\"tcp\"}],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":0,\"resources\":{\"cpu_millis\":500,\"memory_mb\":512,\"pids\":512},\"restart\":{\"max_retries\":5,\"policy\":\"on_failure\"},\"service_id\":\"svc_01JAAAAAAAAAAAAAAAAAAAAAAA\"}",
+      "canonical": "{\"command\":[\"node\",\"server.js\"],\"deployment_id\":\"dep_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"entrypoint\":[\"/sbin/tini\",\"--\"],\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"interval_s\":10,\"path\":\"/healthz\",\"port\":3000,\"retries\":3,\"start_period_s\":15,\"timeout_s\":3,\"type\":\"http\"},\"id\":\"wl_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"image\":\"127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab\",\"kind\":\"service\",\"labels\":{\"com.example.team\":\"platform\",\"roundhouse.service_name\":\"api\"},\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[{\"container_port\":3000,\"protocol\":\"http\"},{\"container_port\":9229,\"protocol\":\"tcp\"}],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":0,\"resources\":{\"cpu_millis\":500,\"memory_mb\":512,\"pids\":512},\"restart\":{\"max_retries\":5,\"policy\":\"on_failure\"},\"service_id\":\"svc_01JAAAAAAAAAAAAAAAAAAAAAAA\"}",
       "spec_hash": "3d018c2f94288a05672a9fbc76b70482b5807206c8a64ffab950630aefc03d33"
     },
     {
@@ -109,12 +109,12 @@
           "policy": "always",
           "max_retries": 0
         },
-        "network": "openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "network": "roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
         "labels": {},
         "drain_s": 0,
         "spec_hash": "c68f999dca864e63693de04e9648c55be6d7b84631ede8deaba801bb621beebe"
       },
-      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"id\":\"wl_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{},\"network\":\"openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
+      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"id\":\"wl_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{},\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
       "spec_hash": "c68f999dca864e63693de04e9648c55be6d7b84631ede8deaba801bb621beebe"
     },
     {
@@ -153,7 +153,7 @@
           "policy": "always",
           "max_retries": 0
         },
-        "network": "openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "network": "roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
         "labels": {
           "QUOTES": "say \"hi\" \\ bye",
           "CONTROL": "tab\there\nnew\u0001line\u001f",
@@ -169,7 +169,7 @@
         "drain_s": 0,
         "spec_hash": "bcc19470cf7b2b6bb90f0132879d8adbef6be8c48c45fb418d10beddee71900e"
       },
-      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"interval_s\":1,\"port\":5432,\"retries\":0,\"start_period_s\":0,\"timeout_s\":1,\"type\":\"tcp\"},\"id\":\"wl_01JCCCCCCCCCCCCCCCCCCCCCCC\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{\"CONTROL\":\"tab\\u0009here\\u000anew\\u0001line\\u001f\",\"DEL\":\"\",\"HTML\":\"<script>&amp;</script>\",\"QUOTES\":\"say \\\"hi\\\" \\\\ bye\",\"SEPARATORS\":\"line para end\",\"UNICODE\":\"日本語 ñ 🚀  \",\"Z_UPPER\":\"sorted before lowercase\",\"a.empty\":\"\",\"a_lower\":\"sorted after uppercase\",\"x.unicode\":\"café\"},\"network\":\"openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
+      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"interval_s\":1,\"port\":5432,\"retries\":0,\"start_period_s\":0,\"timeout_s\":1,\"type\":\"tcp\"},\"id\":\"wl_01JCCCCCCCCCCCCCCCCCCCCCCC\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{\"CONTROL\":\"tab\\u0009here\\u000anew\\u0001line\\u001f\",\"DEL\":\"\",\"HTML\":\"<script>&amp;</script>\",\"QUOTES\":\"say \\\"hi\\\" \\\\ bye\",\"SEPARATORS\":\"line para end\",\"UNICODE\":\"日本語 ñ 🚀  \",\"Z_UPPER\":\"sorted before lowercase\",\"a.empty\":\"\",\"a_lower\":\"sorted after uppercase\",\"x.unicode\":\"café\"},\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
       "spec_hash": "bcc19470cf7b2b6bb90f0132879d8adbef6be8c48c45fb418d10beddee71900e"
     },
     {
@@ -208,12 +208,12 @@
           "policy": "always",
           "max_retries": 0
         },
-        "network": "openrail-system",
+        "network": "roundhouse-system",
         "labels": {},
         "drain_s": 0,
         "spec_hash": "5b3a59462dfd05987aa0e14d9cd198a11389bf8b09a7d0e5f12d1e0cb7f26070"
       },
-      "canonical": "{\"healthcheck\":{\"interval_s\":30,\"port\":5000,\"retries\":3,\"start_period_s\":0,\"timeout_s\":5,\"type\":\"none\"},\"id\":\"sys_registry\",\"image\":\"registry:3\",\"kind\":\"system\",\"labels\":{},\"network\":\"openrail-system\",\"ports\":[{\"container_port\":5000,\"protocol\":\"tcp\"}],\"replica\":0,\"resources\":{\"cpu_millis\":1000,\"memory_mb\":256,\"pids\":256},\"restart\":{\"max_retries\":0,\"policy\":\"always\"}}",
+      "canonical": "{\"healthcheck\":{\"interval_s\":30,\"port\":5000,\"retries\":3,\"start_period_s\":0,\"timeout_s\":5,\"type\":\"none\"},\"id\":\"sys_registry\",\"image\":\"registry:3\",\"kind\":\"system\",\"labels\":{},\"network\":\"roundhouse-system\",\"ports\":[{\"container_port\":5000,\"protocol\":\"tcp\"}],\"replica\":0,\"resources\":{\"cpu_millis\":1000,\"memory_mb\":256,\"pids\":256},\"restart\":{\"max_retries\":0,\"policy\":\"always\"}}",
       "spec_hash": "5b3a59462dfd05987aa0e14d9cd198a11389bf8b09a7d0e5f12d1e0cb7f26070"
     }
   ]

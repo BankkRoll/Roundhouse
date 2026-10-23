@@ -1,4 +1,4 @@
-import { cn } from "@openrail/ui";
+import { cn } from "@roundhouse/ui";
 import { useId, useState } from "react";
 
 /** A box on the schematic. */

@@ -10,19 +10,19 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/api"
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
-	"github.com/BankkRoll/Open-Rail/cli/internal/varref"
+	"github.com/BankkRoll/Roundhouse/cli/internal/api"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/varref"
 )
 
 // Built-in variable names, from BUILTIN_VARIABLES in packages/shared. The
 // deployment and commit built-ins are left out: `run` involves neither.
 const (
 	builtinPort          = "PORT"
-	builtinPublicDomain  = "OPENRAIL_PUBLIC_DOMAIN"
-	builtinPrivateDomain = "OPENRAIL_PRIVATE_DOMAIN"
-	builtinEnvironment   = "OPENRAIL_ENVIRONMENT"
-	builtinServiceName   = "OPENRAIL_SERVICE_NAME"
+	builtinPublicDomain  = "ROUNDHOUSE_PUBLIC_DOMAIN"
+	builtinPrivateDomain = "ROUNDHOUSE_PRIVATE_DOMAIN"
+	builtinEnvironment   = "ROUNDHOUSE_ENVIRONMENT"
+	builtinServiceName   = "ROUNDHOUSE_SERVICE_NAME"
 )
 
 // privateDomainTemplate mirrors privateDomain() in
@@ -37,8 +37,8 @@ func (a *App) runCmd() *cobra.Command {
 		Long: `Run a command on this machine with the linked service's variables in its
 environment, resolved as a deployment would resolve them: references to other
 services and shared variables are followed, and built-ins such as PORT and
-OPENRAIL_PRIVATE_DOMAIN are set. OPENRAIL_DEPLOYMENT_ID and
-OPENRAIL_GIT_COMMIT_SHA are not, since no deployment is involved.
+ROUNDHOUSE_PRIVATE_DOMAIN are set. ROUNDHOUSE_DEPLOYMENT_ID and
+ROUNDHOUSE_GIT_COMMIT_SHA are not, since no deployment is involved.
 
 Secret values are revealed through the audited reveal route (only those the
 service's variables need) and are passed to the child process alone: they are

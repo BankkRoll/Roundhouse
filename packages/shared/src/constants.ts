@@ -1,5 +1,5 @@
 /** Human-facing product name. Kept in one place until naming is decided. */
-export const PRODUCT_NAME = "OpenRail";
+export const PRODUCT_NAME = "Roundhouse";
 
 /** Agent heartbeat interval. The control plane derives offline detection from it. */
 export const HEARTBEAT_INTERVAL_MS = 10_000;

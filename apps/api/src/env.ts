@@ -44,7 +44,7 @@ export interface Env {
    */
   PUBLIC_ORIGIN?: string;
   /** `"1"` in local development: relaxes `PUBLIC_ORIGIN` and lets agents use `ws://`. */
-  OPENRAIL_DEV?: string;
+  ROUNDHOUSE_DEV?: string;
   /** The single `AuditChain` Durable Object (`idFromName("global")`). */
   AUDIT_CHAIN: DurableObjectNamespace<AuditChain>;
   /** Runs one master key rotation per instance (instance ID = rotation ID). */

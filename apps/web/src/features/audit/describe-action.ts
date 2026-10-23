@@ -1,4 +1,4 @@
-import type { AuditAction } from "@openrail/shared";
+import type { AuditAction } from "@roundhouse/shared";
 import type { LucideIcon } from "lucide-react";
 import {
   ActivityIcon,

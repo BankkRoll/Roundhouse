@@ -1,4 +1,4 @@
-import { JOIN_TOKEN_TTL_MS } from "@openrail/shared";
+import { JOIN_TOKEN_TTL_MS } from "@roundhouse/shared";
 import { act, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";

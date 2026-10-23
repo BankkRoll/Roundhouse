@@ -33,7 +33,7 @@ describe("newId", () => {
   });
 
   it("mints IDs the wire protocol accepts", () => {
-    // Mirrors ID_RE in @openrail/protocol, which this package must not depend on.
+    // Mirrors ID_RE in @roundhouse/protocol, which this package must not depend on.
     const wireId = /^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$/;
     for (const kind of Object.keys(ID_PREFIXES) as (keyof typeof ID_PREFIXES)[]) {
       expect(newId(kind)).toMatch(wireId);

@@ -1,4 +1,4 @@
-import { cn, SectionLabel, Skeleton } from "@openrail/ui";
+import { cn, SectionLabel, Skeleton } from "@roundhouse/ui";
 import { Link, useParams } from "@tanstack/react-router";
 import { PlusIcon } from "lucide-react";
 import type { Project } from "../../lib/api/deploy-types";

@@ -1,4 +1,4 @@
-module github.com/BankkRoll/Open-Rail/cli
+module github.com/BankkRoll/Roundhouse/cli
 
 go 1.26.8
 

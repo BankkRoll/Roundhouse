@@ -1,4 +1,4 @@
-# @openrail/protocol
+# @roundhouse/protocol
 
 Wire protocol between the control plane and agents.
 
@@ -36,7 +36,7 @@ from formatting in `biome.json`:
 - `sealed-box.json`: X25519 sealed boxes (RFC 7748 keys) that both sides
   open and re-seal to identical bytes; `encryption-key.json`: a node's
   encryption key signed by its identity key (ADR 0014).
-- `redaction.json`: the strings `redactionNeedles` (in `@openrail/shared`)
+- `redaction.json`: the strings `redactionNeedles` (in `@roundhouse/shared`)
   and Go's `RedactionNeedles` must produce for a set of secrets.
 
 ### Go decoding rules

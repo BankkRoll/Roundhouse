@@ -1,4 +1,4 @@
-import type { Role } from "@openrail/shared";
+import type { Role } from "@roundhouse/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { api } from "../lib/api/client";

@@ -25,10 +25,10 @@ func TestResolve(t *testing.T) {
 		Service: "api",
 		Services: map[string]map[string]string{
 			"api": {"DB": "${{db.URL}}", "SELF": "${{PORT}}-${{NAME}}", "NAME": "api", "REGION": "${{shared.REGION}}", "ESC": "$${{x}}"},
-			"db":  {"URL": "postgres://${{OPENRAIL_PRIVATE_DOMAIN}}:5432"},
+			"db":  {"URL": "postgres://${{ROUNDHOUSE_PRIVATE_DOMAIN}}:5432"},
 		},
 		Shared:   map[string]string{"REGION": "eu"},
-		Builtins: map[string]map[string]string{"api": {"PORT": "8080"}, "db": {"OPENRAIL_PRIVATE_DOMAIN": "db.production.internal"}},
+		Builtins: map[string]map[string]string{"api": {"PORT": "8080"}, "db": {"ROUNDHOUSE_PRIVATE_DOMAIN": "db.production.internal"}},
 	})
 	if errs != nil {
 		t.Fatal(errs)

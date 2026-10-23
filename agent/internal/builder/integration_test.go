@@ -26,12 +26,12 @@ import (
 	"testing"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 const (
 	itRegistryImage = "registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2"
-	itRegistryName  = "openrail-it-registry"
+	itRegistryName  = "roundhouse-it-registry"
 	itRegistryAddr  = "127.0.0.1:5055"
 	itProxyPort     = 5056
 	itToken         = "ghs_integrationTestToken0123456789abcdef"
@@ -55,7 +55,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	code := m.Run()
-	if os.Getenv("OPENRAIL_IT_KEEP") != "1" {
+	if os.Getenv("ROUNDHOUSE_IT_KEEP") != "1" {
 		_ = d.removeContainer(ctx, itRegistryName)
 		_ = d.removeContainer(ctx, ContainerName)
 		_ = d.do(ctx, http.MethodDelete, "/networks/"+NetworkName, nil, nil, nil)
@@ -282,7 +282,7 @@ func pullAndRun(t *testing.T, ref string, env []string) string {
 	if err := itDocker.pullImage(ctx, ref); err != nil {
 		t.Fatalf("pull %s: %v", ref, err)
 	}
-	id, err := itDocker.createContainer(ctx, "openrail-it-app-"+fmt.Sprint(time.Now().UnixNano()), map[string]any{
+	id, err := itDocker.createContainer(ctx, "roundhouse-it-app-"+fmt.Sprint(time.Now().UnixNano()), map[string]any{
 		"Image":      ref,
 		"Env":        env,
 		"HostConfig": map[string]any{"NetworkMode": "host"},
@@ -325,7 +325,7 @@ func TestIntegrationDockerfilePrivateRepo(t *testing.T) {
 	})
 	job := testJob(protocol.BuilderDockerfile, repoURL, sha)
 	job.Source.Token = itToken
-	job.BuildArgs = map[string]string{"GREETING": "hello-openrail", "API_TOKEN": "s3cr3t-build-arg-value"}
+	job.BuildArgs = map[string]string{"GREETING": "hello-roundhouse", "API_TOKEN": "s3cr3t-build-arg-value"}
 
 	b := newTestBuilder(t, nil)
 	res, logs := runBuild(t, b, job)
@@ -335,7 +335,7 @@ func TestIntegrationDockerfilePrivateRepo(t *testing.T) {
 	if res.Image.Repository != job.ImageRepository {
 		t.Errorf("repository = %q", res.Image.Repository)
 	}
-	if !strings.Contains(logs, "greeting=hello-openrail") {
+	if !strings.Contains(logs, "greeting=hello-roundhouse") {
 		t.Errorf("build output missing from logs:\n%s", logs)
 	}
 	for _, secret := range []string{itToken, "s3cr3t-build-arg-value", base64.StdEncoding.EncodeToString([]byte(gitTokenUser + ":" + itToken))} {
@@ -353,7 +353,7 @@ func TestIntegrationDockerfilePrivateRepo(t *testing.T) {
 	}
 	id := pullAndRun(t, pulledRef(res), nil)
 	waitExit(t, id)
-	if out := itDocker.containerLogs(context.Background(), id, 10); !strings.Contains(out, "hello-openrail") {
+	if out := itDocker.containerLogs(context.Background(), id, 10); !strings.Contains(out, "hello-roundhouse") {
 		t.Errorf("container output %q", out)
 	}
 
@@ -384,8 +384,8 @@ func TestIntegrationRailpackNode(t *testing.T) {
 	}
 	g := newGitServer(t)
 	repoURL, sha := g.repo(t, "node-app", map[string]string{
-		"package.json":      `{"name":"openrail-it","version":"1.0.0","private":true,"scripts":{"start":"node index.js"},"engines":{"node":"22"}}`,
-		"package-lock.json": `{"name":"openrail-it","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"openrail-it","version":"1.0.0","engines":{"node":"22"}}}}`,
+		"package.json":      `{"name":"roundhouse-it","version":"1.0.0","private":true,"scripts":{"start":"node index.js"},"engines":{"node":"22"}}`,
+		"package-lock.json": `{"name":"roundhouse-it","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"roundhouse-it","version":"1.0.0","engines":{"node":"22"}}}}`,
 		"index.js": "const http = require('http');\n" +
 			"const port = process.env.PORT || 3000;\n" +
 			"http.createServer((req, res) => res.end('hello from railpack ' + process.env.GREETING)).listen(port, '127.0.0.1');\n",

@@ -3,7 +3,7 @@
 | File                     | What                                                        |
 | ------------------------ | ----------------------------------------------------------- |
 | `install.sh`             | Installs Docker, Caddy and the agent, joins, starts systemd |
-| `openrail-agent.service` | systemd unit (a copy is embedded in install.sh)             |
+| `roundhouse-agent.service` | systemd unit (a copy is embedded in install.sh)             |
 | `uninstall.sh`           | Removes agent, config, and state. Leaves Docker and Caddy.  |
 | `test/container-test.sh` | End-to-end installer test CI runs on each supported OS      |
 
@@ -35,7 +35,7 @@ Options: `--url`, `--name`, `--version`, `--token-file`, `--rejoin`,
 Caddy terminates TLS and routes hostnames to containers. The agent owns its
 configuration and changes it only through the admin API, which listens on
 `localhost:2019`. A systemd drop-in
-(`/etc/systemd/system/caddy.service.d/openrail.conf`) replaces the packaged
+(`/etc/systemd/system/caddy.service.d/roundhouse.conf`) replaces the packaged
 `ExecStart` with `caddy run --environ --resume`:
 - On first start there is no saved config, so Caddy starts empty (admin API
   only) and the packaged Caddyfile is never loaded.
@@ -51,13 +51,13 @@ only if the drop-in changed.
 
 ### Builder nodes
 
-`--builder` passes `--builder` to `openrail-agent join`, which records the
-role in `/etc/openrail/agent.yaml`; later re-runs read it from there. To turn
+`--builder` passes `--builder` to `roundhouse-agent join`, which records the
+role in `/etc/roundhouse/agent.yaml`; later re-runs read it from there. To turn
 an existing node into a builder, re-run with `--rejoin --builder` and a new
 token. Builders need 20 GiB free on `/var/lib`.
 
 The builder runs BuildKit rootless in the `sys_buildkitd` container on its
-own bridge network (`openrail-bk0`), so build steps cannot reach host
+own bridge network (`roundhouse-bk0`), so build steps cannot reach host
 loopback services such as Caddy's admin API or the registry. It pushes
 through a per-build, password-protected proxy the agent opens on that
 network's gateway, port 5001.
@@ -67,7 +67,7 @@ Pins live at the top of `install.sh` and must match
 
 ## Firewall
 
-The agent dials out to the control plane, so OpenRail needs no inbound port
+The agent dials out to the control plane, so Roundhouse needs no inbound port
 for control traffic. Open only:
 
 | Port    | Why                       |
@@ -77,9 +77,9 @@ for control traffic. Open only:
 | 443/udp | HTTP/3 ingress (optional) |
 
 Keep SSH restricted as you normally would. When ufw is active the installer
-adds these rules, plus, on builders, `allow in on openrail-bk0 to any port
+adds these rules, plus, on builders, `allow in on roundhouse-bk0 to any port
 5001 proto tcp` so BuildKit can reach the agent's registry proxy; with other
-firewalls, allow the same. Docker publishes no ports for OpenRail's system
+firewalls, allow the same. Docker publishes no ports for Roundhouse's system
 containers, and the registry listens on `127.0.0.1:5000` only.
 
 ## Notes
@@ -90,16 +90,16 @@ containers, and the registry listens on `127.0.0.1:5000` only.
   until the first release; see `infra/release-signing.md`.
 - The token is used within seconds of starting, before the slow package
   installs, and is single-use.
-- Keep `openrail-agent.service` and its copy in `install.sh` identical.
-- The agent's sandbox (`openrail-agent.service`) also covers the `git` and
+- Keep `roundhouse-agent.service` and its copy in `install.sh` identical.
+- The agent's sandbox (`roundhouse-agent.service`) also covers the `git` and
   `railpack` processes a builder runs; checkouts live in
-  `/var/lib/openrail/builds` and are deleted after each build.
+  `/var/lib/roundhouse/builds` and are deleted after each build.
 
 ## Test
 
 ```sh
 cd agent && CGO_ENABLED=0 GOOS=linux go build -ldflags "-X main.version=0.0.0-ci" \
-  -o ../dist/openrail-agent-linux-amd64 ./cmd/openrail-agent && cd ..
+  -o ../dist/roundhouse-agent-linux-amd64 ./cmd/roundhouse-agent && cd ..
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/dist:/dist:ro" ubuntu:24.04 \
   bash /src/install/test/container-test.sh
 ```

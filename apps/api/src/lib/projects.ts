@@ -5,7 +5,7 @@
  *
  * @module
  */
-import { type Db, deployments, domains, serviceConfigs } from "@openrail/db";
+import { type Db, deployments, domains, serviceConfigs } from "@roundhouse/db";
 import {
   CANCELLABLE_DEPLOYMENT_STATUSES,
   type DomainTlsStatus,
@@ -14,7 +14,7 @@ import {
   type ServiceConfigSpec,
   slugify,
   type TlsMode,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {

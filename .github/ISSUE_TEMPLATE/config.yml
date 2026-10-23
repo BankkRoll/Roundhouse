@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/BankkRoll/Open-Rail/security/advisories/new
+    url: https://github.com/BankkRoll/Roundhouse/security/advisories/new
     about: Do not open a public issue. Report privately as described in SECURITY.md.
   - name: Questions and ideas
-    url: https://github.com/BankkRoll/Open-Rail/discussions
+    url: https://github.com/BankkRoll/Roundhouse/discussions
     about: Ask usage questions and discuss larger ideas before opening an issue.

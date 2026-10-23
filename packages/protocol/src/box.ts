@@ -8,7 +8,7 @@
  * 1. The sender generates an ephemeral X25519 keypair `(esk, epk)`.
  * 2. `shared = X25519(esk, recipient_pk)`; an all-zero result is rejected.
  * 3. `okm = HKDF-SHA256(ikm = shared, salt = epk ‖ recipient_pk,
- *    info = "openrail-box:v1:" + purpose, length = 44)`.
+ *    info = "roundhouse-box:v1:" + purpose, length = 44)`.
  * 4. `key = okm[0..32]`, `nonce = okm[32..44]`. The key is single-use (fresh
  *    ephemeral key per box), so a derived nonce is safe.
  * 5. `ct = AES-256-GCM(key, nonce, plaintext, aad)`, tag appended.
@@ -49,10 +49,10 @@ export type BoxPurpose = (typeof BOX_PURPOSES)[number];
  * HKDF `info` (and AAD prefix) for a purpose.
  *
  * @param purpose - What the box is for.
- * @returns E.g. `openrail-box:v1:workload-env`.
+ * @returns E.g. `roundhouse-box:v1:workload-env`.
  */
 export function boxInfo(purpose: BoxPurpose): string {
-  return `openrail-box:v${BOX_VERSION}:${purpose}`;
+  return `roundhouse-box:v${BOX_VERSION}:${purpose}`;
 }
 
 /**
@@ -61,7 +61,7 @@ export function boxInfo(purpose: BoxPurpose): string {
  * @param nodeId - Node the box is sealed to.
  * @param workloadId - The workload (`wl_…`).
  * @param generation - `desired_state.generation` of the frame carrying it.
- * @returns E.g. `openrail-box:v1:workload-env:node_1:wl_1:42`.
+ * @returns E.g. `roundhouse-box:v1:workload-env:node_1:wl_1:42`.
  */
 export function workloadEnvAad(nodeId: string, workloadId: string, generation: number): string {
   return `${boxInfo("workload-env")}:${nodeId}:${workloadId}:${generation}`;
@@ -72,7 +72,7 @@ export function workloadEnvAad(nodeId: string, workloadId: string, generation: n
  *
  * @param nodeId - Builder node the box is sealed to.
  * @param buildId - The build (`bld_…`).
- * @returns E.g. `openrail-box:v1:build-secrets:node_1:bld_1`.
+ * @returns E.g. `roundhouse-box:v1:build-secrets:node_1:bld_1`.
  */
 export function buildSecretsAad(nodeId: string, buildId: string): string {
   return `${boxInfo("build-secrets")}:${nodeId}:${buildId}`;
@@ -191,10 +191,10 @@ export async function nodeEncryptionKeyId(publicKey: string): Promise<string> {
  *
  * @param nodeId - The node.
  * @param publicKey - Base64 raw X25519 public key.
- * @returns UTF-8 of `openrail-node-encryption-key:v1:<node_id>:<public_key>`.
+ * @returns UTF-8 of `roundhouse-node-encryption-key:v1:<node_id>:<public_key>`.
  */
 export function encryptionKeySignaturePayload(nodeId: string, publicKey: string): Uint8Array {
-  return encoder.encode(`openrail-node-encryption-key:v1:${nodeId}:${publicKey}`);
+  return encoder.encode(`roundhouse-node-encryption-key:v1:${nodeId}:${publicKey}`);
 }
 
 /**

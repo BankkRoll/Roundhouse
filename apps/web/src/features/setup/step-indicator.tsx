@@ -1,4 +1,4 @@
-import { cn } from "@openrail/ui";
+import { cn } from "@roundhouse/ui";
 import { CheckIcon } from "lucide-react";
 
 /**

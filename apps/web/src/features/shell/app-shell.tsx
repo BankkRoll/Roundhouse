@@ -6,7 +6,7 @@ import {
   SheetContent,
   toast,
   useCommandPaletteHotkey,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import {

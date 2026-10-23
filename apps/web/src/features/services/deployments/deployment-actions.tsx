@@ -6,7 +6,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   toast,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { useNavigate } from "@tanstack/react-router";
 import {
   BanIcon,

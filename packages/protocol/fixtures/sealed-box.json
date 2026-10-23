@@ -9,7 +9,7 @@
     {
       "name": "workload-env",
       "purpose": "workload-env",
-      "aad": "openrail-box:v1:workload-env:node_fixture:wl_01JAAAAAAAAAAAAAAAAAAAAAAA:42",
+      "aad": "roundhouse-box:v1:workload-env:node_fixture:wl_01JAAAAAAAAAAAAAAAAAAAAAAA:42",
       "plaintext": "{\"env\":{\"PORT\":\"3000\",\"GREETING\":\"héllo 🚀\"},\"files\":{\"TLS_KEY\":\"-----BEGIN TEST KEY-----\\nAAAA\\n-----END TEST KEY-----\\n\"}}",
       "box": {
         "v": 1,
@@ -21,7 +21,7 @@
     {
       "name": "build-secrets",
       "purpose": "build-secrets",
-      "aad": "openrail-box:v1:build-secrets:node_fixture:bld_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      "aad": "roundhouse-box:v1:build-secrets:node_fixture:bld_01JAAAAAAAAAAAAAAAAAAAAAAA",
       "plaintext": "{\"secrets\":{\"NPM_TOKEN\":\"fixture-npm-token\"}}",
       "box": {
         "v": 1,
@@ -33,7 +33,7 @@
     {
       "name": "empty-env",
       "purpose": "workload-env",
-      "aad": "openrail-box:v1:workload-env:node_fixture:wl_01JBBBBBBBBBBBBBBBBBBBBBBB:0",
+      "aad": "roundhouse-box:v1:workload-env:node_fixture:wl_01JBBBBBBBBBBBBBBBBBBBBBBB:0",
       "plaintext": "{\"env\":{},\"files\":{}}",
       "box": {
         "v": 1,

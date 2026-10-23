@@ -5,8 +5,8 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // DefaultCapAdd are the capabilities added back after dropping all of them.
@@ -48,7 +48,7 @@ type wantSpec struct {
 // containerName is unique per workload and spec, so a replacement can be
 // created while the container it replaces still runs.
 func containerName(s *wantSpec) string {
-	return "openrail-" + s.ID + "-" + s.SpecHash[:12]
+	return "roundhouse-" + s.ID + "-" + s.SpecHash[:12]
 }
 
 // containerCreate translates a spec into the engine's create request, with
@@ -120,7 +120,7 @@ func pullAuth(s *wantSpec) (*docker.AuthConfig, bool) {
 // LabelPrivateDomain carries a service replica's private hostname,
 // "<service>.<environment>.internal", which the agent registers as a network
 // alias so other containers on the project network resolve it.
-const LabelPrivateDomain = "openrail.private_domain"
+const LabelPrivateDomain = "roundhouse.private_domain"
 
 // networkAliases returns the DNS aliases s answers to on its network.
 //

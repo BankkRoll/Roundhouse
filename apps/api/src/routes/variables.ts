@@ -10,7 +10,7 @@
  *
  * @module
  */
-import { can } from "@openrail/shared";
+import { can } from "@roundhouse/shared";
 import { clientIp, createRouter, requireMasterKey } from "../context";
 import {
   listServiceVariables,

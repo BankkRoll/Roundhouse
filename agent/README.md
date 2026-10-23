@@ -1,4 +1,4 @@
-# openrail-agent
+# roundhouse-agent
 
 Runs on each server. Dials out to the control plane over WebSocket, reports
 heartbeats, runs the workloads the control plane's desired state lists, routes
@@ -8,24 +8,24 @@ nodes.
 ## Build
 
 ```sh
-go build -o bin/openrail-agent ./cmd/openrail-agent
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bin/openrail-agent-linux-arm64 ./cmd/openrail-agent
+go build -o bin/roundhouse-agent ./cmd/roundhouse-agent
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bin/roundhouse-agent-linux-arm64 ./cmd/roundhouse-agent
 ```
 
 ## Use
 
 ```sh
-openrail-agent join --url https://<control-plane> --token <token> [--name <name>] [--builder]
-openrail-agent run
-openrail-agent version
+roundhouse-agent join --url https://<control-plane> --token <token> [--name <name>] [--builder]
+roundhouse-agent run
+roundhouse-agent version
 ```
 
 On servers, use `install/install.sh`, which also sets up Docker and systemd.
 
 | Flag           | Purpose                                                        |
 | -------------- | -------------------------------------------------------------- |
-| `--config`     | Config path (default `/etc/openrail/agent.yaml`)               |
-| `--data-dir`   | Credential, identity key, state (default `/var/lib/openrail`)  |
+| `--config`     | Config path (default `/etc/roundhouse/agent.yaml`)               |
+| `--data-dir`   | Credential, identity key, state (default `/var/lib/roundhouse`)  |
 | `--token-file` | Read the join token from a file instead of argv                |
 | `--force`      | Re-join; the old registration is kept intact if the join fails |
 | `--builder`    | Make this node a builder: local registry and build jobs        |
@@ -49,7 +49,7 @@ go vet ./...
 
 `run` converges Docker to the latest `desired_state` (`internal/runtime`):
 - **Reconcile** every 5 s, immediately on a new generation and on container
-  events. Containers labelled `openrail.managed=true` carry their workload,
+  events. Containers labelled `roundhouse.managed=true` carry their workload,
   deployment, service, project, spec hash, generation, routes and drain time,
   so an agent restart mid-rollout loses nothing. Until the first desired
   state after a start arrives, the agent only observes and never removes.
@@ -67,7 +67,7 @@ go vet ./...
 - **Health** is probed by the agent from the host: `http` (GET, 2xx/3xx),
   `tcp`, or `none`, honouring `start_period_s`, `interval_s`, `timeout_s`
   and `retries` like Docker's `HEALTHCHECK`.
-- Each project gets the bridge network `openrail-<project_id>`. Unused images
+- Each project gets the bridge network `roundhouse-<project_id>`. Unused images
   are garbage-collected when Docker's disk is 85% full, never one a
   container uses or a desired workload names. Env values live only in
   Docker's container config.
@@ -128,7 +128,7 @@ into an image in the local registry and answers with `build_result`.
    environment, and the build as BuildKit secrets.
 3. **Build.** BuildKit runs rootless as `sys_buildkitd`
    (`moby/buildkit:v0.34.1-rootless`, pinned by digest) on its own bridge
-   network `openrail-build`, with its cache in the `openrail-buildkit`
+   network `roundhouse-build`, with its cache in the `roundhouse-buildkit`
    volume, capped by BuildKit's GC and a periodic prune. It has no network
    listener: the agent reaches it with the BuildKit Go client over
    `buildctl dial-stdio`, run through the Docker exec API. Dockerfile builds
@@ -164,7 +164,7 @@ CLI. It works on Linux and from Git Bash on Windows with Docker Desktop
 (`-v //var/run/docker.sock:/var/run/docker.sock`, with `MSYS_NO_PATHCONV=1`).
 It uses `127.0.0.1:5055` for the registry and `5056` for the proxy, and
 removes `sys_buildkitd` and its network afterwards unless
-`OPENRAIL_IT_KEEP=1`.
+`ROUNDHOUSE_IT_KEEP=1`.
 
 ## Notes
 

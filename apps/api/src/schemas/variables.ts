@@ -13,8 +13,8 @@ import {
   MAX_ENV_KEY_BYTES,
   MAX_ENV_VALUE_BYTES,
   utf8ByteLength,
-} from "@openrail/protocol";
-import { CLASSIFICATION_WARNING_CODES, VARIABLE_TIERS } from "@openrail/shared";
+} from "@roundhouse/protocol";
+import { CLASSIFICATION_WARNING_CODES, VARIABLE_TIERS } from "@roundhouse/shared";
 
 const Millis = z.number().int().openapi({ description: "Unix time in milliseconds" });
 

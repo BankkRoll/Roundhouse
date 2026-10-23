@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	"github.com/BankkRoll/Open-Rail/agent/internal/leaktest"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	"github.com/BankkRoll/Roundhouse/agent/internal/leaktest"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -34,7 +34,7 @@ func spec(id, service string) protocol.WorkloadSpec {
 		Resources: protocol.Resources{CPUMillis: 500, MemoryMB: 256, PIDs: 128},
 		Restart:   protocol.Restart{Policy: protocol.RestartAlways},
 		Network:   protocol.ProjectNetworkName("prj_1"),
-		Labels:    map[string]string{"openrail.service_name": "web", LabelManaged: "false"},
+		Labels:    map[string]string{"roundhouse.service_name": "web", LabelManaged: "false"},
 		DrainS:    0,
 	}
 	return rehash(w)
@@ -82,7 +82,7 @@ func newHarness(t *testing.T, tweak func(*Options)) *harness {
 	opts := Options{
 		Docker:            d,
 		Ingress:           h.ing,
-		DataDir:           "/var/lib/openrail",
+		DataDir:           "/var/lib/roundhouse",
 		Report:            h.status.report,
 		Interval:          20 * time.Millisecond,
 		RestartBackoff:    20 * time.Millisecond,
@@ -179,7 +179,7 @@ func TestCreatesHardenedContainer(t *testing.T) {
 		t.Error("read-only root must be off by default")
 	case hc.LogConfig.Type != "json-file" || hc.LogConfig.Config["max-size"] == "":
 		t.Errorf("log config %+v", hc.LogConfig)
-	case hc.NetworkMode != "openrail-prj_1":
+	case hc.NetworkMode != "roundhouse-prj_1":
 		t.Errorf("network %q", hc.NetworkMode)
 	}
 	if !slices.Equal(c.spec.Env, []string{"GREETING=hello"}) || !slices.Equal(c.spec.Cmd, w.Command) {
@@ -188,10 +188,10 @@ func TestCreatesHardenedContainer(t *testing.T) {
 	l := c.spec.Labels
 	if l[LabelManaged] != "true" || l[LabelWorkloadID] != "wl_a" || l[LabelSpecHash] != w.SpecHash ||
 		l[LabelDeploymentID] != "dep_a" || l[LabelProjectID] != "prj_1" || l[LabelGeneration] != "1" ||
-		l["openrail.service_name"] != "web" {
+		l["roundhouse.service_name"] != "web" {
 		t.Errorf("labels %v", l)
 	}
-	if _, ok := h.d.networks["openrail-prj_1"]; !ok {
+	if _, ok := h.d.networks["roundhouse-prj_1"]; !ok {
 		t.Error("project network not created")
 	}
 	got, _ := h.status.lastOf("wl_a")
@@ -545,7 +545,7 @@ func TestRegistrySystemWorkload(t *testing.T) {
 	if b := hc.PortBindings["5000/tcp"]; len(b) != 1 || b[0].HostIP != "127.0.0.1" || b[0].HostPort != "5000" {
 		t.Fatalf("port bindings %v", hc.PortBindings)
 	}
-	if !slices.Equal(hc.Binds, []string{"/var/lib/openrail/registry:/var/lib/registry"}) {
+	if !slices.Equal(hc.Binds, []string{"/var/lib/roundhouse/registry:/var/lib/registry"}) {
 		t.Fatalf("binds %v", hc.Binds)
 	}
 	if c.spec.Image != RegistryImage || c.spec.Labels[LabelDeploymentID] != "" {

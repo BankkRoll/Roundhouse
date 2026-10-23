@@ -6,7 +6,7 @@
  *
  * @module
  */
-import type { Role } from "@openrail/shared";
+import type { Role } from "@roundhouse/shared";
 import type {
   AcceptInviteRequest,
   AcceptInviteResponse,

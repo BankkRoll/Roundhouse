@@ -15,8 +15,8 @@ import type {
   projects,
   serviceConfigs,
   services,
-} from "@openrail/db";
-import type { TlsMode } from "@openrail/shared";
+} from "@roundhouse/db";
+import type { TlsMode } from "@roundhouse/shared";
 
 type Row<T extends { $inferSelect: unknown }> = T["$inferSelect"];
 

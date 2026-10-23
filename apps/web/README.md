@@ -1,4 +1,4 @@
-# @openrail/web
+# @roundhouse/web
 
 Dashboard SPA (React, TanStack Router + Query, Tailwind). In production the
 API Worker serves the built files.
@@ -6,7 +6,7 @@ API Worker serves the built files.
 ## Run
 
 ```sh
-pnpm --filter @openrail/api dev   # API on :8787
+pnpm --filter @roundhouse/api dev   # API on :8787
 pnpm dev                          # http://localhost:5173, proxies /v1 and /api
 ```
 

@@ -3,7 +3,7 @@
 # forge: through the system store, which the builder's git uses.
 set -eu
 if [ -f /e2e-certs/ca.crt ]; then
-	cp /e2e-certs/ca.crt /usr/local/share/ca-certificates/openrail-e2e.crt
+	cp /e2e-certs/ca.crt /usr/local/share/ca-certificates/roundhouse-e2e.crt
 	update-ca-certificates >/dev/null 2>&1
 fi
-exec openrail-agent "$@"
+exec roundhouse-agent "$@"

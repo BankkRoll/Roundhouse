@@ -49,7 +49,7 @@ function workload(overrides: Partial<WorkloadSpec> = {}): WorkloadSpec {
     healthcheck: null,
     resources: { cpu_millis: 250, memory_mb: 256, pids: 128 },
     restart: { policy: "always", max_retries: 0 },
-    network: "openrail-prj_1-env_1",
+    network: "roundhouse-prj_1-env_1",
     labels: {},
     drain_s: 10,
     spec_hash: HASH,
@@ -115,8 +115,8 @@ describe("WorkloadSpecSchema", () => {
   });
 
   it.each([
-    ["its environment network", "openrail-prj_1-env_1"],
-    ["its own project's legacy network, while it migrates", "openrail-prj_1"],
+    ["its environment network", "roundhouse-prj_1-env_1"],
+    ["its own project's legacy network, while it migrates", "roundhouse-prj_1"],
   ])("lets a service join %s", (_name, network) => {
     expect(WorkloadSpecSchema.safeParse(workload({ network })).success).toBe(true);
   });
@@ -125,7 +125,7 @@ describe("WorkloadSpecSchema", () => {
     const project_id = `prj_${"a".repeat(64)}`;
     const environment_id = `env_${"b".repeat(64)}`;
     // Pinned by fixtures/network-names.json.
-    const hashed = "openrail-env-de76313f46ca78e88fae6164b20495d30a7eb49069316d1fb8c3248492e9fb3b";
+    const hashed = "roundhouse-env-de76313f46ca78e88fae6164b20495d30a7eb49069316d1fb8c3248492e9fb3b";
     const spec = (network: string) => workload({ project_id, environment_id, network });
     expect(WorkloadSpecSchema.safeParse(spec(hashed)).success).toBe(true);
     expect(WorkloadSpecSchema.safeParse(spec(`${hashed.slice(0, -1)}c`)).success).toBe(false);
@@ -142,14 +142,14 @@ describe("WorkloadSpecSchema", () => {
     ["a box with a bad kid", { env_sealed: { ...BOX, kid: "nope" } }],
     ["a box with a short epk", { env_sealed: { ...BOX, epk: "AAAA" } }],
     ["a box of another version", { env_sealed: { ...BOX, v: 2 as 1 } }],
-    ["another environment's network", { network: "openrail-prj_1-env_2" }],
-    ["another project's network", { network: "openrail-prj_2-env_1" }],
-    ["another project's legacy network", { network: "openrail-prj_2" }],
+    ["another environment's network", { network: "roundhouse-prj_1-env_2" }],
+    ["another project's network", { network: "roundhouse-prj_2-env_1" }],
+    ["another project's legacy network", { network: "roundhouse-prj_2" }],
     ["the host network", { network: "host" }],
     ["the bridge network", { network: "bridge" }],
     ["no network", { network: "none" }],
-    ["the system network", { network: "openrail-system" }],
-    ["the build network", { network: "openrail-build" }],
+    ["the system network", { network: "roundhouse-system" }],
+    ["the build network", { network: "roundhouse-build" }],
     ["a local image of another service", { image: `127.0.0.1:5000/prj_1/svc_2@sha256:${HASH}` }],
     ["a local image by tag", { image: "127.0.0.1:5000/prj_1/svc_1:latest" }],
     ["port 0", { ports: [{ container_port: 0, protocol: "http" }], routes: [] }],

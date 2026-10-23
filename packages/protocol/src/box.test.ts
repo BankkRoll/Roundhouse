@@ -110,9 +110,9 @@ describe("sealBox / openBox", () => {
 
   it("formats AADs", () => {
     expect(workloadEnvAad("node_1", "wl_1", 42)).toBe(
-      "openrail-box:v1:workload-env:node_1:wl_1:42",
+      "roundhouse-box:v1:workload-env:node_1:wl_1:42",
     );
-    expect(buildSecretsAad("node_1", "bld_1")).toBe("openrail-box:v1:build-secrets:node_1:bld_1");
+    expect(buildSecretsAad("node_1", "bld_1")).toBe("roundhouse-box:v1:build-secrets:node_1:bld_1");
   });
 });
 

@@ -27,7 +27,7 @@ const spec: WorkloadSpec = {
   healthcheck: null,
   resources: { cpu_millis: 100, memory_mb: 64, pids: 64 },
   restart: { policy: "always", max_retries: 0 },
-  network: "openrail-prj_1-env_1",
+  network: "roundhouse-prj_1-env_1",
   labels: {},
   drain_s: 5,
   spec_hash: "0".repeat(64),
@@ -100,7 +100,7 @@ describe("computeSpecHash", () => {
 
   it.each<[string, Partial<WorkloadSpec>]>([
     ["image", { image: "nginx:1.28" }],
-    ["network", { network: "openrail-prj_1-env_2" }],
+    ["network", { network: "roundhouse-prj_1-env_2" }],
     ["command", { command: ["sh"] }],
     ["ports", { ports: [{ container_port: 81, protocol: "http" }] }],
     ["resources", { resources: { cpu_millis: 101, memory_mb: 64, pids: 64 } }],

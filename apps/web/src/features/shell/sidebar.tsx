@@ -9,7 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   KbdHint,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { LogOutIcon, MoonIcon, SunIcon } from "lucide-react";
 import { Brand } from "../../components/brand";

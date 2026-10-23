@@ -13,7 +13,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,

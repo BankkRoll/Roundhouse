@@ -15,7 +15,7 @@ import {
   PROTECTION_RULE_ROLES,
   ROLES,
   VIEWER_DEFAULT_PROJECT_ROLES,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 
 const Millis = z.number().int().openapi({ description: "Unix time in milliseconds" });
 

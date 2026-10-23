@@ -108,8 +108,8 @@ describe("formats", () => {
   it("gives every environment of a project its own network", async () => {
     const prod = await environmentNetworkName("prj_1", "env_prod");
     const staging = await environmentNetworkName("prj_1", "env_staging");
-    expect(prod).toBe("openrail-prj_1-env_prod");
-    expect(staging).toBe("openrail-prj_1-env_staging");
+    expect(prod).toBe("roundhouse-prj_1-env_prod");
+    expect(staging).toBe("roundhouse-prj_1-env_staging");
     expect(prod).not.toBe(staging);
   });
 
@@ -134,22 +134,22 @@ describe("formats", () => {
   });
 
   it.each([
-    ["its environment network", "openrail-prj_1-env_1", true],
-    ["its project's legacy network", "openrail-prj_1", true],
-    ["a sibling environment", "openrail-prj_1-env_2", false],
-    ["another project's environment", "openrail-prj_2-env_1", false],
-    ["another project's legacy network", "openrail-prj_2", false],
+    ["its environment network", "roundhouse-prj_1-env_1", true],
+    ["its project's legacy network", "roundhouse-prj_1", true],
+    ["a sibling environment", "roundhouse-prj_1-env_2", false],
+    ["another project's environment", "roundhouse-prj_2-env_1", false],
+    ["another project's legacy network", "roundhouse-prj_2", false],
     ["host", "host", false],
     ["bridge", "bridge", false],
     ["none", "none", false],
-    ["the system network", "openrail-system", false],
-    ["the build network", "openrail-build", false],
+    ["the system network", "roundhouse-system", false],
+    ["the build network", "roundhouse-build", false],
   ])("decides whether a service may join %s", (_name, network, allowed) => {
     expect(isServiceNetworkAllowed(network, "prj_1", "env_1")).toBe(allowed);
   });
 
   it("names aliases and cache keys", () => {
-    expect(privateServiceAlias("svc_01JAB")).toBe("svc-01jab.openrail.internal");
+    expect(privateServiceAlias("svc_01JAB")).toBe("svc-01jab.roundhouse.internal");
     expect(buildCacheKey("prj_1", "svc_1")).toBe("prj_1.svc_1");
   });
 

@@ -13,7 +13,7 @@ import {
   SealedWorkloadEnvSchema,
   verifyEnvelope,
   workloadEnvAad,
-} from "@openrail/protocol";
+} from "@roundhouse/protocol";
 import {
   type Client,
   eventually,

@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "openrail",
+  "name": "roundhouse",
   "main": "src/index.ts",
   // NOTE: Pinned to the newest date the workerd bundled with
   // @cloudflare/vitest-plugin supports, so tests run with the same runtime
@@ -21,12 +21,12 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "openrail",
+      "database_name": "roundhouse",
       "migrations_dir": "../../packages/db/migrations"
     }
   ],
   // Created on the first deploy if missing, like the D1 database.
-  "r2_buckets": [{ "binding": "LOGS", "bucket_name": "openrail-logs" }],
+  "r2_buckets": [{ "binding": "LOGS", "bucket_name": "roundhouse-logs" }],
   "durable_objects": {
     "bindings": [
       { "name": "NODE_CONNECTION", "class_name": "NodeConnection" },
@@ -40,9 +40,9 @@
     { "tag": "v3", "new_sqlite_classes": ["AuditChain"] }
   ],
   "workflows": [
-    { "name": "openrail-deploy", "binding": "DEPLOY_WORKFLOW", "class_name": "DeployWorkflow" },
+    { "name": "roundhouse-deploy", "binding": "DEPLOY_WORKFLOW", "class_name": "DeployWorkflow" },
     {
-      "name": "openrail-key-rotation",
+      "name": "roundhouse-key-rotation",
       "binding": "KEY_ROTATION_WORKFLOW",
       "class_name": "KeyRotationWorkflow"
     }
@@ -64,7 +64,7 @@
       "simple": { "limit": 300, "period": 60 }
     }
   ],
-  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "openrail_metrics" }],
+  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "roundhouse_metrics" }],
   "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": true }],
   "observability": { "enabled": true }
 }

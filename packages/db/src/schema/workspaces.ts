@@ -10,7 +10,7 @@ import type {
   MemberDefaultProjectRole,
   Role,
   ViewerDefaultProjectRole,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { users } from "./auth";
 import { id, json, timestamp, timestamps } from "./columns";

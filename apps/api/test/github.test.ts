@@ -5,8 +5,8 @@
  * API is replaced by a fetch stub; webhook bodies are recorded payloads.
  */
 import { env, introspectWorkflow } from "cloudflare:test";
-import { createDb } from "@openrail/db";
-import { CREDENTIAL_FRAME_TTL_MS, fromBase64, toBase64 } from "@openrail/protocol";
+import { createDb } from "@roundhouse/db";
+import { CREDENTIAL_FRAME_TTL_MS, fromBase64, toBase64 } from "@roundhouse/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appJwt,
@@ -88,9 +88,9 @@ async function seedApp() {
   const k = await testKeys();
   await storeGithubApp(createDb(env.DB), env, {
     id: APP_ID,
-    slug: "openrail-cp-a1b2c3",
-    name: "OpenRail cp a1b2c3",
-    html_url: "https://github.com/apps/openrail-cp-a1b2c3",
+    slug: "roundhouse-cp-a1b2c3",
+    name: "Roundhouse cp a1b2c3",
+    html_url: "https://github.com/apps/roundhouse-cp-a1b2c3",
     owner: { login: "acme" },
     client_id: "Iv23liAbCdEfGh123456",
     client_secret: "client-secret",
@@ -370,7 +370,7 @@ describe("push → deploy", () => {
     ]);
     expect(statuses[0]!.url).toBe(`https://api.github.com/repos/acme/api/statuses/${push.after}`);
     expect(statuses[0]!.authorization).toBe("Bearer ghs_installationtoken123");
-    expect((statuses[1]!.body as { context: string }).context).toBe("openrail/api/production");
+    expect((statuses[1]!.body as { context: string }).context).toBe("roundhouse/api/production");
     const tokenRequests = recorded.filter((r) => r.url.endsWith("/access_tokens"));
     expect(tokenRequests[0]!.authorization).toMatch(/^Bearer [\w-]+\.[\w-]+\.[\w-]+$/);
     expect(tokenRequests.map((r) => r.body)).toContainEqual({
@@ -486,9 +486,9 @@ describe("App setup", () => {
           Response.json(
             {
               id: APP_ID,
-              slug: "openrail-cp-a1b2c3",
-              name: "OpenRail cp a1b2c3",
-              html_url: "https://github.com/apps/openrail-cp-a1b2c3",
+              slug: "roundhouse-cp-a1b2c3",
+              name: "Roundhouse cp a1b2c3",
+              html_url: "https://github.com/apps/roundhouse-cp-a1b2c3",
               owner: { login: "mara" },
               client_id: "Iv23li",
               client_secret: "cs-secret",
@@ -510,7 +510,7 @@ describe("App setup", () => {
     );
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toMatch(
-      /^https:\/\/github\.com\/apps\/openrail-cp-a1b2c3\/installations\/new\?state=/,
+      /^https:\/\/github\.com\/apps\/roundhouse-cp-a1b2c3\/installations\/new\?state=/,
     );
     const stored = await env.DB.prepare(
       "SELECT value FROM instance_settings WHERE key = 'github_app'",
@@ -529,7 +529,7 @@ describe("App setup", () => {
       app: { slug: string; install_url: string };
     }>(`/v1/github/status?workspace_id=${workspaceId}`);
     expect(status.body.configured).toBe(true);
-    expect(status.body.app.slug).toBe("openrail-cp-a1b2c3");
+    expect(status.body.app.slug).toBe("roundhouse-cp-a1b2c3");
   });
 
   it("binds an installation to the workspace whose install link was used", async () => {

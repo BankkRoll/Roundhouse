@@ -194,7 +194,7 @@ export class HetznerClient {
     this.sleep = options.sleep ?? abortableSleep;
     this.now = options.now ?? Date.now;
     this.random = options.random ?? Math.random;
-    this.userAgent = options.userAgent ?? "openrail-hetzner/0.0.0";
+    this.userAgent = options.userAgent ?? "roundhouse-hetzner/0.0.0";
   }
 
   // ---------------------------------------------------------------------------

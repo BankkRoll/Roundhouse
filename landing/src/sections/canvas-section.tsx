@@ -1,4 +1,4 @@
-import { Badge, cn, Spinner } from "@openrail/ui";
+import { Badge, cn, Spinner } from "@roundhouse/ui";
 import { BoxIcon, DatabaseIcon } from "lucide-react";
 import {
   type CSSProperties,

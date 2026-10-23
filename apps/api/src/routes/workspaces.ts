@@ -4,8 +4,8 @@
  * @module
  */
 import { createRoute, z } from "@hono/zod-openapi";
-import { type Db, users, workspaceMembers, workspaces } from "@openrail/db";
-import type { Role } from "@openrail/shared";
+import { type Db, users, workspaceMembers, workspaces } from "@roundhouse/db";
+import type { Role } from "@roundhouse/shared";
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { clientIp, createRouter, requireUser, requireWorkspace } from "../context";
 import { recordAudit } from "../lib/audit";

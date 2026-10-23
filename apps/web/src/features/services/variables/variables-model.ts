@@ -6,7 +6,7 @@
  *
  * @module
  */
-import { BUILTIN_VARIABLES, parseReferences, SHARED_NAMESPACE } from "@openrail/shared";
+import { BUILTIN_VARIABLES, parseReferences, SHARED_NAMESPACE } from "@roundhouse/shared";
 import type { Variable, VariablesPutBody } from "../../../lib/api/deploy-types";
 
 /** A value staged for a key. */

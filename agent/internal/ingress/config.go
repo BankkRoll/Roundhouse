@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"strings"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // Route sends requests for Host, and paths under PathPrefix, to Upstreams.
@@ -56,7 +56,7 @@ type BuildOptions struct {
 }
 
 // Server is the name of the Caddy server the agent manages.
-const Server = "openrail"
+const Server = "roundhouse"
 
 // BuildConfig returns Caddy's JSON config for c, deterministically: equal
 // inputs give byte-identical output, so its hash detects changes.

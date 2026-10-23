@@ -6,10 +6,10 @@
  * @module
  */
 import { createRoute, type RouteConfig } from "@hono/zod-openapi";
-import type { Action, AuditAction } from "@openrail/shared";
+import type { Action, AuditAction } from "@roundhouse/shared";
 
 /** OpenAPI extension key carrying a route's {@link RoutePolicy}. */
-export const POLICY_KEY = "x-openrail-policy";
+export const POLICY_KEY = "x-roundhouse-policy";
 
 /** How a route authenticates its caller. */
 export type RouteAuth =

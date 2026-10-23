@@ -23,7 +23,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const OFFLINE_BUDGET_MS = 45_000;
 const isWindows = process.platform === "win32";
 
-const work = mkdtempSync(join(tmpdir(), "openrail-smoke-"));
+const work = mkdtempSync(join(tmpdir(), "roundhouse-smoke-"));
 const children = [];
 let failed = false;
 
@@ -127,8 +127,8 @@ try {
   const { token } = await api(`/v1/workspaces/${ws}/nodes/join-tokens`, { method: "POST" });
 
   log("building agent");
-  const agentBin = join(work, isWindows ? "openrail-agent.exe" : "openrail-agent");
-  run("go", ["build", "-o", agentBin, "./agent/cmd/openrail-agent"], { cwd: ROOT });
+  const agentBin = join(work, isWindows ? "roundhouse-agent.exe" : "roundhouse-agent");
+  run("go", ["build", "-o", agentBin, "./agent/cmd/roundhouse-agent"], { cwd: ROOT });
 
   const config = join(work, "agent", "agent.yaml");
   log("joining");

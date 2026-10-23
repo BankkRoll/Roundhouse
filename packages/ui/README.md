@@ -1,7 +1,7 @@
-# @openrail/ui
+# @roundhouse/ui
 
 Dashboard design system: tokens (`src/styles.css`, imported as
-`@openrail/ui/styles.css`), components, and helpers (theme, clipboard, key
+`@roundhouse/ui/styles.css`), components, and helpers (theme, clipboard, key
 sequences).
 
 ```sh

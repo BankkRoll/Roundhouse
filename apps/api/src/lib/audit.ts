@@ -9,8 +9,8 @@
  *
  * @module
  */
-import { auditLogs, type Db } from "@openrail/db";
-import { type AuditAction, type AuditActorType, newId } from "@openrail/shared";
+import { auditLogs, type Db } from "@roundhouse/db";
+import { type AuditAction, type AuditActorType, newId } from "@roundhouse/shared";
 import { sql } from "drizzle-orm";
 
 /** One audited action. */

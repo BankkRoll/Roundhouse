@@ -11,8 +11,8 @@
  * @module
  */
 import "./landing.css";
-import { PRODUCT_NAME } from "@openrail/shared";
-import { cn } from "@openrail/ui";
+import { PRODUCT_NAME } from "@roundhouse/shared";
+import { cn } from "@roundhouse/ui";
 import { useEffect, useState } from "react";
 import { useReducedMotion } from "./hooks";
 import { CanvasSection } from "./sections/canvas-section";

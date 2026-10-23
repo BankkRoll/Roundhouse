@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/state"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/state"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 	"github.com/coder/websocket"
 )
 

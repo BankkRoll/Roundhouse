@@ -5,7 +5,7 @@
 
 ## Context
 
-OpenRail spans a Cloudflare Worker control plane, a Go node agent, an install
+Roundhouse spans a Cloudflare Worker control plane, a Go node agent, an install
 script, and a wire protocol between them. Decisions in one part constrain the
 others, and contributors join at different times. Without a record, the reasons
 behind a decision are lost and get relitigated or quietly broken.

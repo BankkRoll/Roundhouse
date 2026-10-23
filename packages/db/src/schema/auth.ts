@@ -113,7 +113,7 @@ export const twoFactors = sqliteTable(
 
 /**
  * Failed sign-in counter per account, for exponential lockout (see
- * `recordLoginFailure` in `@openrail/shared`). Keyed by a hash of the
+ * `recordLoginFailure` in `@roundhouse/shared`). Keyed by a hash of the
  * normalised email, so unknown emails lock the same way and the table holds
  * no addresses.
  */

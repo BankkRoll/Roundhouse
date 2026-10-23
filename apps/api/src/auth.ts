@@ -4,9 +4,9 @@
  *
  * @module
  */
-import { accounts, type Db, sessions, users, verifications } from "@openrail/db";
-import { toBase64 } from "@openrail/protocol";
-import { isIdKind, newId } from "@openrail/shared";
+import { accounts, type Db, sessions, users, verifications } from "@roundhouse/db";
+import { toBase64 } from "@roundhouse/protocol";
+import { isIdKind, newId } from "@roundhouse/shared";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";

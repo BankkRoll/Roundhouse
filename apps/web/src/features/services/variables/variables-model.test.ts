@@ -171,7 +171,7 @@ describe("reference autocomplete", () => {
     ]);
     const api = referenceSuggestions("api.", catalog, 20).map((s) => s.insert);
     expect(api[0]).toBe("api.API_KEY");
-    expect(api).toContain("api.OPENRAIL_PRIVATE_DOMAIN");
+    expect(api).toContain("api.ROUNDHOUSE_PRIVATE_DOMAIN");
     expect(referenceSuggestions("nope.", catalog)).toEqual([]);
   });
 

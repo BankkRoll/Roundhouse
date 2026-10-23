@@ -28,7 +28,7 @@ const SOURCEMAP_DIR = resolve(import.meta.dirname, "sourcemaps");
  */
 function moveSourcemapsOutOfDist(): Plugin {
   return {
-    name: "openrail:move-sourcemaps-out-of-dist",
+    name: "roundhouse:move-sourcemaps-out-of-dist",
     apply: "build",
     buildStart() {
       rmSync(SOURCEMAP_DIR, { recursive: true, force: true });

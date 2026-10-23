@@ -1,4 +1,4 @@
-import { cn, tabTriggerClasses } from "@openrail/ui";
+import { cn, tabTriggerClasses } from "@roundhouse/ui";
 import { Link } from "@tanstack/react-router";
 import { canManageInstance, usePermissions } from "../../lib/permissions";
 import { useMe } from "../../queries/me";

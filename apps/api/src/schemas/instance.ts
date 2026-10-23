@@ -6,7 +6,7 @@
  * @module
  */
 import { z } from "@hono/zod-openapi";
-import { AUDIT_ACTIONS, AUDIT_ACTOR_TYPES } from "@openrail/shared";
+import { AUDIT_ACTIONS, AUDIT_ACTOR_TYPES } from "@roundhouse/shared";
 
 const Millis = z.number().int().openapi({ description: "Unix time in milliseconds" });
 

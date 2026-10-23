@@ -74,7 +74,7 @@ type SealedBuildSecrets struct {
 
 // BoxInfo returns the HKDF info string of a purpose.
 func BoxInfo(purpose BoxPurpose) string {
-	return "openrail-box:v" + strconv.Itoa(BoxVersion) + ":" + string(purpose)
+	return "roundhouse-box:v" + strconv.Itoa(BoxVersion) + ":" + string(purpose)
 }
 
 // WorkloadEnvAAD returns the AAD of a workload's sealed environment.
@@ -99,7 +99,7 @@ func NodeEncryptionKeyID(publicKey []byte) string {
 // EncryptionKeySignaturePayload returns the bytes a node signs to register
 // its encryption key. Mirrors encryptionKeySignaturePayload in TypeScript.
 func EncryptionKeySignaturePayload(nodeID, publicKeyB64 string) []byte {
-	return []byte("openrail-node-encryption-key:v1:" + nodeID + ":" + publicKeyB64)
+	return []byte("roundhouse-node-encryption-key:v1:" + nodeID + ":" + publicKeyB64)
 }
 
 // NewNodeEncryptionKey signs pub with the node's identity key for [Hello].

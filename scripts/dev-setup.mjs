@@ -27,7 +27,7 @@ if (!key) {
   writeFileSync(vars, next);
 }
 
-const migrate = spawnSync("pnpm", ["--filter", "@openrail/api", "db:migrate:local"], {
+const migrate = spawnSync("pnpm", ["--filter", "@roundhouse/api", "db:migrate:local"], {
   stdio: "inherit",
   shell: process.platform === "win32",
 });

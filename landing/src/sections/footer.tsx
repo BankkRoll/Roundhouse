@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@openrail/shared";
+import { PRODUCT_NAME } from "@roundhouse/shared";
 import { ArrowUpRightIcon, MoonIcon, SunIcon } from "lucide-react";
 import { type MouseEvent, useLayoutEffect, useRef, useState } from "react";
 import {
@@ -189,7 +189,7 @@ export function SiteFooter() {
           href={REPO_URL}
           className="text-foreground underline decoration-muted-foreground underline-offset-2 hover:decoration-foreground"
         >
-          github.com/BankkRoll/Open-Rail
+          github.com/BankkRoll/Roundhouse
         </ExternalLink>
       </div>
     </footer>

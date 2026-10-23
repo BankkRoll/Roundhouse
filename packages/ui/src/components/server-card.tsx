@@ -1,4 +1,4 @@
-import type { NodeStatus } from "@openrail/shared";
+import type { NodeStatus } from "@roundhouse/shared";
 import type { ReactNode } from "react";
 import { cn } from "../lib/cn";
 import { MeterRow, type MeterRowProps } from "./meter";

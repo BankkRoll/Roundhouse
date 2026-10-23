@@ -14,7 +14,7 @@
  *
  * @module
  */
-import { isRole, JOIN_TOKEN_TTL_MS, OFFLINE_AFTER_MS, type Role, slugify } from "@openrail/shared";
+import { isRole, JOIN_TOKEN_TTL_MS, OFFLINE_AFTER_MS, type Role, slugify } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
 import type { AuditLogPage, Invite, Me, Member, Node, Workspace } from "../lib/api/types";
 import {

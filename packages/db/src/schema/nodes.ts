@@ -3,8 +3,8 @@
  *
  * @module
  */
-import type { Capabilities } from "@openrail/protocol";
-import type { NodeStatus } from "@openrail/shared";
+import type { Capabilities } from "@roundhouse/protocol";
+import type { NodeStatus } from "@roundhouse/shared";
 import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { users } from "./auth";
 import { id, json, timestamp, timestamps } from "./columns";

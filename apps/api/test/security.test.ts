@@ -3,8 +3,8 @@
  * names the attack it guards against.
  */
 import { env, runDurableObjectAlarm, runInDurableObject, SELF } from "cloudflare:test";
-import { createDb, type Db } from "@openrail/db";
-import { HEARTBEAT_INTERVAL_MS, OFFLINE_AFTER_MS } from "@openrail/shared";
+import { createDb, type Db } from "@roundhouse/db";
+import { HEARTBEAT_INTERVAL_MS, OFFLINE_AFTER_MS } from "@roundhouse/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { CloseCode } from "../src/durable/node-connection";
 import { errorCodeForStatus } from "../src/lib/errors";

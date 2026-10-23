@@ -26,8 +26,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/api"
-	"github.com/BankkRoll/Open-Rail/cli/internal/varref"
+	"github.com/BankkRoll/Roundhouse/cli/internal/api"
+	"github.com/BankkRoll/Roundhouse/cli/internal/varref"
 )
 
 // Seed data, fixed so golden files are stable.
@@ -145,7 +145,7 @@ func (f *Fake) seed() {
 	}
 	f.vars[varKey(APIServiceID, ProductionID)] = map[string]*variable{
 		"NODE_ENV":     {value: "production", version: 1},
-		"DATABASE_URL": {value: "postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.OPENRAIL_PRIVATE_DOMAIN}}:${{db.PORT}}/shop", version: 2},
+		"DATABASE_URL": {value: "postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.ROUNDHOUSE_PRIVATE_DOMAIN}}:${{db.PORT}}/shop", version: 2},
 		"API_KEY":      {value: SecretValue, secret: true, version: 1},
 		"REGION":       {value: "${{shared.REGION}}", version: 1},
 		"LISTEN":       {value: "0.0.0.0:${{PORT}}", version: 1},

@@ -1,4 +1,4 @@
-import { Button, EmptyState, Skeleton } from "@openrail/ui";
+import { Button, EmptyState, Skeleton } from "@roundhouse/ui";
 import { LockIcon, UserPlusIcon } from "lucide-react";
 import { ErrorState } from "../../components/error-state";
 import { PageHeader } from "../../components/page-header";

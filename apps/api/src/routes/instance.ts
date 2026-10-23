@@ -5,8 +5,8 @@
  *
  * @module
  */
-import { domains } from "@openrail/db";
-import type { InstanceAction } from "@openrail/shared";
+import { domains } from "@roundhouse/db";
+import type { InstanceAction } from "@roundhouse/shared";
 import { and, eq, ne } from "drizzle-orm";
 import { clientIp, createRouter, requireInstanceAction } from "../context";
 import { getInstanceSettings, policyOf, updateInstanceSettings } from "../contracts";

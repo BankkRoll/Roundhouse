@@ -5,7 +5,7 @@
  *
  * @module
  */
-import type { WorkloadState } from "@openrail/protocol";
+import type { WorkloadState } from "@roundhouse/protocol";
 import type {
   BuildStatus,
   DeploymentEventType,
@@ -14,7 +14,7 @@ import type {
   DomainTlsStatus,
   DomainType,
   DomainVerificationStatus,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import {
   type AnySQLiteColumn,
   index,
@@ -106,7 +106,7 @@ export const builds = sqliteTable(
     status: text("status").$type<BuildStatus>().notNull().default("queued"),
     /** Builder node the job was sent to. */
     nodeId: text("node_id").references(() => nodes.id, { onDelete: "set null" }),
-    /** Local-registry repository, see `localImageRepository` in `@openrail/protocol`. */
+    /** Local-registry repository, see `localImageRepository` in `@roundhouse/protocol`. */
     imageRepository: text("image_repository").notNull(),
     /** `sha256:…` from `build_result`, once succeeded. */
     imageDigest: text("image_digest"),

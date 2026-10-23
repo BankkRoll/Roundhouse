@@ -12,7 +12,7 @@ import {
   storeThemePreference,
   THEME_STORAGE_KEY,
   type ThemePreference,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { useSyncExternalStore } from "react";
 
 /** The theme as the page is currently showing it. */

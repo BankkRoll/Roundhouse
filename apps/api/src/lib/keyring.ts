@@ -7,8 +7,8 @@
  *
  * @module
  */
-import { fromBase64 } from "@openrail/protocol";
-import type { VariableScope } from "@openrail/shared";
+import { fromBase64 } from "@roundhouse/protocol";
+import type { VariableScope } from "@roundhouse/shared";
 import { isValidMasterKey } from "./crypto";
 
 const encoder = new TextEncoder();
@@ -56,14 +56,14 @@ export interface Keyring {
 
 /**
  * ID of a master key: the first 8 hex characters of SHA-256 over
- * HKDF-SHA256(key, salt `openrail/v2/kid`, info `kid`, 32 bytes). Derived
+ * HKDF-SHA256(key, salt `roundhouse/v2/kid`, info `kid`, 32 bytes). Derived
  * through HKDF so the ID reveals nothing usable about the key itself.
  *
  * @param base64Key - The master key as configured.
  * @returns 8 lowercase hex characters.
  */
 export async function masterKeyId(base64Key: string): Promise<string> {
-  const derived = await hkdf(fromBase64(base64Key.trim()), "openrail/v2/kid", "kid");
+  const derived = await hkdf(fromBase64(base64Key.trim()), "roundhouse/v2/kid", "kid");
   return hex(await crypto.subtle.digest("SHA-256", derived)).slice(0, 8);
 }
 
@@ -115,7 +115,7 @@ export type KeyPurposeV2 = "kek" | "state-token" | "auth-secret";
 
 /**
  * Derives a purpose-bound 32-byte subkey, format 2: HKDF-SHA256 with salt
- * `openrail/v2/<purpose>` and info `<purpose>`. A salt per purpose (v1 used
+ * `roundhouse/v2/<purpose>` and info `<purpose>`. A salt per purpose (v1 used
  * one salt for all) keeps the derivations independent even if an `info`
  * string is ever reused.
  *
@@ -124,7 +124,7 @@ export type KeyPurposeV2 = "kek" | "state-token" | "auth-secret";
  * @returns Raw subkey bytes.
  */
 export function deriveKeyV2(key: MasterKey, purpose: KeyPurposeV2): Promise<ArrayBuffer> {
-  return hkdf(key.raw, `openrail/v2/${purpose}`, purpose);
+  return hkdf(key.raw, `roundhouse/v2/${purpose}`, purpose);
 }
 
 // -----------------------------------------------------------------------------
@@ -240,7 +240,7 @@ export async function dekId(rawDek: Uint8Array<ArrayBuffer>): Promise<string> {
 
 /**
  * The project's fingerprint key: HKDF-SHA256(DEK, salt
- * `openrail/v2/fingerprint`, info `variable-fingerprint:<project_id>`),
+ * `roundhouse/v2/fingerprint`, info `variable-fingerprint:<project_id>`),
  * imported for HMAC-SHA256.
  *
  * SECURITY: Fingerprints are shown to every reader of a project, viewers
@@ -256,7 +256,7 @@ export async function fingerprintKey(
   rawDek: Uint8Array<ArrayBuffer>,
   projectId: string,
 ): Promise<CryptoKey> {
-  const raw = await hkdf(rawDek, "openrail/v2/fingerprint", `variable-fingerprint:${projectId}`);
+  const raw = await hkdf(rawDek, "roundhouse/v2/fingerprint", `variable-fingerprint:${projectId}`);
   return crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 }
 

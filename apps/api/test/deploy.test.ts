@@ -4,8 +4,8 @@
  * deployment is active, fails, or is cancelled.
  */
 import { env, introspectWorkflow } from "cloudflare:test";
-import { createDb } from "@openrail/db";
-import { BUILD_TIMEOUT_S, canTransition, ROLLOUT_TIMEOUT_MS } from "@openrail/shared";
+import { createDb } from "@roundhouse/db";
+import { BUILD_TIMEOUT_S, canTransition, ROLLOUT_TIMEOUT_MS } from "@roundhouse/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { IllegalTransitionError, transitionDeployment } from "../src/lib/deployments";
 import { rolloutTimeoutMs } from "../src/workflows/deploy";
@@ -43,7 +43,7 @@ describe("image deployments", () => {
     await s.owner.json(`/v1/services/${s.serviceId}/variables?environment_id=${s.envId}`, {
       method: "PUT",
       // biome-ignore lint/suspicious/noTemplateCurlyInString: `${{…}}` is variable-reference syntax, not a template.
-      json: { set: [{ key: "GREETING", value: "hi from ${{OPENRAIL_SERVICE_NAME}}" }] },
+      json: { set: [{ key: "GREETING", value: "hi from ${{ROUNDHOUSE_SERVICE_NAME}}" }] },
     });
     const created = await deploy(s.owner, s.serviceId, s.envId);
     expect(created.status).toBe("queued");
@@ -63,14 +63,14 @@ describe("image deployments", () => {
     expect(workload).toMatchObject({
       kind: "service",
       image: "nginx:1.27",
-      network: `openrail-${s.project.id}-${s.envId}`,
+      network: `roundhouse-${s.project.id}-${s.envId}`,
       ports: [{ container_port: 8080, protocol: "http" }],
     });
     expect(s.agent.env(workload.id)).toMatchObject({
       GREETING: "hi from web",
       PORT: "8080",
-      OPENRAIL_DEPLOYMENT_ID: created.id,
-      OPENRAIL_ENVIRONMENT: "production",
+      ROUNDHOUSE_DEPLOYMENT_ID: created.id,
+      ROUNDHOUSE_ENVIRONMENT: "production",
     });
     expect(s.agent.rejected).toEqual([]);
 
@@ -225,7 +225,7 @@ describe("git deployments", () => {
     expect(job.exp - job.iat).toBeLessThanOrEqual(60_000);
     expect("token" in (job as { source: object }).source).toBe(false);
     const workload = s.agent.desired()!.workloads[0]!;
-    expect(s.agent.env(workload.id)?.OPENRAIL_GIT_COMMIT_SHA).toBe(COMMIT_SHA);
+    expect(s.agent.env(workload.id)?.ROUNDHOUSE_GIT_COMMIT_SHA).toBe(COMMIT_SHA);
     expect(s.agent.desired()!.registry).toEqual({
       listen: "127.0.0.1:5000",
       storage: { type: "filesystem" },

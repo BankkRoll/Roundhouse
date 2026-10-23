@@ -116,9 +116,9 @@ jobs:
           for arch in amd64 arm64; do
             GOARCH="$arch" go build -trimpath \
               -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::12}" \
-              -o "bin/openrail-agent-linux-$arch" ./cmd/openrail-agent
+              -o "bin/roundhouse-agent-linux-$arch" ./cmd/roundhouse-agent
           done
-          file bin/openrail-agent-linux-*
+          file bin/roundhouse-agent-linux-*
 
   protocol-drift:
     name: Protocol schema and fixture drift
@@ -136,13 +136,13 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @openrail/protocol gen:schema
-      - run: pnpm --filter @openrail/protocol gen:fixtures
+      - run: pnpm --filter @roundhouse/protocol gen:schema
+      - run: pnpm --filter @roundhouse/protocol gen:fixtures
       - name: Fail on uncommitted generated changes
         run: |
           git add -N packages/protocol
           if ! git diff --exit-code packages/protocol; then
-            echo "::error::Generated protocol schema/fixtures are stale. Run 'pnpm --filter @openrail/protocol gen:schema' and 'gen:fixtures' and commit the result."
+            echo "::error::Generated protocol schema/fixtures are stale. Run 'pnpm --filter @roundhouse/protocol gen:schema' and 'gen:fixtures' and commit the result."
             exit 1
           fi
 
@@ -162,13 +162,13 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @openrail/db generate
+      - run: pnpm --filter @roundhouse/db generate
       - name: Fail if the schema has ungenerated migrations
         run: |
           changes="$(git status --porcelain --untracked-files=all packages/db/migrations)"
           if [ -n "$changes" ]; then
             echo "$changes"
-            echo "::error::packages/db schema has changes without a migration. Run 'pnpm --filter @openrail/db generate' and commit the result."
+            echo "::error::packages/db schema has changes without a migration. Run 'pnpm --filter @roundhouse/db generate' and commit the result."
             exit 1
           fi
 
@@ -206,10 +206,10 @@ jobs:
           cache-dependency-path: "**/go.sum"
       - run: pnpm install --frozen-lockfile
       - run: node e2e/agent-smoke.mjs
-      - run: pnpm --filter @openrail/web build
-      - run: pnpm --filter @openrail/e2e exec playwright install --with-deps chromium
+      - run: pnpm --filter @roundhouse/web build
+      - run: pnpm --filter @roundhouse/e2e exec playwright install --with-deps chromium
       - name: Browser end-to-end tests
-        run: pnpm --filter @openrail/e2e test:browser
+        run: pnpm --filter @roundhouse/e2e test:browser
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -241,11 +241,11 @@ jobs:
           go-version-file: go.work
           cache-dependency-path: "**/go.sum"
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @openrail/e2e exec playwright install --with-deps chromium
+      - run: pnpm --filter @roundhouse/e2e exec playwright install --with-deps chromium
       - name: Phase 1 end-to-end suite
         env:
           CI: "true"
-        run: pnpm --filter @openrail/e2e test:phase1
+        run: pnpm --filter @roundhouse/e2e test:phase1
       - name: Upload diagnostics
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -275,11 +275,11 @@ jobs:
           fi
           shellcheck --version
           shellcheck "${scripts[@]}"
-      - name: Embedded systemd unit matches install/openrail-agent.service
+      - name: Embedded systemd unit matches install/roundhouse-agent.service
         run: |
-          if ! diff -u install/openrail-agent.service \
+          if ! diff -u install/roundhouse-agent.service \
                <(sed -n "/<<'UNIT'/,/^UNIT$/p" install/install.sh | sed '1d;$d'); then
-            echo "::error::install/install.sh embeds a different unit than install/openrail-agent.service; copy the file into the heredoc."
+            echo "::error::install/install.sh embeds a different unit than install/roundhouse-agent.service; copy the file into the heredoc."
             exit 1
           fi
 
@@ -309,7 +309,7 @@ jobs:
           GOARCH: amd64
         run: |
           go build -trimpath -ldflags "-s -w -X main.version=0.0.0-ci" \
-            -o ../dist/openrail-agent-linux-amd64 ./cmd/openrail-agent
+            -o ../dist/roundhouse-agent-linux-amd64 ./cmd/roundhouse-agent
       - name: Installer pins match the agent's builder
         working-directory: agent
         run: go test -count=1 -run TestInstallScriptPins ./internal/builder/

@@ -15,7 +15,7 @@ import (
 )
 
 func TestRegistryProxyAuthorize(t *testing.T) {
-	p := &registryProxy{repos: map[string]bool{"prj_a/svc_b": true, "openrail-cache/abc": true}}
+	p := &registryProxy{repos: map[string]bool{"prj_a/svc_b": true, "roundhouse-cache/abc": true}}
 	cases := []struct {
 		method, path string
 		ok           bool
@@ -28,7 +28,7 @@ func TestRegistryProxyAuthorize(t *testing.T) {
 		{"POST", "/v2/prj_a/svc_b/blobs/uploads/", true},
 		{"PATCH", "/v2/prj_a/svc_b/blobs/uploads/uuid", true},
 		{"PUT", "/v2/prj_a/svc_b/blobs/uploads/uuid", true},
-		{"GET", "/v2/openrail-cache/abc/manifests/buildcache", true},
+		{"GET", "/v2/roundhouse-cache/abc/manifests/buildcache", true},
 		{"DELETE", "/v2/prj_a/svc_b/manifests/sha256:abc", false},
 		{"DELETE", "/v2/prj_a/svc_b/blobs/sha256:abc", false},
 		{"PUT", "/v2/prj_a/svc_b/blobs/sha256:abc", false},
@@ -128,8 +128,8 @@ func TestRegistryProxyForwarding(t *testing.T) {
 }
 
 func TestSessionAuth(t *testing.T) {
-	a := &sessionAuth{host: "openrail-registry.internal:5001", user: "u", password: "p"}
-	got, err := a.Credentials(context.Background(), &auth.CredentialsRequest{Host: "openrail-registry.internal:5001"})
+	a := &sessionAuth{host: "roundhouse-registry.internal:5001", user: "u", password: "p"}
+	got, err := a.Credentials(context.Background(), &auth.CredentialsRequest{Host: "roundhouse-registry.internal:5001"})
 	if err != nil || got.Username != "u" || got.Secret != "p" {
 		t.Fatalf("own host: %+v %v", got, err)
 	}

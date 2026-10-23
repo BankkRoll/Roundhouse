@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@openrail/shared";
+import { PRODUCT_NAME } from "@roundhouse/shared";
 
 /**
  * Square lime logo mark.

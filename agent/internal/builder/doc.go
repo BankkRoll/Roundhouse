@@ -22,7 +22,7 @@ package builder
 import (
 	"context"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // Builder runs build jobs. Implementations are safe for concurrent use, but

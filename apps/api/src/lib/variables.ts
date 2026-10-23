@@ -10,7 +10,7 @@
  *
  * @module
  */
-import { type Db, projectKeys, services, variables } from "@openrail/db";
+import { type Db, projectKeys, services, variables } from "@roundhouse/db";
 import {
   type ClassificationWarningCode,
   classifyVariable,
@@ -19,7 +19,7 @@ import {
   parseReferences,
   type VariableScope,
   type VariableTier,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   deriveProjectKey,

@@ -58,7 +58,7 @@ export type GithubAccountType = (typeof GITHUB_ACCOUNT_TYPES)[number];
 
 /**
  * Ingress TLS modes, as stored in the `tls_mode` instance setting. Same values
- * as `TLS_MODES` in `@openrail/protocol`.
+ * as `TLS_MODES` in `@roundhouse/protocol`.
  */
 export const TLS_MODES = ["acme", "internal", "off"] as const;
 

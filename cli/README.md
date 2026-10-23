@@ -16,7 +16,7 @@ install -m 0755 roundhouse-linux-amd64 /usr/local/bin/roundhouse
 Or build from source (Go 1.26):
 
 ```sh
-go install github.com/BankkRoll/Open-Rail/cli/cmd/roundhouse@latest
+go install github.com/BankkRoll/Roundhouse/cli/cmd/roundhouse@latest
 cli/scripts/build.sh   # every OS/arch into cli/dist, with SHA256SUMS
 ```
 

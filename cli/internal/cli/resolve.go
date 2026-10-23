@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/api"
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/api"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
 )
 
 // targetFlags name the project, environment and service a command acts on.

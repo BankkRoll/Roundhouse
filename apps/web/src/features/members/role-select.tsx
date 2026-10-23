@@ -1,5 +1,5 @@
-import { ROLES, type Role } from "@openrail/shared";
-import { Select } from "@openrail/ui";
+import { ROLES, type Role } from "@roundhouse/shared";
+import { Select } from "@roundhouse/ui";
 import type { ComponentProps } from "react";
 
 /** Props for {@link RoleSelect}. */

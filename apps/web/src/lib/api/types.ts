@@ -4,7 +4,7 @@
  *
  * @module
  */
-import type { NodeStatus, Role } from "@openrail/shared";
+import type { NodeStatus, Role } from "@roundhouse/shared";
 
 /** Unix epoch milliseconds. */
 export type Millis = number;

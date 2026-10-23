@@ -1,6 +1,6 @@
-# OpenRail
+# Roundhouse
 
-OpenRail is an open-source, self-hosted platform for deploying applications, similar in spirit to Railway. The control plane runs on your own Cloudflare account; your workloads run on your own Linux servers.
+Roundhouse is an open-source, self-hosted platform for deploying applications, similar in spirit to Railway. The control plane runs on your own Cloudflare account; your workloads run on your own Linux servers.
 
 > Early development. Schema, API, and agent protocol may change without notice.
 
@@ -11,7 +11,7 @@ OpenRail is an open-source, self-hosted platform for deploying applications, sim
    ```sh
    pnpm install
    cd apps/api
-   npx wrangler d1 create openrail          # put the id in wrangler.jsonc
+   npx wrangler d1 create roundhouse          # put the id in wrangler.jsonc
    npx wrangler secret put MASTER_KEY       # openssl rand -base64 32
    pnpm run deploy
    ```
@@ -42,7 +42,7 @@ pnpm dev                                           # API :8787, dashboard :5173,
 pnpm lint && pnpm typecheck && pnpm test           # TypeScript
 go test ./agent/... ./packages/protocol/go/...     # Go
 node e2e/agent-smoke.mjs                           # control plane + real agent
-pnpm --filter @openrail/e2e test:browser           # browser end-to-end
+pnpm --filter @roundhouse/e2e test:browser           # browser end-to-end
 ```
 
 ## Layout

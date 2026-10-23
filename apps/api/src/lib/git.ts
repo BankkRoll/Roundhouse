@@ -57,7 +57,7 @@ export async function resolveBranch(
   token?: string,
 ): Promise<string | null> {
   const url = `${repoUrl.replace(/\/+$/, "")}/info/refs?service=git-upload-pack`;
-  const headers: Record<string, string> = { "user-agent": "openrail" };
+  const headers: Record<string, string> = { "user-agent": "roundhouse" };
   if (token) headers.authorization = `Basic ${btoa(`x-access-token:${token}`)}`;
   const res = await fetch(url, { headers, redirect: "follow" });
   if (!res.ok) {

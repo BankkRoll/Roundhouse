@@ -6,15 +6,15 @@ import (
 	"encoding/json"
 	"path/filepath"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // RegistryWorkloadID is the ID of the builder node's registry.
 const RegistryWorkloadID = "sys_registry"
 
 // SystemNetwork is the bridge network system workloads join.
-const SystemNetwork = "openrail-system"
+const SystemNetwork = "roundhouse-system"
 
 // RegistryImage is the CNCF distribution registry the builder node runs.
 //

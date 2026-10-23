@@ -1,7 +1,7 @@
 /**
  * Controls and helpers that only some pages need: switch, slider, segmented control,
  * avatar stack, ANSI terminal text and list windowing. A separate entry point from
- * `@openrail/ui`, so a route-split app loads them with the pages that use them.
+ * `@roundhouse/ui`, so a route-split app loads them with the pages that use them.
  *
  * @module
  */

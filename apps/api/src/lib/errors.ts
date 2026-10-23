@@ -4,12 +4,12 @@
  *
  * @module
  */
-import type { SecurityErrorCode } from "@openrail/shared";
+import type { SecurityErrorCode } from "@roundhouse/shared";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 /**
  * Machine-readable error codes returned in `{ error: { code } }`. The ADR
- * 0014 codes live in `@openrail/shared` so the dashboard and CLI share them.
+ * 0014 codes live in `@roundhouse/shared` so the dashboard and CLI share them.
  */
 export type ErrorCode =
   | SecurityErrorCode

@@ -202,22 +202,22 @@ func LocalImageRepository(projectID, serviceID string) string {
 // longer use it, since one network per project let every environment reach
 // every other one ([EnvironmentNetworkName] replaced it); agents use it to
 // recognise, and remove, the networks Phase 1 left behind.
-func ProjectNetworkName(projectID string) string { return "openrail-" + projectID }
+func ProjectNetworkName(projectID string) string { return "roundhouse-" + projectID }
 
 // MaxNetworkNameLength is the longest network name the protocol accepts.
 const MaxNetworkNameLength = 128
 
 // HashedNetworkPrefix starts the hashed form of [EnvironmentNetworkName].
-const HashedNetworkPrefix = "openrail-env-"
+const HashedNetworkPrefix = "roundhouse-env-"
 
 // EnvironmentNetworkName returns the Docker network one environment of a
-// project joins: "openrail-<project_id>-<environment_id>" when that fits
-// [MaxNetworkNameLength], else "openrail-env-" and the hex SHA-256 of
+// project joins: "roundhouse-<project_id>-<environment_id>" when that fits
+// [MaxNetworkNameLength], else "roundhouse-env-" and the hex SHA-256 of
 // "<project_id>/<environment_id>". Environments never share a network, so a
 // container in one cannot reach another environment by IP or by name.
 // Mirrors environmentNetworkName in TypeScript.
 func EnvironmentNetworkName(projectID, environmentID string) string {
-	readable := "openrail-" + projectID + "-" + environmentID
+	readable := "roundhouse-" + projectID + "-" + environmentID
 	if len(readable) <= MaxNetworkNameLength {
 		return readable
 	}
@@ -227,7 +227,7 @@ func EnvironmentNetworkName(projectID, environmentID string) string {
 
 // ReservedNetworks are networks a service workload may never join: Docker's
 // built-ins and the agent's own.
-var ReservedNetworks = []string{"host", "bridge", "none", "openrail-system", "openrail-build"}
+var ReservedNetworks = []string{"host", "bridge", "none", "roundhouse-system", "roundhouse-build"}
 
 // ServiceNetworkAllowed reports whether a service workload of projectID and
 // environmentID may join network (ADR 0014, H1): only its own environment
@@ -248,7 +248,7 @@ func ServiceNetworkAllowed(network, projectID, environmentID string) bool {
 // can't collide with another service. Mirrors privateServiceAlias in
 // TypeScript.
 func PrivateServiceAlias(serviceID string) string {
-	return strings.ReplaceAll(strings.ToLower(serviceID), "_", "-") + ".openrail.internal"
+	return strings.ReplaceAll(strings.ToLower(serviceID), "_", "-") + ".roundhouse.internal"
 }
 
 // BuildCacheKey returns the BuildKit cache scope of a service's builds.

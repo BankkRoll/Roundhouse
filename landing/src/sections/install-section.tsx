@@ -1,5 +1,5 @@
-import { PRODUCT_NAME } from "@openrail/shared";
-import { ServerCard } from "@openrail/ui";
+import { PRODUCT_NAME } from "@roundhouse/shared";
+import { ServerCard } from "@roundhouse/ui";
 import { CheckIcon } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { JOIN_TOKEN_MINUTES } from "../content";
@@ -7,10 +7,10 @@ import { DEPLOY_URL, INSTALL_COMMAND, MASTER_KEY_COMMAND } from "../links";
 import { buttonClass, CommandLine, ExternalLink, Section } from "../ui";
 
 const RESOURCES = [
-  ["Worker", "openrail", "deployed"],
-  ["D1 database", "openrail", "migrated"],
+  ["Worker", "roundhouse", "deployed"],
+  ["D1 database", "roundhouse", "migrated"],
   ["Durable Object", "NodeConnection", "bound"],
-  ["Analytics Engine", "openrail_metrics", "bound"],
+  ["Analytics Engine", "roundhouse_metrics", "bound"],
 ] as const;
 
 function DeployedFragment() {
@@ -116,10 +116,10 @@ function ConnectedFragment() {
 /** The tail of the installer's output on a fresh server, as `install/install.sh` logs it. */
 const INSTALLER_LOG = [
   "signature and checksum verified for 0.1.0",
-  "joining https://openrail.acme.workers.dev",
+  "joining https://roundhouse.acme.workers.dev",
   "installing Docker Engine from download.docker.com",
   "installing Caddy from the official Cloudsmith repository",
-  "OpenRail agent is running.",
+  "Roundhouse agent is running.",
 ] as const;
 
 function InstallerLog() {

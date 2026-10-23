@@ -10,7 +10,7 @@
  *   variables, access (teams, grants, protection), auth (2FA, re-auth),
  *   instance (admins, workspaces, audit) and keys (rotation).
  *
- * Config part schemas are checked against the `@openrail/shared` types they
+ * Config part schemas are checked against the `@roundhouse/shared` types they
  * store (`satisfies z.ZodType<…>`), so the API, the database and the
  * dashboard can't drift apart.
  *
@@ -29,7 +29,7 @@ import {
   TLS_MODES as PROTOCOL_TLS_MODES,
   type TlsMode as ProtocolTlsMode,
   WORKLOAD_STATES,
-} from "@openrail/protocol";
+} from "@roundhouse/protocol";
 import {
   AUDIT_ACTIONS,
   AUDIT_ACTOR_TYPES,
@@ -58,7 +58,7 @@ import {
   type ServiceSource,
   TLS_MODES,
   type TlsMode,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { VariableKeyField } from "./schemas/variables";
 
 export * from "./schemas/access";
@@ -602,7 +602,7 @@ export const DomainSchema = z
 // -----------------------------------------------------------------------------
 
 /**
- * Ingress TLS mode. `@openrail/shared` and `@openrail/protocol` both define
+ * Ingress TLS mode. `@roundhouse/shared` and `@roundhouse/protocol` both define
  * the values; the two `satisfies` checks fail the build if they drift apart.
  */
 export const TlsModeSchema = z

@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // statusBoard holds the latest status of every workload and queues every

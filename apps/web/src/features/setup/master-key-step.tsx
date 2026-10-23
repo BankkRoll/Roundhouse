@@ -1,4 +1,4 @@
-import { Button, CodeBlock } from "@openrail/ui";
+import { Button, CodeBlock } from "@roundhouse/ui";
 import { RefreshCwIcon } from "lucide-react";
 import { MASTER_KEY_COMMAND } from "../../lib/master-key";
 

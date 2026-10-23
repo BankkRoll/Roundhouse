@@ -64,10 +64,10 @@ and config version; it skips the build.
 
 `desired_state.workloads[]` is the complete list for the node. The agent
 converges Docker to it: it creates what is missing, recreates what changed
-(by spec hash), and removes containers labelled `openrail.managed=true` that
+(by spec hash), and removes containers labelled `roundhouse.managed=true` that
 are no longer listed. Containers run with `no-new-privileges`, all
 capabilities dropped except those listed, a PID limit, and memory/CPU limits.
-Each project gets a Docker bridge network `openrail-<project_id>`.
+Each project gets a Docker bridge network `roundhouse-<project_id>`.
 
 The agent reports `workload_status` on every change and with each hello.
 Runtime logs ship as batched `logs` frames (at most 64 KiB, flushed every
@@ -99,9 +99,9 @@ reach that registry: the builder itself, or any node once the WireGuard mesh
 
 Values are encrypted with a per-project data key (AES-256-GCM), itself
 sealed by the master-derived KEK. References `${{service.VAR}}`,
-`${{shared.VAR}}`, and built-ins (`PORT`, `OPENRAIL_PUBLIC_DOMAIN`,
-`OPENRAIL_PRIVATE_DOMAIN`, `OPENRAIL_ENVIRONMENT`, `OPENRAIL_GIT_COMMIT_SHA`,
-`OPENRAIL_SERVICE_NAME`, `OPENRAIL_DEPLOYMENT_ID`) are resolved only when
+`${{shared.VAR}}`, and built-ins (`PORT`, `ROUNDHOUSE_PUBLIC_DOMAIN`,
+`ROUNDHOUSE_PRIVATE_DOMAIN`, `ROUNDHOUSE_ENVIRONMENT`, `ROUNDHOUSE_GIT_COMMIT_SHA`,
+`ROUNDHOUSE_SERVICE_NAME`, `ROUNDHOUSE_DEPLOYMENT_ID`) are resolved only when
 building a node's desired state. Cycles and unknown references are errors at
 deploy time. Secret values never appear in API responses unless explicitly
 revealed (audited) and never in logs: the control plane redacts known

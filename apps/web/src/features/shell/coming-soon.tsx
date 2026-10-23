@@ -1,4 +1,4 @@
-import { EmptyState } from "@openrail/ui";
+import { EmptyState } from "@roundhouse/ui";
 import { SparklesIcon } from "lucide-react";
 import { PageHeader } from "../../components/page-header";
 import { UPCOMING, type UpcomingFeature } from "./upcoming";

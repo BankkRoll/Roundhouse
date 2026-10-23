@@ -1,6 +1,6 @@
-import { VARIABLE_NAME_RE } from "@openrail/shared";
-import { Badge, Button, copyText, EmptyState, Input, Label, Skeleton, toast } from "@openrail/ui";
-import { Switch } from "@openrail/ui/controls";
+import { VARIABLE_NAME_RE } from "@roundhouse/shared";
+import { Badge, Button, copyText, EmptyState, Input, Label, Skeleton, toast } from "@roundhouse/ui";
+import { Switch } from "@roundhouse/ui/controls";
 import { useQueries } from "@tanstack/react-query";
 import {
   CheckIcon,

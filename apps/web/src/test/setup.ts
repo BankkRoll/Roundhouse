@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { clearToasts } from "@openrail/ui";
+import { clearToasts } from "@roundhouse/ui";
 import { act, cleanup, configure } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { resetDb } from "../mocks/db";

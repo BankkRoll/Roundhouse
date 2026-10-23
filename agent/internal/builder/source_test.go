@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 const testToken = "ghs_unitTestToken_ABCDEFGHIJKLMNOP"

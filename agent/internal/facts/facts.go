@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
@@ -47,7 +47,7 @@ type Static struct {
 func Collect(ctx context.Context) (Static, error) {
 	arch := protocol.Arch(runtime.GOARCH)
 	if !arch.Valid() {
-		return Static{}, fmt.Errorf("unsupported architecture %q: OpenRail nodes must be amd64 or arm64", runtime.GOARCH)
+		return Static{}, fmt.Errorf("unsupported architecture %q: Roundhouse nodes must be amd64 or arm64", runtime.GOARCH)
 	}
 
 	hostname, err := os.Hostname()

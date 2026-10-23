@@ -22,7 +22,7 @@ import {
   parseReferences,
   ROLLBACK_SOURCE_STATUSES,
   slugify,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { HttpResponse, http, ws } from "msw";
 import { PHASE1_ROUTES, policyOf } from "../../../api/src/contracts";
 import type {
@@ -1322,7 +1322,7 @@ export const deployHandlers = [
       : "https://github.com/settings/apps/new";
     return HttpResponse.json({
       manifest: {
-        name: `OpenRail (${new URL(origin).hostname})`,
+        name: `Roundhouse (${new URL(origin).hostname})`,
         url: origin,
         hook_attributes: { url: `${origin}/v1/webhooks/github` },
         redirect_url: `${origin}/v1/github/callback`,
@@ -1364,10 +1364,10 @@ export const deployHandlers = [
       db.deploy.github.states = db.deploy.github.states.filter((row) => row !== pending);
       db.deploy.github.app = {
         id: 900_001,
-        slug: "openrail-mock",
-        name: "OpenRail (mock)",
-        html_url: "https://github.com/apps/openrail-mock",
-        install_url: "https://github.com/apps/openrail-mock/installations/new",
+        slug: "roundhouse-mock",
+        name: "Roundhouse (mock)",
+        html_url: "https://github.com/apps/roundhouse-mock",
+        install_url: "https://github.com/apps/roundhouse-mock/installations/new",
       };
       recordAudit({
         workspaceId: pending.workspace_id,

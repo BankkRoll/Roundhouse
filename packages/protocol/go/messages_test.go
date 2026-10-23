@@ -28,7 +28,7 @@ func validSpec() WorkloadSpec {
 		Routes:        []WorkloadRoute{{Hostname: "web.example.com", ContainerPort: 8080}},
 		Resources:     Resources{CPUMillis: 250, MemoryMB: 256, PIDs: 128},
 		Restart:       Restart{Policy: RestartAlways},
-		Network:       "openrail-prj_1-env_1",
+		Network:       "roundhouse-prj_1-env_1",
 		Labels:        map[string]string{},
 		DrainS:        10,
 		SpecHash:      strings.Repeat("0", 64),
@@ -105,14 +105,14 @@ func TestWorkloadSpecValidate(t *testing.T) {
 		"service without box":   func(w *WorkloadSpec) { w.EnvSealed = nil },
 		"box with bad kid":      func(w *WorkloadSpec) { w.EnvSealed.KID = "nope" },
 		"box of v2":             func(w *WorkloadSpec) { w.EnvSealed.V = 2 },
-		"other env network":     func(w *WorkloadSpec) { w.Network = "openrail-prj_1-env_2" },
-		"other project network": func(w *WorkloadSpec) { w.Network = "openrail-prj_2-env_1" },
-		"other project legacy":  func(w *WorkloadSpec) { w.Network = "openrail-prj_2" },
+		"other env network":     func(w *WorkloadSpec) { w.Network = "roundhouse-prj_1-env_2" },
+		"other project network": func(w *WorkloadSpec) { w.Network = "roundhouse-prj_2-env_1" },
+		"other project legacy":  func(w *WorkloadSpec) { w.Network = "roundhouse-prj_2" },
 		"host network":          func(w *WorkloadSpec) { w.Network = "host" },
 		"bridge network":        func(w *WorkloadSpec) { w.Network = "bridge" },
 		"none network":          func(w *WorkloadSpec) { w.Network = "none" },
-		"system network":        func(w *WorkloadSpec) { w.Network = "openrail-system" },
-		"build network":         func(w *WorkloadSpec) { w.Network = "openrail-build" },
+		"system network":        func(w *WorkloadSpec) { w.Network = "roundhouse-system" },
+		"build network":         func(w *WorkloadSpec) { w.Network = "roundhouse-build" },
 		"foreign local image":   func(w *WorkloadSpec) { w.Image = "127.0.0.1:5000/prj_1/svc_2@sha256:" + strings.Repeat("a", 64) },
 		"tagged local image":    func(w *WorkloadSpec) { w.Image = "127.0.0.1:5000/prj_1/svc_1:latest" },
 		"unknown kind":          func(w *WorkloadSpec) { w.Kind = "job" },
@@ -431,7 +431,7 @@ func TestComputeSpecHashExclusions(t *testing.T) {
 	}
 	changed := map[string]func(*WorkloadSpec){
 		"image":   func(w *WorkloadSpec) { w.Image = "nginx:1.28" },
-		"network": func(w *WorkloadSpec) { w.Network = "openrail-prj_1-env_2" },
+		"network": func(w *WorkloadSpec) { w.Network = "roundhouse-prj_1-env_2" },
 		"command": func(w *WorkloadSpec) { w.Command = []string{"sh"} },
 		"replica": func(w *WorkloadSpec) { w.Replica = 1 },
 	}
@@ -477,7 +477,7 @@ func TestIsSafeRelativePath(t *testing.T) {
 func TestEnvironmentNetworkName(t *testing.T) {
 	prod := EnvironmentNetworkName("prj_1", "env_prod")
 	staging := EnvironmentNetworkName("prj_1", "env_staging")
-	if prod != "openrail-prj_1-env_prod" || staging == prod {
+	if prod != "roundhouse-prj_1-env_prod" || staging == prod {
 		t.Errorf("got %q and %q", prod, staging)
 	}
 	long := EnvironmentNetworkName("prj_"+strings.Repeat("a", 64), "env_"+strings.Repeat("b", 64))
@@ -488,17 +488,17 @@ func TestEnvironmentNetworkName(t *testing.T) {
 
 func TestServiceNetworkAllowed(t *testing.T) {
 	for network, want := range map[string]bool{
-		"openrail-prj_1-env_1":  true,
-		"openrail-prj_1":        true,
-		"openrail-prj_1-env_2":  false,
-		"openrail-prj_2-env_1":  false,
-		"openrail-prj_2":        false,
+		"roundhouse-prj_1-env_1":  true,
+		"roundhouse-prj_1":        true,
+		"roundhouse-prj_1-env_2":  false,
+		"roundhouse-prj_2-env_1":  false,
+		"roundhouse-prj_2":        false,
 		"host":                  false,
 		"bridge":                false,
 		"none":                  false,
-		"openrail-system":       false,
-		"openrail-build":        false,
-		"openrail-env-deadbeef": false,
+		"roundhouse-system":       false,
+		"roundhouse-build":        false,
+		"roundhouse-env-deadbeef": false,
 	} {
 		if got := ServiceNetworkAllowed(network, "prj_1", "env_1"); got != want {
 			t.Errorf("ServiceNetworkAllowed(%q) = %v, want %v", network, got, want)

@@ -147,7 +147,7 @@ func IsSafeGitRef(ref string) bool {
 }
 
 // IsPrivateDomain reports whether s is a private alias of the form
-// <service>.<environment>.internal, as the openrail.private_domain label
+// <service>.<environment>.internal, as the roundhouse.private_domain label
 // carries. Agents ignore labels that fail it.
 func IsPrivateDomain(s string) bool { return privateDomainRE.MatchString(s) }
 

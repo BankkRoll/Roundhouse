@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
 )
 
 func TestNonInteractivePromptsFail(t *testing.T) {

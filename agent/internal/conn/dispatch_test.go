@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/leaktest"
-	"github.com/BankkRoll/Open-Rail/agent/internal/state"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/leaktest"
+	"github.com/BankkRoll/Roundhouse/agent/internal/state"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // fakeHandler records dispatched messages and accepts desired states the
@@ -238,7 +238,7 @@ func TestDropsDesiredStateOnAForeignNetwork(t *testing.T) {
 
 	future := time.Now().Add(time.Minute)
 	gen := int64(1)
-	for _, network := range []string{"openrail-prj_2-env_1", "openrail-prj_2", "openrail-prj_1-env_2", "host", "bridge", "none", "openrail-system", "openrail-build"} {
+	for _, network := range []string{"roundhouse-prj_2-env_1", "roundhouse-prj_2", "roundhouse-prj_1-env_2", "host", "bridge", "none", "roundhouse-system", "roundhouse-build"} {
 		bad := desired("m_bad_"+network, gen, future)
 		bad.Workloads = []protocol.WorkloadSpec{serviceOn(network)}
 		cp.push(t, priv, bad)

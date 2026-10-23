@@ -1,4 +1,4 @@
-import { ActivityItem, Card, CardContent, CardHeader, CardTitle, Skeleton } from "@openrail/ui";
+import { ActivityItem, Card, CardContent, CardHeader, CardTitle, Skeleton } from "@roundhouse/ui";
 import { Link } from "@tanstack/react-router";
 import { formatAgo, formatTimestamp } from "../../lib/format";
 import { usePermissions } from "../../lib/permissions";

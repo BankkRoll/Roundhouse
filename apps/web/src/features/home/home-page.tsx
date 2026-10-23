@@ -1,4 +1,4 @@
-import { Button, SectionLabel, Tooltip } from "@openrail/ui";
+import { Button, SectionLabel, Tooltip } from "@roundhouse/ui";
 import { PlusIcon } from "lucide-react";
 import { PageHeader } from "../../components/page-header";
 import { usePermissions } from "../../lib/permissions";

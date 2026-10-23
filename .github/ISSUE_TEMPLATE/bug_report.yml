@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in OpenRail does not work as documented.
+description: Something in Roundhouse does not work as documented.
 labels: [bug, triage]
 body:
   - type: markdown
@@ -41,7 +41,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: Control plane commit or release, and `openrail-agent --version` if relevant.
+      description: Control plane commit or release, and `roundhouse-agent --version` if relevant.
     validations:
       required: true
   - type: input
@@ -53,5 +53,5 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: Relevant output from `journalctl -u openrail-agent`, `wrangler tail`, or the browser console. Remove secrets and tokens.
+      description: Relevant output from `journalctl -u roundhouse-agent`, `wrangler tail`, or the browser console. Remove secrets and tokens.
       render: text

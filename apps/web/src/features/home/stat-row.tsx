@@ -1,4 +1,4 @@
-import { Meter, Skeleton, StatCard } from "@openrail/ui";
+import { Meter, Skeleton, StatCard } from "@roundhouse/ui";
 import { useQueries } from "@tanstack/react-query";
 import { EMPTY, formatPercent } from "../../lib/format";
 import { useNodes } from "../../queries/nodes";

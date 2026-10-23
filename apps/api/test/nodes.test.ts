@@ -1,6 +1,6 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { type DesiredState, EnvelopeSchema, verifyEnvelope } from "@openrail/protocol";
-import { OFFLINE_AFTER_MS } from "@openrail/shared";
+import { type DesiredState, EnvelopeSchema, verifyEnvelope } from "@roundhouse/protocol";
+import { OFFLINE_AFTER_MS } from "@roundhouse/shared";
 import { describe, expect, it } from "vitest";
 import { CloseCode } from "../src/durable/node-connection";
 import {

@@ -208,11 +208,11 @@ func TestContainerLifecycleRequests(t *testing.T) {
 	f.handle("POST /containers/abc123/stop", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 	f.handle("DELETE /containers/abc123", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 	f.handle("GET /containers/json", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, 200, []ContainerSummary{{ID: "abc123", State: "running", Labels: map[string]string{"openrail.managed": "true"}}})
+		writeJSON(w, 200, []ContainerSummary{{ID: "abc123", State: "running", Labels: map[string]string{"roundhouse.managed": "true"}}})
 	})
 	ctx := context.Background()
 	pids := int64(64)
-	id, err := c.CreateContainer(ctx, "openrail-wl", ContainerCreate{
+	id, err := c.CreateContainer(ctx, "roundhouse-wl", ContainerCreate{
 		Image:      "busybox",
 		HostConfig: HostConfig{CapDrop: []string{"ALL"}, PidsLimit: &pids, RestartPolicy: RestartPolicy{Name: "no"}},
 	})
@@ -220,7 +220,7 @@ func TestContainerLifecycleRequests(t *testing.T) {
 		t.Fatalf("create = %q, %v", id, err)
 	}
 	r, body := f.last()
-	if r.URL.Query().Get("name") != "openrail-wl" || !strings.Contains(body, `"PidsLimit":64`) || !strings.Contains(body, `"CapDrop":["ALL"]`) {
+	if r.URL.Query().Get("name") != "roundhouse-wl" || !strings.Contains(body, `"PidsLimit":64`) || !strings.Contains(body, `"CapDrop":["ALL"]`) {
 		t.Fatalf("create request %v %s", r.URL, body)
 	}
 	if err := c.StartContainer(ctx, id); err != nil {
@@ -241,11 +241,11 @@ func TestContainerLifecycleRequests(t *testing.T) {
 	if err := c.RemoveContainer(ctx, "gone"); err != nil {
 		t.Fatalf("removing a missing container: %v", err)
 	}
-	list, err := c.ListContainers(ctx, "openrail.managed=true")
+	list, err := c.ListContainers(ctx, "roundhouse.managed=true")
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list = %v, %v", list, err)
 	}
-	if r, _ := f.last(); r.URL.Query().Get("filters") != `{"label":["openrail.managed=true"]}` || r.URL.Query().Get("all") != "1" {
+	if r, _ := f.last(); r.URL.Query().Get("filters") != `{"label":["roundhouse.managed=true"]}` || r.URL.Query().Get("all") != "1" {
 		t.Fatalf("list query = %v", r.URL.Query())
 	}
 }
@@ -255,17 +255,17 @@ func TestNetworks(t *testing.T) {
 	f.handle("POST /networks/create", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, 201, map[string]string{"Id": "net1"})
 	})
-	f.handle("GET /networks/openrail-prj", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, 200, Network{ID: "net1", Name: "openrail-prj", Driver: "bridge"})
+	f.handle("GET /networks/roundhouse-prj", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, 200, Network{ID: "net1", Name: "roundhouse-prj", Driver: "bridge"})
 	})
 	f.handle("POST /networks/net1/connect", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	f.handle("GET /networks", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, []Network{{ID: "net1"}}) })
 	ctx := context.Background()
-	id, err := c.CreateNetwork(ctx, NetworkCreate{Name: "openrail-prj", Driver: "bridge"})
+	id, err := c.CreateNetwork(ctx, NetworkCreate{Name: "roundhouse-prj", Driver: "bridge"})
 	if err != nil || id != "net1" {
 		t.Fatalf("create = %q, %v", id, err)
 	}
-	n, err := c.InspectNetwork(ctx, "openrail-prj")
+	n, err := c.InspectNetwork(ctx, "roundhouse-prj")
 	if err != nil || n.ID != "net1" {
 		t.Fatalf("inspect = %+v, %v", n, err)
 	}
@@ -275,7 +275,7 @@ func TestNetworks(t *testing.T) {
 	if _, body := f.last(); !strings.Contains(body, `"Container":"ctr"`) {
 		t.Fatalf("connect body %s", body)
 	}
-	if ns, err := c.ListNetworks(ctx, "openrail.managed=true"); err != nil || len(ns) != 1 {
+	if ns, err := c.ListNetworks(ctx, "roundhouse.managed=true"); err != nil || len(ns) != 1 {
 		t.Fatalf("list = %v, %v", ns, err)
 	}
 }

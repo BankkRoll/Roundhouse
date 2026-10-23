@@ -1,4 +1,4 @@
-import { cn, Input, Skeleton } from "@openrail/ui";
+import { cn, Input, Skeleton } from "@roundhouse/ui";
 import { LockIcon, SearchIcon } from "lucide-react";
 import { useId, useState } from "react";
 import type { GithubRepository } from "../../../lib/api/deploy-types";
@@ -57,7 +57,7 @@ export function RepoPicker({ repositories, loading, selectedId, onSelect }: Repo
           <p className="p-3 text-sm text-muted-foreground">
             {repositories?.length
               ? "No repositories match."
-              : "No repositories are shared with OpenRail yet."}
+              : "No repositories are shared with Roundhouse yet."}
           </p>
         ) : (
           shown.map((repo) => {

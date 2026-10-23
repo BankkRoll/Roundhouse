@@ -5,7 +5,7 @@
  *
  * Syntax, inside any variable value:
  * - `${{api.DATABASE_URL}}`: variable `DATABASE_URL` of the service with slug `api`,
- *   or one of its built-ins (`${{db.OPENRAIL_PRIVATE_DOMAIN}}`);
+ *   or one of its built-ins (`${{db.ROUNDHOUSE_PRIVATE_DOMAIN}}`);
  * - `${{shared.REGION}}`: shared variable `REGION` of the environment;
  * - `${{PORT}}`: a variable of the same service (or of `shared`, inside a
  *   shared value), falling back to the service's built-ins;
@@ -20,12 +20,12 @@
 /** Variables the control plane injects into every service. */
 export const BUILTIN_VARIABLES = [
   "PORT",
-  "OPENRAIL_PUBLIC_DOMAIN",
-  "OPENRAIL_PRIVATE_DOMAIN",
-  "OPENRAIL_ENVIRONMENT",
-  "OPENRAIL_GIT_COMMIT_SHA",
-  "OPENRAIL_SERVICE_NAME",
-  "OPENRAIL_DEPLOYMENT_ID",
+  "ROUNDHOUSE_PUBLIC_DOMAIN",
+  "ROUNDHOUSE_PRIVATE_DOMAIN",
+  "ROUNDHOUSE_ENVIRONMENT",
+  "ROUNDHOUSE_GIT_COMMIT_SHA",
+  "ROUNDHOUSE_SERVICE_NAME",
+  "ROUNDHOUSE_DEPLOYMENT_ID",
 ] as const;
 
 /** A built-in variable name; see {@link BUILTIN_VARIABLES}. */
@@ -218,9 +218,9 @@ const utf8Length = (s: string): number => {
  * @example
  * resolveVariables({
  *   service: "api",
- *   services: { api: { DB: "${{db.OPENRAIL_PRIVATE_DOMAIN}}" }, db: {} },
+ *   services: { api: { DB: "${{db.ROUNDHOUSE_PRIVATE_DOMAIN}}" }, db: {} },
  *   shared: {},
- *   builtins: { api: { PORT: "8080" }, db: { OPENRAIL_PRIVATE_DOMAIN: "db.internal" } },
+ *   builtins: { api: { PORT: "8080" }, db: { ROUNDHOUSE_PRIVATE_DOMAIN: "db.internal" } },
  * });
  * // { ok: true, env: { PORT: "8080", DB: "db.internal" } }
  */

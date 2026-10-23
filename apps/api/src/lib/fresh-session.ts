@@ -9,8 +9,8 @@
  *
  * @module
  */
-import { sessions } from "@openrail/db";
-import { isFreshSession, REAUTH_WINDOW_MS } from "@openrail/shared";
+import { sessions } from "@roundhouse/db";
+import { isFreshSession, REAUTH_WINDOW_MS } from "@roundhouse/shared";
 import { eq } from "drizzle-orm";
 import { type AppContext, authFor } from "../context";
 import { ApiError } from "./errors";

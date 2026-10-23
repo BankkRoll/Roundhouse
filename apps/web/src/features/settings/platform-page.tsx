@@ -1,4 +1,4 @@
-import { LOCAL_APPS_DOMAIN, type TlsMode } from "@openrail/shared";
+import { LOCAL_APPS_DOMAIN, type TlsMode } from "@roundhouse/shared";
 import {
   Badge,
   Button,
@@ -13,7 +13,7 @@ import {
   Select,
   Skeleton,
   toast,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { ExternalLinkIcon, ShieldIcon } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { ErrorState } from "../../components/error-state";
@@ -161,7 +161,7 @@ function CreateAppForm({ workspaceId }: { workspaceId: string }) {
   return (
     <form onSubmit={onSubmit} noValidate className="grid gap-3" aria-label="Create GitHub App">
       <p className="text-sm text-muted-foreground">
-        OpenRail creates a private GitHub App for this instance with read access to code and push
+        Roundhouse creates a private GitHub App for this instance with read access to code and push
         events. You confirm it on GitHub, then install it on the accounts whose repositories you
         want to deploy. Public repositories work without it.
       </p>

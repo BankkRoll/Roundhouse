@@ -1,5 +1,5 @@
 {
-  "name": "@openrail/e2e",
+  "name": "@roundhouse/e2e",
   "version": "0.0.0",
   "private": true,
   "type": "module",

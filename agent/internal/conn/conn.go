@@ -26,9 +26,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/clock"
-	"github.com/BankkRoll/Open-Rail/agent/internal/state"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/clock"
+	"github.com/BankkRoll/Roundhouse/agent/internal/state"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 	"github.com/coder/websocket"
 )
 
@@ -186,7 +186,7 @@ func (c *Client) Run(ctx context.Context) error {
 		}
 		delay := retryDelay(b, err)
 		if errors.Is(err, errUnauthorized) {
-			c.Logger.Error("control plane rejected this node's credential; the node may have been removed. Re-join with `openrail-agent join --force`",
+			c.Logger.Error("control plane rejected this node's credential; the node may have been removed. Re-join with `roundhouse-agent join --force`",
 				"err", err, "retry_in", delay)
 		} else if isAgentOutdated(err) {
 			c.Logger.Error("control plane no longer supports this agent's protocol version; upgrade with `install.sh --upgrade`",

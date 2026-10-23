@@ -17,7 +17,7 @@ import type {
   ServiceSource,
   VariableScope,
   VariableTier,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { users } from "./auth";

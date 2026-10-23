@@ -28,7 +28,7 @@
  * @module
  */
 import { type RouteConfig, z } from "@hono/zod-openapi";
-import { SERVICE_KINDS } from "@openrail/shared";
+import { SERVICE_KINDS } from "@roundhouse/shared";
 import { ACCESS_ROUTES } from "./contracts/access";
 import { AUTH_ROUTES } from "./contracts/auth";
 import { INSTANCE_ROUTES } from "./contracts/instance";

@@ -26,7 +26,7 @@ const server = http.createServer(async (req, res) => {
     JSON.stringify({
       version: VERSION,
       greeting: process.env.GREETING ?? null,
-      deployment_id: process.env.OPENRAIL_DEPLOYMENT_ID ?? null,
+      deployment_id: process.env.ROUNDHOUSE_DEPLOYMENT_ID ?? null,
     }),
   );
 });

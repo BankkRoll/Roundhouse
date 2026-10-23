@@ -19,8 +19,8 @@
  * @module
  */
 import { DurableObject } from "cloudflare:workers";
-import { createDb, workspaceMembers } from "@openrail/db";
-import type { LogLine, LogSource } from "@openrail/protocol";
+import { createDb, workspaceMembers } from "@roundhouse/db";
+import type { LogLine, LogSource } from "@roundhouse/protocol";
 import { and, eq } from "drizzle-orm";
 import type { Env } from "../env";
 import {
@@ -30,7 +30,7 @@ import {
 } from "../schemas";
 
 /** Header carrying the authenticated viewer as JSON (`RoomViewer`). */
-export const ROOM_VIEWER_HEADER = "x-openrail-viewer";
+export const ROOM_VIEWER_HEADER = "x-roundhouse-viewer";
 
 /** Sockets one user may hold open on one project (tabs, windows). */
 export const MAX_SOCKETS_PER_USER = 8;

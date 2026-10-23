@@ -9,8 +9,8 @@
  *
  * @module
  */
-import { type Db, instanceSettings } from "@openrail/db";
-import { fromBase64, toBase64 } from "@openrail/protocol";
+import { type Db, instanceSettings } from "@roundhouse/db";
+import { fromBase64, toBase64 } from "@roundhouse/protocol";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import type { Sealed } from "./crypto";
@@ -295,7 +295,7 @@ export async function githubRequest<T>(
     headers: {
       accept: "application/vnd.github+json",
       "x-github-api-version": "2022-11-28",
-      "user-agent": "openrail",
+      "user-agent": "roundhouse",
       ...(init.auth ? { authorization: `Bearer ${init.auth}` } : {}),
       ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
     },

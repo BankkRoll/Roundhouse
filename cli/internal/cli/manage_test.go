@@ -9,9 +9,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/apitest"
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
-	"github.com/BankkRoll/Open-Rail/cli/internal/ui"
+	"github.com/BankkRoll/Roundhouse/cli/internal/apitest"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/ui"
 )
 
 func TestProjects(t *testing.T) {

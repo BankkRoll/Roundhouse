@@ -3,7 +3,7 @@
 //
 // Responsibilities:
 //   - diff the desired workloads (plus the agent's own system workloads)
-//     against the containers labelled openrail.managed=true, every 5 s and
+//     against the containers labelled roundhouse.managed=true, every 5 s and
 //     immediately on a new generation or a container event;
 //   - create what is missing, recreate what changed (by spec hash) and
 //     remove what is no longer wanted, in zero-downtime order: the new
@@ -28,9 +28,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	"github.com/BankkRoll/Open-Rail/agent/internal/ingress"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // Docker is the subset of the engine API the runtime uses; *docker.Client
@@ -103,7 +103,7 @@ type Options struct {
 	// GC configures image garbage collection; see [GCOptions].
 	GC GCOptions
 	// Namespace, when set, restricts the runtime to containers labelled
-	// openrail.namespace=<Namespace> and labels the ones it creates so.
+	// roundhouse.namespace=<Namespace> and labels the ones it creates so.
 	// Integration tests use it to stay clear of everything else on the host.
 	Namespace string
 }

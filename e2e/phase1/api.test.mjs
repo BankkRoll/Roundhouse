@@ -247,7 +247,7 @@ describe("Phase 1 on the real stack", () => {
     log("step 2", `node ${node.id} online; waiting for sys_registry and sys_buildkitd`);
     await waitFor(
       "the registry system workload",
-      async () => (await running("openrail.workload_id=sys_registry")).length === 1,
+      async () => (await running("roundhouse.workload_id=sys_registry")).length === 1,
       { timeoutMs: 180_000 },
     );
     evidence("2. node: join as a builder and come online", { node_id: node.id });
@@ -307,7 +307,7 @@ describe("Phase 1 on the real stack", () => {
     const mark = vars.variables.find((v) => v.key === "WHOAMI_MARK").value;
     const env = await viaCaddy(S.whoami.host, "/?env=true");
     assert.match(env.body, new RegExp(`WHOAMI_MARK=${mark}`), "variable reached the container");
-    assert.match(env.body, new RegExp(`OPENRAIL_DEPLOYMENT_ID=${d.id}`), "built-ins reached it");
+    assert.match(env.body, new RegExp(`ROUNDHOUSE_DEPLOYMENT_ID=${d.id}`), "built-ins reached it");
     evidence("3. image source: deploy traefik/whoami and reach it through Caddy", {
       deployment: d.id,
       host: S.whoami.host,
@@ -339,7 +339,7 @@ describe("Phase 1 on the real stack", () => {
       // biome-ignore lint/suspicious/noTemplateCurlyInString: variable-reference syntax.
       { key: "GREETING", value: "${{whoami.GREETING_SOURCE}} v1" },
       // biome-ignore lint/suspicious/noTemplateCurlyInString: variable-reference syntax.
-      { key: "PEER_URL", value: "http://${{whoami.OPENRAIL_PRIVATE_DOMAIN}}:80/" },
+      { key: "PEER_URL", value: "http://${{whoami.ROUNDHOUSE_PRIVATE_DOMAIN}}:80/" },
       { key: "API_TOKEN", value: SECRET, is_secret: true },
     ]);
 
@@ -402,7 +402,7 @@ describe("Phase 1 on the real stack", () => {
   });
 
   step("5. zero-downtime redeploy after a variable change", async () => {
-    const before = await running(`openrail.deployment_id=${S.app.v1}`);
+    const before = await running(`roundhouse.deployment_id=${S.app.v1}`);
     assert.equal(before.length, 1);
     const stop = await startLoop(S.app.host);
     let summary;
@@ -420,7 +420,7 @@ describe("Phase 1 on the real stack", () => {
       log("step 5", "active; waiting for the old container to drain and go");
       await waitFor(
         "the old container to be removed after draining",
-        async () => (await containersWithLabel(`openrail.deployment_id=${S.app.v1}`)).length === 0,
+        async () => (await containersWithLabel(`roundhouse.deployment_id=${S.app.v1}`)).length === 0,
         { timeoutMs: 60_000 },
       );
     } finally {
@@ -533,7 +533,7 @@ describe("Phase 1 on the real stack", () => {
       assert.equal(res.status, 200, "previous whoami still serving");
       await waitFor(
         "the failed deployment's container to be removed",
-        async () => (await containersWithLabel(`openrail.deployment_id=${d.id}`)).length === 0,
+        async () => (await containersWithLabel(`roundhouse.deployment_id=${d.id}`)).length === 0,
         { timeoutMs: 60_000 },
       );
       await patchService(S.whoami.id, { networking: { port: 80 } });
@@ -666,8 +666,8 @@ describe("Phase 1 on the real stack", () => {
   });
 
   step("9. agent restart: workloads keep serving and desired state is resent", async () => {
-    const appBefore = await running(`openrail.service_id=${S.app.id}`);
-    const whoamiBefore = await running(`openrail.service_id=${S.whoami.id}`);
+    const appBefore = await running(`roundhouse.service_id=${S.app.id}`);
+    const whoamiBefore = await running(`roundhouse.service_id=${S.whoami.id}`);
     assert.equal(appBefore.length, 1);
     assert.equal(whoamiBefore.length, 1);
     const stop = await startLoop(S.app.host);
@@ -705,12 +705,12 @@ describe("Phase 1 on the real stack", () => {
     );
     assert.equal(summary.failed, 0, JSON.stringify(summary.failures));
     assert.deepEqual(
-      await running(`openrail.service_id=${S.app.id}`),
+      await running(`roundhouse.service_id=${S.app.id}`),
       appBefore,
       "app container kept",
     );
     assert.deepEqual(
-      await running(`openrail.service_id=${S.whoami.id}`),
+      await running(`roundhouse.service_id=${S.whoami.id}`),
       whoamiBefore,
       "whoami container kept",
     );
@@ -728,7 +728,7 @@ describe("Phase 1 on the real stack", () => {
     log("step 10", "whoami deleted; waiting for its containers and route to go");
     await waitFor(
       "whoami's containers to be removed",
-      async () => (await containersWithLabel(`openrail.service_id=${S.whoami.id}`)).length === 0,
+      async () => (await containersWithLabel(`roundhouse.service_id=${S.whoami.id}`)).length === 0,
       { timeoutMs: 60_000 },
     );
     const gone = await waitFor(

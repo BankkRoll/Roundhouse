@@ -24,7 +24,7 @@ type Event struct {
 }
 
 // Events streams engine events matching filters (e.g. {"type":
-// ["container"], "label": ["openrail.managed=true"]}) until ctx ends or the
+// ["container"], "label": ["roundhouse.managed=true"]}) until ctx ends or the
 // connection drops. fn is called for each event in order. It returns nil
 // when ctx is cancelled.
 func (c *Client) Events(ctx context.Context, filters map[string][]string, fn func(Event)) error {

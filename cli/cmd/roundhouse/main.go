@@ -18,7 +18,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/cli"
+	"github.com/BankkRoll/Roundhouse/cli/internal/cli"
 )
 
 // version and commit are set at build time with

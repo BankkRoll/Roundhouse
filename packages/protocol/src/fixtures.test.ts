@@ -77,7 +77,7 @@ describe("shared fixtures", () => {
     const { cases } = fixture("network-names.json") as {
       cases: { project_id: string; environment_id: string; network: string }[];
     };
-    expect(cases.some((c) => c.network.startsWith("openrail-env-"))).toBe(true);
+    expect(cases.some((c) => c.network.startsWith("roundhouse-env-"))).toBe(true);
     for (const c of cases) {
       expect(await environmentNetworkName(c.project_id, c.environment_id)).toBe(c.network);
     }

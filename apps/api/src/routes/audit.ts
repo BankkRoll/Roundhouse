@@ -5,7 +5,7 @@
  * @module
  */
 import { createRoute, z } from "@hono/zod-openapi";
-import { auditLogs, nodes, users } from "@openrail/db";
+import { auditLogs, nodes, users } from "@roundhouse/db";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import { createRouter, requireWorkspace } from "../context";
 import { AuditLogSchema, errors, json, sessionAuth, WorkspaceParams } from "../schemas";

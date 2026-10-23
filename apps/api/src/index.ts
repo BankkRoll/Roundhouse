@@ -104,7 +104,7 @@ app.openAPIRegistry.registerComponent("securitySchemes", SESSION_SCHEME, {
 
 app.doc31("/v1/openapi.json", {
   openapi: "3.1.0",
-  info: { title: "OpenRail API", version: API_VERSION },
+  info: { title: "Roundhouse API", version: API_VERSION },
 });
 
 app.notFound((c) => c.json(errorBody("not_found", "No such endpoint"), 404));

@@ -1,4 +1,4 @@
-import { Button, Input } from "@openrail/ui";
+import { Button, Input } from "@roundhouse/ui";
 import { PlusIcon, XIcon } from "lucide-react";
 
 /** One editable pair. */

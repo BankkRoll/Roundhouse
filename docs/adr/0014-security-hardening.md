@@ -224,7 +224,7 @@ join and GitHub manifest/callback URLs, the agent `connect_url`, and the
 same-origin guard. `publicOrigin(c)` in `lib/origin.ts` returns it
 normalised (scheme, host, port; no path or trailing slash). When it is
 unset, requests fail with 503 `public_origin_missing`, except with
-`OPENRAIL_DEV=1`, where the request origin is used. The API tests set
+`ROUNDHOUSE_DEV=1`, where the request origin is used. The API tests set
 `PUBLIC_ORIGIN=https://cp.test` in `vitest.config.ts`. (`originOf` already
 delegates to `publicOrigin`; the stub still returns the request origin.)
 
@@ -383,7 +383,7 @@ without a value.
 
 `variables.fingerprint` = first 8 hex of HMAC-SHA256(fingerprint key, UTF-8
 raw value); fingerprint key = HKDF-SHA256(DEK, salt
-`openrail/v2/fingerprint`, info `variable-fingerprint:<project_id>`).
+`roundhouse/v2/fingerprint`, info `variable-fingerprint:<project_id>`).
 Computed for both tiers; shown to every reader with `updated_at` and
 `updated_by`. **HMAC, not a plain hash**: fingerprints are visible to
 viewers and stored in D1, and a bare hash of a short or guessable secret can
@@ -472,9 +472,9 @@ refuses v2: the crypto stream lifts that).
 - `MASTER_KEY`: current key (base64, ≥ 32 bytes). `MASTER_KEYS_PREVIOUS`:
   optional comma-separated earlier keys, newest first.
 - `kid(key)` = first 8 hex of SHA-256(HKDF-SHA256(key, salt
-  `openrail/v2/kid`, info `kid`, 32 bytes)). Pinned: key `"a"×32` →
+  `roundhouse/v2/kid`, info `kid`, 32 bytes)). Pinned: key `"a"×32` →
   `ce6bd2cb`.
-- v2 subkeys: HKDF-SHA256(key, salt `openrail/v2/<purpose>`, info
+- v2 subkeys: HKDF-SHA256(key, salt `roundhouse/v2/<purpose>`, info
   `<purpose>`, 32 bytes) for `kek`, `state-token`, `auth-secret`. A salt per
   purpose keeps derivations independent.
 - The Better Auth secret is derived from the _current_ key: rotating signs
@@ -545,7 +545,7 @@ nor a stolen signing key's _past_ frames expose them.
   `encryption_key_id` and `encryption_key_registered_at` (done at join).
 - Nodes that joined earlier send `hello.encryption_key = { public_key, kid,
   sig }`, `sig` = the identity key's Ed25519 signature over
-  `openrail-node-encryption-key:v1:<node_id>:<public_key>`
+  `roundhouse-node-encryption-key:v1:<node_id>:<public_key>`
   (`encryptionKeySignaturePayload`). The control plane verifies it with
   `nodes.identity_public_key` (`verifyNodeEncryptionKey`) and stores it
   **only when the node has none** (audits `node.encryption_key_registered`);
@@ -560,7 +560,7 @@ esk, epk   = fresh X25519 keypair
 shared     = X25519(esk, recipient_pk)            // all-zero → reject
 okm        = HKDF-SHA256(ikm = shared,
                          salt = epk ‖ recipient_pk (64 bytes),
-                         info = "openrail-box:v1:" + purpose,
+                         info = "roundhouse-box:v1:" + purpose,
                          L = 44)
 key, nonce = okm[0:32], okm[32:44]
 ct         = AES-256-GCM(key, nonce, plaintext, aad = UTF-8(aad)) ‖ 16-byte tag
@@ -574,8 +574,8 @@ a generic failure.
 
 | Purpose         | AAD                                                                 | Plaintext                                             |
 | --------------- | ------------------------------------------------------------------- | ----------------------------------------------------- |
-| `workload-env`  | `openrail-box:v1:workload-env:<node_id>:<workload_id>:<generation>` | `{"env":{…},"files":{…}}` (`SealedWorkloadEnvSchema`) |
-| `build-secrets` | `openrail-box:v1:build-secrets:<node_id>:<build_id>`                | `{"secrets":{…}}` (`SealedBuildSecretsSchema`)        |
+| `workload-env`  | `roundhouse-box:v1:workload-env:<node_id>:<workload_id>:<generation>` | `{"env":{…},"files":{…}}` (`SealedWorkloadEnvSchema`) |
+| `build-secrets` | `roundhouse-box:v1:build-secrets:<node_id>:<build_id>`                | `{"secrets":{…}}` (`SealedBuildSecretsSchema`)        |
 
 `files` holds `mount_as_file` variables; a key is in `env` or `files`, not
 both; together they obey the env limits (256 keys, 64 KiB).
@@ -624,7 +624,7 @@ fixtures.
   scheduler and builder choice must skip such nodes too (TODO, crypto
   stream; `it.todo` in `agent-protocol.test.ts`).
 - `ws://`: the agent keeps `--insecure`, but refuses to apply workloads or
-  builds received over `ws://` unless `OPENRAIL_DEV=1` (it still connects
+  builds received over `ws://` unless `ROUNDHOUSE_DEV=1` (it still connects
   and reports).
 
 #### On the node
@@ -634,8 +634,8 @@ container's `config.v2.json` show it to root on the node; root on a node is
 trusted with that node's workloads. For variables that shouldn't sit there,
 `mount_as_file` (opt-in, decided: in scope) delivers the value as
 `/run/secrets/<KEY>` instead: the agent writes it to
-`/run/openrail/secrets/<workload_id>/<KEY>` on the host tmpfs (`/run`;
-`/run/openrail/secrets` is 0700 root, the per-workload directory 0755,
+`/run/roundhouse/secrets/<workload_id>/<KEY>` on the host tmpfs (`/run`;
+`/run/roundhouse/secrets` is 0700 root, the per-workload directory 0755,
 files 0444), and bind-mounts the per-workload directory read-only at
 `/run/secrets`; it deletes the directory with the container.
 `docker inspect` shows only the mount path. No `_FILE` variable is injected;
@@ -649,8 +649,8 @@ including its hashed long-name form and `fixtures/network-names.json`.
 Every replica of a project environment joins
 `environmentNetworkName(project_id, environment_id)`, and only that network.
 Containers move networks once on upgrade (their spec hash changes), and the
-agent's GC removes the unused `openrail-*` networks it created.
-`OPENRAIL_PRIVATE_DOMAIN` keeps its `<service>.<environment>.internal` form.
+agent's GC removes the unused `roundhouse-*` networks it created.
+`ROUNDHOUSE_PRIVATE_DOMAIN` keeps its `<service>.<environment>.internal` form.
 
 **Change to ADR 0003.** 0003 says the agent "does not second-guess
 `network`". That was true while one control-plane bug could only misplace a
@@ -660,12 +660,12 @@ local registry (H1). The agent therefore accepts, for a service workload,
 only:
 1. the network computed from the workload's own `project_id` and
    `environment_id`, or
-2. during the one migration rollout, the legacy `openrail-<project_id>` of
+2. during the one migration rollout, the legacy `roundhouse-<project_id>` of
    the same project.
 
 Everything else is rejected in protocol validation in both languages, and
 again in the runtime. That covers `host`, `bridge`, `none`,
-`openrail-system`, `openrail-build` (`RESERVED_NETWORKS`), and other
+`roundhouse-system`, `roundhouse-build` (`RESERVED_NETWORKS`), and other
 projects' and other environments' networks. 0003's concern still holds: the
 agent never rewrites `network`, it only refuses. A control plane that isn't
 upgraded yet sends form 1 or 2, so nothing splits.
@@ -680,7 +680,7 @@ upgraded yet sends form 1 or 2, so nothing splits.
   those credentials, never run from the local cache (a cached private image
   could otherwise be reused by a project without access).
 - **H3**: one BuildKit daemon per project (state in
-  `/var/lib/openrail/buildkit/<project_id lowercased>`), started on demand,
+  `/var/lib/roundhouse/buildkit/<project_id lowercased>`), started on demand,
   stopped after 10 idle minutes, at most 2 running (LRU). BuildKit cache
   mounts can't be scoped by tenant, so separate daemons are the only real
   isolation. `build_job` now carries `project_id` and `service_id`;
@@ -691,8 +691,8 @@ upgraded yet sends form 1 or 2, so nothing splits.
   `unconfined`; build daemons get memory (default 4 GiB), CPU (default 2
   cores) and pids (4096) limits; workload limits come from the spec as
   before. The agent installs, idempotently at start, `DOCKER-USER` rules
-  rejecting `169.254.169.254` and `fd00:ec2::254` from every `openrail-*`
-  bridge, including `openrail-build`, where build daemons run (not on the
+  rejecting `169.254.169.254` and `fd00:ec2::254` from every `roundhouse-*`
+  bridge, including `roundhouse-build`, where build daemons run (not on the
   host network).
 - **M1**: Railpack and `git` run with an allowlisted environment (`PATH`,
   `HOME`, `TMPDIR`, `BUILDKIT_HOST`, and what the job supplies); nothing
@@ -706,7 +706,7 @@ upgraded yet sends form 1 or 2, so nothing splits.
   message. (The control plane's unique hostnames should make this
   unreachable.)
 - **M4**: every replica answers to `privateServiceAlias(service_id)`
-  (`svc-01j….openrail.internal`). The `openrail.private_domain` label alias
+  (`svc-01j….roundhouse.internal`). The `roundhouse.private_domain` label alias
   is registered only when it passes `IsPrivateDomain` and no other workload
   on the network claims it (lowest workload ID wins).
 - Opens `env_sealed` per workload for each frame's generation; a box that
@@ -769,7 +769,7 @@ trigger is bounded.
   columns is what prevents forks. It's poked with `waitUntil` after audited
   requests and runs an alarm every minute.
 - `hash` = lowercase hex SHA-256 of UTF-8
-  `JSON.stringify(["openrail-audit:v1", seq, prev_hash, id, workspace_id,
+  `JSON.stringify(["roundhouse-audit:v1", seq, prev_hash, id, workspace_id,
   actor_type, actor_id, action, target_type, target_id, metadata, ip,
   created_at])`, where `metadata` is the column's stored text (or `null`)
   and `created_at` the stored integer, so verification needs no canonical
@@ -872,7 +872,7 @@ top of that:
    work only for users who meet the same bar, and OAuth/MCP tokens never
    (as 0012 says).
 2. **What.** The agent execs only into containers that carry its own
-   `openrail.namespace` and the frame's `workload_id`. It never execs into
+   `roundhouse.namespace` and the frame's `workload_id`. It never execs into
    system containers (`sys_*`, BuildKit daemons, Caddy, the registry). It
    always uses the container's configured user, never `Privileged` or
    added capabilities. `command` is validated as an argv array of at most
@@ -976,7 +976,7 @@ check the environment; `listGithubRepositories` takes `project_id` (with:
 removal, invite creation, join-token creation → fresh; `/v1/me` adds
 `user.instance_admin` (done). Removed: both `…/variables/reveal` routes.
 
-Error codes added (`SECURITY_ERROR_CODES` in `@openrail/shared`, part of the
+Error codes added (`SECURITY_ERROR_CODES` in `@roundhouse/shared`, part of the
 API's `ErrorCode`): `two_factor_required`, `reauth_required`,
 `account_locked`, `confirmation_required`, `public_prefix_secret_value`,
 `tier_locked`, `value_required`, `build_arg_secret`,

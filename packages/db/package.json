@@ -1,5 +1,5 @@
 {
-  "name": "@openrail/db",
+  "name": "@roundhouse/db",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,8 +11,8 @@
     "generate": "drizzle-kit generate"
   },
   "dependencies": {
-    "@openrail/protocol": "workspace:*",
-    "@openrail/shared": "workspace:*",
+    "@roundhouse/protocol": "workspace:*",
+    "@roundhouse/shared": "workspace:*",
     "drizzle-orm": "^0.45.4"
   },
   "devDependencies": {

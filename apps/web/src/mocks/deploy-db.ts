@@ -8,7 +8,7 @@
  *
  * @module
  */
-import { defaultServiceConfig, type ServiceSource } from "@openrail/shared";
+import { defaultServiceConfig, type ServiceSource } from "@roundhouse/shared";
 import type {
   Build,
   Deployment,
@@ -424,7 +424,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
   const webVariables: [string, string, boolean][] = [
     ["DATABASE_URL", "postgres://store:hunter2@db.internal:5432/store", true],
     ["NODE_ENV", "production", false],
-    ["API_URL", `http://\${{api.OPENRAIL_PRIVATE_DOMAIN}}:8080`, false],
+    ["API_URL", `http://\${{api.ROUNDHOUSE_PRIVATE_DOMAIN}}:8080`, false],
     ["SESSION_SECRET", "s3cr3t-session-key-0123456789", true],
     ["REGION", `\${{shared.REGION}}`, false],
   ];
@@ -665,10 +665,10 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
     github: {
       app: {
         id: 912_345,
-        slug: "openrail-acme",
-        name: "OpenRail (acme)",
-        html_url: "https://github.com/apps/openrail-acme",
-        install_url: "https://github.com/apps/openrail-acme/installations/new?state=ins_state",
+        slug: "roundhouse-acme",
+        name: "Roundhouse (acme)",
+        html_url: "https://github.com/apps/roundhouse-acme",
+        install_url: "https://github.com/apps/roundhouse-acme/installations/new?state=ins_state",
       },
       installations: [
         {
