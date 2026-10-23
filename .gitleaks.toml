@@ -2,7 +2,7 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Intentional test fixtures, fakes and placeholders"
 paths = [
   '''apps/api/vitest\.config\.ts''',
@@ -17,6 +17,20 @@ paths = [
   '''_test\.go$''',
   '''cli/internal/apitest/''',
   '''packages/protocol/scripts/gen-fixtures.ts''',
+  # Test-only package: seals to RFC 7748's published example key (Bob).
+  '''^agent/internal/sealtest/''',
 ]
-# Drizzle column references, not values: `r2Key: logChunks.r2Key`.
+
+[[allowlists]]
+description = "Drizzle column references, not values: `r2Key: logChunks.r2Key`"
 regexes = ['''^logChunks.r2Key$''']
+
+[[allowlists]]
+# install/install-cli.sh pins release-signing public keys. An Ed25519 public
+# key in SPKI DER always starts with the same 12 bytes (base64
+# "MCowBQYDK2VwAyEA") followed by the 32-byte key, 44 bytes in all; a private
+# key (PKCS#8) has a different prefix and length, so nothing secret matches.
+# No path condition: gitleaks skips a file outright when a global allowlist's
+# paths match it, whatever the condition, which would hide real leaks there.
+description = "Ed25519 public keys (SPKI DER, base64)"
+regexes = ['''^MCowBQYDK2VwAyEA[A-Za-z0-9+/]{43}=$''']
