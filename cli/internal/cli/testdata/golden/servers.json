@@ -8,6 +8,7 @@
     "region": null,
     "provider_server_id": null,
     "provider_server_missing_at": null,
+    "workloads_blocked": null,
     "public_ip": "203.0.113.10",
     "os": "linux",
     "arch": "amd64",

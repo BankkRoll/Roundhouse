@@ -327,23 +327,26 @@ type Node struct {
 	ProviderServerID *string `json:"provider_server_id"`
 	// ProviderServerMissingAt is when the provider first reported that
 	// server gone, in Unix milliseconds.
-	ProviderServerMissingAt *int64          `json:"provider_server_missing_at"`
-	PublicIP                *string         `json:"public_ip"`
-	OS                      *string         `json:"os"`
-	Arch                    *string         `json:"arch"`
-	Kernel                  *string         `json:"kernel"`
-	DockerVersion           *string         `json:"docker_version"`
-	AgentVersion            *string         `json:"agent_version"`
-	Capabilities            json.RawMessage `json:"capabilities"`
-	CPUTotal                *float64        `json:"cpu_total"`
-	MemTotal                *float64        `json:"mem_total"`
-	DiskTotal               *float64        `json:"disk_total"`
-	CPUPercent              *float64        `json:"cpu_percent"`
-	MemUsed                 *float64        `json:"mem_used"`
-	DiskUsed                *float64        `json:"disk_used"`
-	Load1                   *float64        `json:"load1"`
-	LastHeartbeatAt         *int64          `json:"last_heartbeat_at"`
-	CreatedAt               int64           `json:"created_at"`
+	ProviderServerMissingAt *int64 `json:"provider_server_missing_at"`
+	// WorkloadsBlocked says why the node gets no workloads or builds
+	// ("upgrade_agent" or "no_encryption_key"); nil when it can run them.
+	WorkloadsBlocked *string         `json:"workloads_blocked"`
+	PublicIP         *string         `json:"public_ip"`
+	OS               *string         `json:"os"`
+	Arch             *string         `json:"arch"`
+	Kernel           *string         `json:"kernel"`
+	DockerVersion    *string         `json:"docker_version"`
+	AgentVersion     *string         `json:"agent_version"`
+	Capabilities     json.RawMessage `json:"capabilities"`
+	CPUTotal         *float64        `json:"cpu_total"`
+	MemTotal         *float64        `json:"mem_total"`
+	DiskTotal        *float64        `json:"disk_total"`
+	CPUPercent       *float64        `json:"cpu_percent"`
+	MemUsed          *float64        `json:"mem_used"`
+	DiskUsed         *float64        `json:"disk_used"`
+	Load1            *float64        `json:"load1"`
+	LastHeartbeatAt  *int64          `json:"last_heartbeat_at"`
+	CreatedAt        int64           `json:"created_at"`
 }
 
 // JoinToken is a single-use node join token and the command that uses it.

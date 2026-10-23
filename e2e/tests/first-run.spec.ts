@@ -171,8 +171,8 @@ test.describe
       await expect(dialog.getByText(`pnpm dev:node ${token}`)).toBeVisible();
       await shot(page, "07c-add-server-this-computer");
       await audit(page, "add server: this computer");
-      await dialog.getByRole("tab", { name: "This computer" }).press("ArrowRight");
-      await expect(dialog.getByRole("tab", { name: /Hetzner/ })).toBeFocused();
+      await dialog.getByRole("tab", { name: "This computer" }).press("ArrowLeft");
+      await expect(dialog.getByRole("tab", { name: "Cloud-init" })).toBeFocused();
       await expect(page.getByRole("tooltip")).toContainText("Coming soon");
       await shot(page, "07d-add-server-hetzner-soon");
       await dialog.getByRole("tab", { name: "Linux server" }).click();

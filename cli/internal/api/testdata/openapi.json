@@ -1718,6 +1718,17 @@
               "maintenance"
             ],
             "type": "string"
+          },
+          "workloads_blocked": {
+            "enum": [
+              "upgrade_agent",
+              "no_encryption_key",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1735,6 +1746,7 @@
           "kernel",
           "docker_version",
           "agent_version",
+          "workloads_blocked",
           "capabilities",
           "cpu_total",
           "mem_total",

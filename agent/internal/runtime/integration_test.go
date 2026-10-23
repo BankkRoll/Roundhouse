@@ -103,14 +103,7 @@ func newHarness(t *testing.T) *harness {
 	// The upstream DNS server runs in the test process, as in the agent;
 	// Caddy reaches it on the test container's address.
 	self := dockertest.IP(t, c, dockertest.Self(t, c), h.network)
-	pc, err := net.ListenPacket("udp", self+":0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln, err := net.Listen("tcp", pc.LocalAddr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
+	pc, ln := listenDNS(t, self)
 	ing := ingress.New(ingress.Options{
 		AdminURL:   "http://" + h.caddy + ":2019",
 		Build:      ingress.BuildOptions{AdminListen: "0.0.0.0:2019", Resolver: pc.LocalAddr().String()},
@@ -527,4 +520,24 @@ echo "ISOLATED"
 	if r.ExitCode == nil || *r.ExitCode != 0 || !strings.Contains(out, "OWN_OK") || !strings.Contains(out, "ISOLATED") {
 		t.Fatalf("exit %v; a production container reached staging or not even production:\n%s", r.ExitCode, out)
 	}
+}
+
+// listenDNS opens UDP and TCP listeners on one port of host. The UDP port is
+// picked by the kernel, so another process may already hold the same TCP
+// port; retry with a fresh one instead of failing the test.
+func listenDNS(t *testing.T, host string) (net.PacketConn, net.Listener) {
+	t.Helper()
+	for range 20 {
+		pc, err := net.ListenPacket("udp", host+":0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln, err := net.Listen("tcp", pc.LocalAddr().String())
+		if err == nil {
+			return pc, ln
+		}
+		pc.Close()
+	}
+	t.Fatal("no port free for both UDP and TCP")
+	return nil, nil
 }
