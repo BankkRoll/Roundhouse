@@ -57,6 +57,27 @@ This writes `.roundhouse/config.json` (IDs only, no secrets) and offers to
 add it to `.gitignore`. Commands find the link from any subdirectory; flags
 such as `--service` and `--environment` override it per command.
 
+## Templates
+
+```sh
+roundhouse templates list
+roundhouse templates show n8n
+roundhouse templates deploy n8n --input WEBHOOK_URL=https://n8n.example.com --yes
+roundhouse templates deploy whoami --linked --environment staging --no-deploy
+roundhouse init --template n8n --input ADMIN_PASSWORD=- --yes < password.txt
+```
+
+`templates deploy` creates a project from a template (`--name`, `--slug`,
+`--workspace`) and starts each service's first deployment unless
+`--no-deploy` is given. With `--linked`, `--project` or `--environment` it
+adds the services to that project instead. `--input KEY=VALUE` sets an
+input (`-` reads stdin); required inputs left out are asked for on a
+terminal, secret ones without echo, and fail with exit 12 in scripts.
+Generated and secret variables are write-only, so the CLI asks first;
+`--yes` confirms. `templates show` lists them by name only. A template
+needing a feature the control plane lacks exits 6. `init --template` does
+the same as a new-project deploy and links the directory.
+
 ## Deploy and follow
 
 ```sh
@@ -157,9 +178,12 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `vars [get\|set\|unset\|import\|export]`            | Service (or `--shared`) variables                        |
 | `run -- <cmd>`                                      | Run a local command with the service's variables         |
 | `projects list\|create\|delete`                     | Projects; deletes need the typed slug                    |
+| `templates list\|show\|deploy`                      | Built-in templates; deploy as a new project or into one  |
 | `services list\|create\|delete`                     | Services; deletes need the typed slug                    |
 | `domain [--all]`                                    | The service's domains                                    |
 | `servers list\|add [--provider]`                    | Servers; `add` prints the install command, or provisions |
+| `servers remove <server> [--keep-server] [-y]`      | Remove a server; deletes a provisioned cloud server too  |
+| `servers cancel <provision-id> [--no-wait]`         | Cancel a provisioning run and delete what it created     |
 | `tokens list\|create\|revoke`                       | Workspace API tokens for CI and scripts                  |
 | `version`, `completion`                             | Build info, shell completion                             |
 | `up`, `shell`, `db connect`                         | Not available on the control plane yet (exit 10)         |
@@ -167,6 +191,27 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 Every command takes `--json`, `--profile`, `--no-input`, `--no-color` and
 `--debug` (HTTP traces with credentials redacted). Run
 `roundhouse <command> --help` for flags and examples.
+
+### Cloud servers
+
+`servers add --provider hetzner` creates a server on a provider connected in
+the dashboard and waits until it joins. Ctrl-C only stops watching: the
+server is still being created, and the CLI prints the
+`roundhouse servers cancel <provision-id>` command that stops the run,
+revokes its join token and deletes whatever it created.
+
+`servers list` shows an estimated monthly cost for servers Roundhouse
+provisioned, and a total per currency. The figure is the plan's price in the
+provider's catalogue when the server was created: it leaves out traffic,
+backups, taxes and later price changes, so the provider's invoice is what
+counts.
+
+`servers remove <server>` asks for confirmation (pass `-y` in scripts; without
+a TTY it is a usage error otherwise). For a provisioned server it deletes the
+cloud server as well, unless `--keep-server` is given. If the provider is no
+longer connected the API refuses with `provider_not_connected` and keeps the
+server listed: reconnect the provider, or pass `--keep-server` and delete the
+cloud server in the provider's console.
 
 ## Scripting
 

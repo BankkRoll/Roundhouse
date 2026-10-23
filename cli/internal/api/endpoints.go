@@ -39,10 +39,16 @@ var (
 	RouteProviderOffers  = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/providers/{provider}/offers"}
 	RouteProvisionNode   = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/nodes/provision"}
 	RouteNodeProvision   = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/node-provisions/{provisionId}"}
+	RouteCancelProvision = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/node-provisions/{provisionId}/cancel"}
+	RouteRemoveNode      = Route{http.MethodDelete, "/v1/workspaces/{workspaceId}/nodes/{nodeId}"}
 	RouteRealtime        = Route{http.MethodGet, "/v1/projects/{projectId}/realtime"}
 	RouteListTokens      = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/tokens"}
 	RouteCreateToken     = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/tokens"}
 	RouteRevokeToken     = Route{http.MethodDelete, "/v1/workspaces/{workspaceId}/tokens/{tokenId}"}
+	RouteListTemplates   = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/templates"}
+	RouteGetTemplate     = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/templates/{templateId}"}
+	RouteFromTemplate    = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/projects/from-template"}
+	RouteDeployTemplate  = Route{http.MethodPost, "/v1/projects/{projectId}/templates/deploy"}
 )
 
 // Better Auth routes. They are served by Better Auth's own router, outside
@@ -60,8 +66,13 @@ var Routes = []Route{
 	RouteSharedVars, RoutePutSharedVars,
 	RouteListDeployments, RouteCreateDeploy, RouteGetDeployment, RouteRollback, RouteCancel,
 	RouteDeploymentLogs, RouteBuildLogs, RouteListDomains, RouteListNodes, RouteJoinToken,
+	RouteAddDomain, RouteGetDomain, RouteCheckDomain, RouteRemoveDomain,
 	RouteIntegrations, RouteProviderOffers, RouteProvisionNode, RouteNodeProvision,
+	RouteCancelProvision, RouteRemoveNode,
 	RouteRealtime, RouteListTokens, RouteCreateToken, RouteRevokeToken,
+	RouteListTemplates, RouteGetTemplate, RouteFromTemplate, RouteDeployTemplate,
+	RouteListChangeSets, RouteGetDraft, RouteGetChangeSet, RouteReviewChangeSet,
+	RouteApplyChangeSet, RouteDiscardChangeSet,
 }
 
 // AuthRoutes lists the Better Auth routes the client calls.
@@ -388,6 +399,25 @@ func (c *Client) GetNodeProvision(ctx context.Context, workspaceID, provisionID 
 	return fetch[NodeProvision](ctx, c, RouteNodeProvision, nil, nil, workspaceID, provisionID)
 }
 
+// CancelNodeProvision cancels a provisioning run that has not finished. A
+// queued or booting run comes back cancelled (or cleanup_failed); one still
+// creating its server keeps its status, with CancelRequestedAt set, until
+// the server exists and can be deleted. Repeating the call is harmless.
+func (c *Client) CancelNodeProvision(ctx context.Context, workspaceID, provisionID string) (*NodeProvision, error) {
+	return fetch[NodeProvision](ctx, c, RouteCancelProvision, nil, nil, workspaceID, provisionID)
+}
+
+// RemoveNode removes a server from the workspace and revokes its
+// credential. For a server Roundhouse provisioned it also deletes the cloud
+// server, unless keepServer is set.
+func (c *Client) RemoveNode(ctx context.Context, workspaceID, nodeID string, keepServer bool) error {
+	var q url.Values
+	if keepServer {
+		q = url.Values{"keep_server": {"true"}}
+	}
+	return c.call(ctx, RouteRemoveNode, q, nil, nil, workspaceID, nodeID)
+}
+
 // -----------------------------------------------------------------------------
 // API tokens
 // -----------------------------------------------------------------------------
@@ -412,6 +442,46 @@ func (c *Client) CreateAPIToken(ctx context.Context, workspaceID string, in Crea
 // RevokeAPIToken revokes a token at once; revoking it again is a no-op.
 func (c *Client) RevokeAPIToken(ctx context.Context, workspaceID, tokenID string) error {
 	return c.call(ctx, RouteRevokeToken, nil, nil, nil, workspaceID, tokenID)
+}
+
+// -----------------------------------------------------------------------------
+// Templates
+// -----------------------------------------------------------------------------
+
+// ListTemplates lists the built-in templates, in gallery order.
+func (c *Client) ListTemplates(ctx context.Context, workspaceID string) ([]TemplateSummary, error) {
+	var out struct {
+		Templates []TemplateSummary `json:"templates"`
+	}
+	if err := c.call(ctx, RouteListTemplates, nil, nil, &out, workspaceID); err != nil {
+		return nil, err
+	}
+	return out.Templates, nil
+}
+
+// GetTemplate returns a template with its inputs, services and variables.
+// Secret and generated variables come without a value.
+func (c *Client) GetTemplate(ctx context.Context, workspaceID, templateID string) (*TemplateDetail, error) {
+	return fetch[TemplateDetail](ctx, c, RouteGetTemplate, nil, nil, workspaceID, templateID)
+}
+
+// CreateProjectFromTemplate creates a project with a production environment
+// and the template's services. It answers 409 for a template that needs
+// something the control plane lacks.
+func (c *Client) CreateProjectFromTemplate(ctx context.Context, workspaceID string, in CreateProjectFromTemplateInput) (*TemplateDeployment, error) {
+	if in.Inputs == nil {
+		in.Inputs = map[string]string{}
+	}
+	return fetch[TemplateDeployment](ctx, c, RouteFromTemplate, nil, in, workspaceID)
+}
+
+// DeployTemplate adds a template's services to an existing project; its
+// variables and first deployments go to in.EnvironmentID.
+func (c *Client) DeployTemplate(ctx context.Context, projectID string, in DeployTemplateInput) (*TemplateDeployment, error) {
+	if in.Inputs == nil {
+		in.Inputs = map[string]string{}
+	}
+	return fetch[TemplateDeployment](ctx, c, RouteDeployTemplate, nil, in, projectID)
 }
 
 func (c *Client) call(ctx context.Context, r Route, q url.Values, in, out any, params ...string) error {

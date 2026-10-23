@@ -48,6 +48,12 @@ export const ID_PREFIXES = {
   providerCredential: "pcr",
   /** One one-click provisioning run; also its workflow instance ID. */
   nodeProvision: "prov",
+  /** One user's OAuth consent for an MCP client in one workspace. */
+  oauthGrant: "oag",
+  /** A reviewable batch of staged changes (ADR 0006). */
+  changeSet: "chs",
+  /** One operation staged in a change set. */
+  stagedChange: "stg",
 } as const;
 
 /** An entity kind that has an ID prefix. */

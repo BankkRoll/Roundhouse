@@ -67,6 +67,12 @@ export interface Env {
    * production. See `rolloutTimeoutMs`.
    */
   ROLLOUT_TIMEOUT_S?: string;
+  /**
+   * DNS-over-HTTPS JSON endpoint for custom-domain checks, e.g. a resolver
+   * that sees split-horizon records. Defaults to Cloudflare's; Google's is
+   * the fallback either way.
+   */
+  DNS_RESOLVER_URL?: string;
 }
 
 type AppBindings = Env;

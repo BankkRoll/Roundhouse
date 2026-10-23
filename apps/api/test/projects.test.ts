@@ -36,7 +36,11 @@ describe("projects", () => {
     const key = await env.DB.prepare("SELECT dek_sealed FROM project_keys WHERE project_id = ?")
       .bind(res.body.id)
       .first<{ dek_sealed: string }>();
-    expect(JSON.parse(key!.dek_sealed)).toMatchObject({ v: 1, iv: expect.any(String) });
+    expect(JSON.parse(key!.dek_sealed)).toMatchObject({
+      v: 2,
+      kid: expect.stringMatching(/^[a-f0-9]{8}$/),
+      iv: expect.any(String),
+    });
     const audit = await env.DB.prepare("SELECT action FROM audit_logs WHERE target_id = ?")
       .bind(res.body.id)
       .first<{ action: string }>();

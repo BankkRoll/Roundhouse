@@ -1,6 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { ApiError } from "../../lib/api/client";
 import {
   db,
@@ -220,7 +220,9 @@ describe("sign out", () => {
 });
 
 describe("invite", () => {
-  const INVITE = `/invite/${INVITE_TOKEN}`;
+  const INVITE = `/invite#token=${INVITE_TOKEN}`;
+
+  beforeEach(() => sessionStorage.clear());
 
   it("lets a new person create an account and join, without flashing the signed-in view", async () => {
     signInAs(null);
@@ -287,13 +289,13 @@ describe("invite", () => {
     expect(
       await screen.findByRole("button", { name: "Create account and join" }),
     ).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe(INVITE);
+    expect(router.state.location.pathname).toBe("/invite");
     expect(db.sessionUserId).toBeNull();
   });
 
   it("explains invalid links", async () => {
     signInAs(null);
-    renderApp("/invite/inv_nope");
+    renderApp("/invite#token=inv_nope");
     expect(await screen.findByRole("heading", { name: "Invite unavailable" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Go to sign in" })).toHaveAttribute("href", "/login");
   });
@@ -327,6 +329,63 @@ describe("invite", () => {
     signInAs(null);
     renderApp(INVITE);
     const link = await screen.findByRole("link", { name: "Sign in first" });
-    expect(link.getAttribute("href")).toBe(`/login?redirect=${encodeURIComponent(INVITE)}`);
+    expect(link.getAttribute("href")).toBe(`/login?redirect=${encodeURIComponent("/invite")}`);
+  });
+
+  it("takes the token out of the address bar and sends it only in request bodies", async () => {
+    signInAs(null);
+    const requests: { url: string; body: string }[] = [];
+    const onRequest = ({ request }: { request: Request }) => {
+      void request
+        .clone()
+        .text()
+        .then((body) => requests.push({ url: request.url, body }));
+    };
+    server.events.on("request:start", onRequest);
+    try {
+      const { router } = renderApp(INVITE);
+      expect(await screen.findByRole("heading", { name: "Join Acme" })).toBeInTheDocument();
+      expect(router.state.location.hash).toBe("");
+      expect(router.state.location.href).not.toContain(INVITE_TOKEN);
+      await waitFor(() =>
+        expect(requests.some((r) => r.url.endsWith("/v1/invites/lookup"))).toBe(true),
+      );
+    } finally {
+      server.events.removeListener("request:start", onRequest);
+    }
+    for (const r of requests) expect(r.url).not.toContain(INVITE_TOKEN);
+    expect(requests.find((r) => r.url.endsWith("/v1/invites/lookup"))?.body).toBe(
+      JSON.stringify({ token: INVITE_TOKEN }),
+    );
+  });
+
+  it("keeps working after a reload or the sign-in detour, then forgets the token", async () => {
+    signInAs(null);
+    const first = renderApp(INVITE);
+    expect(await screen.findByRole("heading", { name: "Join Acme" })).toBeInTheDocument();
+    first.unmount();
+
+    const { router, user } = renderApp("/invite");
+    expect(await screen.findByRole("heading", { name: "Join Acme" })).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Your name"), "Erin");
+    await user.type(screen.getByLabelText("Password"), "a-long-enough-password");
+    await user.type(screen.getByLabelText("Confirm password"), "a-long-enough-password");
+    await user.click(screen.getByRole("button", { name: "Create account and join" }));
+    await expectPath(router, `/w/${WORKSPACE_ID}`);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("asks for the full link when there is no token", async () => {
+    signInAs(null);
+    renderApp("/invite");
+    expect(await screen.findByRole("heading", { name: "Invite unavailable" })).toBeInTheDocument();
+    expect(screen.getByText(/needs the full invite link/)).toBeInTheDocument();
+  });
+
+  it("forgets a token the API refused", async () => {
+    signInAs(null);
+    renderApp("/invite#token=inv_nope");
+    expect(await screen.findByRole("heading", { name: "Invite unavailable" })).toBeInTheDocument();
+    await waitFor(() => expect(sessionStorage.length).toBe(0));
   });
 });

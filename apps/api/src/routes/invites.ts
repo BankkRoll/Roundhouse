@@ -2,6 +2,13 @@
  * Workspace invitations. Invites are the only way to create an account after
  * setup, so accepting one may also sign the user up.
  *
+ * SECURITY: An invite link carries its token in the URL fragment
+ * (`/invite#token=…`), which browsers never send to a server, so it can't
+ * reach access logs, traces or `Referer` headers. The dashboard sends it in
+ * the body of the public lookup and accept routes, both rate-limited per IP.
+ * Tokens are single-use, stored only as hashes, and expire; a refused token
+ * is audited (`invite.rejected_token`) without the token itself.
+ *
  * @module
  */
 import { createRoute, z } from "@hono/zod-openapi";
@@ -9,8 +16,10 @@ import { type Db, invites, users, workspaceMembers, workspaces } from "@roundhou
 import { newId } from "@roundhouse/shared";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import {
+  type AppContext,
   clientIp,
   createRouter,
+  currentPrincipal,
   currentUser,
   originOf,
   requireWorkspace,
@@ -34,15 +43,31 @@ import {
 /** How long an invite link stays valid. */
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-// TODO(phase-1): The invite token travels in the URL path, so it can reach
-// Workers logs and observability traces. Move it to the request body, or log
-// only its hash, before logs are shipped anywhere.
-const TokenParams = z.object({ token: z.string().min(1).max(200) });
-
-const AcceptBody = z.object({
-  name: z.string().trim().min(1).max(100).optional(),
-  password: z.string().min(12).max(256).optional(),
+const TokenField = z.string().min(1).max(200).openapi({
+  description: "Token from the invite link's fragment (`#token=…`). Never send it in a URL.",
 });
+
+const LookupBody = z.object({ token: TokenField }).openapi("InviteLookup");
+
+const AcceptBody = z
+  .object({
+    token: TokenField,
+    name: z.string().trim().min(1).max(100).optional(),
+    password: z.string().min(12).max(256).optional(),
+  })
+  .openapi("AcceptInvite");
+
+/**
+ * The shareable link for an invite token. The token goes in the fragment so
+ * the browser keeps it to itself.
+ *
+ * @param origin - Control plane origin, from `originOf`.
+ * @param token - Plaintext invite token.
+ * @returns E.g. `https://cp.example.com/invite#token=inv_…`.
+ */
+export function inviteUrl(origin: string, token: string): string {
+  return `${origin}/invite#token=${encodeURIComponent(token)}`;
+}
 
 const list = createRoute({
   method: "get",
@@ -80,12 +105,14 @@ const revoke = createRoute({
   responses: { 204: { description: "Revoked" }, ...errors(401, 403, 404) },
 });
 
-const preview = createRoute({
-  method: "get",
-  path: "/v1/invites/{token}",
+const lookup = createRoute({
+  method: "post",
+  path: "/v1/invites/lookup",
   tags: ["invites"],
   summary: "Preview an invite (public)",
-  request: { params: TokenParams },
+  description:
+    "The token travels in the body, never the URL. 404 when it is unknown, used or expired. Rate-limited per IP.",
+  request: body(LookupBody),
   responses: {
     200: json(
       z.object({
@@ -95,19 +122,18 @@ const preview = createRoute({
         expires_at: Millis,
       }),
     ),
-    ...errors(404),
+    ...errors(400, 404, 429),
   },
 });
 
 const accept = createRoute({
   method: "post",
-  path: "/v1/invites/{token}/accept",
+  path: "/v1/invites/accept",
   tags: ["invites"],
   summary: "Accept an invite, creating an account if signed out",
-  request: {
-    params: TokenParams,
-    body: { required: false, content: { "application/json": { schema: AcceptBody } } },
-  },
+  description:
+    "Single-use: the token stops working once accepted. Rate-limited per IP, since it can create an account.",
+  request: body(AcceptBody),
   responses: {
     200: json(z.object({ workspace_id: z.string() })),
     ...errors(400, 403, 404, 409, 429),
@@ -124,16 +150,62 @@ const toInvite = (row: typeof invites.$inferSelect) => ({
 
 const isPending = () => and(isNull(invites.acceptedAt), gt(invites.expiresAt, new Date()));
 
-async function findPending(db: Db, token: string) {
+type InviteRow = typeof invites.$inferSelect;
+
+/** Why a token was refused, as recorded in `invite.rejected_token`. */
+type RejectReason = "unknown" | "used" | "expired";
+
+type TokenLookup =
+  | { ok: true; invite: InviteRow; workspaceName: string }
+  | { ok: false; reason: RejectReason; invite?: InviteRow };
+
+async function lookupToken(db: Db, token: string): Promise<TokenLookup> {
   const [row] = await db
-    .select({ invite: invites, workspaceName: workspaces.name })
+    .select({ invite: invites, workspaceName: workspaces.name, deletedAt: workspaces.deletedAt })
     .from(invites)
     .innerJoin(workspaces, eq(workspaces.id, invites.workspaceId))
-    .where(
-      and(eq(invites.tokenHash, await hashToken(token)), isPending(), isNull(workspaces.deletedAt)),
-    )
+    .where(eq(invites.tokenHash, await hashToken(token)))
     .limit(1);
-  return row;
+  if (!row || row.deletedAt) return { ok: false, reason: "unknown" };
+  if (row.invite.acceptedAt) return { ok: false, reason: "used", invite: row.invite };
+  if (+row.invite.expiresAt <= Date.now()) {
+    return { ok: false, reason: "expired", invite: row.invite };
+  }
+  return { ok: true, invite: row.invite, workspaceName: row.workspaceName };
+}
+
+/**
+ * Audits a refused token and returns the 404 to throw. An unknown token is an
+ * instance-level entry; a used or expired invite's goes to its workspace.
+ *
+ * SECURITY: Records neither the token nor its hash, either of which would
+ * let a reader of the audit log replay or correlate attempts.
+ */
+async function rejectToken(
+  c: AppContext,
+  refused: Extract<TokenLookup, { ok: false }>,
+  stage: "lookup" | "accept",
+): Promise<ApiError> {
+  let principal: Awaited<ReturnType<typeof currentPrincipal>> = null;
+  try {
+    principal = await currentPrincipal(c);
+  } catch {
+    // An invalid credential on a public route is still just an anonymous attempt.
+  }
+  await recordAudit(c.get("db"), {
+    workspaceId: refused.invite?.workspaceId ?? null,
+    actorType: principal?.token ? "token" : "user",
+    actorId: principal?.token?.id ?? principal?.user.id ?? null,
+    action: "invite.rejected_token",
+    ...(refused.invite ? { targetType: "invite", targetId: refused.invite.id } : {}),
+    metadata: {
+      reason: refused.reason,
+      stage,
+      ...(refused.invite ? { email: refused.invite.email } : {}),
+    },
+    ip: clientIp(c),
+  });
+  return notFound("Invite");
 }
 
 /** Routes for invite management and acceptance. */
@@ -200,7 +272,7 @@ export const inviteRoutes = createRouter()
     });
     // TODO(phase-1): email the link once a mail provider is configured; until
     // then the inviter copies it from the dashboard.
-    return c.json({ invite: toInvite(row!), url: `${originOf(c)}/invite/${token}` }, 201);
+    return c.json({ invite: toInvite(row!), url: inviteUrl(originOf(c), token) }, 201);
   })
   .openapi(revoke, async (c) => {
     const { workspaceId, inviteId } = c.req.valid("param");
@@ -228,9 +300,9 @@ export const inviteRoutes = createRouter()
     });
     return c.body(null, 204);
   })
-  .openapi(preview, async (c) => {
-    const found = await findPending(c.get("db"), c.req.valid("param").token);
-    if (!found) throw notFound("Invite");
+  .openapi(lookup, async (c) => {
+    const found = await lookupToken(c.get("db"), c.req.valid("json").token);
+    if (!found.ok) throw await rejectToken(c, found, "lookup");
     return c.json(
       {
         workspace_name: found.workspaceName,
@@ -242,11 +314,10 @@ export const inviteRoutes = createRouter()
     );
   })
   .openapi(accept, async (c) => {
-    const { token } = c.req.valid("param");
-    const input = c.req.valid("json");
+    const { token, ...input } = c.req.valid("json");
     const db = c.get("db");
-    const found = await findPending(db, token);
-    if (!found) throw notFound("Invite");
+    const found = await lookupToken(db, token);
+    if (!found.ok) throw await rejectToken(c, found, "accept");
     const { invite } = found;
 
     const user = await currentUser(c);
@@ -291,9 +362,9 @@ export const inviteRoutes = createRouter()
     const [claimed] = await db
       .update(invites)
       .set({ acceptedAt: new Date() })
-      .where(and(eq(invites.id, invite.id), isNull(invites.acceptedAt)))
+      .where(and(eq(invites.id, invite.id), isPending()))
       .returning({ id: invites.id });
-    if (!claimed) throw notFound("Invite");
+    if (!claimed) throw await rejectToken(c, { ok: false, reason: "used", invite }, "accept");
 
     let createdUserId: string | undefined;
     let cookies: Headers | undefined;

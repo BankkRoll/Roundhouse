@@ -17,13 +17,14 @@ import {
   Skeleton,
   toast,
 } from "@roundhouse/ui";
+import { Switch } from "@roundhouse/ui/controls";
 import { ExternalLinkIcon, ShieldIcon } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { ErrorState } from "../../components/error-state";
 import { FormField } from "../../components/form-field";
 import { GithubIcon } from "../../components/github-mark";
 import { SettingsField } from "../../components/settings-field";
-import { errorMessage } from "../../lib/api/client";
+import { errorMessage, isApiError } from "../../lib/api/client";
 import type { GithubStatus, InstanceSettings } from "../../lib/api/deploy-types";
 import { formatRelativeTime } from "../../lib/format";
 import { canManageInstance, usePermissions } from "../../lib/permissions";
@@ -36,6 +37,10 @@ import {
 import { useMe } from "../../queries/me";
 import { submitGithubManifest } from "./github-manifest";
 import { SettingsFrame } from "./settings-frame";
+
+/** The MCP section of the API README: endpoint, tools, scopes and client setup. */
+export const MCP_DOCS_URL =
+  "https://github.com/BankkRoll/Roundhouse/blob/main/apps/api/README.md#mcp";
 
 const HOSTNAME = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
@@ -208,6 +213,73 @@ function LogRetentionForm({ settings }: { settings: InstanceSettings }) {
   );
 }
 
+function McpSection({ settings }: { settings: InstanceSettings }) {
+  const update = useUpdateInstanceSettings();
+  const [error, setError] = useState<string | null>(null);
+  const switchId = useId();
+
+  function onChange(enabled: boolean) {
+    setError(null);
+    update.mutate(
+      { mcp_enabled: enabled },
+      {
+        onSuccess: () =>
+          toast({ title: enabled ? "MCP enabled" : "MCP disabled", tone: "success" }),
+        onError: (cause) =>
+          setError(
+            isApiError(cause, "reauth_required")
+              ? `${errorMessage(cause)} Sign in again, then retry.`
+              : errorMessage(cause),
+          ),
+      },
+    );
+  }
+
+  return (
+    <SettingsSection
+      title="MCP"
+      description="A remote MCP server at /mcp lets coding agents list projects, read logs, deploy and set variables with a workspace API token, limited by the token's scopes and its owner's role."
+      actions={
+        <Badge tone={settings.mcp_enabled ? "success" : "neutral"}>
+          {settings.mcp_enabled ? "On" : "Off"}
+        </Badge>
+      }
+    >
+      <SettingsRow
+        label="Allow coding agents"
+        description={
+          <>
+            Off by default. While off, /mcp answers 404 to everyone.{" "}
+            <a
+              href={MCP_DOCS_URL}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="text-accent-text underline-offset-4 hover:underline"
+            >
+              How agents connect
+            </a>
+          </>
+        }
+        htmlFor={switchId}
+        control="switch"
+      >
+        <Switch
+          id={switchId}
+          checked={settings.mcp_enabled}
+          disabled={update.isPending}
+          onCheckedChange={onChange}
+          aria-describedby={error ? `${switchId}-error` : undefined}
+        />
+      </SettingsRow>
+      {error ? (
+        <p id={`${switchId}-error`} role="alert" className="pb-4 text-sm text-danger">
+          {error}
+        </p>
+      ) : null}
+    </SettingsSection>
+  );
+}
+
 function CreateAppForm({ workspaceId }: { workspaceId: string }) {
   const create = useCreateGithubManifest();
   const [organization, setOrganization] = useState("");
@@ -357,8 +429,8 @@ function GithubSection({
 }
 
 /**
- * Install-wide settings: the apps domain and TLS mode for generated domains and how
- * long logs are kept (owners), and the GitHub App with its installations. Owners can
+ * Install-wide settings: the apps domain and TLS mode for generated domains, how long
+ * logs are kept, and whether the MCP endpoint is on (instance admins), and the GitHub App with its installations. Owners can
  * create the App through GitHub's manifest flow; anyone who manages projects can install
  * it.
  *
@@ -395,6 +467,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
             <>
               <IngressForm settings={settings.data} />
               <LogRetentionForm settings={settings.data} />
+              <McpSection settings={settings.data} />
             </>
           )
         ) : (

@@ -15,6 +15,7 @@ export const TRIGGER_LABELS: Record<Deployment["trigger"], string> = {
   rollback: "rollback",
   api: "api",
   template: "template",
+  change_set: "staged changes",
 };
 
 /**

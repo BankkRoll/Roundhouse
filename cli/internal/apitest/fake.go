@@ -92,6 +92,7 @@ type Fake struct {
 	deployments []*api.DeploymentDetail
 	logs        map[string][]api.LogEntry
 	domains     []api.Domain
+	dns         map[string]DNSState
 	nodes       []api.Node
 	providers   map[string]bool
 	offers      []api.ProviderOffer
@@ -100,6 +101,11 @@ type Fake struct {
 	seq         int
 	tokens      []*apiToken
 	tokenSeq    int
+	changeSets  []*changeSet
+
+	// templateDeployErrors maps a template service ref to the message its
+	// first deployment fails to start with; see [Fake.FailTemplateDeploy].
+	templateDeployErrors map[string]string
 
 	// refresh, when set, is the session cookie the next authenticated /v1
 	// response sets; endSession, when set, ends the session on the next /v1
@@ -232,9 +238,9 @@ func (f *Fake) seed() {
 		{TS: Now - 3410000, Stream: "stderr", Text: "npm warn deprecated"},
 	}
 	f.domains = []api.Domain{
-		{ID: "dom_0002", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "shop.example.com", URL: "https://shop.example.com", Type: "custom", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", CreatedAt: Now - 1000},
-		{ID: "dom_0001", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "api-production-x7k2.apps.example.com", URL: "https://api-production-x7k2.apps.example.com", Type: "generated", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", CreatedAt: Now - 86400000},
-		{ID: "dom_0003", ServiceID: APIServiceID, EnvironmentID: StagingID, Hostname: "api-staging-q9p1.apps.example.com", URL: "https://api-staging-q9p1.apps.example.com", Type: "generated", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", CreatedAt: Now - 86400000},
+		{ID: "dom_0002", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "shop.example.com", URL: "https://shop.example.com", Type: "custom", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 1000), CreatedAt: Now - 1000},
+		{ID: "dom_0001", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "api-production-x7k2.apps.example.com", URL: "https://api-production-x7k2.apps.example.com", Type: "generated", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 86400000), CreatedAt: Now - 86400000},
+		{ID: "dom_0003", ServiceID: APIServiceID, EnvironmentID: StagingID, Hostname: "api-staging-q9p1.apps.example.com", URL: "https://api-staging-q9p1.apps.example.com", Type: "generated", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 86400000), CreatedAt: Now - 86400000},
 	}
 	f.nodes = []api.Node{{ID: NodeID, Name: "edge-1", Hostname: str("edge-1"), Status: "online", Provider: "manual", PublicIP: str("203.0.113.10"),
 		OS: str("linux"), Arch: str("amd64"), AgentVersion: str("0.4.0"), Capabilities: json.RawMessage(`{"docker":true,"builder":true}`),
@@ -260,6 +266,27 @@ var ProviderDisplayNames = map[string]string{
 
 // SetProviderConnected connects or disconnects the workspace from a cloud
 // provider. Only hetzner is connected in the seed.
+// AddNode adds a server to the seeded workspace, e.g. a provider-managed one.
+func (f *Fake) AddNode(n api.Node) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nodes = append(f.nodes, n)
+}
+
+// Nodes returns copies of the workspace's servers.
+func (f *Fake) Nodes() []api.Node {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.nodes)
+}
+
+// AddNodeProvision adds a provisioning run as if it had been started.
+func (f *Fake) AddNodeProvision(p api.NodeProvision) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.provisions = append(f.provisions, &p)
+}
+
 func (f *Fake) SetProviderConnected(provider string, connected bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -608,15 +635,32 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteDeploymentLogs:  {"services:read", f.getLogs},
 		api.RouteBuildLogs:       {"services:read", f.getLogs},
 		api.RouteListDomains:     {"services:read", f.listDomains},
+		api.RouteAddDomain:       {"services:manage", f.addDomain},
+		api.RouteGetDomain:       {"services:read", f.getDomain},
+		api.RouteCheckDomain:     {"services:manage", f.recheckDomain},
+		api.RouteRemoveDomain:    {"services:manage", f.removeDomain},
 		api.RouteListNodes:       {"nodes:read", f.listNodes},
 		api.RouteJoinToken:       {"nodes:manage", f.joinToken},
 		api.RouteIntegrations:    {"nodes:manage", f.listIntegrations},
 		api.RouteProviderOffers:  {"nodes:manage", f.providerOffers},
 		api.RouteProvisionNode:   {"nodes:manage", f.provisionNode},
 		api.RouteNodeProvision:   {"nodes:read", f.getNodeProvision},
+		api.RouteCancelProvision: {"nodes:manage", f.cancelNodeProvision},
+		api.RouteRemoveNode:      {"nodes:manage", f.removeNode},
 		api.RouteListTokens:      {"tokens:manage", f.listTokens},
 		api.RouteCreateToken:     {"tokens:manage", f.createToken},
 		api.RouteRevokeToken:     {"tokens:manage", f.revokeToken},
+		api.RouteListTemplates:   {"projects:read", f.listTemplates},
+		api.RouteGetTemplate:     {"projects:read", f.getTemplate},
+		api.RouteFromTemplate:    {"projects:create", f.createFromTemplate},
+		api.RouteDeployTemplate:  {"services:manage", f.deployTemplate},
+
+		api.RouteListChangeSets:   {"projects:read", f.listChangeSets},
+		api.RouteGetDraft:         {"projects:read", f.getDraft},
+		api.RouteGetChangeSet:     {"projects:read", f.getChangeSet},
+		api.RouteReviewChangeSet:  {"projects:read", f.reviewChangeSet},
+		api.RouteApplyChangeSet:   {"projects:read", f.applyChangeSet},
+		api.RouteDiscardChangeSet: {"projects:read", f.discardChangeSet},
 	}
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
@@ -1531,6 +1575,54 @@ func (f *Fake) provisionNode(w http.ResponseWriter, r *http.Request) {
 		Builder: in.Builder, Status: api.ProvisionQueued, CreatedAt: Now, UpdatedAt: Now}
 	f.provisions = append(f.provisions, p)
 	writeJSON(w, http.StatusAccepted, p)
+}
+
+// cancelNodeProvision mirrors the API: a queued or booting run is cancelled
+// at once, one still creating keeps its status with the cancel requested,
+// and a finished run is 409. Repeating a cancel returns the run unchanged.
+func (f *Fake) cancelNodeProvision(w http.ResponseWriter, r *http.Request) {
+	if !f.workspace(w, r) {
+		return
+	}
+	i := slices.IndexFunc(f.provisions, func(p *api.NodeProvision) bool { return p.ID == r.PathValue("provisionId") })
+	if i < 0 {
+		apiError(w, http.StatusNotFound, "not_found", "Provisioning run not found")
+		return
+	}
+	p := f.provisions[i]
+	switch {
+	case p.CancelRequestedAt != nil:
+	case api.IsProvisionFinished(p.Status):
+		apiError(w, http.StatusConflict, "conflict", "This run already finished ("+p.Status+")")
+		return
+	default:
+		p.CancelRequestedAt, p.UpdatedAt = i64(Now+1000), Now+1000
+		if p.Status != api.ProvisionCreating {
+			p.Status, p.FailureReason, p.FailureMessage, p.FinishedAt = api.ProvisionCancelled, str("cancelled"), str("Cancelled before the server joined"), i64(Now+1000)
+		}
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// removeNode deletes a server. A provider-managed one needs its provider
+// connected unless keep_server=true, as the API deletes the cloud server
+// first.
+func (f *Fake) removeNode(w http.ResponseWriter, r *http.Request) {
+	if !f.workspace(w, r) {
+		return
+	}
+	i := slices.IndexFunc(f.nodes, func(n api.Node) bool { return n.ID == r.PathValue("nodeId") })
+	if i < 0 {
+		apiError(w, http.StatusNotFound, "not_found", "Server not found")
+		return
+	}
+	n := f.nodes[i]
+	if n.ProviderServerID != nil && r.URL.Query().Get("keep_server") != "true" && !f.providers[n.Provider] {
+		apiError(w, http.StatusConflict, "provider_not_connected", "Connect "+cmp.Or(ProviderDisplayNames[n.Provider], n.Provider)+" to this workspace first")
+		return
+	}
+	f.nodes = slices.Delete(f.nodes, i, i+1)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (f *Fake) getNodeProvision(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,48 @@
   "components": {
     "parameters": {},
     "schemas": {
+      "AcceptInvite": {
+        "properties": {
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 256,
+            "minLength": 12,
+            "type": "string"
+          },
+          "token": {
+            "description": "Token from the invite link's fragment (`#token=…`). Never send it in a URL.",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
+      "AddDomain": {
+        "properties": {
+          "environment_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "example": "shop.example.com",
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment_id",
+          "hostname"
+        ],
+        "type": "object"
+      },
       "ApiToken": {
         "properties": {
           "created_at": {
@@ -112,6 +154,63 @@
         ],
         "type": "string"
       },
+      "AppliedChangeSet": {
+        "properties": {
+          "change_set": {
+            "$ref": "#/components/schemas/ChangeSet"
+          },
+          "deployment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "items": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                },
+                "service_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "service_id",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change_set",
+          "deployment_ids",
+          "skipped"
+        ],
+        "type": "object"
+      },
+      "ApplyChangeSet": {
+        "properties": {
+          "deploy": {
+            "default": "affected",
+            "enum": [
+              "affected",
+              "none"
+            ],
+            "type": "string"
+          },
+          "expected_revision": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "type": "object"
+      },
       "AuditLog": {
         "properties": {
           "action": {
@@ -179,7 +278,19 @@
               "node.provision_requested",
               "node.provisioned",
               "node.provision_failed",
-              "node.deprovisioned"
+              "node.deprovisioned",
+              "node.provision_cancelled",
+              "invite.rejected_token",
+              "domain.added",
+              "domain.verified",
+              "domain.failed",
+              "domain.removed",
+              "mcp_client.authorized",
+              "mcp_client.revoked",
+              "template.deployed",
+              "change_set.created",
+              "change_set.applied",
+              "change_set.discarded"
             ],
             "type": "string"
           },
@@ -394,6 +505,397 @@
         ],
         "type": "object"
       },
+      "Canvas": {
+        "properties": {
+          "draft": {
+            "$ref": "#/components/schemas/ChangeSetSummary"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/CanvasEdge"
+            },
+            "type": "array"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "environment_protected": {
+            "type": "boolean"
+          },
+          "layout_version": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/CanvasNode"
+            },
+            "type": "array"
+          },
+          "positions": {
+            "$ref": "#/components/schemas/CanvasPositions"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "environment_id",
+          "environment_protected",
+          "nodes",
+          "edges",
+          "positions",
+          "layout_version",
+          "draft"
+        ],
+        "type": "object"
+      },
+      "CanvasEdge": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "reference",
+              "private_network"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "current",
+              "staged",
+              "removed"
+            ],
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "variables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "from",
+          "to",
+          "kind",
+          "variables",
+          "state"
+        ],
+        "type": "object"
+      },
+      "CanvasLayout": {
+        "properties": {
+          "positions": {
+            "$ref": "#/components/schemas/CanvasPositions"
+          },
+          "version": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "positions",
+          "version"
+        ],
+        "type": "object"
+      },
+      "CanvasNode": {
+        "properties": {
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "app",
+              "database",
+              "cron"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "staged": {
+            "enum": [
+              "create",
+              "update",
+              "delete",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "staged_ops": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "kind",
+          "icon",
+          "staged",
+          "staged_ops"
+        ],
+        "type": "object"
+      },
+      "CanvasPosition": {
+        "properties": {
+          "x": {
+            "maximum": 100000,
+            "minimum": -100000,
+            "type": "integer"
+          },
+          "y": {
+            "maximum": 100000,
+            "minimum": -100000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ],
+        "type": "object"
+      },
+      "CanvasPositions": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/CanvasPosition"
+        },
+        "type": "object"
+      },
+      "ChangeSet": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ChangeSetSummary"
+          },
+          {
+            "properties": {
+              "changes": {
+                "items": {
+                  "$ref": "#/components/schemas/StagedChange"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "changes"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ChangeSetList": {
+        "properties": {
+          "change_sets": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeSetSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change_sets"
+        ],
+        "type": "object"
+      },
+      "ChangeSetReview": {
+        "properties": {
+          "change_set": {
+            "$ref": "#/components/schemas/ChangeSet"
+          },
+          "conflicts": {
+            "items": {
+              "properties": {
+                "conflict": {
+                  "$ref": "#/components/schemas/StagedConflict"
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "conflict"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "deploys": {
+            "items": {
+              "$ref": "#/components/schemas/PlannedDeploy"
+            },
+            "type": "array"
+          },
+          "rebases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change_set",
+          "rebases",
+          "conflicts",
+          "deploys"
+        ],
+        "type": "object"
+      },
+      "ChangeSetSummary": {
+        "properties": {
+          "applied_at": {
+            "description": "Unix time in milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "applied_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conflicted_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_by_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_draft": {
+            "type": "boolean"
+          },
+          "op_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "enum": [
+              "dashboard",
+              "api",
+              "mcp",
+              "template",
+              "promote",
+              "preview"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "applying",
+              "applied",
+              "discarded",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "environment_id",
+          "status",
+          "is_draft",
+          "source",
+          "title",
+          "revision",
+          "op_count",
+          "conflicted_count",
+          "created_by",
+          "created_by_token",
+          "applied_by",
+          "applied_at",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "type": [
+          "object",
+          "null"
+        ]
+      },
       "ConnectProvider": {
         "properties": {
           "token": {
@@ -408,6 +910,110 @@
           "token"
         ],
         "type": "object"
+      },
+      "ConnectedMcpClient": {
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "description": "Unix time in milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "enum": [
+                "workspace:read",
+                "workspace:update",
+                "workspace:delete",
+                "members:read",
+                "members:manage",
+                "tokens:manage",
+                "nodes:read",
+                "nodes:manage",
+                "audit:read",
+                "projects:create",
+                "github:manage",
+                "projects:read",
+                "projects:manage",
+                "access:manage",
+                "services:read",
+                "services:manage",
+                "deployments:create",
+                "variables:read",
+                "variables:read_plain",
+                "variables:manage"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workspace": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "client_id",
+          "name",
+          "domain",
+          "workspace",
+          "scopes",
+          "created_at",
+          "last_used_at",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "CostEstimate": {
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "monthly_cents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "monthly_cents",
+          "currency"
+        ],
+        "type": [
+          "object",
+          "null"
+        ]
       },
       "CreateApiToken": {
         "properties": {
@@ -438,6 +1044,35 @@
           "scopes",
           "expires_in_days"
         ],
+        "type": "object"
+      },
+      "CreateChangeSet": {
+        "properties": {
+          "ops": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/StagedOpInput"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "source": {
+            "default": "api",
+            "enum": [
+              "api",
+              "mcp",
+              "template",
+              "promote",
+              "preview"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "CreateDeployment": {
@@ -508,6 +1143,61 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "CreateProjectFromTemplate": {
+        "properties": {
+          "acknowledge_public": {
+            "default": [],
+            "items": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "confirm_write_only": {
+            "default": false,
+            "type": "boolean"
+          },
+          "deploy": {
+            "default": true,
+            "type": "boolean"
+          },
+          "description": {
+            "maxLength": 500,
+            "type": "string"
+          },
+          "inputs": {
+            "additionalProperties": {
+              "maxLength": 32768,
+              "type": "string"
+            },
+            "default": {},
+            "description": "Values for the template's inputs, by key.",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "slug": {
+            "example": "api",
+            "maxLength": 40,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "template_id": {
+            "example": "fastapi",
+            "maxLength": 40,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template_id"
         ],
         "type": "object"
       },
@@ -752,6 +1442,50 @@
         ],
         "type": "object"
       },
+      "DeployTemplate": {
+        "properties": {
+          "acknowledge_public": {
+            "default": [],
+            "items": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "confirm_write_only": {
+            "default": false,
+            "type": "boolean"
+          },
+          "deploy": {
+            "default": true,
+            "type": "boolean"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "inputs": {
+            "additionalProperties": {
+              "maxLength": 32768,
+              "type": "string"
+            },
+            "default": {},
+            "description": "Values for the template's inputs, by key.",
+            "type": "object"
+          },
+          "template_id": {
+            "example": "fastapi",
+            "maxLength": 40,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template_id",
+          "environment_id"
+        ],
+        "type": "object"
+      },
       "Deployment": {
         "properties": {
           "build": {
@@ -838,7 +1572,8 @@
               "manual",
               "rollback",
               "api",
-              "template"
+              "template",
+              "change_set"
             ],
             "type": "string"
           },
@@ -975,8 +1710,83 @@
         ],
         "type": "object"
       },
+      "DiffEntry": {
+        "properties": {
+          "after": {},
+          "before": {},
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "DiscardChangeSet": {
+        "properties": {
+          "expected_revision": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "DnsRecord": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "purpose": {
+            "enum": [
+              "routing",
+              "ownership"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "unknown",
+              "ok",
+              "missing",
+              "wrong"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "CNAME",
+              "A",
+              "AAAA",
+              "TXT"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "name",
+          "value",
+          "purpose",
+          "state",
+          "note"
+        ],
+        "type": "object"
+      },
       "Domain": {
         "properties": {
+          "apex": {
+            "type": "boolean"
+          },
           "created_at": {
             "description": "Unix time in milliseconds",
             "example": 1767225600000,
@@ -985,13 +1795,51 @@
           "environment_id": {
             "type": "string"
           },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "hostname": {
             "type": "string"
           },
           "id": {
             "type": "string"
           },
+          "last_checked_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "next_check_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/DnsRecord"
+            },
+            "type": "array"
+          },
           "service_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending_dns",
+              "pending_verification",
+              "issuing",
+              "active",
+              "failed"
+            ],
             "type": "string"
           },
           "target_port": {
@@ -1023,6 +1871,14 @@
               "failed"
             ],
             "type": "string"
+          },
+          "verified_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1035,6 +1891,13 @@
           "target_port",
           "verification_status",
           "tls_status",
+          "status",
+          "apex",
+          "records",
+          "error",
+          "last_checked_at",
+          "next_check_at",
+          "verified_at",
           "created_at"
         ],
         "type": "object"
@@ -1056,6 +1919,17 @@
           "object",
           "null"
         ]
+      },
+      "Draft": {
+        "properties": {
+          "change_set": {
+            "$ref": "#/components/schemas/ChangeSet"
+          }
+        },
+        "required": [
+          "change_set"
+        ],
+        "type": "object"
       },
       "Environment": {
         "properties": {
@@ -1384,6 +2258,9 @@
             "minimum": 1,
             "type": "integer"
           },
+          "mcp_enabled": {
+            "type": "boolean"
+          },
           "tls_mode": {
             "$ref": "#/components/schemas/TlsMode"
           }
@@ -1391,7 +2268,8 @@
         "required": [
           "apps_domain",
           "tls_mode",
-          "log_retention_days"
+          "log_retention_days",
+          "mcp_enabled"
         ],
         "type": "object"
       },
@@ -1410,6 +2288,9 @@
             "maximum": 365,
             "minimum": 1,
             "type": "integer"
+          },
+          "mcp_enabled": {
+            "type": "boolean"
           },
           "tls_mode": {
             "$ref": "#/components/schemas/TlsMode"
@@ -1445,6 +2326,130 @@
           "role",
           "expires_at",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "InviteLookup": {
+        "properties": {
+          "token": {
+            "description": "Token from the invite link's fragment (`#token=…`). Never send it in a URL.",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
+      "KeyRotationStarted": {
+        "properties": {
+          "rotation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rotation_id"
+        ],
+        "type": "object"
+      },
+      "KeyStatus": {
+        "properties": {
+          "current_kid": {
+            "type": "string"
+          },
+          "previous_keys_removable": {
+            "type": "boolean"
+          },
+          "previous_kids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "remaining": {
+            "properties": {
+              "instance_secrets": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "missing_fingerprints": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "project_keys": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "v1_deployments": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "v1_variables": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "project_keys",
+              "instance_secrets",
+              "v1_variables",
+              "v1_deployments",
+              "missing_fingerprints"
+            ],
+            "type": "object"
+          },
+          "rotation": {
+            "properties": {
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "finished_at": {
+                "description": "Unix time in milliseconds",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "started_at": {
+                "description": "Unix time in milliseconds",
+                "type": "integer"
+              },
+              "state": {
+                "enum": [
+                  "running",
+                  "completed",
+                  "failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "state",
+              "started_at",
+              "finished_at",
+              "error"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "current_kid",
+          "previous_kids",
+          "remaining",
+          "rotation",
+          "previous_keys_removable"
         ],
         "type": "object"
       },
@@ -1582,6 +2587,9 @@
               },
               "gvisor": {
                 "type": "boolean"
+              },
+              "ingress": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -1628,6 +2636,9 @@
               "string",
               "null"
             ]
+          },
+          "estimated_monthly_cost": {
+            "$ref": "#/components/schemas/CostEstimate"
           },
           "hostname": {
             "type": [
@@ -1740,6 +2751,7 @@
           "region",
           "provider_server_id",
           "provider_server_missing_at",
+          "estimated_monthly_cost",
           "public_ip",
           "os",
           "arch",
@@ -1765,9 +2777,19 @@
           "builder": {
             "type": "boolean"
           },
+          "cancel_requested_at": {
+            "description": "Unix time in milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "created_at": {
             "description": "Unix time in milliseconds",
             "type": "integer"
+          },
+          "estimated_monthly_cost": {
+            "$ref": "#/components/schemas/CostEstimate"
           },
           "failure_message": {
             "type": [
@@ -1834,6 +2856,7 @@
               "booting",
               "joined",
               "failed",
+              "cancelled",
               "cleanup_failed"
             ],
             "type": "string"
@@ -1864,9 +2887,257 @@
           "ipv4",
           "ipv6",
           "node_id",
+          "cancel_requested_at",
+          "estimated_monthly_cost",
           "created_at",
           "updated_at",
           "finished_at"
+        ],
+        "type": "object"
+      },
+      "OAuthAuthorizationParams": {
+        "properties": {
+          "client_id": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "code_challenge": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "code_challenge_method": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "redirect_uri": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "resource": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "response_type": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "scope": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 4096,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "OAuthConsent": {
+        "properties": {
+          "client": {
+            "properties": {
+              "client_id": {
+                "type": "string"
+              },
+              "client_uri": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "domain": {
+                "type": "string"
+              },
+              "logo_uri": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "client_id",
+              "name",
+              "domain",
+              "logo_uri",
+              "client_uri"
+            ],
+            "type": "object"
+          },
+          "consent_token": {
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "redirect_uri": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "enum": [
+                "workspace:read",
+                "workspace:update",
+                "workspace:delete",
+                "members:read",
+                "members:manage",
+                "tokens:manage",
+                "nodes:read",
+                "nodes:manage",
+                "audit:read",
+                "projects:create",
+                "github:manage",
+                "projects:read",
+                "projects:manage",
+                "access:manage",
+                "services:read",
+                "services:manage",
+                "deployments:create",
+                "variables:read",
+                "variables:read_plain",
+                "variables:manage"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workspaces": {
+            "items": {
+              "properties": {
+                "grantable_scopes": {
+                  "items": {
+                    "enum": [
+                      "workspace:read",
+                      "workspace:update",
+                      "workspace:delete",
+                      "members:read",
+                      "members:manage",
+                      "tokens:manage",
+                      "nodes:read",
+                      "nodes:manage",
+                      "audit:read",
+                      "projects:create",
+                      "github:manage",
+                      "projects:read",
+                      "projects:manage",
+                      "access:manage",
+                      "services:read",
+                      "services:manage",
+                      "deployments:create",
+                      "variables:read",
+                      "variables:read_plain",
+                      "variables:manage"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "role": {
+                  "enum": [
+                    "owner",
+                    "admin",
+                    "member",
+                    "viewer"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "role",
+                "grantable_scopes"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "client",
+          "redirect_uri",
+          "scopes",
+          "workspaces",
+          "consent_token",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "OAuthDecision": {
+        "properties": {
+          "consent_token": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "approve",
+              "deny"
+            ],
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/OAuthAuthorizationParams"
+          },
+          "scopes": {
+            "items": {
+              "enum": [
+                "workspace:read",
+                "workspace:update",
+                "workspace:delete",
+                "members:read",
+                "members:manage",
+                "tokens:manage",
+                "nodes:read",
+                "nodes:manage",
+                "audit:read",
+                "projects:create",
+                "github:manage",
+                "projects:read",
+                "projects:manage",
+                "access:manage",
+                "services:read",
+                "services:manage",
+                "deployments:create",
+                "variables:read",
+                "variables:read_plain",
+                "variables:manage"
+              ],
+              "type": "string"
+            },
+            "maxItems": 20,
+            "type": "array"
+          },
+          "workspace_id": {
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "request",
+          "consent_token",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "OAuthRedirect": {
+        "properties": {
+          "redirect_to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "redirect_to"
         ],
         "type": "object"
       },
@@ -1948,6 +3219,31 @@
         },
         "required": [
           "node_selector"
+        ],
+        "type": "object"
+      },
+      "PlannedDeploy": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "config",
+              "variables",
+              "created",
+              "references"
+            ],
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "name",
+          "reason"
         ],
         "type": "object"
       },
@@ -2286,6 +3582,26 @@
           "plan",
           "region",
           "name"
+        ],
+        "type": "object"
+      },
+      "ResolveOp": {
+        "properties": {
+          "expected_revision": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "keep": {
+            "enum": [
+              "mine",
+              "theirs"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "keep",
+          "expected_revision"
         ],
         "type": "object"
       },
@@ -2677,6 +3993,1248 @@
         ],
         "type": "object"
       },
+      "StageOp": {
+        "properties": {
+          "expected_revision": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "op": {
+            "$ref": "#/components/schemas/StagedOpInput"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "type": "object"
+      },
+      "StagedChange": {
+        "properties": {
+          "conflict": {
+            "$ref": "#/components/schemas/StagedConflict"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "diff": {
+            "items": {
+              "$ref": "#/components/schemas/DiffEntry"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "op": {
+            "$ref": "#/components/schemas/StagedOp"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "conflicted",
+              "applied"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "target_key": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "seq",
+          "target_key",
+          "op",
+          "summary",
+          "diff",
+          "status",
+          "conflict",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "StagedConflict": {
+        "properties": {
+          "base_version": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "current_version": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "theirs": {}
+        },
+        "required": [
+          "base_version",
+          "current_version"
+        ],
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "StagedOp": {
+        "oneOf": [
+          {
+            "properties": {
+              "config": {
+                "properties": {
+                  "build": {
+                    "properties": {
+                      "build_args": {
+                        "additionalProperties": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "builder": {
+                        "enum": [
+                          "railpack",
+                          "dockerfile"
+                        ],
+                        "type": "string"
+                      },
+                      "dockerfile_path": {
+                        "example": "apps/web",
+                        "type": "string"
+                      },
+                      "secret_build_args": {
+                        "description": "Names of build_args whose values are secret. The builder passes them as BuildKit secrets (read them with RUN --mount=type=secret,id=NAME,env=NAME), never as build args, so they stay out of the image and its history, and redacts them from build logs.",
+                        "example": [
+                          "NPM_TOKEN"
+                        ],
+                        "items": {
+                          "example": "DATABASE_URL",
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "deploy": {
+                    "properties": {
+                      "drain_s": {
+                        "maximum": 3600,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "max_retries": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pre_deploy_command": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "replicas": {
+                        "maximum": 20,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "restart_policy": {
+                        "enum": [
+                          "always",
+                          "on_failure",
+                          "never"
+                        ],
+                        "type": "string"
+                      },
+                      "start_command": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "healthcheck": {
+                    "$ref": "#/components/schemas/HealthcheckConfig"
+                  },
+                  "networking": {
+                    "properties": {
+                      "generated_domain": {
+                        "type": "boolean"
+                      },
+                      "port": {
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "placement": {
+                    "properties": {
+                      "node_selector": {
+                        "additionalProperties": {
+                          "maxLength": 256,
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "resources": {
+                    "properties": {
+                      "cpu_millis": {
+                        "maximum": 64000,
+                        "minimum": 10,
+                        "type": "integer"
+                      },
+                      "memory_mb": {
+                        "maximum": 262144,
+                        "minimum": 16,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              },
+              "icon": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "kind": {
+                "default": "app",
+                "enum": [
+                  "app",
+                  "database",
+                  "cron"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "ref": {
+                "example": "new:1",
+                "pattern": "^new:[1-9][0-9]{0,3}$",
+                "type": "string"
+              },
+              "slug": {
+                "description": "Suffixed with -2, -3, … when taken or reserved (shared)",
+                "example": "api",
+                "maxLength": 40,
+                "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/components/schemas/ServiceSource"
+              },
+              "type": {
+                "enum": [
+                  "service.create"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "ref",
+              "name",
+              "source"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "icon": {
+                "maxLength": 64,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "service_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "slug": {
+                "description": "Suffixed with -2, -3, … when taken or reserved (shared)",
+                "example": "api",
+                "maxLength": 40,
+                "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "service.update"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service_id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "service_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "service.delete"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service_id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "patch": {
+                "$ref": "#/components/schemas/ServiceConfigPatch"
+              },
+              "service": {
+                "description": "A service ID, or `new:<n>` for a service created in the same set",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "config.patch"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service",
+              "patch"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "acknowledge_public": {
+                "type": "boolean"
+              },
+              "available_at_build": {
+                "type": "boolean"
+              },
+              "confirm_write_only": {
+                "type": "boolean"
+              },
+              "fingerprint": {
+                "pattern": "^[a-f0-9]{8}$",
+                "type": "string"
+              },
+              "key": {
+                "example": "DATABASE_URL",
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              },
+              "mount_as_file": {
+                "type": "boolean"
+              },
+              "scope": {
+                "enum": [
+                  "service",
+                  "shared"
+                ],
+                "type": "string"
+              },
+              "service": {
+                "description": "A service ID, or `new:<n>` for a service created in the same set",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "staged_tier": {
+                "$ref": "#/components/schemas/VariableTier"
+              },
+              "tier": {
+                "$ref": "#/components/schemas/VariableTier"
+              },
+              "type": {
+                "enum": [
+                  "variable.set"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "scope",
+              "key",
+              "confirm_write_only",
+              "acknowledge_public",
+              "fingerprint",
+              "staged_tier"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "key": {
+                "example": "DATABASE_URL",
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              },
+              "scope": {
+                "enum": [
+                  "service",
+                  "shared"
+                ],
+                "type": "string"
+              },
+              "service": {
+                "description": "A service ID, or `new:<n>` for a service created in the same set",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "variable.delete"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "scope",
+              "key"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "StagedOpInput": {
+        "oneOf": [
+          {
+            "properties": {
+              "config": {
+                "properties": {
+                  "build": {
+                    "properties": {
+                      "build_args": {
+                        "additionalProperties": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "builder": {
+                        "enum": [
+                          "railpack",
+                          "dockerfile"
+                        ],
+                        "type": "string"
+                      },
+                      "dockerfile_path": {
+                        "example": "apps/web",
+                        "type": "string"
+                      },
+                      "secret_build_args": {
+                        "description": "Names of build_args whose values are secret. The builder passes them as BuildKit secrets (read them with RUN --mount=type=secret,id=NAME,env=NAME), never as build args, so they stay out of the image and its history, and redacts them from build logs.",
+                        "example": [
+                          "NPM_TOKEN"
+                        ],
+                        "items": {
+                          "example": "DATABASE_URL",
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                          "type": "string"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "deploy": {
+                    "properties": {
+                      "drain_s": {
+                        "maximum": 3600,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "max_retries": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pre_deploy_command": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "replicas": {
+                        "maximum": 20,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "restart_policy": {
+                        "enum": [
+                          "always",
+                          "on_failure",
+                          "never"
+                        ],
+                        "type": "string"
+                      },
+                      "start_command": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "healthcheck": {
+                    "$ref": "#/components/schemas/HealthcheckConfig"
+                  },
+                  "networking": {
+                    "properties": {
+                      "generated_domain": {
+                        "type": "boolean"
+                      },
+                      "port": {
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "placement": {
+                    "properties": {
+                      "node_selector": {
+                        "additionalProperties": {
+                          "maxLength": 256,
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "resources": {
+                    "properties": {
+                      "cpu_millis": {
+                        "maximum": 64000,
+                        "minimum": 10,
+                        "type": "integer"
+                      },
+                      "memory_mb": {
+                        "maximum": 262144,
+                        "minimum": 16,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              },
+              "icon": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "kind": {
+                "default": "app",
+                "enum": [
+                  "app",
+                  "database",
+                  "cron"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "ref": {
+                "example": "new:1",
+                "pattern": "^new:[1-9][0-9]{0,3}$",
+                "type": "string"
+              },
+              "slug": {
+                "description": "Suffixed with -2, -3, … when taken or reserved (shared)",
+                "example": "api",
+                "maxLength": 40,
+                "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/components/schemas/ServiceSource"
+              },
+              "type": {
+                "enum": [
+                  "service.create"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "ref",
+              "name",
+              "source"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "icon": {
+                "maxLength": 64,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "service_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "slug": {
+                "description": "Suffixed with -2, -3, … when taken or reserved (shared)",
+                "example": "api",
+                "maxLength": 40,
+                "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "service.update"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service_id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "service_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "service.delete"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service_id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "patch": {
+                "$ref": "#/components/schemas/ServiceConfigPatch"
+              },
+              "service": {
+                "description": "A service ID, or `new:<n>` for a service created in the same set",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "config.patch"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service",
+              "patch"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "acknowledge_public": {
+                "default": false,
+                "type": "boolean"
+              },
+              "available_at_build": {
+                "type": "boolean"
+              },
+              "confirm_write_only": {
+                "default": false,
+                "type": "boolean"
+              },
+              "key": {
+                "example": "DATABASE_URL",
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              },
+              "mount_as_file": {
+                "type": "boolean"
+              },
+              "scope": {
+                "enum": [
+                  "service",
+                  "shared"
+                ],
+                "type": "string"
+              },
+              "service": {
+                "description": "A service ID, or `new:<n>` for a service created in the same set",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "tier": {
+                "$ref": "#/components/schemas/VariableTier"
+              },
+              "type": {
+                "enum": [
+                  "variable.set"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "scope",
+              "key",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "key": {
+                "example": "DATABASE_URL",
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              },
+              "scope": {
+                "enum": [
+                  "service",
+                  "shared"
+                ],
+                "type": "string"
+              },
+              "service": {
+                "description": "A service ID, or `new:<n>` for a service created in the same set",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "variable.delete"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "scope",
+              "key"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TemplateDeployment": {
+        "properties": {
+          "deploy_errors": {
+            "items": {
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "service_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "service_id",
+                "message"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/Deployment"
+            },
+            "type": "array"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/Environment"
+          },
+          "project": {
+            "$ref": "#/components/schemas/Project"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/Service"
+            },
+            "type": "array"
+          },
+          "template": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "version": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "version"
+            ],
+            "type": "object"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/VariableWarning"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "template",
+          "project",
+          "environment",
+          "services",
+          "deployments",
+          "deploy_errors",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "TemplateDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TemplateSummary"
+          },
+          {
+            "properties": {
+              "inputs": {
+                "items": {
+                  "$ref": "#/components/schemas/TemplateInput"
+                },
+                "type": "array"
+              },
+              "services": {
+                "items": {
+                  "$ref": "#/components/schemas/TemplateService"
+                },
+                "type": "array"
+              },
+              "shared_variables": {
+                "items": {
+                  "$ref": "#/components/schemas/TemplateVariable"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "inputs",
+              "services",
+              "shared_variables"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TemplateInput": {
+        "properties": {
+          "default": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "type": {
+            "enum": [
+              "string",
+              "secret",
+              "number",
+              "boolean",
+              "select"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "description",
+          "type",
+          "required",
+          "default",
+          "options"
+        ],
+        "type": "object"
+      },
+      "TemplateService": {
+        "properties": {
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "app",
+              "database",
+              "cron"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "public": {
+            "type": "boolean"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/TemplateSource"
+          },
+          "start_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateVariable"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ref",
+          "name",
+          "kind",
+          "icon",
+          "source",
+          "port",
+          "public",
+          "start_command",
+          "variables"
+        ],
+        "type": "object"
+      },
+      "TemplateSource": {
+        "oneOf": [
+          {
+            "properties": {
+              "image": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "image"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "image"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "branch": {
+                "type": "string"
+              },
+              "repo_url": {
+                "type": "string"
+              },
+              "root_dir": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "git"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "repo_url",
+              "branch",
+              "root_dir"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "engine": {
+                "enum": [
+                  "postgres",
+                  "mysql",
+                  "redis",
+                  "mongodb"
+                ],
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "database"
+                ],
+                "type": "string"
+              },
+              "version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "engine",
+              "version"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TemplateSummary": {
+        "properties": {
+          "category": {
+            "enum": [
+              "starter",
+              "static",
+              "tool",
+              "monitoring",
+              "automation",
+              "database"
+            ],
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "docs_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "requirements": {
+            "items": {
+              "enum": [
+                "databases",
+                "volumes"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "service_count": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "supported": {
+            "type": "boolean"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "version": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "name",
+          "description",
+          "icon",
+          "category",
+          "tags",
+          "docs_url",
+          "service_count",
+          "requirements",
+          "supported"
+        ],
+        "type": "object"
+      },
+      "TemplateVariable": {
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generated": {
+            "type": "boolean"
+          },
+          "key": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "secret",
+          "generated",
+          "value",
+          "description"
+        ],
+        "type": "object"
+      },
       "TlsMode": {
         "enum": [
           "acme",
@@ -2684,6 +5242,35 @@
           "off"
         ],
         "type": "string"
+      },
+      "UpdateCanvasLayout": {
+        "properties": {
+          "expected_version": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "positions": {
+            "additionalProperties": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/CanvasPosition"
+                },
+                {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                }
+              ]
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "positions",
+          "expected_version"
+        ],
+        "type": "object"
       },
       "UpdateProject": {
         "properties": {
@@ -3122,6 +5709,701 @@
         }
       }
     },
+    "/v1/change-sets/{changeSetId}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a change set",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/change-sets/{changeSetId}/apply": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyChangeSet"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppliedChangeSet"
+                }
+              }
+            },
+            "description": "Applied"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Apply a change set",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [
+            "change_set.applied",
+            "service.created",
+            "service.updated",
+            "service.deleted",
+            "variables.updated",
+            "deployment.created"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/change-sets/{changeSetId}/diff": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetReview"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Review a change set",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/change-sets/{changeSetId}/discard": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscardChangeSet"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "Discarded"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Discard a change set",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [
+            "change_set.discarded"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/change-sets/{changeSetId}/ops": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StageOp"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "Staged"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Stage a change",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/change-sets/{changeSetId}/ops/{opId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "opId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_revision",
+            "required": false,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "Unstaged"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Unstage a change",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/change-sets/{changeSetId}/ops/{opId}/resolve": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "opId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveOp"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "Resolved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Resolve a conflict",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/deployments/{deploymentId}": {
       "get": {
         "parameters": [
@@ -3465,6 +6747,625 @@
           "audit": [
             "deployment.rolled_back"
           ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/domains/{domainId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Remove a custom domain",
+        "tags": [
+          "domains"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "domain.removed"
+          ],
+          "auth": "session"
+        }
+      },
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Domain"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a domain",
+        "tags": [
+          "domains"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/domains/{domainId}/check": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Domain"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Check a domain now",
+        "tags": [
+          "domains"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "domain.verified"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/environments/{environmentId}/change-sets": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "default": "open",
+              "enum": [
+                "open",
+                "all"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List change sets",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChangeSet"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "Opened"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Open a change set",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [
+            "change_set.created"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/environments/{environmentId}/draft": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Draft"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get the environment's draft",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/environments/{environmentId}/draft/ops": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StageOp"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "Staged"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Stage a change in the draft",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
           "auth": "session"
         }
       }
@@ -3844,6 +7745,125 @@
         }
       }
     },
+    "/v1/instance/keys": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get key status",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/instance/keys/rotate": {
+      "post": {
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRotationStarted"
+                }
+              }
+            },
+            "description": "Started"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Rotate to the current master key",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "instance.key_rotation_started"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
     "/v1/instance/settings": {
       "get": {
         "responses": {
@@ -3965,105 +7985,18 @@
         }
       }
     },
-    "/v1/invites/{token}": {
-      "get": {
-        "parameters": [
-          {
-            "in": "path",
-            "name": "token",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "email": {
-                      "type": "string"
-                    },
-                    "expires_at": {
-                      "description": "Unix time in milliseconds",
-                      "example": 1767225600000,
-                      "type": "integer"
-                    },
-                    "role": {
-                      "$ref": "#/components/schemas/Role"
-                    },
-                    "workspace_name": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "workspace_name",
-                    "email",
-                    "role",
-                    "expires_at"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Preview an invite (public)",
-        "tags": [
-          "invites"
-        ]
-      }
-    },
-    "/v1/invites/{token}/accept": {
+    "/v1/invites/accept": {
       "post": {
-        "parameters": [
-          {
-            "in": "path",
-            "name": "token",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            }
-          }
-        ],
+        "description": "Single-use: the token stops working once accepted. Rate-limited per IP, since it can create an account.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "properties": {
-                  "name": {
-                    "maxLength": 100,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "password": {
-                    "maxLength": 256,
-                    "minLength": 12,
-                    "type": "string"
-                  }
-                },
-                "type": "object"
+                "$ref": "#/components/schemas/AcceptInvite"
               }
             }
           },
-          "required": false
+          "required": true
         },
         "responses": {
           "200": {
@@ -4136,6 +8069,89 @@
           }
         },
         "summary": "Accept an invite, creating an account if signed out",
+        "tags": [
+          "invites"
+        ]
+      }
+    },
+    "/v1/invites/lookup": {
+      "post": {
+        "description": "The token travels in the body, never the URL. 404 when it is unknown, used or expired. Rate-limited per IP.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteLookup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "email": {
+                      "type": "string"
+                    },
+                    "expires_at": {
+                      "description": "Unix time in milliseconds",
+                      "example": 1767225600000,
+                      "type": "integer"
+                    },
+                    "role": {
+                      "$ref": "#/components/schemas/Role"
+                    },
+                    "workspace_name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workspace_name",
+                    "email",
+                    "role",
+                    "expires_at"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview an invite (public)",
         "tags": [
           "invites"
         ]
@@ -4298,6 +8314,9 @@
                         "type": "boolean"
                       },
                       "gvisor": {
+                        "type": "boolean"
+                      },
+                      "ingress": {
                         "type": "boolean"
                       }
                     },
@@ -4466,6 +8485,366 @@
         "tags": [
           "agent"
         ]
+      }
+    },
+    "/v1/oauth/authorization": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "response_type",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "client_id",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "redirect_uri",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "code_challenge",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "code_challenge_method",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthConsent"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Describe an MCP authorization request",
+        "tags": [
+          "oauth"
+        ],
+        "x-roundhouse-policy": {
+          "action": null,
+          "audit": [],
+          "auth": "session_only"
+        }
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthRedirect"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Approve or deny an MCP authorization request",
+        "tags": [
+          "oauth"
+        ],
+        "x-roundhouse-policy": {
+          "action": null,
+          "audit": [
+            "mcp_client.authorized"
+          ],
+          "auth": "session_only"
+        }
+      }
+    },
+    "/v1/oauth/grants": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "clients": {
+                      "items": {
+                        "$ref": "#/components/schemas/ConnectedMcpClient"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "clients"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "List my connected MCP clients",
+        "tags": [
+          "oauth"
+        ],
+        "x-roundhouse-policy": {
+          "action": null,
+          "audit": [],
+          "auth": "session_only"
+        }
+      }
+    },
+    "/v1/oauth/grants/{grantId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grantId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Disconnect an MCP client",
+        "tags": [
+          "oauth"
+        ],
+        "x-roundhouse-policy": {
+          "action": null,
+          "audit": [
+            "mcp_client.revoked"
+          ],
+          "auth": "session_only"
+        }
       }
     },
     "/v1/projects/{projectId}": {
@@ -4706,6 +9085,200 @@
           "audit": [
             "project.updated"
           ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/projects/{projectId}/canvas": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Canvas"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get the project canvas",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/projects/{projectId}/canvas/layout": {
+      "patch": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCanvasLayout"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanvasLayout"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Update canvas positions",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [],
           "auth": "session"
         }
       }
@@ -5250,6 +9823,113 @@
         "x-roundhouse-policy": {
           "action": "projects:read",
           "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/projects/{projectId}/templates/deploy": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeployTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateDeployment"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Deploy a template into a project",
+        "tags": [
+          "templates"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "service.created",
+            "deployment.created",
+            "template.deployed"
+          ],
           "auth": "session"
         }
       }
@@ -6119,6 +10799,120 @@
         "x-roundhouse-policy": {
           "action": "services:read",
           "audit": [],
+          "auth": "session"
+        }
+      },
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddDomain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Domain"
+                }
+              }
+            },
+            "description": "Added"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Add a custom domain",
+        "tags": [
+          "domains"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "domain.added",
+            "domain.verified"
+          ],
           "auth": "session"
         }
       }
@@ -8081,6 +12875,100 @@
         }
       }
     },
+    "/v1/workspaces/{workspaceId}/node-provisions/{provisionId}/cancel": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "provisionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeProvision"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Cancel a provisioning run",
+        "tags": [
+          "providers"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [
+            "node.provision_cancelled"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
     "/v1/workspaces/{workspaceId}/nodes": {
       "get": {
         "parameters": [
@@ -8758,6 +13646,114 @@
         }
       }
     },
+    "/v1/workspaces/{workspaceId}/projects/from-template": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectFromTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateDeployment"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Create a project from a template",
+        "tags": [
+          "templates"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:create",
+          "audit": [
+            "project.created",
+            "service.created",
+            "deployment.created",
+            "template.deployed"
+          ],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/workspaces/{workspaceId}/projects/summary": {
       "get": {
         "parameters": [
@@ -8980,6 +13976,184 @@
         ],
         "x-roundhouse-policy": {
           "action": "nodes:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/templates": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "templates": {
+                      "items": {
+                        "$ref": "#/components/schemas/TemplateSummary"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "templates"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List templates",
+        "tags": [
+          "templates"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/templates/{templateId}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "templateId",
+            "required": true,
+            "schema": {
+              "example": "fastapi",
+              "maxLength": 40,
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateDetail"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a template",
+        "tags": [
+          "templates"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
           "audit": [],
           "auth": "session"
         }

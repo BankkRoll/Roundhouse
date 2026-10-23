@@ -5,6 +5,7 @@
  */
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { policyOf, updateInstanceSettings } from "../src/contracts";
 import { addMember, call, eventually, install, joinNode } from "./helpers";
 import { connectWorkloadAgent } from "./pipeline-helpers";
 
@@ -14,7 +15,7 @@ describe("instance settings", () => {
     const res = await owner.json("/v1/instance/settings");
     expect(res).toEqual({
       status: 200,
-      body: { apps_domain: null, tls_mode: "acme", log_retention_days: 7 },
+      body: { apps_domain: null, tls_mode: "acme", log_retention_days: 7, mcp_enabled: false },
     });
   });
 
@@ -63,6 +64,7 @@ describe("instance settings", () => {
       apps_domain: "apps.example.com",
       tls_mode: "internal",
       log_retention_days: 7,
+      mcp_enabled: false,
     });
     for (const agent of [a, b]) {
       await eventually(async () => {
@@ -88,7 +90,52 @@ describe("instance settings", () => {
       apps_domain: null,
       tls_mode: "internal",
       log_retention_days: 7,
+      mcp_enabled: false,
     });
+  });
+});
+
+describe("mcp_enabled", () => {
+  it("is off by default, toggled by instance admins only, audited, and needs a fresh session", async () => {
+    const { owner, workspaceId } = await install();
+    const admin = await addMember(owner, workspaceId, "ws-admin@example.com", "admin");
+    expect(
+      (await admin.json("/v1/instance/settings", { method: "PATCH", json: { mcp_enabled: true } }))
+        .status,
+    ).toBe(403);
+
+    const on = await owner.json<{ mcp_enabled: boolean }>("/v1/instance/settings", {
+      method: "PATCH",
+      json: { mcp_enabled: true },
+    });
+    expect(on).toMatchObject({ status: 200, body: { mcp_enabled: true } });
+    const audit = await env.DB.prepare(
+      "SELECT workspace_id, metadata FROM audit_logs WHERE action = 'instance.settings_updated'",
+    ).first<{ workspace_id: string | null; metadata: string }>();
+    expect(audit!.workspace_id).toBeNull();
+    expect(JSON.parse(audit!.metadata)).toEqual({
+      changed: ["mcp_enabled"],
+      before: { mcp_enabled: false },
+      after: { mcp_enabled: true },
+    });
+
+    // Toggling goes through the instance-settings policy: instance admins,
+    // browser sessions only, fresh session required.
+    expect(policyOf(updateInstanceSettings)).toEqual({
+      auth: "session_only",
+      action: "instance:manage",
+      audit: ["instance.settings_updated"],
+      reauth: true,
+    });
+  });
+
+  it("rejects a non-boolean value", async () => {
+    const { owner } = await install();
+    const res = await owner.json("/v1/instance/settings", {
+      method: "PATCH",
+      json: { mcp_enabled: "yes" },
+    });
+    expect(res.status).toBe(400);
   });
 });
 

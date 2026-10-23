@@ -115,7 +115,7 @@ export const projectRoutes = createRouter()
 
     const id = newId("project");
     const envId = newId("environment");
-    const keyRow = await newProjectKeyRow(masterKey, id);
+    const keyRow = await newProjectKeyRow(masterKey, id, workspaceId);
     const { slug } = await insertWithFreeSlug({
       base: body.slug ?? slugFor(body.name, "project"),
       uniqueOn: "projects",

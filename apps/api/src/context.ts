@@ -54,6 +54,14 @@ export interface TokenIdentity {
   /** The only workspace the token can reach. */
   workspaceId: string;
   scopes: readonly Action[];
+  /** Set for an MCP OAuth access token (only `/mcp` accepts those). */
+  oauth?: {
+    grantId: string;
+    /** The client metadata document URL. */
+    clientId: string;
+    /** Unix ms. */
+    expiresAt: number;
+  };
 }
 
 /**

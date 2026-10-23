@@ -2,14 +2,13 @@
  * The master keyring and the format 2 building blocks of ADR 0014 "Crypto":
  * key IDs, purpose-bound key derivation, the v2 AAD strings, DEK IDs and
  * variable fingerprints. Everything here is fixed byte for byte by the ADR;
- * sealing and unsealing with it (and the rotation workflow) belong to the
- * api-secrets-crypto stream.
+ * `./crypto` seals and unseals with it.
  *
  * @module
  */
+import { env as workerEnv } from "cloudflare:workers";
 import { fromBase64 } from "@roundhouse/protocol";
 import type { VariableScope } from "@roundhouse/shared";
-import { isValidMasterKey } from "./crypto";
 
 const encoder = new TextEncoder();
 
@@ -36,6 +35,35 @@ async function hkdf(
 // -----------------------------------------------------------------------------
 // Keyring
 // -----------------------------------------------------------------------------
+
+/** The Worker bindings that hold the master keyring. */
+export interface KeyEnv {
+  /** Current master key, base64 (at least 32 bytes). */
+  MASTER_KEY?: string;
+  /** Earlier master keys, comma-separated, newest first. */
+  MASTER_KEYS_PREVIOUS?: string;
+}
+
+/**
+ * Where a caller gets the keyring from: the bindings, or `MASTER_KEY` alone
+ * (call sites that predate the keyring); see {@link keyringOf}.
+ */
+export type KeySource = string | KeyEnv;
+
+/**
+ * Validates that `MASTER_KEY` decodes to at least 32 bytes.
+ *
+ * @param masterKey - The raw secret value.
+ * @returns `true` when it is usable.
+ */
+export function isValidMasterKey(masterKey: string | undefined): masterKey is string {
+  if (!masterKey) return false;
+  try {
+    return fromBase64(masterKey.trim()).byteLength >= 32;
+  } catch {
+    return false;
+  }
+}
 
 /** One master key and its ID. */
 export interface MasterKey {
@@ -108,6 +136,50 @@ export async function parseKeyring(env: {
  */
 export function keyByKid(keyring: Keyring, kid: string): MasterKey | undefined {
   return [keyring.current, ...keyring.previous].find((k) => k.kid === kid);
+}
+
+// PERF: Parsing runs HKDF and SHA-256 per key, every seal and unseal needs
+// the keyring, and the bindings don't change within an isolate.
+const ringCache = new Map<string, Promise<Keyring | null>>();
+
+/**
+ * The keyring for a key source, parsed once per isolate.
+ *
+ * A bare `MASTER_KEY` string gets the Worker's `MASTER_KEYS_PREVIOUS` added,
+ * so values sealed under a previous key stay readable between the
+ * operator's key change and the rotation workflow, whichever form the
+ * caller passes.
+ *
+ * @param source - The bindings, or the current master key.
+ * @returns The keyring.
+ * @throws {Error} When `MASTER_KEY` is missing or invalid, or a previous key is.
+ */
+export async function keyringOf(source: KeySource): Promise<Keyring> {
+  const keys = typeof source === "string" ? withWorkerPrevious(source) : source;
+  const id = `${keys.MASTER_KEY?.trim() ?? ""}|${keys.MASTER_KEYS_PREVIOUS ?? ""}`;
+  let ring = ringCache.get(id);
+  if (!ring) {
+    if (ringCache.size >= 8) ringCache.clear();
+    ring = parseKeyring(keys);
+    ringCache.set(id, ring);
+    ring.catch(() => ringCache.delete(id));
+  }
+  const parsed = await ring;
+  if (!parsed) throw new Error("MASTER_KEY is not configured");
+  return parsed;
+}
+
+function withWorkerPrevious(masterKey: string): KeyEnv {
+  const current = masterKey.trim();
+  const previous = (workerEnv as KeyEnv | undefined)?.MASTER_KEYS_PREVIOUS ?? "";
+  return {
+    MASTER_KEY: current,
+    MASTER_KEYS_PREVIOUS: previous
+      .split(",")
+      .map((k) => k.trim())
+      .filter((k) => k && k !== current)
+      .join(","),
+  };
 }
 
 /** Purposes a v2 subkey is derived for. */

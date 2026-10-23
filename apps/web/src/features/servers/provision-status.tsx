@@ -8,9 +8,15 @@ import {
   RefreshCwIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { errorMessage } from "../../lib/api/client";
+import { useState } from "react";
+import { errorMessage, isApiError } from "../../lib/api/client";
 import type { NodeProvision } from "../../lib/api/providers-types";
-import { PROVISION_POLL_INTERVAL_MS, useNodeProvision } from "../../queries/providers";
+import {
+  isProvisionInFlight,
+  PROVISION_POLL_INTERVAL_MS,
+  useCancelProvision,
+  useNodeProvision,
+} from "../../queries/providers";
 import { PROVISION_STAGES, provisionProgress, provisionStepLabel } from "./cloud-offers";
 
 /** Props for {@link ProvisionStatus}. */
@@ -80,9 +86,79 @@ function Stepper({ provision }: { provision: NodeProvision }) {
 }
 
 /**
- * Follows a provisioning run, polling until it joins or fails: a three-stage stepper
- * (Creating server → Booting → Joined) with the adapter's current step, the failure and
- * what to do about it, or a link to the new server.
+ * Cancel control for a run in flight: a first click asks to confirm, since cancelling
+ * deletes the server; while a server is still being created the cancel finishes once the
+ * provider has made it, so the control turns into a progress note.
+ */
+function CancelRun({
+  workspaceId,
+  run,
+  provider,
+}: {
+  workspaceId: string;
+  run: NodeProvision;
+  provider: string;
+}) {
+  const cancel = useCancelProvision(workspaceId);
+  const [confirming, setConfirming] = useState(false);
+
+  if (run.cancel_requested_at !== null) {
+    return (
+      <p className="flex items-start gap-2 text-xs text-muted-foreground" role="status">
+        <Spinner className="mt-px" />
+        <span>
+          Cancelling. The server is deleted as soon as {provider} has finished creating it.
+        </span>
+      </p>
+    );
+  }
+  if (!confirming) {
+    return (
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs text-muted-foreground">
+          This takes a minute or two. You can close this dialog; the server keeps joining and shows
+          up under Servers.
+        </p>
+        <Button variant="secondary" size="sm" onClick={() => setConfirming(true)}>
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-2 rounded-md border border-border p-3">
+      <p className="text-sm text-foreground">
+        Stop creating <span className="font-mono">{run.name}</span>? Anything already created at{" "}
+        {provider} is deleted.
+      </p>
+      {cancel.isError ? (
+        <p role="alert" className="text-sm text-danger">
+          {isApiError(cancel.error, "reauth_required")
+            ? `${errorMessage(cancel.error)} Sign in again, then retry.`
+            : errorMessage(cancel.error)}
+        </p>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>
+          Keep creating
+        </Button>
+        <Button
+          variant="danger"
+          size="sm"
+          loading={cancel.isPending}
+          onClick={() => cancel.mutate(run.id)}
+        >
+          Cancel and delete
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Follows a provisioning run, polling until it joins, fails or is cancelled: a three-stage
+ * stepper (Creating server → Booting → Joined) with the adapter's current step, a cancel
+ * control while it runs, the failure and what to do about it, or a link to the new server.
  *
  * @param props - Workspace, run id and completion handlers.
  * @returns The status view.
@@ -119,6 +195,7 @@ export function ProvisionStatus({
 
   const provider = PROVIDERS[run.provider].displayName;
   const failed = run.status === "failed" || run.status === "cleanup_failed";
+  const cancelled = run.failure_reason === "cancelled";
   return (
     <div className="grid gap-4">
       <div className="grid gap-0.5">
@@ -163,11 +240,36 @@ export function ProvisionStatus({
             </Button>
           </div>
         </>
+      ) : run.status === "cancelled" ? (
+        <>
+          <p
+            role="status"
+            className="flex items-start gap-2 rounded-md border border-border p-3 text-sm text-foreground"
+          >
+            <CircleXIcon className="mt-0.5 size-4 text-muted-foreground" aria-hidden="true" />
+            <span>
+              Cancelled. Nothing is left running at {provider}
+              {run.server_id ? (
+                <>
+                  : server <span className="font-mono">{run.server_id}</span> was deleted
+                </>
+              ) : null}
+              .
+            </span>
+          </p>
+          <div className="flex justify-end">
+            <Button variant="secondary" onClick={onRetry}>
+              Start over
+            </Button>
+          </div>
+        </>
       ) : failed ? (
         <>
           <div role="alert" className="grid gap-1 rounded-md border border-danger/30 p-3 text-sm">
             <p className="font-medium text-danger">
-              Couldn't create the server
+              {cancelled
+                ? "Cancelled, but the server couldn't be deleted"
+                : "Couldn't create the server"}
               {run.failure_reason ? (
                 <span className="font-mono text-xs font-normal"> ({run.failure_reason})</span>
               ) : null}
@@ -201,12 +303,9 @@ export function ProvisionStatus({
             </Button>
           </div>
         </>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          This takes a minute or two. You can close this dialog; the server keeps joining and shows
-          up under Servers.
-        </p>
-      )}
+      ) : isProvisionInFlight(run.status) ? (
+        <CancelRun workspaceId={workspaceId} run={run} provider={provider} />
+      ) : null}
     </div>
   );
 }

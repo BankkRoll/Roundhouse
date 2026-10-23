@@ -1,4 +1,5 @@
-import { Button, Tooltip } from "@roundhouse/ui";
+import { Button } from "@roundhouse/ui";
+import { Link } from "@tanstack/react-router";
 import { PlusIcon } from "lucide-react";
 import { PageHeader } from "../../components/page-header";
 import { SectionHeader } from "../../components/section-header";
@@ -10,23 +11,6 @@ import { ActivityCard } from "./activity-card";
 import { DeploysChart } from "./deploys-chart";
 import { FleetCard } from "./fleet-card";
 import { StatRow } from "./stat-row";
-
-function PhaseGatedButton({ label, reason }: { label: string; reason: string }) {
-  // NOTE: aria-disabled instead of disabled: a disabled button gets no hover or focus, so
-  // the tooltip explaining why it is unavailable could never appear.
-  return (
-    <Tooltip content={reason}>
-      <Button
-        variant="secondary"
-        aria-disabled="true"
-        onClick={(event) => event.preventDefault()}
-        className="aria-disabled:pointer-events-auto aria-disabled:cursor-not-allowed"
-      >
-        {label}
-      </Button>
-    </Tooltip>
-  );
-}
 
 /**
  * Workspace home: headline figures, the projects, deploys this week, recent activity as
@@ -47,7 +31,11 @@ export function HomePage({ workspaceId }: { workspaceId: string }) {
         subline={`${workspace?.name ?? "Workspace"} · self-hosted control plane on Cloudflare`}
         actions={
           <>
-            <PhaseGatedButton label="Browse templates" reason="Templates arrive in a later phase" />
+            <Button asChild variant="secondary">
+              <Link to="/w/$workspaceId/templates" params={{ workspaceId }}>
+                Browse templates
+              </Link>
+            </Button>
             {can("projects:manage") ? (
               <Button variant="primary" onClick={openNewProject}>
                 <PlusIcon />

@@ -48,6 +48,7 @@ import {
   rootDirError,
 } from "../../projects/new-service/source";
 import { findService, useProjectEnvironment } from "../../projects/use-project-environment";
+import { DomainsSection } from "../domains/domains-section";
 import type { ServicePageProps } from "../service-layout";
 import {
   fromBuildArgPairs,
@@ -88,6 +89,7 @@ const SECTIONS = [
   { id: "resources", label: "Resources" },
   { id: "healthcheck", label: "Healthcheck" },
   { id: "networking", label: "Networking" },
+  { id: "domains", label: "Domains" },
   { id: "placement", label: "Placement" },
 ] as const;
 
@@ -1166,6 +1168,7 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
         <ResourcesSection config={current} context={context} />
         <HealthcheckSection config={current} context={context} />
         <NetworkingSection config={current} context={context} />
+        <DomainsSection workspaceId={workspaceId} projectId={projectId} serviceId={serviceId} />
         <PlacementSection config={current} context={context} />
         {canDelete ? (
           <div id="danger-zone" className="scroll-mt-20">

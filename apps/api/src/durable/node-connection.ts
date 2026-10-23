@@ -12,7 +12,8 @@
  * - apply `workload_status` (and `hello.statuses`) to placements, move
  *   deployments between `active` and `crashed`, and wake deploy workflows;
  * - record `build_result`s and wake the waiting workflow;
- * - redact, store (R2 + `log_chunks`) and forward `logs` to the project
+ * - redact (with each deployment's frozen secret set and its encodings),
+ *   store (R2 + `log_chunks`) and forward `logs` to the project
  *   room, flushing on the Durable Object's alarm and dropping lines whose
  *   deployment or build no longer exists;
  * - sign and send control frames: `welcome`, `desired_state` (always
@@ -71,6 +72,7 @@ import {
   type NodeStatus,
   newId,
   OFFLINE_AFTER_MS,
+  redact,
 } from "@roundhouse/shared";
 import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Env } from "../env";
@@ -82,11 +84,10 @@ import {
   wakeWorkflow,
 } from "../lib/deployments";
 import { buildDesiredState } from "../lib/desired-state";
-import { logChunkKey, redact, redactionList, type StoredLogLine, toNdjson } from "../lib/logs";
+import { deploymentRedaction, logChunkKey, type StoredLogLine, toNdjson } from "../lib/logs";
 import { NODE_ID_HEADER } from "../lib/nodes";
 import { projectRoom } from "../lib/realtime";
 import { loadSigningKey } from "../lib/settings";
-import { loadEnvironmentVariables, projectKey } from "../lib/variables";
 
 /** Signed control frames expire quickly so a captured frame can't be replayed later. */
 const CONTROL_TTL_MS = 5 * 60 * 1000;
@@ -137,8 +138,14 @@ const LOG_FLUSH_BYTES = 256 * 1024;
 /** How long log lines may sit in memory before they are flushed to R2. */
 const LOG_FLUSH_DELAY_MS = 2000;
 
-/** How long redaction lists and log-source lookups are reused. */
+/**
+ * How long log-source lookups, and the redaction sets of deployments from
+ * before frozen secret sets, are reused.
+ */
 const LOOKUP_TTL_MS = 30_000;
+
+/** Deployments whose redaction sets one Durable Object keeps in memory. */
+const REDACTION_CACHE_LIMIT = 256;
 
 /** Statuses an agent's hello or heartbeat may move to `online`. */
 const AGENT_DRIVEN_STATUSES: NodeStatus[] = ["pending", "offline", "online", "degraded"];
@@ -172,6 +179,8 @@ interface LogOwner {
   environmentId: string;
   deploymentId: string | null;
   buildId: string | null;
+  /** Deployment whose frozen secret set redacts the lines (a build's own, for build logs). */
+  redactionDeploymentId: string;
 }
 
 interface LogBuffer {
@@ -209,7 +218,7 @@ export class NodeConnection extends DurableObject<Env> {
   private db: Db;
   private logBuffers = new Map<string, LogBuffer>();
   private owners = new Map<string, { owner: LogOwner | null; at: number }>();
-  private secrets = new Map<string, { values: string[]; at: number }>();
+  private redactionSets = new Map<string, { needles: string[]; expires: number }>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -828,13 +837,21 @@ export class NodeConnection extends DurableObject<Env> {
           ),
         )
         .limit(1);
-      if (row) owner = { ...row, deploymentId: src.deployment_id, buildId: null };
+      if (row) {
+        owner = {
+          ...row,
+          deploymentId: src.deployment_id,
+          buildId: null,
+          redactionDeploymentId: src.deployment_id,
+        };
+      }
     } else {
       const [row] = await this.db
         .select({
           projectId: services.projectId,
           serviceId: builds.serviceId,
           environmentId: deployments.environmentId,
+          redactionDeploymentId: builds.deploymentId,
         })
         .from(builds)
         .innerJoin(deployments, eq(deployments.id, builds.deploymentId))
@@ -848,34 +865,30 @@ export class NodeConnection extends DurableObject<Env> {
     return owner;
   }
 
-  /** Secret values of the owner's service and its environment's shared scope. */
+  /**
+   * The redaction needles for the owner's lines: its deployment's frozen
+   * secret set (see `deploymentRedaction`). Cached by deployment and kind
+   * with no expiry, since a frozen set never changes; only sets of
+   * deployments from before frozen sets expire, after {@link LOOKUP_TTL_MS}.
+   */
   private async redactions(owner: LogOwner): Promise<string[]> {
-    const key = `${owner.serviceId}:${owner.environmentId}`;
-    const cached = this.secrets.get(key);
-    if (cached && Date.now() - cached.at < LOOKUP_TTL_MS) return cached.values;
+    const build = owner.buildId !== null;
+    const key = `${build ? "b" : "r"}:${owner.redactionDeploymentId}`;
+    const cached = this.redactionSets.get(key);
+    if (cached && Date.now() < cached.expires) return cached.needles;
     const masterKey = this.env.MASTER_KEY?.trim();
-    let values: string[] = [];
-    if (masterKey) {
-      const dek = await projectKey(this.db, masterKey, owner.projectId);
-      const vars = await loadEnvironmentVariables(
-        this.db,
-        dek,
-        owner.projectId,
-        owner.environmentId,
-      );
-      const [svc] = await this.db
-        .select({ slug: services.slug })
-        .from(services)
-        .where(eq(services.id, owner.serviceId))
-        .limit(1);
-      values = redactionList([
-        ...(svc ? (vars.secrets[svc.slug] ?? []) : []),
-        ...vars.sharedSecrets,
-      ]);
+    const set = masterKey
+      ? await deploymentRedaction(this.db, masterKey, owner.redactionDeploymentId, build)
+      : { needles: [], frozen: false };
+    if (this.redactionSets.size >= REDACTION_CACHE_LIMIT) {
+      const oldest = this.redactionSets.keys().next().value;
+      if (oldest !== undefined) this.redactionSets.delete(oldest);
     }
-    if (this.secrets.size > 256) this.secrets.clear();
-    this.secrets.set(key, { values, at: Date.now() });
-    return values;
+    this.redactionSets.set(key, {
+      needles: set.needles,
+      expires: set.frozen ? Number.POSITIVE_INFINITY : Date.now() + LOOKUP_TTL_MS,
+    });
+    return set.needles;
   }
 
   /**

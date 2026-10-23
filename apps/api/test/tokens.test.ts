@@ -9,7 +9,7 @@ import { env } from "cloudflare:test";
 import { API_TOKEN_PRESETS } from "@roundhouse/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { hashToken } from "../src/lib/crypto";
-import { addMember, type Client, call, install, ORIGIN } from "./helpers";
+import { addMember, type Client, call, install, inviteToken, ORIGIN } from "./helpers";
 import { createProject } from "./pipeline-helpers";
 
 interface Created {
@@ -246,10 +246,10 @@ describe("bearer authentication", () => {
     expect(
       (await as(secret, "/v1/workspaces", { method: "POST", json: { name: "W" } })).status,
     ).toBe(403);
-    const inviteToken = invite.body.url.split("/invite/")[1]!;
-    const accept = await as(secret, `/v1/invites/${inviteToken}/accept`, {
+    const token = inviteToken(invite.body.url);
+    const accept = await as(secret, "/v1/invites/accept", {
       method: "POST",
-      json: {},
+      json: { token },
     });
     expect(accept.status).toBe(403);
   });

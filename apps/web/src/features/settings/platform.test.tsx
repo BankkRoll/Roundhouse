@@ -1,8 +1,12 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import { http } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { db, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
+import { apiError } from "../../mocks/handlers";
+import { server } from "../../mocks/server";
 import { findPageHeading, renderApp } from "../../test/render";
 import { githubPostUrl, submitGithubManifest } from "./github-manifest";
+import { MCP_DOCS_URL } from "./platform-page";
 
 const PLATFORM = `/w/${WORKSPACE_ID}/platform`;
 
@@ -56,7 +60,47 @@ describe("platform settings", () => {
       apps_domain: "127.0.0.1.nip.io",
       tls_mode: "internal",
       log_retention_days: 7,
+      mcp_enabled: false,
     });
+  });
+
+  it("lets instance admins turn MCP on and off, off by default, with a link to the docs", async () => {
+    const { user } = renderApp(PLATFORM);
+    const toggle = await screen.findByRole("switch", { name: "Allow coding agents" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(/While off, \/mcp answers 404 to everyone/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "How agents connect" })).toHaveAttribute(
+      "href",
+      MCP_DOCS_URL,
+    );
+    expect(MCP_DOCS_URL).toMatch(/apps\/api\/README\.md#mcp$/);
+
+    await user.click(toggle);
+    expect(await screen.findByText("MCP enabled")).toBeInTheDocument();
+    expect(db.deploy.instance.mcp_enabled).toBe(true);
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    expect(db.audit.at(-1)).toMatchObject({
+      action: "instance.settings_updated",
+      metadata: { mcp_enabled: true },
+    });
+
+    await user.click(toggle);
+    expect(await screen.findByText("MCP disabled")).toBeInTheDocument();
+    expect(db.deploy.instance.mcp_enabled).toBe(false);
+  });
+
+  it("explains a refused MCP toggle that needs a fresh sign-in", async () => {
+    server.use(
+      http.patch("*/v1/instance/settings", () =>
+        apiError(403, "reauth_required", "Confirm your password to continue"),
+      ),
+    );
+    const { user } = renderApp(PLATFORM);
+    await user.click(await screen.findByRole("switch", { name: "Allow coding agents" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Confirm your password to continue Sign in again, then retry.",
+    );
+    expect(db.deploy.instance.mcp_enabled).toBe(false);
   });
 
   it("lets owners choose how long logs are kept, and says where changes are recorded", async () => {

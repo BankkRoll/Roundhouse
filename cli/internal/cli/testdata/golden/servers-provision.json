@@ -13,6 +13,8 @@
   "ipv4": "198.51.100.7",
   "ipv6": null,
   "node_id": "node_0002",
+  "cancel_requested_at": null,
+  "estimated_monthly_cost": null,
   "created_at": 1792670400000,
   "updated_at": 1792670403000,
   "finished_at": 1792670403000

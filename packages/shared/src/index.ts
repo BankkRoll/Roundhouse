@@ -7,8 +7,10 @@
  */
 export * from "./audit";
 export * from "./auth-policy";
+export * from "./changes";
 export * from "./constants";
 export * from "./deployments";
+export * from "./domains";
 export * from "./hostnames";
 export * from "./ids";
 export * from "./projects";

@@ -3,17 +3,21 @@
  * protocol 4 fake agent that plays its part in rollouts (answers
  * `build_job`, reports workload health), and deployment polling.
  */
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
+import { createDb } from "@roundhouse/db";
 import {
+  buildSecretsAad,
   type ControlMessage,
   type DesiredState,
   type JoinResponse,
   openBox,
   SEALED_ENV_PROTOCOL_VERSION,
+  SealedBuildSecretsSchema,
   SealedWorkloadEnvSchema,
   verifyEnvelope,
   workloadEnvAad,
 } from "@roundhouse/protocol";
+import { cancelDeployment, IllegalTransitionError } from "../src/lib/deployments";
 import {
   type Client,
   eventually,
@@ -99,6 +103,10 @@ export interface FakeWorkloadAgent extends FakeAgent {
   desired(): DesiredState | undefined;
   /** Opened environment of a workload, from the latest frame that carried it. */
   env(workloadId: string): Record<string, string> | undefined;
+  /** Opened `mount_as_file` values of a workload, from the latest frame that carried it. */
+  files(workloadId: string): Record<string, string> | undefined;
+  /** Opened `build_secrets_sealed` of a build job; `undefined` when it carried none. */
+  buildSecrets(buildId: string): Record<string, string> | undefined;
   /** Resolves with the first control payload matching `predicate`, waiting if needed. */
   waitFor<T extends ControlMessage>(
     predicate: (m: ControlMessage) => m is T,
@@ -145,6 +153,8 @@ export async function connectWorkloadAgent(
   const listeners = new Set<() => void>();
   const known = new Set<string>();
   const envs = new Map<string, Record<string, string>>();
+  const files = new Map<string, Record<string, string>>();
+  const buildSecrets = new Map<string, Record<string, string>>();
   const send = (frame: unknown) =>
     ws.send(typeof frame === "string" ? frame : JSON.stringify(frame));
 
@@ -166,6 +176,8 @@ export async function connectWorkloadAgent(
     send,
     desired: () => [...received].reverse().find(isDesired),
     env: (workloadId) => envs.get(workloadId),
+    files: (workloadId) => files.get(workloadId),
+    buildSecrets: (buildId) => buildSecrets.get(buildId),
     waitFor<T extends ControlMessage>(predicate: (m: ControlMessage) => m is T, timeoutMs = 8000) {
       return new Promise<T>((resolve, reject) => {
         const check = () => {
@@ -257,13 +269,28 @@ export async function connectWorkloadAgent(
             "workload-env",
             workloadEnvAad(joined.node_id, w.id, m.generation),
           );
-          envs.set(
-            w.id,
-            SealedWorkloadEnvSchema.parse(JSON.parse(new TextDecoder().decode(pt))).env,
-          );
+          const opened = SealedWorkloadEnvSchema.parse(JSON.parse(new TextDecoder().decode(pt)));
+          envs.set(w.id, opened.env);
+          files.set(w.id, opened.files);
         } catch {
           rejected.push(`env_sealed:${w.id}`);
         }
+      }
+    }
+    if (m.type === "build_job" && m.build_secrets_sealed) {
+      try {
+        const pt = await openBox(
+          NODE_ENCRYPTION_PRIVATE_KEY,
+          m.build_secrets_sealed,
+          "build-secrets",
+          buildSecretsAad(joined.node_id, m.build_id),
+        );
+        buildSecrets.set(
+          m.build_id,
+          SealedBuildSecretsSchema.parse(JSON.parse(new TextDecoder().decode(pt))).secrets,
+        );
+      } catch {
+        rejected.push(`build_secrets_sealed:${m.build_id}`);
       }
     }
     received.push(m);
@@ -366,17 +393,69 @@ export async function deploy(
   return res.body;
 }
 
-/** Polls a deployment until its status is one of `statuses`. */
-export function waitForStatus(
+/** Statuses the deploy workflow ends in, shortly after writing them. */
+const WORKFLOW_FINAL_STATUSES = new Set(["active", "failed", "cancelled"]);
+
+/** Workflow instance states after which it touches nothing. */
+const INSTANCE_DONE = new Set(["complete", "errored", "terminated"]);
+
+/** Waits until the deploy workflow instance `id` will touch nothing more. */
+function instanceDone(id: string, timeoutMs: number): Promise<true> {
+  return eventually(async () => {
+    try {
+      const instance = await env.DEPLOY_WORKFLOW.get(id);
+      return INSTANCE_DONE.has((await instance.status()).status) ? true : undefined;
+    } catch {
+      return true; // no instance: nothing can outlive the test
+    }
+  }, timeoutMs);
+}
+
+/**
+ * Cancels every deployment still in flight and waits for each workflow
+ * instance to finish. Call it before disposing the workflow introspector: a
+ * disposed introspector aborts running instances, and an instance aborted
+ * mid-wait fails its deployment in a context that no longer exists (workerd
+ * then logs an uncaught "execution context … is no longer running").
+ */
+export async function settleDeployments(timeoutMs = 10_000): Promise<void> {
+  const ctx = { db: createDb(env.DB), env };
+  const live = await env.DB.prepare(
+    `SELECT d.id, s.project_id FROM deployments d JOIN services s ON s.id = d.service_id
+     WHERE d.status IN ('queued', 'building', 'deploying')`,
+  ).all<{ id: string; project_id: string }>();
+  for (const d of live.results) {
+    try {
+      await cancelDeployment(ctx, d.project_id, d.id, "The test finished");
+    } catch (err) {
+      if (!(err instanceof IllegalTransitionError)) throw err;
+    }
+  }
+  const all = await env.DB.prepare(
+    "SELECT id FROM deployments WHERE workflow_instance_id IS NOT NULL",
+  ).all<{ id: string }>();
+  await Promise.all(all.results.map((d) => instanceDone(d.id, timeoutMs)));
+}
+
+/**
+ * Polls a deployment until its status is one of `statuses`. When that status
+ * is one the workflow ends in, it also waits for the workflow instance to
+ * finish: the status is written a step before the end, and a test that
+ * returns in between tears the instance down mid-step (workerd then logs
+ * "The execution context which hosts this callback is no longer running").
+ */
+export async function waitForStatus(
   c: Client,
   deploymentId: string,
   statuses: string[],
   timeoutMs = 20_000,
 ): Promise<DeploymentBody> {
-  return eventually(async () => {
+  const body = await eventually(async () => {
     const res = await c.json<DeploymentBody>(`/v1/deployments/${deploymentId}`);
     return statuses.includes(res.body.status) ? res.body : undefined;
   }, timeoutMs);
+  if (WORKFLOW_FINAL_STATUSES.has(body.status)) await instanceDone(deploymentId, timeoutMs);
+  return body;
 }
 
 /** A full commit SHA for git deployments. */

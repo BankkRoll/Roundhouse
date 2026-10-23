@@ -20,6 +20,7 @@ import {
   GIT_SERVICE,
   IMAGE_DIGEST,
   isDesired,
+  settleDeployments,
   stage,
   waitForStatus,
 } from "./pipeline-helpers";
@@ -32,6 +33,7 @@ async function introspect() {
 }
 
 afterEach(async () => {
+  await settleDeployments();
   await introspector?.dispose();
   introspector = undefined;
 });

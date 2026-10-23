@@ -220,11 +220,11 @@ describe("service settings", () => {
     await user.click(within(dialog).getByRole("button", { name: "Delete service" }));
     await expectPath(router, `/w/ws_acme/p/${SEED.project}`);
     expect(db.deploy.services.find((s) => s.id === SEED.web)?.deleted).toBe(true);
+    const canvas = await screen.findByRole("group", { name: /Project canvas/ });
     await waitFor(() =>
-      expect(
-        within(screen.getByRole("list", { name: "Services" })).queryByRole("link", { name: "web" }),
-      ).toBeNull(),
+      expect(within(canvas).getByRole("button", { name: /^api,/ })).toBeInTheDocument(),
     );
+    expect(within(canvas).queryByRole("button", { name: /^web,/ })).toBeNull();
   });
 
   it("is read-only for viewers", async () => {
@@ -233,31 +233,5 @@ describe("service settings", () => {
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Replicas")).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Delete service" })).not.toBeInTheDocument();
-  });
-});
-
-describe("domains tab", () => {
-  it("shows the generated domain with copy and open, and custom domains as Phase 3", async () => {
-    const { user } = renderApp(servicePath(SEED.web, "domains"));
-    const list = await screen.findByRole("list", { name: "Domain list" });
-    expect(
-      within(list).getByRole("link", {
-        name: /^web-production-x7k2\.apps\.example\.com\s*\(opens/,
-      }),
-    ).toHaveAttribute("href", "https://web-production-x7k2.apps.example.com");
-    expect(list).toHaveTextContent("TLS issued");
-    await user.click(within(list).getByRole("button", { name: /Copy/ }));
-    expect(await navigator.clipboard.readText()).toBe(
-      "https://web-production-x7k2.apps.example.com",
-    );
-    const custom = screen.getByRole("button", { name: "Add custom domain" });
-    expect(custom).toHaveAttribute("aria-disabled", "true");
-    expect(custom).toHaveAccessibleDescription(/arrive in Phase 3/);
-  });
-
-  it("explains how to get a domain when there is none", async () => {
-    renderApp(servicePath(SEED.worker, "domains"));
-    expect(await screen.findByRole("heading", { name: "No domains" })).toBeInTheDocument();
-    expect(screen.getByText(/has no port/)).toBeInTheDocument();
   });
 });

@@ -133,8 +133,23 @@ export const NODE_PROVISION_STATUSES = [
   "booting",
   "joined",
   "failed",
+  "cancelled",
   "cleanup_failed",
 ] as const;
+
+/**
+ * A monthly price from a provider's catalogue, recorded when Roundhouse
+ * created the server. An estimate: traffic, backups, taxes and price
+ * changes are not included, and the provider's invoice is what counts.
+ */
+export const CostEstimateSchema = z
+  .object({
+    /** Price in minor units (cents), gross where the provider adds VAT. */
+    monthly_cents: z.number().int(),
+    /** ISO 4217 currency, e.g. `EUR`. */
+    currency: z.string(),
+  })
+  .openapi("CostEstimate");
 
 /** One one-click provisioning run. */
 export const NodeProvisionSchema = z
@@ -155,6 +170,10 @@ export const NodeProvisionSchema = z
     ipv6: z.string().nullable(),
     /** Set once the agent joined. */
     node_id: z.string().nullable(),
+    /** When an operator asked to cancel; the run ends `cancelled` (or `cleanup_failed`). */
+    cancel_requested_at: Millis.nullable(),
+    /** The chosen plan's catalogue price, once known. */
+    estimated_monthly_cost: CostEstimateSchema.nullable(),
     created_at: Millis,
     updated_at: Millis,
     finished_at: Millis.nullable(),

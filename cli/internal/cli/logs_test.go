@@ -236,7 +236,23 @@ func TestRealtimeAuthCloseCodes(t *testing.T) {
 		if err := rt.Subscribe(ctx, api.RealtimeTopic{DeploymentID: apitest.ActiveDeploy}); err != nil {
 			return err
 		}
-		h.fake.Publish(api.RealtimeMessage{Type: "presence"})
+		// The fake may register the subscription after Subscribe returns, so a
+		// single publish can be missed under load; keep publishing until a read
+		// succeeds.
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			tick := time.NewTicker(50 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				h.fake.Publish(api.RealtimeMessage{Type: "presence"})
+				select {
+				case <-stop:
+					return
+				case <-tick.C:
+				}
+			}
+		}()
 		_, err = rt.Read(ctx)
 		return err
 	}

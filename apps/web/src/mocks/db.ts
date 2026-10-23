@@ -16,6 +16,7 @@ import type {
   User,
   Workspace,
 } from "../lib/api/types";
+import { type ChangesDb, emptyChanges } from "./changes-db";
 import { type DeployDb, emptyDeploy, seedDeploy } from "./deploy-db";
 import { emptyProviders, type ProvidersDb } from "./providers-db";
 
@@ -61,6 +62,8 @@ export interface MockDb {
   deploy: DeployDb;
   /** Cloud provider integrations and provisioning runs. */
   providers: ProvidersDb;
+  /** Staged change sets and canvas layouts. */
+  changes: ChangesDb;
   counter: number;
 }
 
@@ -108,6 +111,7 @@ export function makeNode(overrides: Partial<Node> = {}): Node {
     provider: "hetzner",
     provider_server_id: null,
     provider_server_missing_at: null,
+    estimated_monthly_cost: null,
     workloads_blocked: null,
     region: "hel1",
     public_ip: "203.0.113.10",
@@ -250,6 +254,7 @@ function seed(): MockDb {
     ].map((entry) => ({ ...entry, workspace_id: WORKSPACE_ID })),
     deploy: seedDeploy(WORKSPACE_ID, now),
     providers: emptyProviders(),
+    changes: emptyChanges(),
     counter: 0,
   };
 }

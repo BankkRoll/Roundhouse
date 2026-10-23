@@ -9,7 +9,10 @@ import {
   client,
   failStatement,
   install,
+  inviteToken,
   joinNode,
+  lookupInvite,
+  ORIGIN,
 } from "./helpers";
 
 type Member = { id: string; user_id: string; email: string; role: string };
@@ -74,8 +77,8 @@ describe("invites", () => {
       method: "POST",
       json: { email: "Jonas@Example.com", role: "member" },
     });
-    const token = body.url.split("/invite/")[1];
-    const preview = await call(`/v1/invites/${token}`);
+    const token = inviteToken(body.url);
+    const preview = await lookupInvite(token);
     expect(await preview.json()).toMatchObject({
       workspace_name: "Nightjar Labs",
       email: "jonas@example.com",
@@ -89,11 +92,11 @@ describe("invites", () => {
       method: "POST",
       json: { email: "once@example.com", role: "member" },
     });
-    const token = body.url.split("/invite/")[1];
+    const token = inviteToken(body.url);
     const accept = () =>
-      call(`/v1/invites/${token}/accept`, {
+      call("/v1/invites/accept", {
         method: "POST",
-        json: { name: "Once", password: "a perfectly fine password" },
+        json: { token, name: "Once", password: "a perfectly fine password" },
       });
     const results = await Promise.all([accept(), accept()]);
     expect(results.map((r) => r.status).sort()).toEqual([200, expect.any(Number)]);
@@ -106,15 +109,15 @@ describe("invites", () => {
       method: "POST",
       json: { email: "someone-else@example.com", role: "admin" },
     });
-    const token = body.url.split("/invite/")[1];
-    const res = await owner.json(`/v1/invites/${token}/accept`, { method: "POST" });
+    const token = inviteToken(body.url);
+    const res = await owner.json("/v1/invites/accept", { method: "POST", json: { token } });
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ error: { code: "email_mismatch" } });
   });
 
   it("rejects unknown and revoked tokens", async () => {
     const { owner, workspaceId } = await install();
-    expect((await call("/v1/invites/inv_bogus")).status).toBe(404);
+    expect((await lookupInvite("inv_bogus")).status).toBe(404);
     const created = await owner.json<{ invite: { id: string }; url: string }>(
       `/v1/workspaces/${workspaceId}/invites`,
       { method: "POST", json: { email: "revoked@example.com", role: "member" } } as RequestInit,
@@ -124,8 +127,129 @@ describe("invites", () => {
       { method: "DELETE" },
     );
     expect(del.status).toBe(204);
-    const token = created.body.url.split("/invite/")[1];
+    const token = inviteToken(created.body.url);
+    expect((await lookupInvite(token)).status).toBe(404);
+  });
+
+  it("puts the token in the link's fragment, never its path or query", async () => {
+    const { owner, workspaceId } = await install();
+    const { body } = await owner.json<{ url: string }>(`/v1/workspaces/${workspaceId}/invites`, {
+      method: "POST",
+      json: { email: "frag@example.com", role: "member" },
+    });
+    const url = new URL(body.url);
+    expect(url.pathname).toBe("/invite");
+    expect(url.search).toBe("");
+    expect(url.hash).toMatch(/^#token=inv_[\w-]+$/);
+    expect(url.origin).toBe(new URL(ORIGIN).origin);
+    // The path-token routes are gone, so a token can't be sent in a URL by mistake.
+    const token = inviteToken(body.url);
     expect((await call(`/v1/invites/${token}`)).status).toBe(404);
+    expect((await call(`/v1/invites/${token}/accept`, { method: "POST", json: {} })).status).toBe(
+      404,
+    );
+    expect((await lookupInvite(token)).status).toBe(200);
+  });
+
+  it("refuses a replayed token and audits the refusal without the token", async () => {
+    const { owner, workspaceId } = await install();
+    const { body } = await owner.json<{ url: string }>(`/v1/workspaces/${workspaceId}/invites`, {
+      method: "POST",
+      json: { email: "replay@example.com", role: "member" },
+    });
+    const token = inviteToken(body.url);
+    const accept = () =>
+      call("/v1/invites/accept", {
+        method: "POST",
+        json: { token, name: "Replay", password: "a perfectly fine password" },
+      });
+    expect((await accept()).status).toBe(200);
+    const again = await accept();
+    expect(again.status).toBe(404);
+    expect((await lookupInvite(token)).status).toBe(404);
+
+    const rows = await env.DB.prepare(
+      "SELECT workspace_id, action, target_type, metadata FROM audit_logs WHERE action LIKE 'invite.%' ORDER BY seq",
+    ).all<{ workspace_id: string | null; action: string; metadata: string }>();
+    expect(rows.results.map((r) => r.action)).toEqual([
+      "invite.created",
+      "invite.accepted",
+      "invite.rejected_token",
+      "invite.rejected_token",
+    ]);
+    const rejected = rows.results.filter((r) => r.action === "invite.rejected_token");
+    expect(rejected.map((r) => [r.workspace_id, JSON.parse(r.metadata)])).toEqual([
+      [workspaceId, { reason: "used", stage: "accept", email: "replay@example.com" }],
+      [workspaceId, { reason: "used", stage: "lookup", email: "replay@example.com" }],
+    ]);
+    const everything = await env.DB.prepare("SELECT * FROM audit_logs").all();
+    const dump = JSON.stringify(everything.results);
+    expect(dump).not.toContain(token);
+    expect(dump).not.toContain(await hashToken(token));
+  });
+
+  it("refuses an expired token for lookup and accept", async () => {
+    const { owner, workspaceId } = await install();
+    const { body } = await owner.json<{ url: string; invite: { id: string } }>(
+      `/v1/workspaces/${workspaceId}/invites`,
+      { method: "POST", json: { email: "late@example.com", role: "member" } },
+    );
+    await env.DB.prepare("UPDATE invites SET expires_at = ? WHERE id = ?")
+      .bind(Date.now() - 1, body.invite.id)
+      .run();
+    const token = inviteToken(body.url);
+    expect((await lookupInvite(token)).status).toBe(404);
+    const res = await call("/v1/invites/accept", {
+      method: "POST",
+      json: { token, name: "Late", password: "a perfectly fine password" },
+    });
+    expect(res.status).toBe(404);
+    const users = await env.DB.prepare(
+      "SELECT count(*) AS n FROM users WHERE email = 'late@example.com'",
+    ).first<{ n: number }>();
+    expect(users!.n).toBe(0);
+    const reasons = await env.DB.prepare(
+      "SELECT workspace_id, json_extract(metadata, '$.reason') AS reason FROM audit_logs WHERE action = 'invite.rejected_token'",
+    ).all<{ workspace_id: string; reason: string }>();
+    expect(reasons.results).toEqual([
+      { workspace_id: workspaceId, reason: "expired" },
+      { workspace_id: workspaceId, reason: "expired" },
+    ]);
+  });
+
+  it("audits unknown tokens at instance level", async () => {
+    await install();
+    expect((await lookupInvite("inv_never_issued")).status).toBe(404);
+    const row = await env.DB.prepare(
+      "SELECT workspace_id, actor_id, target_id, metadata FROM audit_logs WHERE action = 'invite.rejected_token'",
+    ).first<{ workspace_id: string | null; actor_id: string | null; metadata: string }>();
+    expect(row).toMatchObject({ workspace_id: null, actor_id: null, target_id: null });
+    expect(JSON.parse(row!.metadata)).toEqual({ reason: "unknown", stage: "lookup" });
+    expect(row!.metadata).not.toContain("inv_never_issued");
+  });
+
+  it("rate-limits the token routes per IP", async () => {
+    const { owner, workspaceId } = await install();
+    const { body } = await owner.json<{ url: string }>(`/v1/workspaces/${workspaceId}/invites`, {
+      method: "POST",
+      json: { email: "limited@example.com", role: "member" },
+    });
+    const token = inviteToken(body.url);
+    const buckets: string[] = [];
+    (env as { AUTH_LIMITER?: RateLimit }).AUTH_LIMITER = {
+      limit: async ({ key }) => {
+        buckets.push(key);
+        return { success: false };
+      },
+    };
+    expect((await lookupInvite(token)).status).toBe(429);
+    const accepted = await call("/v1/invites/accept", {
+      method: "POST",
+      json: { token, name: "Limited", password: "a perfectly fine password" },
+    });
+    expect(accepted.status).toBe(429);
+    expect(buckets.every((k) => k.startsWith("invite:"))).toBe(true);
+    expect(buckets).toHaveLength(2);
   });
 
   it("doesn't let admins mint owners", async () => {
@@ -432,7 +556,7 @@ describe("invite edge cases", () => {
       `/v1/workspaces/${workspaceId}/invites`,
       { method: "POST", json: { email, role } },
     );
-    return { ...res, token: res.body.url?.split("/invite/")[1] };
+    return { ...res, token: res.body.url ? inviteToken(res.body.url) : undefined };
   }
 
   it("rejects a second pending invite for the same address", async () => {
@@ -460,29 +584,29 @@ describe("invite edge cases", () => {
     });
     await addMember(owner, workspaceId, "known@example.com", "member");
     const { token } = await invite(owner, other.id, "known@example.com");
-    const res = await call(`/v1/invites/${token}/accept`, {
+    const res = await call("/v1/invites/accept", {
       method: "POST",
-      json: { name: "Known", password: "a perfectly fine password" },
+      json: { token, name: "Known", password: "a perfectly fine password" },
     });
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ error: { code: "account_exists" } });
-    expect((await call(`/v1/invites/${token}`)).status).toBe(200);
+    expect((await lookupInvite(token!)).status).toBe(200);
   });
 
   it("validates the accept body against its schema", async () => {
     const { owner, workspaceId } = await install();
     const { token } = await invite(owner, workspaceId, "short@example.com");
-    const res = await call(`/v1/invites/${token}/accept`, {
+    const res = await call("/v1/invites/accept", {
       method: "POST",
-      json: { name: "Short", password: "tooshort" },
+      json: { token, name: "Short", password: "tooshort" },
     });
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({
       error: { code: "invalid_request", message: expect.stringContaining("password") },
     });
-    const longName = await call(`/v1/invites/${token}/accept`, {
+    const longName = await call("/v1/invites/accept", {
       method: "POST",
-      json: { name: "x".repeat(101), password: "a perfectly fine password" },
+      json: { token, name: "x".repeat(101), password: "a perfectly fine password" },
     });
     expect(longName.status).toBe(400);
   });
@@ -491,9 +615,9 @@ describe("invite edge cases", () => {
     const { owner, workspaceId } = await install();
     const { token } = await invite(owner, workspaceId, "fragile@example.com");
     const accept = () =>
-      call(`/v1/invites/${token}/accept`, {
+      call("/v1/invites/accept", {
         method: "POST",
-        json: { name: "Fragile", password: "a perfectly fine password" },
+        json: { token, name: "Fragile", password: "a perfectly fine password" },
       });
 
     const restore = failStatement(/^insert into "audit_logs"/);
@@ -527,7 +651,7 @@ describe("invite edge cases", () => {
       .bind(workspaceId, await hashToken(token), Date.now() + 60_000, Date.now(), Date.now())
       .run();
 
-    const res = await viewer.json(`/v1/invites/${token}/accept`, { method: "POST" });
+    const res = await viewer.json("/v1/invites/accept", { method: "POST", json: { token } });
     expect(res.status).toBe(200);
     const me = await viewer.json<{ workspaces: { role: string }[] }>("/v1/me");
     expect(me.body.workspaces[0]!.role).toBe("viewer");

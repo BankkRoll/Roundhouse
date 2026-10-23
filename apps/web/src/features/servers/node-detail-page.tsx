@@ -28,6 +28,7 @@ import {
 import { usePermissions } from "../../lib/permissions";
 import { useNow } from "../../lib/use-now";
 import { forgetNode, useDeleteNode, useNode } from "../../queries/nodes";
+import { COST_ESTIMATE_NOTE, formatCostEstimate } from "./cost-estimate";
 import { nodeMeterRows, nodeSubtitle } from "./node-metrics";
 import { managedProvider, ProviderBadges } from "./provider-badge";
 
@@ -77,6 +78,14 @@ function NodeFacts({ node, now }: { node: Node; now: number }) {
       {managed ? (
         <Fact label="Server ID">
           <span className="font-mono">{node.provider_server_id}</span>
+        </Fact>
+      ) : null}
+      {managed && node.estimated_monthly_cost ? (
+        <Fact label="Estimated cost">
+          <span title={COST_ESTIMATE_NOTE}>
+            {formatCostEstimate(node.estimated_monthly_cost)}{" "}
+            <span className="text-muted-foreground">(estimate)</span>
+          </span>
         </Fact>
       ) : null}
       <Fact label="Region">{node.region ?? EMPTY}</Fact>

@@ -87,6 +87,28 @@ export async function install(
 }
 
 /**
+ * The token in an invite link's fragment (`…/invite#token=…`).
+ *
+ * @param url - Link from `POST …/invites`.
+ * @returns The plaintext token.
+ */
+export function inviteToken(url: string): string {
+  const token = new URLSearchParams(new URL(url).hash.slice(1)).get("token");
+  if (!token) throw new Error(`no token in invite link ${url}`);
+  return token;
+}
+
+/**
+ * Calls the public invite preview, as the dashboard does with a link's token.
+ *
+ * @param token - Invite token.
+ * @returns The raw response.
+ */
+export function lookupInvite(token: string): Promise<Response> {
+  return call("/v1/invites/lookup", { method: "POST", json: { token } });
+}
+
+/**
  * Invites `email` with `role` and accepts as a brand-new user.
  *
  * @returns A client signed in as the new member.
@@ -101,10 +123,13 @@ export async function addMember(
     method: "POST",
     json: { email, role },
   });
-  const token = body.url.split("/invite/")[1]!;
-  const res = await call(`/v1/invites/${token}/accept`, {
+  const res = await call("/v1/invites/accept", {
     method: "POST",
-    json: { name: email.split("@")[0], password: "a perfectly fine password" },
+    json: {
+      token: inviteToken(body.url),
+      name: email.split("@")[0],
+      password: "a perfectly fine password",
+    },
   });
   if (res.status !== 200) throw new Error(`accept failed: ${res.status} ${await res.text()}`);
   return client(cookieFrom(res));

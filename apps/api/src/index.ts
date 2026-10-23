@@ -4,7 +4,9 @@
  * Responsibilities:
  * - REST API under `/v1` (OpenAPI document at `/v1/openapi.json`)
  * - Better Auth under `/api/auth/*`
- * - The MCP server for coding agents at `/mcp` (`mcp/route.ts`)
+ * - The MCP server for coding agents at `/mcp` (`mcp/route.ts`) and its OAuth
+ *   authorization server: discovery under `/.well-known/`, `/oauth/*`, and
+ *   the consent routes under `/v1/oauth/*` (`mcp/oauth/`)
  * - Agent join/connect endpoints and the install script
  * - The project realtime socket (`ProjectRoom`), the audit chain sealer
  *   (`AuditChain`), and the deploy and key rotation workflows
@@ -12,6 +14,7 @@
  *   provisioning (`ProvisionWorkflow`), exported for their bindings
  * - `Cache-Control: no-store` on every API and auth response, and the
  *   two-factor gate in front of `/v1/*` mutations (ADR 0014)
+ * - Custom-domain checks every minute (Cron Trigger), see `lib/domains/check.ts`
  * - The hourly retention job (Cron Trigger), see `lib/retention.ts`, and the
  *   cloud provider reconcile, see `lib/provisioning.ts`
  * - Static SPA assets (served by the platform for everything else)
@@ -24,17 +27,22 @@ import { secureHeaders } from "hono/secure-headers";
 import { authFor, createRouter, withDb } from "./context";
 import type { Env } from "./env";
 import { noStore } from "./lib/cache-control";
+import { DOMAIN_CHECK_CRON, runDomainChecks } from "./lib/domains/check";
 import { ApiError, errorBody, errorCodeForStatus } from "./lib/errors";
 import { rateLimitSecrets, sameOriginMutations } from "./lib/guards";
 import { reconcileProviders } from "./lib/provisioning";
 import { runRetention } from "./lib/retention";
 import { twoFactorGate } from "./lib/two-factor-gate";
+import { oauthConsentRoutes } from "./mcp/oauth/consent";
+import { oauthRoutes } from "./mcp/oauth/routes";
 import { mcpRoutes } from "./mcp/route";
 import { accessRoutes } from "./routes/access";
 import { agentRoutes } from "./routes/agent";
 import { auditRoutes } from "./routes/audit";
 import { authSecurityRoutes } from "./routes/auth-security";
+import { changeRoutes } from "./routes/changes";
 import { deploymentRoutes } from "./routes/deployments";
+import { domainRoutes } from "./routes/domains";
 import { githubRoutes } from "./routes/github";
 import { instanceRoutes } from "./routes/instance";
 import { instanceAdminRoutes } from "./routes/instance-admin";
@@ -46,6 +54,7 @@ import { providerRoutes } from "./routes/providers";
 import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
 import { serviceRoutes } from "./routes/services";
 import { setupRoutes } from "./routes/setup";
+import { templateRoutes } from "./routes/templates";
 import { tokenRoutes } from "./routes/tokens";
 import { variableRoutes } from "./routes/variables";
 import { workspaceRoutes } from "./routes/workspaces";
@@ -95,6 +104,8 @@ app
   .route("/", agentRoutes)
   .route("/", projectRoutes)
   .route("/", serviceRoutes)
+  .route("/", changeRoutes)
+  .route("/", domainRoutes)
   .route("/", variableRoutes)
   .route("/", deploymentRoutes)
   .route("/", instanceRoutes)
@@ -106,7 +117,10 @@ app
   .route("/", instanceAdminRoutes)
   .route("/", keyRoutes)
   .route("/", providerRoutes)
-  .route("/", mcpRoutes);
+  .route("/", templateRoutes)
+  .route("/", mcpRoutes)
+  .route("/", oauthRoutes)
+  .route("/", oauthConsentRoutes);
 
 app.openAPIRegistry.registerComponent("securitySchemes", SESSION_SCHEME, {
   type: "apiKey",
@@ -150,6 +164,15 @@ export { app };
 export default {
   fetch: app.fetch,
   async scheduled(controller, env) {
+    if (controller.cron === DOMAIN_CHECK_CRON) {
+      try {
+        const checks = await runDomainChecks(env, controller.scheduledTime);
+        if (checks.checked) console.log("domain checks", JSON.stringify(checks));
+      } catch (err) {
+        console.error("domain checks failed", err instanceof Error ? err.name : "error");
+      }
+      return;
+    }
     const report = await runRetention(env, controller.scheduledTime);
     console.log("retention", JSON.stringify(report));
     // NOTE: Separate from retention so a provider outage never blocks cleanup.

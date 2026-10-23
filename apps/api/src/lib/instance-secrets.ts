@@ -1,37 +1,43 @@
 /**
- * Sealing of install-wide secrets kept in `instance_settings` (the
- * control-plane signing key, the GitHub App's private key and secrets). The
- * one place that decides their format and AAD, so the key rotation workflow
- * and every caller agree (ADR 0014 "Crypto").
+ * Sealing of install-wide secrets: the ones kept in `instance_settings` (the
+ * control-plane signing key, the GitHub App's private key and secrets) and
+ * the workspaces' cloud provider tokens. The one place that decides their
+ * format and AAD, so the key rotation workflow and every caller agree (ADR
+ * 0014 "Crypto"): format 2 under the current KEK with AAD
+ * `setting:v2:<setting_key>:<field|->`; format 1 (`setting:<key>[:<field>]`)
+ * stays readable under every key of the keyring until rotation re-wraps it.
  *
- * Owned by the api-secrets-crypto stream; callers in other streams only use
- * these functions.
+ * Callers in other streams only use these functions.
  *
  * @module
  */
 import { z } from "zod";
-import { type Sealed, seal, unseal } from "./crypto";
+import { type Sealed, type SealedV2, seal, unseal } from "./crypto";
+import { instanceSecretAadV2, type KeyEnv } from "./keyring";
 
-/** The Worker bindings that hold the master keyring. */
-export interface KeyEnv {
-  MASTER_KEY?: string;
-  MASTER_KEYS_PREVIOUS?: string;
-}
+export type { KeyEnv } from "./keyring";
 
-// Format 1 AADs, kept until every stored value is format 2.
 const aadV1 = (settingKey: string, field?: string) =>
   field ? `setting:${settingKey}:${field}` : `setting:${settingKey}`;
 
-function currentKey(keys: KeyEnv): string {
-  if (!keys.MASTER_KEY) throw new Error("MASTER_KEY is not configured");
-  return keys.MASTER_KEY.trim();
+/**
+ * The AAD an instance secret is sealed with.
+ *
+ * @param sealed - The stored value (its format picks the AAD form).
+ * @param settingKey - `instance_settings.key` it is stored under.
+ * @param field - Field of that setting, as passed when sealing.
+ * @returns The AAD string.
+ */
+export function instanceSecretAad(
+  sealed: Pick<Sealed, "v">,
+  settingKey: string,
+  field?: string,
+): string {
+  return sealed.v === 2 ? instanceSecretAadV2(settingKey, field ?? "-") : aadV1(settingKey, field);
 }
 
 /**
- * Seals one instance secret.
- *
- * TODO(api-secrets-crypto): seal format 2 under the current KEK with
- * `instanceSecretAadV2(settingKey, field ?? "-")`.
+ * Seals one instance secret, format 2 under the current KEK.
  *
  * @param keys - The keyring bindings.
  * @param plaintext - The secret.
@@ -44,15 +50,13 @@ export function sealInstanceSecret(
   plaintext: string,
   settingKey: string,
   field?: string,
-): Promise<Sealed> {
-  return seal(currentKey(keys), plaintext, aadV1(settingKey, field));
+): Promise<SealedV2> {
+  return seal(keys, plaintext, instanceSecretAadV2(settingKey, field ?? "-"));
 }
 
 /**
- * Unseals one instance secret, whichever format and key sealed it.
- *
- * TODO(api-secrets-crypto): read format 2 by `kid` from the keyring, and
- * format 1 under each key of the keyring in turn.
+ * Unseals one instance secret, whichever format and key sealed it: format 2
+ * by `kid`, format 1 under each key of the keyring in turn.
  *
  * @param keys - The keyring bindings.
  * @param sealed - The stored value.
@@ -67,7 +71,7 @@ export function unsealInstanceSecret(
   settingKey: string,
   field?: string,
 ): Promise<string> {
-  return unseal(currentKey(keys), sealed, aadV1(settingKey, field));
+  return unseal(keys, sealed, instanceSecretAad(sealed, settingKey, field));
 }
 
 /** A stored ciphertext of either format, for parsing `instance_settings` values. */

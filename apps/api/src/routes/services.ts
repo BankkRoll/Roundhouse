@@ -37,6 +37,7 @@ import {
   updateService,
 } from "../contracts";
 import { recordAudit } from "../lib/audit";
+import { presentDomains } from "../lib/domains/present";
 import { conflict, isUniqueViolation, notFound } from "../lib/errors";
 import { assertSourceInstallation } from "../lib/github";
 import {
@@ -54,8 +55,9 @@ import {
 } from "../lib/projects";
 import { publish } from "../lib/realtime";
 import { environmentOf, projectScope, serviceScope } from "../lib/scope";
-import { toApiConfig, toApiDomain, toApiService } from "../lib/serialize";
+import { toApiConfig, toApiService } from "../lib/serialize";
 import { getIngressSettings } from "../lib/settings";
+import { assertPlainBuildArgs } from "../lib/variables";
 import { SERVICE_CONFIG_PARTS } from "../schemas";
 
 async function liveSlugs(db: Db, projectId: string): Promise<string[]> {
@@ -94,6 +96,14 @@ export const serviceRoutes = createRouter()
       .from(environments)
       .where(eq(environments.projectId, projectId))
       .orderBy(asc(environments.id));
+    for (const e of envs) {
+      await assertPlainBuildArgs(db, c.env, {
+        projectId,
+        environmentId: e.id,
+        serviceSlug: null,
+        build: spec.build,
+      });
+    }
     const id = newId("service");
     const { slug } = await insertWithFreeSlug({
       base: body.slug ?? slugFor(body.name, "service"),
@@ -190,6 +200,14 @@ export const serviceRoutes = createRouter()
       }
       const spec = mergeConfig(specOf(latest), patch);
       if (patch.source) await checkSource(c, project.workspaceId, spec.source);
+      if (patch.build) {
+        await assertPlainBuildArgs(db, c.env, {
+          projectId: project.id,
+          environmentId: env.id,
+          serviceSlug: newSlug ?? service.slug,
+          build: spec.build,
+        });
+      }
       try {
         [config = null] = await configInsert(db, {
           serviceId,
@@ -322,6 +340,5 @@ export const serviceRoutes = createRouter()
         ),
       )
       .orderBy(asc(domains.hostname));
-    const { tlsMode } = await getIngressSettings(db);
-    return c.json({ domains: rows.map((d) => toApiDomain(d, tlsMode)) }, 200);
+    return c.json({ domains: await presentDomains(db, project.workspaceId, rows) }, 200);
   });

@@ -93,7 +93,9 @@ describe("rate limiting", () => {
     expect(rateLimitBucket("POST", "/api/auth/sign-in/email")).toBe("auth");
     expect(rateLimitBucket("POST", "/v1/setup")).toBe("setup");
     expect(rateLimitBucket("POST", "/v1/nodes/join")).toBe("join");
-    expect(rateLimitBucket("POST", "/v1/invites/inv_x/accept")).toBe("invite");
+    expect(rateLimitBucket("POST", "/v1/invites/accept")).toBe("invite");
+    expect(rateLimitBucket("POST", "/v1/invites/lookup")).toBe("invite");
+    expect(rateLimitBucket("POST", "/v1/invites/inv_x/accept")).toBeNull();
     expect(rateLimitBucket("GET", "/v1/setup")).toBeNull();
     expect(rateLimitBucket("POST", "/v1/workspaces")).toBeNull();
   });
@@ -277,7 +279,8 @@ describe("rate limit coverage", () => {
     ["/v1/setup/", "setup"],
     ["/v1/%73etup", "setup"],
     ["/v1/nodes/join//", "join"],
-    ["/v1/invites/inv_x/accept/", "invite"],
+    ["/v1/invites/accept/", "invite"],
+    ["/v1/invites//lookup", "invite"],
   ])("puts POST %s in the %s bucket", (path, bucket) => {
     expect(rateLimitBucket("POST", path)).toBe(bucket);
   });

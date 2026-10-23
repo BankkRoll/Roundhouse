@@ -94,7 +94,14 @@ export const ROLLBACK_SOURCE_STATUSES: readonly DeploymentStatus[] = [
 ];
 
 /** What started a deployment. */
-export const DEPLOYMENT_TRIGGERS = ["push", "manual", "rollback", "api", "template"] as const;
+export const DEPLOYMENT_TRIGGERS = [
+  "push",
+  "manual",
+  "rollback",
+  "api",
+  "template",
+  "change_set",
+] as const;
 
 /** What started a deployment; see {@link DEPLOYMENT_TRIGGERS}. */
 export type DeploymentTrigger = (typeof DEPLOYMENT_TRIGGERS)[number];

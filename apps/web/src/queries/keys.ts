@@ -26,6 +26,9 @@ export const queryKeys = {
   githubStatus: (workspaceId: string) => ["workspaces", workspaceId, "github"] as const,
   githubRepositories: (workspaceId: string) =>
     ["workspaces", workspaceId, "github", "repositories"] as const,
+  templates: (workspaceId: string) => ["workspaces", workspaceId, "templates"] as const,
+  template: (workspaceId: string, templateId: string) =>
+    ["workspaces", workspaceId, "templates", templateId] as const,
   project: (projectId: string) => ["projects", projectId] as const,
   /** Every summary of a project, whatever the environment; prefix of {@link projectSummary}. */
   projectSummaryAll: (projectId: string) => ["projects", projectId, "summary"] as const,

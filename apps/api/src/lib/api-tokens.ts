@@ -82,6 +82,9 @@ export async function resolveApiToken(
     .where(
       and(
         eq(apiTokens.tokenHash, await hashToken(secret)),
+        // SECURITY: OAuth access tokens are audience-bound to /mcp (ADR 0012);
+        // their prefix already keeps them out, this keeps the rule explicit.
+        eq(apiTokens.kind, "api"),
         isNull(apiTokens.revokedAt),
         isNull(workspaces.deletedAt),
       ),

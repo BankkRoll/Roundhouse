@@ -42,6 +42,10 @@ import {
   DEPLOYMENT_STATUSES,
   DEPLOYMENT_TRIGGERS,
   type DeployConfig,
+  DNS_RECORD_PURPOSES,
+  DNS_RECORD_STATES,
+  DNS_RECORD_TYPES,
+  DOMAIN_STATUSES,
   DOMAIN_TLS_STATUSES,
   DOMAIN_TYPES,
   DOMAIN_VERIFICATION_STATUSES,
@@ -64,10 +68,17 @@ import {
   TLS_MODES,
   type TlsMode,
 } from "@roundhouse/shared";
+import {
+  CanvasLayoutUpdatedMessageSchema,
+  ChangeSetAppliedMessageSchema,
+  ChangeSetUpdatedMessageSchema,
+} from "./schemas/changes";
+import { CostEstimateSchema } from "./schemas/providers";
 import { VariableKeyField } from "./schemas/variables";
 
 export * from "./schemas/access";
 export * from "./schemas/auth";
+export * from "./schemas/changes";
 export * from "./schemas/instance";
 export * from "./schemas/keys";
 export * from "./schemas/providers";
@@ -153,6 +164,11 @@ export const NodeSchema = z
     provider_server_id: z.string().nullable(),
     /** When the provider was first found to no longer have the server. */
     provider_server_missing_at: Millis.nullable(),
+    /**
+     * For servers Roundhouse provisioned: the plan's monthly price from the
+     * provider's catalogue when it was created. An estimate, not the bill.
+     */
+    estimated_monthly_cost: CostEstimateSchema.nullable(),
     public_ip: z.string().nullable(),
     os: z.string().nullable(),
     arch: z.string().nullable(),
@@ -633,6 +649,19 @@ export const LogPageSchema = z
   .object({ lines: z.array(LogEntrySchema), next_cursor: z.string().nullable() })
   .openapi("LogPage");
 
+/** A DNS record the owner of a custom domain must create, with what the last check saw. */
+export const DnsRecordSchema = z
+  .object({
+    type: z.enum(DNS_RECORD_TYPES),
+    name: z.string(),
+    value: z.string(),
+    purpose: z.enum(DNS_RECORD_PURPOSES),
+    state: z.enum(DNS_RECORD_STATES),
+    /** Extra instructions, e.g. ALIAS or CNAME flattening at a zone apex. */
+    note: z.string().nullable(),
+  })
+  .openapi("DnsRecord");
+
 /** A hostname routed to a service. */
 export const DomainSchema = z
   .object({
@@ -644,8 +673,21 @@ export const DomainSchema = z
     url: z.string(),
     type: z.enum(DOMAIN_TYPES),
     target_port: z.number().int(),
+    /** Routed only once `verified`. */
     verification_status: z.enum(DOMAIN_VERIFICATION_STATUSES),
     tls_status: z.enum(DOMAIN_TLS_STATUSES),
+    /** Lifecycle; generated domains are always `active`. */
+    status: z.enum(DOMAIN_STATUSES),
+    /** Whether the hostname is a zone apex, which needs A/AAAA (or ALIAS) instead of a CNAME. */
+    apex: z.boolean(),
+    /** Records to create, routing first; empty for generated domains. */
+    records: z.array(DnsRecordSchema),
+    /** Why the last check didn't pass, or a warning about records changed since. */
+    error: z.string().nullable(),
+    last_checked_at: Millis.nullable(),
+    /** `null` when no check is scheduled (failed domains wait for a manual check). */
+    next_check_at: Millis.nullable(),
+    verified_at: Millis.nullable(),
     created_at: Millis,
   })
   .openapi("Domain");
@@ -673,6 +715,11 @@ export const InstanceSettingsSchema = z
     tls_mode: TlsModeSchema,
     /** Days runtime and build logs are kept; older chunks are deleted hourly. */
     log_retention_days: z.number().int().min(1).max(MAX_LOG_RETENTION_DAYS),
+    /**
+     * Whether `/mcp` serves coding agents with API tokens (ADR 0012). Off on
+     * new installs; while off, `/mcp` answers 404 before authenticating.
+     */
+    mcp_enabled: z.boolean(),
   })
   .openapi("InstanceSettings");
 
@@ -682,6 +729,7 @@ export const InstanceSettingsPatchSchema = z
     apps_domain: HostnameField.nullable().optional(),
     tls_mode: TlsModeSchema.optional(),
     log_retention_days: z.number().int().min(1).max(MAX_LOG_RETENTION_DAYS).optional(),
+    mcp_enabled: z.boolean().optional(),
   })
   .refine((b) => Object.values(b).some((v) => v !== undefined), {
     message: "nothing to update",
@@ -765,6 +813,9 @@ export const RealtimeServerMessageSchema = z
     }),
     z.object({ type: z.literal("service.updated"), service: ServiceSchema }),
     z.object({ type: z.literal("presence"), users: z.array(PresenceUserSchema) }),
+    ChangeSetUpdatedMessageSchema,
+    ChangeSetAppliedMessageSchema,
+    CanvasLayoutUpdatedMessageSchema,
     /**
      * Sent right before the server closes the socket with
      * {@link REALTIME_ACCESS_REVOKED_CLOSE} because the caller lost access

@@ -113,6 +113,10 @@ type App struct {
 	// submitted holds values sent in the current request, so an
 	// invalid_reference error can show where in the value it points.
 	submitted map[string]submittedValue
+
+	// writeOnlyHint replaces the `vars set` advice for a
+	// confirmation_required error, for commands without --plain.
+	writeOnlyHint string
 }
 
 type submittedValue struct {
@@ -222,8 +226,8 @@ func (a *App) rootCommand() *cobra.Command {
 	}
 	add("auth", a.loginCmd(), a.logoutCmd(), a.whoamiCmd())
 	add("project", a.initCmd(), a.linkCmd(), a.unlinkCmd(), a.statusCmd(), a.openCmd())
-	add("deploy", a.deployCmd(), a.logsCmd(), a.rollbackCmd(), a.cancelCmd(), a.upCmd())
-	add("manage", a.varsCmd(), a.runCmd(), a.projectsCmd(), a.servicesCmd(), a.domainCmd(), a.serversCmd(), a.tokensCmd(), a.shellCmd(), a.dbCmd())
+	add("deploy", a.deployCmd(), a.logsCmd(), a.rollbackCmd(), a.cancelCmd(), a.upCmd(), a.changesCmd())
+	add("manage", a.varsCmd(), a.runCmd(), a.projectsCmd(), a.templatesCmd(), a.servicesCmd(), a.domainCmd(), a.serversCmd(), a.tokensCmd(), a.shellCmd(), a.dbCmd())
 	root.AddCommand(a.versionCmd())
 	return root
 }
@@ -462,6 +466,9 @@ func (a *App) printError(err error) {
 // errorHint suggests the next step for an authentication or authorization
 // failure, worded for the credential in use.
 func (a *App) errorHint(err error) string {
+	if h := (*hintedError)(nil); errors.As(err, &h) {
+		return h.hint
+	}
 	var apiErr *api.Error
 	var closed *api.RealtimeClosedError
 	status := 0
@@ -471,6 +478,8 @@ func (a *App) errorHint(err error) string {
 		switch {
 		case strings.HasPrefix(apiErr.Code, "invalid_email"):
 			return ""
+		case apiErr.Code == "confirmation_required" && a.writeOnlyHint != "":
+			return a.writeOnlyHint
 		case apiErr.Code == "confirmation_required":
 			return "secrets are write-only; pass --yes to store them as secrets anyway, or --plain to keep them readable"
 		case apiErr.Code == "public_prefix_secret_value":

@@ -9,9 +9,9 @@
  * values derived from them are left for the CLI to take from a local `.env`.
  *
  * Access is checked with `resolveAccess`, the project in scope; writes also
- * name the environment, so its protection applies.
- *
- * TODO(api-secrets-crypto): v2 sealing and fingerprints.
+ * name the environment, so its protection applies. Lists carry every
+ * value's fingerprint, so readers who can't see values can still tell
+ * them apart.
  *
  * @module
  */

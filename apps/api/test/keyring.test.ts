@@ -3,7 +3,23 @@
  * fingerprints. Values are pinned so a change to any derivation fails here
  * before it strands data sealed with the old one.
  */
+import { toBase64 } from "@roundhouse/protocol";
 import { describe, expect, it } from "vitest";
+import {
+  dataKeyInfo,
+  deriveKey,
+  isCurrentKek,
+  openDataKey,
+  seal,
+  sealDataKey,
+  sealWith,
+  signState,
+  unseal,
+  unsealWith,
+  valueFingerprint,
+  verifyState,
+} from "../src/lib/crypto";
+import { sealInstanceSecret, unsealInstanceSecret } from "../src/lib/instance-secrets";
 import {
   dekId,
   deploymentBuildAadV2,
@@ -136,5 +152,68 @@ describe("DEK ids and fingerprints", () => {
       .join("")
       .slice(0, 8);
     expect(fp).not.toBe(bare);
+  });
+});
+
+describe("sealing through the keyring", () => {
+  const ringA = { MASTER_KEY: KEY_A };
+  const rotated = { MASTER_KEY: KEY_B, MASTER_KEYS_PREVIOUS: KEY_A };
+
+  it("seals format 2 under the current key and opens by kid", async () => {
+    const sealed = await seal(ringA, "s3cret", "aad");
+    expect(sealed).toMatchObject({ v: 2, kid: "c67798f0" });
+    expect(await unseal(ringA, sealed, "aad")).toBe("s3cret");
+    expect(await unseal(rotated, sealed, "aad")).toBe("s3cret");
+    await expect(unseal({ MASTER_KEY: KEY_B }, sealed, "aad")).rejects.toThrow(/c67798f0/);
+    await expect(unseal(ringA, sealed, "other")).rejects.toThrow();
+    expect(await isCurrentKek(ringA, sealed)).toBe(true);
+    expect(await isCurrentKek(rotated, sealed)).toBe(false);
+  });
+
+  it("opens format 1 under any key of the keyring", async () => {
+    const raw = await deriveKey(KEY_A, "kek");
+    const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt"]);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv, additionalData: new TextEncoder().encode("aad") },
+      key,
+      new TextEncoder().encode("legacy"),
+    );
+    const v1 = { v: 1 as const, iv: toBase64(iv), ct: toBase64(ct) };
+    expect(await unseal(rotated, v1, "aad")).toBe("legacy");
+    await expect(unseal({ MASTER_KEY: KEY_B }, v1, "aad")).rejects.toThrow();
+  });
+
+  it("binds instance secrets to their setting and field", async () => {
+    const sealed = await sealInstanceSecret(ringA, "pem", "github_app", "private_key");
+    expect(await unseal(ringA, sealed, "setting:v2:github_app:private_key")).toBe("pem");
+    expect(await unsealInstanceSecret(rotated, sealed, "github_app", "private_key")).toBe("pem");
+    await expect(
+      unsealInstanceSecret(ringA, sealed, "github_app", "client_secret"),
+    ).rejects.toThrow();
+  });
+
+  it("verifies state tokens under every key, signs with the current one", async () => {
+    const token = await signState(ringA, "p", { n: 1 }, 60_000);
+    expect(await verifyState(rotated, "p", token)).toMatchObject({ n: 1 });
+    expect(await verifyState({ MASTER_KEY: KEY_B }, "p", token)).toBeNull();
+    expect(await verifyState(ringA, "other", token)).toBeNull();
+  });
+
+  it("ids DEKs and fingerprints with the key they were opened with", async () => {
+    const raw = toBase64(new Uint8Array(32).fill(7));
+    const { dekSealed, kekKid, dekId: id } = await sealDataKey(ringA, raw, "ws_1", "prj_1");
+    expect(kekKid).toBe("c67798f0");
+    expect(id).toBe("4bb06f8e");
+    await expect(unseal(ringA, dekSealed, "project-key:v2:ws_1:prj_1")).resolves.toBe(raw);
+    const key = await openDataKey(rotated, dekSealed, "ws_1", "prj_1");
+    expect(dataKeyInfo(key)).toMatchObject({ dekId: "4bb06f8e", workspaceId: "ws_1" });
+    expect(await valueFingerprint(key, "hunter2")).toBe("8702a7a8");
+    const value = await sealWith(key, "v", "aad");
+    expect(value).toMatchObject({ v: 2, kid: "4bb06f8e" });
+    expect(await unsealWith(key, value, "aad")).toBe("v");
+    await expect(unsealWith(key, { ...value, kid: "00000000" }, "aad")).rejects.toThrow();
+    // Bound to its project and workspace.
+    await expect(openDataKey(ringA, dekSealed, "ws_2", "prj_1")).rejects.toThrow();
   });
 });

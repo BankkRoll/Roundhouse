@@ -1,7 +1,7 @@
 /**
  * Install-wide settings: the first-run setup lock and completion marker, the
  * control-plane signing key, the ingress settings (`apps_domain`,
- * `tls_mode`), and log retention.
+ * `tls_mode`), log retention, and whether the MCP endpoint is enabled.
  *
  * @module
  */
@@ -38,6 +38,8 @@ export const SettingKey = {
   githubManifestState: "github_manifest_state",
   /** Days logs are kept (an integer); `DEFAULT_LOG_RETENTION_DAYS` when unset. */
   logRetentionDays: "log_retention_days",
+  /** Whether `/mcp` serves coding agents (a boolean); off when unset (ADR 0012). */
+  mcpEnabled: "mcp_enabled",
 } as const;
 
 /**
@@ -248,4 +250,19 @@ export async function getLogRetentionDays(db: Db): Promise<number> {
     (value as number) <= MAX_LOG_RETENTION_DAYS
     ? (value as number)
     : DEFAULT_LOG_RETENTION_DAYS;
+}
+
+// -----------------------------------------------------------------------------
+// MCP
+// -----------------------------------------------------------------------------
+
+/**
+ * Whether the MCP endpoint is enabled. Off unless an instance admin turned it
+ * on, so a new install exposes no agent-facing surface by default.
+ *
+ * @param db - Database client.
+ * @returns `true` only when `mcp_enabled` is stored as `true`.
+ */
+export async function getMcpEnabled(db: Db): Promise<boolean> {
+  return (await getSetting<unknown>(db, SettingKey.mcpEnabled)) === true;
 }

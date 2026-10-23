@@ -11,6 +11,10 @@ import type {
   DeploymentEventType,
   DeploymentStatus,
   DeploymentTrigger,
+  DnsRecordState,
+  DomainDnsObservation,
+  DomainMode,
+  DomainStatus,
   DomainTlsStatus,
   DomainType,
   DomainVerificationStatus,
@@ -24,6 +28,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 import { users } from "./auth";
+import { changeSets } from "./changes";
 import { id, json, timestamp, timestamps } from "./columns";
 import { nodes } from "./nodes";
 import { environments, projects, type SealedValue, services } from "./projects";
@@ -76,6 +81,10 @@ export const deployments = sqliteTable(
     buildEnvSealed: json<SealedValue>("build_env_sealed"),
     /** Cloudflare Workflow instance driving the pipeline. */
     workflowInstanceId: text("workflow_instance_id"),
+    /** The change set whose apply started this deployment (ADR 0006). */
+    changeSetId: text("change_set_id").references((): AnySQLiteColumn => changeSets.id, {
+      onDelete: "set null",
+    }),
     failureReason: text("failure_reason"),
     startedAt: timestamp("started_at"),
     finishedAt: timestamp("finished_at"),
@@ -181,9 +190,38 @@ export const domains = sqliteTable(
       .notNull()
       .default("pending"),
     tlsStatus: text("tls_status").$type<DomainTlsStatus>().notNull().default("pending"),
+    /**
+     * Lifecycle (ADR 0009). Defaults to `active` so generated domains, which
+     * are verified at birth, need nothing; custom domains are inserted as
+     * `pending_dns`. Routing still keys off `verification_status` only.
+     */
+    status: text("status").$type<DomainStatus>().notNull().default("active"),
+    mode: text("mode").$type<DomainMode>().notNull().default("direct"),
+    /** 32 random bytes, hex; the customer publishes it as the ownership TXT. Custom domains only. */
+    verificationToken: text("verification_token"),
+    /** Whether the hostname is a zone apex (has its own SOA), which can't hold a CNAME. */
+    apex: integer("apex", { mode: "boolean" }).notNull().default(false),
+    /** Routing record as last observed. */
+    dnsStatus: text("dns_status").$type<DnsRecordState>().notNull().default("unknown"),
+    /** Ownership TXT as last observed. */
+    ownershipStatus: text("ownership_status").$type<DnsRecordState>().notNull().default("unknown"),
+    /** The last check's answers, for the dashboard's "what we saw". */
+    dnsObserved: json<DomainDnsObservation>("dns_observed"),
+    /** Why the last check didn't pass, in words safe to show the customer. */
+    error: text("error"),
+    checkAttempts: integer("check_attempts").notNull().default(0),
+    /** Start of the current verification window; `failed` after `DOMAIN_VERIFY_WINDOW_MS`. */
+    pendingSince: timestamp("pending_since"),
+    lastCheckedAt: timestamp("last_checked_at"),
+    /** When the cron checks it next; `null` stops scheduled checks (failed domains). */
+    nextCheckAt: timestamp("next_check_at"),
+    verifiedAt: timestamp("verified_at"),
     ...timestamps,
   },
-  (t) => [index("domains_svc_env_idx").on(t.serviceId, t.environmentId)],
+  (t) => [
+    index("domains_svc_env_idx").on(t.serviceId, t.environmentId),
+    index("domains_next_check_idx").on(t.nextCheckAt),
+  ],
 );
 
 /**

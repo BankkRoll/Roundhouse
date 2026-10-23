@@ -84,47 +84,22 @@ func (a *App) domainCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "domain",
 		Aliases: []string{"domains"},
-		Short:   "List the service's domains",
+		Short:   "List, add, verify and remove the service's domains",
 		Long: `List the domains routed to the linked service in its environment, or in
-every environment with --all.`,
+every environment with --all. The subcommands add your own hostnames, check
+their DNS and remove them.`,
 		Example: `  roundhouse domain
-  roundhouse domain --all --json`,
+  roundhouse domain --all --json
+  roundhouse domain add shop.example.com
+  roundhouse domain verify shop.example.com --wait`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			t, err := a.resolve(ctx, f, serviceRequired)
-			if err != nil {
-				return err
-			}
-			envID := t.env.ID
-			if all {
-				envID = ""
-			}
-			domains, err := t.sess.client.ListDomains(ctx, t.service.ID, envID)
-			if err != nil {
-				return err
-			}
-			if a.jsonOut {
-				return a.printJSON(domains)
-			}
-			if len(domains) == 0 {
-				fmt.Fprintf(a.IO.Out, "%s has no domains in %s\n", t.service.Name, t.env.Name)
-				return nil
-			}
-			envName := map[string]string{}
-			for _, e := range t.project.Environments {
-				envName[e.ID] = e.Name
-			}
-			tb := a.newTable("url", "environment", "type", "port", "tls")
-			for _, d := range domains {
-				tb.row(d.URL, orDash(envName[d.EnvironmentID]), d.Type, fmt.Sprint(d.TargetPort), d.TLSStatus)
-			}
-			tb.flush()
-			return nil
+			return a.runDomainList(cmd.Context(), f, all)
 		},
 	}
 	f.register(cmd, true)
 	cmd.Flags().BoolVar(&all, "all", false, "list domains in every environment")
+	cmd.AddCommand(a.domainListCmd(), a.domainAddCmd(), a.domainVerifyCmd(), a.domainRemoveCmd())
 	return cmd
 }
 
@@ -136,9 +111,10 @@ func (a *App) serversCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "servers",
 		Aliases: []string{"server", "nodes"},
-		Short:   "List servers and add new ones",
+		Short:   "List, add and remove servers",
 		Example: `  roundhouse servers list
-  roundhouse servers add`,
+  roundhouse servers add
+  roundhouse servers remove web-1`,
 		Args: noArgs,
 	}
 	var workspace string
@@ -169,15 +145,18 @@ func (a *App) serversCmd() *cobra.Command {
 				fmt.Fprintf(a.IO.Out, "No servers in %s. Add one with `roundhouse servers add`.\n", ws.Name)
 				return nil
 			}
-			t := a.newTable("name", "id", "provider", "ip", "arch", "agent", "last seen", "status")
+			t := a.newTable("name", "id", "provider", "ip", "arch", "agent", "est. cost", "last seen", "status")
 			for _, n := range nodes {
 				seen := "-"
 				if n.LastHeartbeatAt != nil {
 					seen = ago(a.Now(), *n.LastHeartbeatAt)
 				}
-				t.row(n.Name, n.ID, orDash(n.Provider), orDash(deref(n.PublicIP)), orDash(deref(n.Arch)), orDash(deref(n.AgentVersion)), seen, a.IO.OutColor().Status(n.Status))
+				t.row(n.Name, n.ID, orDash(n.Provider), orDash(deref(n.PublicIP)), orDash(deref(n.Arch)), orDash(deref(n.AgentVersion)), estimateLabel(n.EstimatedMonthlyCost), seen, a.IO.OutColor().Status(n.Status))
 			}
 			t.flush()
+			if totals := estimateTotals(nodes); len(totals) > 0 {
+				fmt.Fprintf(a.IO.Out, "\nEstimated total: %s (provider catalogue prices; your bill may differ)\n", strings.Join(totals, " + "))
+			}
 			return nil
 		},
 	}
@@ -243,7 +222,7 @@ API tokens cannot provision.`,
 	}
 	add.Flags().StringVarP(&addWorkspace, "workspace", "w", "", "workspace ID, slug or name")
 	pf.register(add)
-	cmd.AddCommand(list, add)
+	cmd.AddCommand(list, add, a.serversRemoveCmd(), a.serversCancelCmd())
 	return cmd
 }
 
@@ -349,9 +328,16 @@ func (a *App) provisionServer(ctx context.Context, c *api.Client, ws *api.Member
 			return a.printJSON(p)
 		}
 		fmt.Fprintf(a.IO.Out, "Started %s; %s joins %s on first boot\n", p.ID, p.Name, ws.Name)
+		a.IO.Info("Cancel it with: roundhouse servers cancel %s", p.ID)
 		return nil
 	}
+	id := p.ID
 	if p, err = a.watchProvision(ctx, c, ws.ID, p); err != nil {
+		if errors.Is(err, context.Canceled) {
+			// NOTE: Ctrl-C only stops watching; the server is still being
+			// created, and bills, until it is cancelled or removed.
+			a.IO.Info("\nProvisioning continues in the background. To cancel it and delete the server:\n  roundhouse servers cancel %s", id)
+		}
 		return err
 	}
 	return a.reportProvision(p)

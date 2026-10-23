@@ -5,7 +5,9 @@
  * as its REST route, and checks the same RBAC action (read from the route's
  * contract with `policyOf`), so a token can do through MCP exactly what it
  * can do over REST and nothing more. Mutations are audited with their REST
- * audit actions plus `via: "mcp"` and the tool name.
+ * audit actions plus `via: "mcp"` and the tool name. Config and variable
+ * changes stage into change sets instead of writing (ADR 0006), see
+ * `./change-tools`.
  *
  * Deliberately absent: reading secret values (there is no API for it),
  * deleting anything, the shell, database access, domains, node, token and
@@ -53,8 +55,6 @@ import {
   listServiceVariables,
   listSharedVariables,
   policyOf,
-  putServiceVariables,
-  putSharedVariables,
   resolveServiceVariables,
   rollbackDeployment as rollbackDeploymentRoute,
 } from "../contracts";
@@ -84,14 +84,9 @@ import {
 } from "../lib/serialize";
 import { getIngressSettings } from "../lib/settings";
 import { projectSummaries } from "../lib/summaries";
-import {
-  assertValidReferences,
-  listVariables,
-  projectKey,
-  putVariables,
-  type VariableTarget,
-} from "../lib/variables";
-import { VariableSetEntrySchema } from "../schemas";
+import { listVariables, projectKey, type VariableTarget } from "../lib/variables";
+import { CHANGE_TOOLS } from "./change-tools";
+import { deployTemplateTool, listTemplatesTool } from "./template-tools";
 
 // -----------------------------------------------------------------------------
 // Tool shape
@@ -100,7 +95,7 @@ import { VariableSetEntrySchema } from "../schemas";
 /** What a tool handler gets besides its validated input. */
 export interface ToolContext {
   c: AppContext;
-  /** The `tok_` token the request authenticated with. */
+  /** The API token or OAuth access token the request authenticated with. */
   token: TokenIdentity;
   /** Name of the tool being called, for audit metadata. */
   tool: string;
@@ -153,14 +148,19 @@ export const MAX_LOG_LINES = 500;
 export const MAX_LOG_LINE_CHARS = 4096;
 
 async function audit(
-  { c, tool }: ToolContext,
+  { c, tool, token }: ToolContext,
   caller: Caller,
   entry: Omit<AuditEntry, "actorType" | "actorId" | "ip">,
 ): Promise<void> {
   await recordAudit(c.get("db"), {
     ...entry,
     ...caller.actor,
-    metadata: { ...entry.metadata, via: "mcp", tool },
+    metadata: {
+      ...entry.metadata,
+      via: "mcp",
+      tool,
+      ...(token.oauth ? { oauth_client_id: token.oauth.clientId } : {}),
+    },
     ip: clientIp(c),
   });
 }
@@ -721,81 +721,6 @@ const resolveVariablesTool = defineTool({
   },
 });
 
-const setVariablesTool = defineTool({
-  name: "set_variables",
-  title: "Set variables",
-  description:
-    "Creates or updates variables of a service (service_id) or a project's shared variables " +
-    "(project_id) in one environment, in one batch. Each value's tier is decided by the " +
-    "classifier; a value that would become secret (write-only, never readable again) is " +
-    "refused unless confirm_write_only is true. Nothing is deleted. Changes apply on the next " +
-    "deployment. Returns the variables (no secret values) and classifier warnings.",
-  input: z
-    .object({
-      ...VariableScopeInput,
-      set: z.array(VariableSetEntrySchema).min(1).max(64),
-      confirm_write_only: z
-        .boolean()
-        .default(false)
-        .describe("Confirms that values becoming secret can never be read back."),
-      acknowledge_public: z
-        .array(z.string().max(256))
-        .max(64)
-        .default([])
-        .describe("Public-prefix keys to store even though their values look like credentials."),
-    })
-    .refine(exactlyOneScope, EXACTLY_ONE_SCOPE)
-    .refine((v) => new Set(v.set.map((s) => s.key)).size === v.set.length, {
-      message: "each key may appear once",
-    }),
-  scopes: [scopeOf(putServiceVariables)],
-  annotations: { ...WRITE, idempotentHint: true },
-  async run(ctx, input) {
-    const { c } = ctx;
-    const { project, caller, target } = await variableScope(
-      c,
-      input,
-      { service: putServiceVariables, shared: putSharedVariables },
-      true,
-    );
-    assertValidReferences(
-      input.set.flatMap((s) => (s.value === undefined ? [] : [{ key: s.key, value: s.value }])),
-    );
-    const db = c.get("db");
-    const key = await projectKey(db, requireMasterKey(c), project.id);
-    const changed = await putVariables(
-      db,
-      key,
-      target,
-      {
-        set: input.set,
-        delete: [],
-        confirm_write_only: input.confirm_write_only,
-        acknowledge_public: input.acknowledge_public,
-      },
-      caller.user.id,
-    );
-    await audit(ctx, caller, {
-      workspaceId: project.workspaceId,
-      action: "variables.updated",
-      ...(target.scope === "service"
-        ? { targetType: "service", targetId: target.serviceId! }
-        : { targetType: "project", targetId: project.id }),
-      metadata: {
-        environment_id: target.environmentId,
-        ...(target.scope === "shared" ? { scope: "shared" } : {}),
-        set: changed.set,
-        deleted: changed.deleted,
-      },
-    });
-    const plain = caller.allows("variables:read_plain");
-    return {
-      variables: await listVariables(db, key, target, { plain }),
-      warnings: changed.warnings,
-    };
-  },
-});
-
 // -----------------------------------------------------------------------------
 // Servers
 // -----------------------------------------------------------------------------
@@ -839,8 +764,10 @@ export const MCP_TOOLS: readonly McpTool[] = [
   cancelDeploymentTool,
   listVariablesTool,
   resolveVariablesTool,
-  setVariablesTool,
+  ...CHANGE_TOOLS,
   listNodesTool,
+  listTemplatesTool,
+  deployTemplateTool,
 ] as readonly McpTool[];
 
 /**

@@ -28,6 +28,7 @@ import {
 } from "../context";
 import { policyOf } from "../contracts/policy";
 import {
+  cancelNodeProvision,
   connectIntegration,
   disconnectIntegration,
   getIntegration,
@@ -37,6 +38,7 @@ import {
   listProviderOffers,
   provisionNode,
 } from "../contracts/providers";
+import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
 import {
   loadCredential,
@@ -50,7 +52,12 @@ import {
 } from "../lib/cloud-providers";
 import { disposeRpc } from "../lib/deployments";
 import { ApiError, isUniqueViolation, notFound } from "../lib/errors";
-import { ACTIVE_PROVISION_STATUSES, attachJoinedNode, toApiProvision } from "../lib/provisioning";
+import {
+  ACTIVE_PROVISION_STATUSES,
+  attachJoinedNode,
+  finishCancel,
+  toApiProvision,
+} from "../lib/provisioning";
 import type { OffersSchema } from "../schemas/providers";
 
 /** How long offers stay cached: prices and stock change rarely, and a stale pick fails cleanly. */
@@ -393,4 +400,91 @@ export const providerRoutes = createRouter()
     if (!row) throw notFound("Provisioning run");
     const current = row.status === "booting" ? ((await attachJoinedNode(db, row.id)) ?? row) : row;
     return c.json(toApiProvision(current), 200);
+  })
+  .openapi(cancelNodeProvision, async (c) => {
+    const { workspaceId, provisionId } = c.req.valid("param");
+    const m = await requireWorkspace(c, workspaceId, policyOf(cancelNodeProvision).action!);
+    const db = c.get("db");
+    const [found] = await db
+      .select()
+      .from(nodeProvisions)
+      .where(and(eq(nodeProvisions.id, provisionId), eq(nodeProvisions.workspaceId, workspaceId)));
+    if (!found) throw notFound("Provisioning run");
+    // A server that already joined is a node now; removing it is the way out.
+    const row =
+      found.status === "booting" ? ((await attachJoinedNode(db, found.id)) ?? found) : found;
+    if (row.cancelRequestedAt) return c.json(toApiProvision(row), 200);
+    if (!isActive(row.status)) {
+      throw new ApiError(
+        409,
+        "conflict",
+        row.status === "joined"
+          ? `${row.name} already joined; remove the server instead`
+          : `This run already finished (${row.status})`,
+      );
+    }
+    const [requested] = await db
+      .update(nodeProvisions)
+      .set({ cancelRequestedAt: new Date() })
+      .where(
+        and(
+          eq(nodeProvisions.id, row.id),
+          inArray(nodeProvisions.status, [...ACTIVE_PROVISION_STATUSES]),
+          isNull(nodeProvisions.cancelRequestedAt),
+        ),
+      )
+      .returning();
+    if (!requested) {
+      const [now] = await db.select().from(nodeProvisions).where(eq(nodeProvisions.id, row.id));
+      if (now?.cancelRequestedAt) return c.json(toApiProvision(now), 200);
+      throw new ApiError(409, "conflict", `This run already finished (${now?.status ?? "gone"})`);
+    }
+
+    // NOTE: A run creating its server is left to its workflow, the only
+    // place that learns the new server's ID; it finishes the cancel as soon
+    // as the provider call returns. Otherwise the workflow is only waiting,
+    // so stop it and finish here.
+    let result = requested;
+    if (requested.status !== "creating") {
+      await stopWorkflow(c.env, requested.id);
+      result = (await finishCancel(db, c.env, requested.id)) ?? requested;
+    }
+    await recordAudit(db, {
+      workspaceId,
+      ...m.actor,
+      action: "node.provision_cancelled",
+      targetType: "node_provision",
+      targetId: requested.id,
+      metadata: {
+        provider: requested.provider,
+        name: requested.name,
+        from_status: requested.status,
+        status: result.status,
+        server_id: result.serverId,
+      },
+      ip: clientIp(c),
+    });
+    return c.json(toApiProvision(result), 200);
   });
+
+function isActive(status: string): boolean {
+  return (ACTIVE_PROVISION_STATUSES as readonly string[]).includes(status);
+}
+
+/** Terminates a run's workflow instance. Best effort: the run's status already stops it. */
+async function stopWorkflow(env: Env, provisionId: string): Promise<void> {
+  try {
+    const instance = await env.PROVISION_WORKFLOW.get(provisionId);
+    try {
+      await instance.terminate();
+    } finally {
+      disposeRpc(instance);
+    }
+  } catch (err) {
+    console.warn(
+      "provision workflow terminate failed",
+      provisionId,
+      err instanceof Error ? err.name : "error",
+    );
+  }
+}

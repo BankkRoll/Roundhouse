@@ -1,6 +1,6 @@
 /**
- * Install-wide settings: ingress (`apps_domain`, `tls_mode`) and log
- * retention. Only instance admins may read or change them, and only from a
+ * Install-wide settings: ingress (`apps_domain`, `tls_mode`), log
+ * retention, and whether the MCP endpoint is enabled (`mcp_enabled`). Only instance admins may read or change them, and only from a
  * browser session. An ingress change re-sends desired state to every node so
  * Caddy picks it up.
  *
@@ -16,17 +16,25 @@ import { clientIp, createRouter, requireInstanceAction } from "../context";
 import { getInstanceSettings, policyOf, updateInstanceSettings } from "../contracts";
 import { recordAudit } from "../lib/audit";
 import { refreshAllNodes } from "../lib/desired-state";
-import { getIngressSettings, getLogRetentionDays, putSetting, SettingKey } from "../lib/settings";
+import {
+  getIngressSettings,
+  getLogRetentionDays,
+  getMcpEnabled,
+  putSetting,
+  SettingKey,
+} from "../lib/settings";
 
 async function readSettings(db: Db) {
-  const [ingress, logRetentionDays] = await Promise.all([
+  const [ingress, logRetentionDays, mcpEnabled] = await Promise.all([
     getIngressSettings(db),
     getLogRetentionDays(db),
+    getMcpEnabled(db),
   ]);
   return {
     apps_domain: ingress.appsDomain,
     tls_mode: ingress.tlsMode,
     log_retention_days: logRetentionDays,
+    mcp_enabled: mcpEnabled,
   };
 }
 
@@ -50,6 +58,9 @@ export const instanceRoutes = createRouter()
     }
     if (body.log_retention_days !== undefined) {
       statements.push(putSetting(db, SettingKey.logRetentionDays, body.log_retention_days));
+    }
+    if (body.mcp_enabled !== undefined) {
+      statements.push(putSetting(db, SettingKey.mcpEnabled, body.mcp_enabled));
     }
     if (body.tls_mode !== undefined) {
       statements.push(putSetting(db, SettingKey.tlsMode, body.tls_mode));

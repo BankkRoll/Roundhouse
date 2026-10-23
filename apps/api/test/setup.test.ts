@@ -223,7 +223,8 @@ describe("setup", () => {
     for (const [path, method] of [
       ["/v1/setup", "post"],
       ["/v1/nodes/join", "post"],
-      ["/v1/invites/{token}/accept", "post"],
+      ["/v1/invites/accept", "post"],
+      ["/v1/invites/lookup", "post"],
     ] as const) {
       expect(Object.keys(doc.paths[path]![method]!.responses)).toContain("429");
     }

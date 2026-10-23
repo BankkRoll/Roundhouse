@@ -82,7 +82,7 @@ export function RealtimeProvider({ projectId, children, createSocket }: Realtime
         onStatus: setStatus,
         onMessage: (message) => {
           if (message.type === "presence") setPresence(message.users);
-          else applyRealtimeMessage(latest.current.queryClient, message);
+          else applyRealtimeMessage(latest.current.queryClient, message, projectId);
         },
         checkSession: sessionIsValid,
         onSessionExpired: () => endSession(latest.current.queryClient, latest.current.router),

@@ -8,13 +8,18 @@
  *    the image (image source, rollback) or the commit to build (git).
  * 2. `resolve-variables`: resolve the service's variables, references and
  *    built-ins with `resolveServiceEnvironment` (the same resolver the
- *    variables API uses, so the two cannot disagree) and store the env
- *    sealed on the deployment. Done before the build so a broken reference
- *    fails in seconds, not after a build.
+ *    variables API uses, so the two cannot disagree) and freeze them on the
+ *    deployment: `env_sealed` (`mount_as_file` variables split into
+ *    `files`), `secret_keys` (keys whose values are secret or derived from
+ *    a secret, the deployment's redaction set) and, for git sources,
+ *    `build_env_sealed` (build args and `available_at_build` secrets). Done
+ *    before the build so a broken reference fails in seconds, not after a
+ *    build.
  * 3. Git only: `create-build` (pick a builder node, insert the build),
  *    `send-build-job` (signed, 60 s TTL, installation token when the repo is
- *    on an installation, secret build args marked so the builder never bakes
- *    them into the image), then wait for the `build` event the node's
+ *    on an installation, secrets sealed to the builder node in
+ *    `build_secrets_sealed`, secret build args marked so the builder never
+ *    bakes them into the image), then wait for the `build` event the node's
  *    Durable Object sends on `build_result`, up to `BUILD_TIMEOUT_S`.
  * 4. `schedule`: place replicas with `schedule()` and write placements.
  * 5. `rollout`: bump every target node's generation and push desired state.
@@ -45,28 +50,36 @@ import {
   projects,
   serviceConfigs,
   services,
+  variables,
 } from "@roundhouse/db";
 import {
   buildCacheKey,
-  EnvSchema,
+  buildSecretsAad,
   localImageRepository,
   MAX_WORKLOADS_PER_NODE,
   REGISTRY_LISTEN,
   SEALED_ENV_PROTOCOL_VERSION,
+  type SealedBox,
+  SealedBuildSecretsSchema,
+  SealedWorkloadEnvSchema,
+  sealBox,
 } from "@roundhouse/protocol";
 import {
   BUILD_TIMEOUT_S,
   type BuildConfig,
+  canTransition,
   type DeploymentStatus,
   newId,
   ROLLOUT_TIMEOUT_MS,
   type SchedulerNode,
   schedule,
+  secretBuildArgsValid,
+  secretDerivedVariables,
 } from "@roundhouse/shared";
 import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
-import { type Sealed, sealWith, unsealWith } from "../lib/crypto";
+import type { Sealed } from "../lib/crypto";
 import {
   addDeploymentEvent,
   cancelBuildsOnNodes,
@@ -77,10 +90,15 @@ import {
   transitionDeployment,
 } from "../lib/deployments";
 import {
+  type DeploymentBuildInputs,
+  type DeploymentRef,
   LIVE_DEPLOYMENT_STATUSES,
+  openDeploymentBuild,
   refreshNodes,
   restartSpec,
   runsSealedWorkloads,
+  sealDeploymentBuild,
+  sealDeploymentEnv,
 } from "../lib/desired-state";
 import { resolveBranch } from "../lib/git";
 import {
@@ -92,7 +110,7 @@ import {
 } from "../lib/github";
 import { effectiveStatus } from "../lib/nodes";
 import { resolveServiceEnvironment } from "../lib/resolve-env";
-import { deploymentEnvAad, projectKey } from "../lib/variables";
+import { loadEnvironmentVariables, projectKey } from "../lib/variables";
 
 /** Parameters a deploy workflow instance is created with. */
 export interface DeployParams {
@@ -153,18 +171,12 @@ const MAX_WAKEUPS = 100;
 const BUILD_ARG_PREFIX = "__ROUNDHOUSE_BUILD_ARG__";
 
 /**
- * A service's build config as stored. `secret_build_args` is part of the
- * config API (`BuildConfigSchema`) but not yet of the shared type.
- */
-type StoredBuildConfig = BuildConfig & { secret_build_args?: string[] };
-
-/**
  * The names of `build_args` a config marks secret, limited to args it has.
  *
  * @param build - The service's build config.
  * @returns Sorted, distinct names.
  */
-export function secretBuildArgNames(build: StoredBuildConfig | undefined): string[] {
+export function secretBuildArgNames(build: BuildConfig | undefined): string[] {
   if (!build?.secret_build_args) return [];
   const names = new Set(build.secret_build_args.filter((n) => Object.hasOwn(build.build_args, n)));
   return [...names].sort();
@@ -271,7 +283,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       const created = await step.do("create-build", DB_STEP, () => this.createBuild(plan));
       if (created.kind !== "ok") return created;
       const sent = await step.do("send-build-job", NETWORK_STEP, () =>
-        this.sendBuildJob(plan, created.buildId, created.nodeId, resolved.buildArgs),
+        this.sendBuildJob(plan, created.buildId, created.nodeId),
       );
       if (sent.kind !== "ok") return sent;
 
@@ -463,7 +475,23 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     return null;
   }
 
-  private async resolveEnv(plan: Plan): Promise<Verdict<{ buildArgs: Sealed | null }>> {
+  /**
+   * Resolves and freezes the deployment's inputs.
+   *
+   * 1. Resolve the service's variables with the config's build args riding
+   *    along under {@link BUILD_ARG_PREFIX}, so both may reference variables.
+   * 2. Secret keys = the service's `secret` variables plus plain ones whose
+   *    resolution reaches a secret (`secretDerivedVariables`). A build arg
+   *    that reaches a secret fails the deployment unless the config marks it
+   *    secret (ADR 0014 "Builds"): plain build args end up in image history.
+   *    So does a plain `available_at_build` variable that reaches a secret.
+   * 3. Split the env: `mount_as_file` variables go to `files`.
+   * 4. `available_at_build` variables join the build: secret ones as
+   *    BuildKit secrets only, plain ones as build args unless the config
+   *    sets an arg of that name.
+   * 5. Seal env and build inputs on the deployment with `secret_keys`.
+   */
+  private async resolveEnv(plan: Plan): Promise<Verdict<object>> {
     const { db } = this.lifecycle();
     const stopped = await this.stopped(db, plan, ["queued"]);
     if (stopped) return stopped;
@@ -484,6 +512,27 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       )
       .limit(1);
     const buildArgs = plan.git ? (config?.build.build_args ?? {}) : {};
+    const extra = Object.fromEntries(
+      Object.entries(buildArgs).map(([k, v]) => [`${BUILD_ARG_PREFIX}${k}`, v]),
+    );
+    const [vars, flags] = await Promise.all([
+      loadEnvironmentVariables(db, key, plan.projectId, plan.environmentId),
+      db
+        .select({
+          key: variables.key,
+          availableAtBuild: variables.availableAtBuild,
+          mountAsFile: variables.mountAsFile,
+        })
+        .from(variables)
+        .where(
+          and(
+            eq(variables.projectId, plan.projectId),
+            eq(variables.environmentId, plan.environmentId),
+            eq(variables.scope, "service"),
+            eq(variables.serviceId, plan.serviceId),
+          ),
+        ),
+    ]);
     const result = await resolveServiceEnvironment(
       db,
       key,
@@ -494,9 +543,8 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
           commitSha: plan.git?.commitSha ?? null,
           configVersion: plan.configVersion,
         },
-        extra: Object.fromEntries(
-          Object.entries(buildArgs).map(([k, v]) => [`${BUILD_ARG_PREFIX}${k}`, v]),
-        ),
+        extra,
+        variables: vars,
       },
     );
     if (!result.ok) {
@@ -513,29 +561,96 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         })),
       });
     }
+    const slug = plan.serviceSlug;
+    // SECURITY: a plain value that references a secret carries it once
+    // resolved, so it is redacted and kept out of build args like a secret.
+    const taint = secretDerivedVariables({
+      services: { ...vars.services, [slug]: { ...(vars.services[slug] ?? {}), ...extra } },
+      shared: vars.shared,
+      secretServiceKeys: vars.secretKeys,
+      secretSharedKeys: vars.sharedSecretKeys,
+    });
+    const secret = new Set([...(vars.secretKeys[slug] ?? []), ...(taint.services[slug] ?? [])]);
+    // SECURITY: fail closed. Config writes enforce this, so only a row
+    // written around the API gets here, and guessing which names it meant
+    // could pass a secret as a plain build arg.
+    if (plan.git && config && !secretBuildArgsValid(config.build)) {
+      return fail("The service's secret build args must name distinct build args");
+    }
+    const secretArgs = plan.git ? secretBuildArgNames(config?.build) : [];
+    const fileKeys = new Set(flags.filter((f) => f.mountAsFile).map((f) => f.key));
+    const buildKeys = new Set(flags.filter((f) => f.availableAtBuild).map((f) => f.key));
+    // Writes refuse both cases, but a reference into another service's
+    // variables can start reaching a secret after the write.
+    const leaking: { label: string; name: string }[] = plan.git
+      ? [
+          ...[...secret]
+            .filter((k) => k.startsWith(BUILD_ARG_PREFIX))
+            .map((k) => k.slice(BUILD_ARG_PREFIX.length))
+            .filter((name) => !secretArgs.includes(name))
+            .map((name) => ({ label: "Build arg", name })),
+          ...(taint.services[slug] ?? [])
+            .filter((k) => buildKeys.has(k))
+            .map((name) => ({ label: "Variable", name })),
+        ]
+      : [];
+    if (leaking.length) {
+      const { label, name } = leaking[0]!;
+      return fail(
+        `${label} ${name} references a secret; make it a secret variable with available_at_build and read it with RUN --mount=type=secret,id=${name}`,
+        { code: "build_arg_secret", keys: leaking.map((l) => l.name) },
+      );
+    }
+
     const env: Record<string, string> = {};
+    const files: Record<string, string> = {};
     const args: Record<string, string> = {};
     for (const [k, v] of Object.entries(result.env)) {
       if (k.startsWith(BUILD_ARG_PREFIX)) args[k.slice(BUILD_ARG_PREFIX.length)] = v;
+      else if (fileKeys.has(k)) files[k] = v;
       else env[k] = v;
     }
-    const checked = EnvSchema.safeParse(env);
+    const sealedEnv = { env, files };
+    const checked = SealedWorkloadEnvSchema.safeParse(sealedEnv);
     if (!checked.success) {
       return fail(`The resolved environment is too large: ${checked.error.issues[0]?.message}`);
+    }
+    const secretKeys = [...secret].filter((k) => Object.hasOwn(env, k) || Object.hasOwn(files, k));
+
+    const ref = this.ref(plan);
+    let buildEnvSealed: Sealed | null = null;
+    if (plan.git) {
+      const secrets: Record<string, string> = {};
+      for (const k of [...buildKeys].sort()) {
+        const value = env[k] ?? files[k];
+        if (value === undefined) continue;
+        if (secret.has(k)) {
+          // A secret build arg of the same name is already a BuildKit secret with this id.
+          if (!secretArgs.includes(k)) secrets[k] = value;
+        } else if (!Object.hasOwn(args, k)) {
+          args[k] = value;
+        }
+      }
+      const checkedSecrets = SealedBuildSecretsSchema.safeParse({ secrets });
+      if (!checkedSecrets.success) {
+        return fail(`The build secrets are too large: ${checkedSecrets.error.issues[0]?.message}`);
+      }
+      buildEnvSealed = await sealDeploymentBuild(key, ref, {
+        args,
+        secrets,
+        secret_args: secretArgs.filter((name) => Object.hasOwn(args, name)),
+      });
     }
     await db
       .update(deployments)
       .set({
-        envSealed: await sealWith(key, JSON.stringify(env), deploymentEnvAad(plan.deploymentId)),
+        envSealed: await sealDeploymentEnv(key, ref, sealedEnv),
+        secretKeys: secretKeys.sort(),
+        buildEnvSealed,
         updatedAt: new Date(),
       })
       .where(eq(deployments.id, plan.deploymentId));
-    return {
-      kind: "ok",
-      buildArgs: plan.git
-        ? await sealWith(key, JSON.stringify(args), `build-args:${plan.deploymentId}`)
-        : null,
-    };
+    return { kind: "ok" };
   }
 
   private async createBuild(plan: Plan): Promise<Verdict<{ buildId: string; nodeId: string }>> {
@@ -619,13 +734,23 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     plan: Plan,
     buildId: string,
     nodeId: string,
-    sealedArgs: Sealed | null,
   ): Promise<Verdict<object>> {
     const { db } = this.lifecycle();
     const stopped = await this.stopped(db, plan, ["building"]);
     if (stopped) return stopped;
     const build = await db.query.builds.findFirst({ where: eq(builds.id, buildId) });
     if (build && build.status !== "queued") return { kind: "ok" };
+    const [deployment, node] = await Promise.all([
+      db.query.deployments.findFirst({
+        where: eq(deployments.id, plan.deploymentId),
+        columns: { buildEnvSealed: true },
+      }),
+      db.query.nodes.findFirst({
+        where: eq(nodes.id, nodeId),
+        columns: { encryptionPublicKey: true },
+      }),
+    ]);
+    if (!deployment?.buildEnvSealed) return fail("The deployment's build inputs are missing");
 
     const [config] = await db
       .select({ build: serviceConfigs.build })
@@ -639,12 +764,23 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       )
       .limit(1);
     const key = await projectKey(db, this.masterKey(), plan.projectId);
-    const buildArgs = sealedArgs
-      ? (JSON.parse(await unsealWith(key, sealedArgs, `build-args:${plan.deploymentId}`)) as Record<
-          string,
-          string
-        >)
-      : {};
+    const inputs: DeploymentBuildInputs = await openDeploymentBuild(
+      key,
+      deployment.buildEnvSealed as Sealed,
+      this.ref(plan),
+    );
+    let buildSecretsSealed: SealedBox | undefined;
+    if (Object.keys(inputs.secrets).length) {
+      // SECURITY: secrets reach the build only inside a box the builder alone can open.
+      const nodeKey = node?.encryptionPublicKey;
+      if (!nodeKey) return fail("The builder node has no encryption key for build secrets");
+      buildSecretsSealed = await sealBox(
+        nodeKey,
+        JSON.stringify({ secrets: inputs.secrets }),
+        "build-secrets",
+        buildSecretsAad(nodeId, buildId),
+      );
+    }
     const git = plan.git!;
     let token: string | null;
     try {
@@ -656,9 +792,8 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       throw err;
     }
     const builder = config?.build.builder ?? "railpack";
-    const secretArgs = secretBuildArgNames(config?.build as StoredBuildConfig | undefined).filter(
-      (name) => Object.hasOwn(buildArgs, name),
-    );
+    const buildArgs = inputs.args;
+    const secretArgs = inputs.secret_args.filter((name) => Object.hasOwn(buildArgs, name));
 
     const stub = this.env.NODE_CONNECTION.get(this.env.NODE_CONNECTION.idFromName(nodeId));
     const result = await stub.sendBuildJob({
@@ -680,6 +815,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       context_dir: git.rootDir,
       build_args: buildArgs,
       ...(secretArgs.length ? { secret_build_args: secretArgs } : {}),
+      ...(buildSecretsSealed ? { build_secrets_sealed: buildSecretsSealed } : {}),
       image_repository: localImageRepository(plan.projectId, plan.serviceId),
       cache_key: buildCacheKey(plan.projectId, plan.serviceId),
       timeout_s: BUILD_TIMEOUT_S,
@@ -1018,25 +1154,38 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         )
         .returning({ id: builds.id, nodeId: builds.nodeId });
       await cancelBuildsOnNodes(ctx.env, stopped);
-      try {
-        await transitionDeployment(ctx, projectId, params.deployment_id, "failed", {
-          reason: failure.reason,
-        });
-      } catch (err) {
-        // Cancelled (or otherwise finished) meanwhile; leave it as it is.
-        if (err instanceof IllegalTransitionError) return err.from;
-        throw err;
+      const current = await db.query.deployments.findFirst({
+        where: eq(deployments.id, params.deployment_id),
+        columns: { status: true },
+      });
+      if (!current) return "failed" as DeploymentStatus;
+      // Cancelled (or otherwise finished) meanwhile; leave it as it is.
+      if (current.status !== "failed" && !canTransition(current.status, "failed")) {
+        return current.status;
       }
-      await addDeploymentEvent(
-        ctx,
-        projectId,
-        params.deployment_id,
-        "error",
-        failure.reason,
-        failure.data ? (JSON.parse(failure.data) as Record<string, unknown>) : undefined,
-      );
+      if (current.status !== "failed") {
+        // The timeline and audit entry are written before the status flips,
+        // like `finalize` does, so whoever sees `failed` sees the whole failure.
+        await addDeploymentEvent(
+          ctx,
+          projectId,
+          params.deployment_id,
+          "error",
+          failure.reason,
+          failure.data ? (JSON.parse(failure.data) as Record<string, unknown>) : undefined,
+        );
+        if (plan) await this.audit(db, plan, "deployment.failed", { reason: failure.reason });
+        try {
+          await transitionDeployment(ctx, projectId, params.deployment_id, "failed", {
+            reason: failure.reason,
+          });
+        } catch (err) {
+          if (err instanceof IllegalTransitionError) return err.from;
+          throw err;
+        }
+      }
+      // After the flip: desired state drops only deployments that are no longer live.
       await retireDeployments(ctx, [params.deployment_id]);
-      if (plan) await this.audit(db, plan, "deployment.failed", { reason: failure.reason });
       return "failed" as DeploymentStatus;
     });
     if (plan?.git && status === "failed") {
@@ -1050,6 +1199,14 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  private ref(plan: Plan): DeploymentRef {
+    return {
+      workspaceId: plan.workspaceId,
+      projectId: plan.projectId,
+      deploymentId: plan.deploymentId,
+    };
+  }
 
   private masterKey(): string {
     const key = this.env.MASTER_KEY?.trim();

@@ -1,7 +1,8 @@
 /**
- * Log storage: NDJSON chunks in R2 indexed by `log_chunks`, secret
- * redaction before anything is stored or streamed, and newest-first paging
- * across chunks for the log routes.
+ * Log storage: NDJSON chunks in R2 indexed by `log_chunks`, each
+ * deployment's redaction set ({@link deploymentRedaction}, applied before
+ * anything is stored or streamed), and newest-first paging across chunks for
+ * the log routes.
  *
  * Chunk keys follow the ADR layout
  * `logs/<project>/<service>/<yyyy>/<mm>/<dd>/<hh>/<chunk>.ndjson`, where the
@@ -9,10 +10,14 @@
  *
  * @module
  */
-import { type Db, logChunks } from "@roundhouse/db";
+import { type Db, deployments, logChunks, projects, services } from "@roundhouse/db";
 import type { LogStream } from "@roundhouse/protocol";
+import { redactionNeedles } from "@roundhouse/shared";
 import { and, desc, eq, lte } from "drizzle-orm";
+import type { Sealed } from "./crypto";
+import { openDeploymentBuild, openDeploymentEnv } from "./desired-state";
 import { ApiError } from "./errors";
+import { loadEnvironmentVariables, projectKey } from "./variables";
 
 /** One stored line, as written to NDJSON and returned by the log routes. */
 export interface StoredLogLine {
@@ -23,41 +28,82 @@ export interface StoredLogLine {
   workload_id?: string;
 }
 
-/** Replacement for redacted secret values. */
-export const REDACTED = "[REDACTED]";
-
-/**
- * Secrets shorter than this are not redacted: replacing every `1` or `true`
- * in a log would destroy it and a value that short protects nothing anyway.
- */
-export const MIN_REDACTED_LENGTH = 4;
-
-/**
- * Prepares secret values for {@link redact}: drops short ones and sorts
- * longest first, so a secret containing another is replaced whole.
- *
- * @param secrets - Plaintext secret values.
- * @returns Values to redact.
- */
-export function redactionList(secrets: Iterable<string>): string[] {
-  return [...new Set(secrets)]
-    .filter((s) => s.length >= MIN_REDACTED_LENGTH)
-    .sort((a, b) => b.length - a.length);
+/** What a deployment's logs are redacted with, and whether that can change. */
+export interface DeploymentRedaction {
+  /** From `redactionNeedles`: each secret and its encodings, longest first. */
+  needles: string[];
+  /**
+   * The set is frozen with the deployment (`secret_keys` is set), so it may
+   * be cached for as long as the deployment exists. `false` for rows from
+   * before ADR 0014, which fall back to the current secret variables.
+   */
+  frozen: boolean;
 }
 
 /**
- * Replaces every occurrence of each secret with {@link REDACTED}.
+ * The redaction set of one deployment (ADR 0014 "Redaction").
  *
- * @param text - A log line.
- * @param secrets - From {@link redactionList}.
- * @returns The line with secrets removed.
- * @example
- * redact("password=hunter22", ["hunter22"]); // "password=[REDACTED]"
+ * Values come from the deployment's own sealed env, selected by its frozen
+ * `secret_keys`, so a secret rotated out of the variables stays redacted in
+ * the logs of deployments still running with it. Build logs add the build's
+ * BuildKit secrets and secret build args. Rows without `secret_keys` (sealed
+ * before the column existed) use the service's and environment's current
+ * secret variables.
+ *
+ * @param db - Database client.
+ * @param masterKey - Base64 master key, to open the deployment's inputs.
+ * @param deploymentId - The deployment (for build logs, the build's).
+ * @param build - Whether the lines are build output.
+ * @returns Needles for `redact`; none when the deployment is gone.
  */
-export function redact(text: string, secrets: readonly string[]): string {
-  let out = text;
-  for (const s of secrets) if (out.includes(s)) out = out.split(s).join(REDACTED);
-  return out;
+export async function deploymentRedaction(
+  db: Db,
+  masterKey: string,
+  deploymentId: string,
+  build: boolean,
+): Promise<DeploymentRedaction> {
+  const [row] = await db
+    .select({
+      envSealed: deployments.envSealed,
+      secretKeys: deployments.secretKeys,
+      buildEnvSealed: deployments.buildEnvSealed,
+      environmentId: deployments.environmentId,
+      projectId: services.projectId,
+      serviceSlug: services.slug,
+      workspaceId: projects.workspaceId,
+    })
+    .from(deployments)
+    .innerJoin(services, eq(services.id, deployments.serviceId))
+    .innerJoin(projects, eq(projects.id, services.projectId))
+    .where(eq(deployments.id, deploymentId))
+    .limit(1);
+  if (!row) return { needles: [], frozen: false };
+  const key = await projectKey(db, masterKey, row.projectId);
+  const ref = { workspaceId: row.workspaceId, projectId: row.projectId, deploymentId };
+
+  if (row.secretKeys === null) {
+    const vars = await loadEnvironmentVariables(db, key, row.projectId, row.environmentId);
+    return {
+      needles: redactionNeedles([...(vars.secrets[row.serviceSlug] ?? []), ...vars.sharedSecrets]),
+      frozen: false,
+    };
+  }
+  const values: string[] = [];
+  if (row.envSealed) {
+    const { env, files } = await openDeploymentEnv(key, row.envSealed as Sealed, ref);
+    for (const k of row.secretKeys) {
+      const value = Object.hasOwn(files, k) ? files[k] : env[k];
+      if (value !== undefined) values.push(value);
+    }
+  }
+  if (build && row.buildEnvSealed) {
+    const inputs = await openDeploymentBuild(key, row.buildEnvSealed as Sealed, ref);
+    values.push(...Object.values(inputs.secrets));
+    for (const name of inputs.secret_args) {
+      if (Object.hasOwn(inputs.args, name)) values.push(inputs.args[name]!);
+    }
+  }
+  return { needles: redactionNeedles(values), frozen: true };
 }
 
 /**

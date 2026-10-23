@@ -12,6 +12,7 @@ import {
   toast,
 } from "@roundhouse/ui";
 import { useNavigate } from "@tanstack/react-router";
+import { LayoutTemplateIcon } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { FormField } from "../../components/form-field";
 import { errorMessage } from "../../lib/api/client";
@@ -28,7 +29,8 @@ export interface NewProjectDialogProps {
 }
 
 /**
- * Creates a project (with its `production` environment) and opens it.
+ * Creates a project (with its `production` environment) and opens it, or hands off to the
+ * template gallery for a project that starts with services.
  *
  * @param props - Workspace and controlled open state.
  * @returns The dialog.
@@ -119,6 +121,21 @@ export function NewProjectDialog({ workspaceId, open, onOpenChange }: NewProject
               placeholder="What runs here"
             />
           </div>
+          <p className="flex flex-wrap items-center gap-x-1.5 text-sm text-muted-foreground">
+            <LayoutTemplateIcon className="size-3.5" aria-hidden="true" />
+            Want services and variables set up for you?
+            <button
+              type="button"
+              onClick={() => {
+                onOpenChange(false);
+                reset();
+                void navigate({ to: "/w/$workspaceId/templates", params: { workspaceId } });
+              }}
+              className="rounded-sm text-foreground underline-offset-2 outline-none hover:underline focus-visible:underline"
+            >
+              Start from a template
+            </button>
+          </p>
           <DialogFooter>
             <Button variant="secondary" onClick={() => onOpenChange(false)}>
               Cancel

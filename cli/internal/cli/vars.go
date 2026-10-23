@@ -371,7 +371,7 @@ func (a *App) putVariables(ctx context.Context, v varsFlags, w *writeFlags, set 
 		}
 		res, err := vt.sess.client.PutVariables(ctx, vt.scope, vt.env.ID, body)
 		if err != nil {
-			retry, cerr := a.confirmWriteOnly(err, confirmed)
+			retry, cerr := a.confirmWriteOnly(err, confirmed, "nothing stored; pass --plain to keep the values readable")
 			if cerr != nil {
 				return "", cerr
 			}
@@ -412,8 +412,9 @@ func (a *App) putVariables(ctx context.Context, v varsFlags, w *writeFlags, set 
 
 // confirmWriteOnly handles a confirmation_required refusal: on a terminal it
 // asks whether the listed keys may become write-only and reports whether to
-// resend. Any other error, or no terminal, is left to the caller.
-func (a *App) confirmWriteOnly(err error, confirmed bool) (retry bool, _ error) {
+// resend; declined is the error message when the answer is no. Any other
+// error, or no terminal, is left to the caller.
+func (a *App) confirmWriteOnly(err error, confirmed bool, declined string) (retry bool, _ error) {
 	var apiErr *api.Error
 	if confirmed || !errors.As(err, &apiErr) || apiErr.Code != "confirmation_required" || !a.IO.Interactive() || a.jsonOut {
 		return false, nil
@@ -431,7 +432,7 @@ func (a *App) confirmWriteOnly(err error, confirmed bool) (retry bool, _ error) 
 		return false, cerr
 	}
 	if !ok {
-		return false, exitcode.New(exitcode.Error, "nothing stored; pass --plain to keep the values readable")
+		return false, exitcode.New(exitcode.Error, "%s", declined)
 	}
 	return true, nil
 }

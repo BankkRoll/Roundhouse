@@ -288,6 +288,56 @@ describe("provider-managed servers", () => {
     });
   }
 
+  it("shows estimated costs on provisioned servers and a total per currency", async () => {
+    addManaged({ estimated_monthly_cost: { monthly_cents: 451, currency: "EUR" } });
+    db.nodes.push(
+      {
+        ...makeNode({
+          id: "node_web2",
+          name: "web-2",
+          provider: "hetzner",
+          provider_server_id: "48000002",
+          estimated_monthly_cost: { monthly_cents: 812, currency: "EUR" },
+        }),
+        workspace_id: WORKSPACE_ID,
+      },
+      {
+        ...makeNode({
+          id: "node_do1",
+          name: "do-1",
+          provider: "digitalocean",
+          provider_server_id: "9001",
+          estimated_monthly_cost: { monthly_cents: 2400, currency: "USD" },
+        }),
+        workspace_id: WORKSPACE_ID,
+      },
+    );
+    renderApp(SERVERS);
+    await screen.findByRole("heading", { name: "web-1" });
+    expect(card("web-1").getByText(/≈ €4\.51\/mo \(estimate\)/)).toBeInTheDocument();
+    expect(card("do-1").getByText(/≈ \$24\.00\/mo \(estimate\)/)).toBeInTheDocument();
+    expect(card("hel-1").queryByText(/estimate/)).not.toBeInTheDocument();
+    const summary = screen.getByText(/Estimated cloud cost:/);
+    expect(summary).toHaveTextContent(
+      "Estimated cloud cost: ≈ $24.00/mo (1 server) + ≈ €12.63/mo (2 servers). Provider catalogue prices when each server was created, not your bill.",
+    );
+  });
+
+  it("leaves the cost out when no server has an estimate", async () => {
+    addManaged();
+    renderApp(SERVERS);
+    await screen.findByRole("heading", { name: "web-1" });
+    expect(screen.queryByText(/Estimated cloud cost/)).not.toBeInTheDocument();
+    expect(card("web-1").queryByText(/estimate/)).not.toBeInTheDocument();
+  });
+
+  it("shows the estimate on the detail page, labelled as one", async () => {
+    addManaged({ estimated_monthly_cost: { monthly_cents: 451, currency: "EUR" } });
+    renderApp(`${SERVERS}/node_web1`);
+    const fact = await screen.findByText("Estimated cost");
+    expect(fact.nextElementSibling).toHaveTextContent("≈ €4.51/mo (estimate)");
+  });
+
   it("badges the provider, and warns when it deleted the server", async () => {
     addManaged({ provider_server_missing_at: Date.now() - 60_000 });
     renderApp(SERVERS);
@@ -311,6 +361,8 @@ describe("provider-managed servers", () => {
       ipv4: null,
       ipv6: null,
       node_id: null,
+      cancel_requested_at: null,
+      estimated_monthly_cost: null,
       created_at: now,
       updated_at: now,
       finished_at: null,

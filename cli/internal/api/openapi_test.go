@@ -113,38 +113,49 @@ func jsonFields(t reflect.Type) []string {
 func TestWireTypesMatchSchemas(t *testing.T) {
 	doc := loadOpenAPI(t)
 	for name, v := range map[string]any{
-		"Project":             Project{},
-		"ProjectDetail":       ProjectDetail{},
-		"Environment":         Environment{},
-		"Service":             Service{},
-		"CreatedService":      CreatedService{},
-		"ServiceConfig":       ServiceConfig{},
-		"NetworkingConfig":    NetworkingConfig{},
-		"Variable":            Variable{},
-		"VariablesPut":        VariablesPut{},
-		"VariableSetEntry":    VariableSet{},
-		"VariablesPutResult":  VariablesPutResult{},
-		"VariableWarning":     VariableWarning{},
-		"Build":               Build{},
-		"Deployment":          Deployment{},
-		"DeploymentPage":      DeploymentPage{},
-		"DeploymentEvent":     DeploymentEvent{},
-		"DeploymentDetail":    DeploymentDetail{},
-		"Placement":           Placement{},
-		"LogEntry":            LogEntry{},
-		"LogPage":             LogPage{},
-		"Domain":              Domain{},
-		"Node":                Node{},
-		"CreateProject":       CreateProjectInput{},
-		"ApiToken":            APIToken{},
-		"CreateApiToken":      CreateAPITokenInput{},
-		"CreatedApiToken":     CreatedAPIToken{},
-		"ResolvedVariables":   ResolvedVariables{},
-		"ProviderIntegration": ProviderIntegration{},
-		"ProviderOffer":       ProviderOffer{},
-		"ProviderOffers":      ProviderOffers{},
-		"ProvisionNode":       ProvisionNodeInput{},
-		"NodeProvision":       NodeProvision{},
+		"Project":                   Project{},
+		"ProjectDetail":             ProjectDetail{},
+		"Environment":               Environment{},
+		"Service":                   Service{},
+		"CreatedService":            CreatedService{},
+		"ServiceConfig":             ServiceConfig{},
+		"NetworkingConfig":          NetworkingConfig{},
+		"Variable":                  Variable{},
+		"VariablesPut":              VariablesPut{},
+		"VariableSetEntry":          VariableSet{},
+		"VariablesPutResult":        VariablesPutResult{},
+		"VariableWarning":           VariableWarning{},
+		"Build":                     Build{},
+		"Deployment":                Deployment{},
+		"DeploymentPage":            DeploymentPage{},
+		"DeploymentEvent":           DeploymentEvent{},
+		"DeploymentDetail":          DeploymentDetail{},
+		"Placement":                 Placement{},
+		"LogEntry":                  LogEntry{},
+		"LogPage":                   LogPage{},
+		"Domain":                    Domain{},
+		"Node":                      Node{},
+		"CreateProject":             CreateProjectInput{},
+		"ApiToken":                  APIToken{},
+		"CreateApiToken":            CreateAPITokenInput{},
+		"CreatedApiToken":           CreatedAPIToken{},
+		"ResolvedVariables":         ResolvedVariables{},
+		"ProviderIntegration":       ProviderIntegration{},
+		"ProviderOffer":             ProviderOffer{},
+		"ProviderOffers":            ProviderOffers{},
+		"ProvisionNode":             ProvisionNodeInput{},
+		"NodeProvision":             NodeProvision{},
+		"DnsRecord":                 DNSRecord{},
+		"AddDomain":                 AddDomainInput{},
+		"CostEstimate":              CostEstimate{},
+		"TemplateSummary":           TemplateSummary{},
+		"TemplateDetail":            TemplateDetail{},
+		"TemplateInput":             TemplateInput{},
+		"TemplateVariable":          TemplateVariable{},
+		"TemplateService":           TemplateService{},
+		"TemplateDeployment":        TemplateDeployment{},
+		"CreateProjectFromTemplate": CreateProjectFromTemplateInput{},
+		"DeployTemplate":            DeployTemplateInput{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
@@ -267,5 +278,53 @@ func TestProviderEnumsMatchAPI(t *testing.T) {
 		t.Error("NodeProvision.status missing from the OpenAPI document")
 	} else if !slices.Equal(s.Properties["status"].Enum, ProvisionStatuses) {
 		t.Errorf("ProvisionStatuses = %v\nAPI enum          = %v", ProvisionStatuses, s.Properties["status"].Enum)
+	}
+}
+
+// TestTemplateSourceMatchesSchema checks each variant of the TemplateSource
+// union against the fields [TemplateSource] decodes.
+func TestTemplateSourceMatchesSchema(t *testing.T) {
+	doc := loadOpenAPI(t)
+	data, err := os.ReadFile("testdata/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Components struct {
+			Schemas struct {
+				TemplateSource struct {
+					OneOf []*schema `json:"oneOf"`
+				} `json:"TemplateSource"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	variants := raw.Components.Schemas.TemplateSource.OneOf
+	if len(variants) == 0 {
+		t.Fatal("TemplateSource.oneOf missing from the API schema")
+	}
+	fields := jsonFields(reflect.TypeOf(TemplateSource{}))
+	for _, v := range variants {
+		_, required := doc.properties(v)
+		for p := range required {
+			if !slices.Contains(fields, p) {
+				t.Errorf("TemplateSource.%s: required by a variant but missing from the Go type", p)
+			}
+		}
+	}
+}
+
+// TestTemplateInputTypesMatchAPI keeps the input types `templates deploy`
+// prompts for in step with the API's enum.
+func TestTemplateInputTypesMatchAPI(t *testing.T) {
+	doc := loadOpenAPI(t)
+	s := doc.Components.Schemas["TemplateInput"]
+	if s == nil || s.Properties["type"] == nil {
+		t.Fatal("TemplateInput.type missing from the OpenAPI document")
+	}
+	if !slices.Equal(s.Properties["type"].Enum, TemplateInputTypes) {
+		t.Errorf("TemplateInputTypes = %v\nAPI enum           = %v", TemplateInputTypes, s.Properties["type"].Enum)
 	}
 }

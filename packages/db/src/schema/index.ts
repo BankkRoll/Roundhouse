@@ -6,10 +6,12 @@
  */
 export * from "./access";
 export * from "./auth";
+export * from "./changes";
 export * from "./deployments";
 export * from "./github";
 export * from "./instance";
 export * from "./nodes";
+export * from "./oauth";
 export * from "./projects";
 export * from "./providers";
 export * from "./workspaces";

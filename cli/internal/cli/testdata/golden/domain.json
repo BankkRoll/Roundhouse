@@ -9,6 +9,13 @@
     "target_port": 8080,
     "verification_status": "verified",
     "tls_status": "active",
+    "status": "active",
+    "apex": false,
+    "records": [],
+    "error": null,
+    "last_checked_at": null,
+    "next_check_at": null,
+    "verified_at": 1792584000000,
     "created_at": 1792584000000
   },
   {
@@ -21,6 +28,13 @@
     "target_port": 8080,
     "verification_status": "verified",
     "tls_status": "active",
+    "status": "active",
+    "apex": false,
+    "records": [],
+    "error": null,
+    "last_checked_at": null,
+    "next_check_at": null,
+    "verified_at": 1792670399000,
     "created_at": 1792670399000
   }
 ]

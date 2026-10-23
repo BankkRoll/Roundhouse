@@ -8,13 +8,14 @@
     "region": null,
     "provider_server_id": null,
     "provider_server_missing_at": null,
-    "workloads_blocked": null,
+    "estimated_monthly_cost": null,
     "public_ip": "203.0.113.10",
     "os": "linux",
     "arch": "amd64",
     "kernel": null,
     "docker_version": null,
     "agent_version": "0.4.0",
+    "workloads_blocked": null,
     "capabilities": {
       "docker": true,
       "builder": true

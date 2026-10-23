@@ -38,9 +38,14 @@ export const listServiceVariables = defineRoute(session("variables:read"), {
  * Upserts and deletes a service's variables in one batch, then returns the
  * full list and the classifier's warnings. Each value's tier is decided by
  * `decideVariableTier(classifyVariable(key, value), …)`. Errors (400):
- * `invalid_reference`, `confirmation_required`, `public_prefix_secret_value`,
- * `tier_locked`, `value_required`; 403 `environment_protected` reasons come
- * back as `forbidden`; 409 when an `expected_version` is stale.
+ * `invalid_reference`, `confirmation_required` (only when a key becomes
+ * secret; `details` lists them), `public_prefix_secret_value`, `tier_locked`,
+ * `value_required`, `build_arg_secret` (a plain `available_at_build`
+ * variable whose resolution reaches a secret), `invalid_request` with
+ * `reserved_name` details (an `available_at_build` name the builder
+ * reserves, like `PATH` or `LD_PRELOAD`); 403 `environment_protected`
+ * reasons come back as `forbidden`; 409 when an `expected_version` is stale.
+ * Every value is re-sealed for its new version and fingerprinted.
  */
 export const putServiceVariables = defineRoute(session("variables:manage", ["variables.updated"]), {
   method: "put",

@@ -12,6 +12,7 @@ type SettingsPath =
   | "/w/$workspaceId/audit"
   | "/w/$workspaceId/tokens"
   | "/w/$workspaceId/platform"
+  | "/w/$workspaceId/mcp-clients"
   | "/w/$workspaceId/preferences"
   | "/w/$workspaceId/preferences/shortcuts"
   | "/w/$workspaceId/preferences/accessibility";
@@ -36,8 +37,8 @@ function Item({
 
 /**
  * The settings sub-navigation: the workspace's own settings (each shown only to roles
- * that may open it), the instance-wide platform settings, and this browser's
- * preferences.
+ * that may open it), the instance-wide platform settings, the signed-in user's own
+ * account settings, and this browser's preferences.
  *
  * @param props - Workspace id.
  * @returns The navigation.
@@ -65,6 +66,9 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
           <Item workspaceId={workspaceId} to="/w/$workspaceId/platform" label="Platform" />
         </SettingsNavGroup>
       ) : null}
+      <SettingsNavGroup label="Account">
+        <Item workspaceId={workspaceId} to="/w/$workspaceId/mcp-clients" label="MCP clients" />
+      </SettingsNavGroup>
       <SettingsNavGroup label="Preferences">
         <Item workspaceId={workspaceId} to="/w/$workspaceId/preferences" label="Appearance" />
         <Item

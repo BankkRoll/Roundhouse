@@ -12,7 +12,7 @@ import { recordAudit } from "../lib/audit";
 import { notFound } from "../lib/errors";
 import { mintJoinToken } from "../lib/join-tokens";
 import { installCommand, toApiNode } from "../lib/nodes";
-import { deprovisionNodeServer } from "../lib/provisioning";
+import { deprovisionNodeServer, nodeCostEstimates, withCostEstimates } from "../lib/provisioning";
 import {
   errors,
   json,
@@ -88,14 +88,25 @@ export const nodeRoutes = createRouter()
       .where(and(eq(nodes.workspaceId, workspaceId), isNull(nodes.deletedAt)))
       .orderBy(asc(nodes.name));
     const now = Date.now();
-    return c.json({ nodes: rows.map((n) => toApiNode(n, now)) }, 200);
+    const costs = await nodeCostEstimates(c.get("db"), workspaceId);
+    return c.json(
+      {
+        nodes: withCostEstimates(
+          rows.map((n) => toApiNode(n, now)),
+          costs,
+        ),
+      },
+      200,
+    );
   })
   .openapi(get, async (c) => {
     const { workspaceId, nodeId } = c.req.valid("param");
     await requireWorkspace(c, workspaceId, "nodes:read");
     const [row] = await c.get("db").select().from(nodes).where(liveNode(workspaceId, nodeId));
     if (!row) throw notFound("Server");
-    return c.json(toApiNode(row), 200);
+    const costs = await nodeCostEstimates(c.get("db"), workspaceId);
+    const [node] = withCostEstimates([toApiNode(row)], costs);
+    return c.json(node!, 200);
   })
   .openapi(remove, async (c) => {
     const { workspaceId, nodeId } = c.req.valid("param");

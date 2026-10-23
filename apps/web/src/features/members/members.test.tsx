@@ -126,7 +126,7 @@ describe("member management", () => {
     await user.selectOptions(within(dialog).getByLabelText("Role"), "viewer");
     await user.click(within(dialog).getByRole("button", { name: "Create invite" }));
 
-    expect(await within(dialog).findByText(/\/invite\/inv_\w+$/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/\/invite#token=inv_\w+$/)).toBeInTheDocument();
     expect(within(dialog).getByText("frank@example.com")).toBeInTheDocument();
     expect(db.invites.at(-1)).toMatchObject({ email: "frank@example.com", role: "viewer" });
 

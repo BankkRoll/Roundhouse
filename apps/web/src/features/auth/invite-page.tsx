@@ -1,6 +1,6 @@
 import { Badge, Button, Skeleton } from "@roundhouse/ui";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { type FormEvent, type ReactNode, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { AuthLayout } from "../../components/auth-layout";
 import { FormField } from "../../components/form-field";
 import { errorMessage, isApiError } from "../../lib/api/client";
@@ -8,6 +8,7 @@ import type { InvitePreview } from "../../lib/api/types";
 import { type FormErrors, type PasswordFields, validatePassword } from "../../lib/validation";
 import { useAcceptInvite, useInvitePreview } from "../../queries/invites";
 import { useMe, useSignOut } from "../../queries/me";
+import { forgetInviteToken } from "./invite-token";
 
 interface SignUpValues extends PasswordFields {
   name: string;
@@ -87,7 +88,7 @@ function SignUpAndAccept({
         Already have an account?{" "}
         <Link
           to="/login"
-          search={{ redirect: `/invite/${token}` }}
+          search={{ redirect: "/invite" }}
           className="text-accent-text underline-offset-4 hover:underline"
         >
           Sign in first
@@ -153,22 +154,45 @@ function WrongAccount({
   );
 }
 
+function Unavailable({ description }: { description: ReactNode }) {
+  return (
+    <AuthLayout title="Invite unavailable" description={description}>
+      <Button asChild variant="secondary" className="w-full">
+        <Link to="/login">Go to sign in</Link>
+      </Button>
+    </AuthLayout>
+  );
+}
+
 /**
  * Invite landing page. A visitor signed in as the invited address accepts with one click;
  * one signed in as someone else is asked to sign out first (the API refuses the
  * mismatch); everyone else creates an account for the invited address and joins in the
  * same step.
  *
- * @param props - Invite token from the URL.
+ * @param props - Invite token from the link's fragment, or `null` when there was none.
  * @returns The page.
  */
-export function InvitePage({ token }: { token: string }) {
+export function InvitePage({ token }: { token: string | null }) {
+  if (!token) {
+    return (
+      <Unavailable description="This page needs the full invite link. Open the link you were sent again, or ask whoever invited you for a new one." />
+    );
+  }
+  return <InviteFlow token={token} />;
+}
+
+function InviteFlow({ token }: { token: string }) {
   const preview = useInvitePreview(token);
   const me = useMe();
   // NOTE: Owned here rather than by WrongAccount so this component re-renders, and so
   // re-reads the emptied cache, once signing out succeeds.
   const signOut = useSignOut({ redirectToLogin: false });
   const [joining, setJoining] = useState(false);
+  const gone = preview.isError && isApiError(preview.error, 404);
+  useEffect(() => {
+    if (gone) forgetInviteToken();
+  }, [gone]);
 
   if (preview.isPending || (me.isPending && !joining)) {
     return (
@@ -179,16 +203,13 @@ export function InvitePage({ token }: { token: string }) {
   }
 
   if (preview.isError) {
-    const gone = isApiError(preview.error, 404);
+    if (isApiError(preview.error, 404)) {
+      return (
+        <Unavailable description="This invite link is invalid, already used, or expired. Ask whoever invited you for a new one." />
+      );
+    }
     return (
-      <AuthLayout
-        title={gone ? "Invite unavailable" : "Could not load invite"}
-        description={
-          gone
-            ? "This invite link is invalid, already used, or expired. Ask whoever invited you for a new one."
-            : errorMessage(preview.error)
-        }
-      >
+      <AuthLayout title="Could not load invite" description={errorMessage(preview.error)}>
         <Button asChild variant="secondary" className="w-full">
           <Link to="/login">Go to sign in</Link>
         </Button>

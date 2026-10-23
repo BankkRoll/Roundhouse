@@ -81,6 +81,18 @@ export const AUDIT_ACTIONS = [
   "node.provisioned",
   "node.provision_failed",
   "node.deprovisioned",
+  "node.provision_cancelled",
+  "invite.rejected_token",
+  "domain.added",
+  "domain.verified",
+  "domain.failed",
+  "domain.removed",
+  "mcp_client.authorized",
+  "mcp_client.revoked",
+  "template.deployed",
+  "change_set.created",
+  "change_set.applied",
+  "change_set.discarded",
 ] as const;
 
 /** An audited action name. */
@@ -114,4 +126,6 @@ export const INSTANCE_AUDIT_ACTIONS = [
   "auth.two_factor_disabled",
   "auth.backup_codes_regenerated",
   "auth.two_factor_failed",
+  /** Recorded in the invite's workspace instead when the token matches an expired or used invite. */
+  "invite.rejected_token",
 ] as const satisfies readonly AuditAction[];

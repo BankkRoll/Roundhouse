@@ -25,6 +25,7 @@ import {
 } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
 import type { AuditLogPage, Invite, Me, Member, Node, Workspace } from "../lib/api/types";
+import { changeHandlers } from "./changes-handlers";
 import {
   apiError,
   currentUser,
@@ -36,7 +37,9 @@ import {
 } from "./common";
 import { type DbAuditEntry, type DbInvite, type DbMembership, db, nextId } from "./db";
 import { deployHandlers } from "./deploy-handlers";
+import { domainHandlers } from "./domains-mock";
 import { providerHandlers } from "./providers-handlers";
+import { templateHandlers } from "./templates-handlers";
 
 export { apiError } from "./common";
 
@@ -481,7 +484,10 @@ const phase0Handlers = [
       metadata: { email, role },
     });
     return HttpResponse.json(
-      { invite: toInvite(invite), url: `${new URL(request.url).origin}/invite/${invite.token}` },
+      {
+        invite: toInvite(invite),
+        url: `${new URL(request.url).origin}/invite#token=${encodeURIComponent(invite.token)}`,
+      },
       { status: 201 },
     );
   }),
@@ -507,8 +513,11 @@ const phase0Handlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
-  http.get("*/v1/invites/:token", ({ params }) => {
-    const invite = findPendingInvite(params.token);
+  // SECURITY: Like the API, the token only ever travels in request bodies.
+  http.post("*/v1/invites/lookup", async ({ request }) => {
+    const parsed = parseFields(await readJson(request), { token: { min: 1, max: 200 } });
+    if (!parsed.ok) return parsed.response;
+    const invite = findPendingInvite(parsed.values.token);
     if (!invite) return notFound("Invite");
     const workspace = db.workspaces.find((row) => row.id === invite.workspace_id);
     if (!workspace) return notFound("Invite");
@@ -520,14 +529,15 @@ const phase0Handlers = [
     });
   }),
 
-  http.post("*/v1/invites/:token/accept", async ({ params, request }) => {
+  http.post("*/v1/invites/accept", async ({ request }) => {
     const body = await readJson(request);
     const parsed = parseFields(body, {
+      token: { min: 1, max: 200 },
       name: { min: 1, max: 100, trim: true, optional: true },
       password: { min: MIN_PASSWORD, max: 256, optional: true },
     });
     if (!parsed.ok) return parsed.response;
-    const invite = findPendingInvite(params.token);
+    const invite = findPendingInvite(parsed.values.token);
     if (!invite) return notFound("Invite");
 
     const user = currentUser();
@@ -712,5 +722,12 @@ const phase0Handlers = [
   }),
 ];
 
-/** Every route the dashboard calls: Phase 0 first, then the deploy pipeline and cloud providers. */
-export const handlers = [...phase0Handlers, ...deployHandlers, ...providerHandlers];
+/** Every route the dashboard calls: Phase 0 first, then the deploy pipeline, cloud providers and templates. */
+export const handlers = [
+  ...phase0Handlers,
+  ...deployHandlers,
+  ...domainHandlers,
+  ...providerHandlers,
+  ...templateHandlers,
+  ...changeHandlers,
+];

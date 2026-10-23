@@ -5,6 +5,7 @@ import {
   decideVariableTier,
   detectSecretValue,
   hasHighEntropyToken,
+  isReservedBuildName,
   isSecretName,
   literalText,
   MIN_REDACTABLE_SECRET_LENGTH,
@@ -486,5 +487,27 @@ describe("decideVariableTier", () => {
         valueProvided: true,
       }),
     ).toMatchObject({ ok: true, tier: "plain" });
+  });
+});
+
+describe("isReservedBuildName", () => {
+  it.each([
+    ["PATH", true],
+    ["path", true],
+    ["LD_PRELOAD", true],
+    ["DYLD_INSERT_LIBRARIES", true],
+    ["GIT_SSH_COMMAND", true],
+    ["https_proxy", true],
+    ["ALL_PROXY", true],
+    ["SSL_CERT_FILE", true],
+    ["MISE_DATA_DIR", true],
+    ["XDG_CONFIG_HOME", true],
+    ["BUILDKIT_HOST", true],
+    ["NODE_ENV", false],
+    ["GITHUB_SHA", false],
+    ["PROXY_URL", false],
+    ["HOMEPAGE_URL", false],
+  ])("%s → %s", (name, reserved) => {
+    expect(isReservedBuildName(name)).toBe(reserved);
   });
 });

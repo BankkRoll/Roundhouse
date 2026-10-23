@@ -6,28 +6,24 @@ import { findPageHeading, renderApp } from "../test/render";
 const BASE = `/w/${WORKSPACE_ID}`;
 
 describe("home page", () => {
-  it("shows the workspace subline, New project, and the phase-gated templates action", async () => {
+  it("shows the workspace subline, New project, and a link to the templates", async () => {
     renderApp(BASE);
     expect(await findPageHeading("Home")).toBeInTheDocument();
     expect(screen.getByText("Acme · self-hosted control plane on Cloudflare")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New project" })).not.toHaveAttribute(
       "aria-disabled",
     );
-    expect(screen.getByRole("button", { name: "Browse templates" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
+    expect(screen.getByRole("link", { name: "Browse templates" })).toHaveAttribute(
+      "href",
+      `${BASE}/templates`,
     );
   });
 
-  it("explains why templates are unavailable", async () => {
+  it("opens the template gallery from Browse templates", async () => {
     const { router, user } = renderApp(BASE);
-    const button = await screen.findByRole("button", { name: "Browse templates" });
-    await user.hover(button);
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      "Templates arrive in a later phase",
-    );
-    await user.click(button);
-    expect(router.state.location.pathname).toBe(BASE);
+    await user.click(await screen.findByRole("link", { name: "Browse templates" }));
+    expect(await findPageHeading("Templates")).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe(`${BASE}/templates`);
   });
 
   it("hides New project from roles that can't create projects", async () => {
@@ -154,7 +150,6 @@ describe("coming soon sections", () => {
   it.each([
     ["canvas", "Canvas", "Phase 2"],
     ["logs", "Logs", "Later phase"],
-    ["templates", "Templates", "Later phase"],
     ["usage", "Usage", "Later phase"],
   ])("/%s explains which phase brings it", async (path, title, phase) => {
     renderApp(`${BASE}/${path}`);

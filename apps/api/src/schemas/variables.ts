@@ -91,7 +91,12 @@ export const VariableSetEntrySchema = z
     value: VariableValueField.optional(),
     /** Omit for the classifier's default (an existing secret stays secret). */
     tier: VariableTierSchema.optional(),
-    /** Omit to keep the current flag (`false` for new variables). */
+    /**
+     * Also deliver to builds: plain values as build args, secrets as BuildKit
+     * secrets. Omit to keep the current flag (`false` for new variables).
+     * Refused for names the builder reserves, and for plain values that
+     * reference a secret.
+     */
     available_at_build: z.boolean().optional(),
     /** Omit to keep the current flag (`false` for new variables). */
     mount_as_file: z.boolean().optional(),

@@ -312,7 +312,37 @@ type Domain struct {
 	TargetPort         int    `json:"target_port"`
 	VerificationStatus string `json:"verification_status"`
 	TLSStatus          string `json:"tls_status"`
-	CreatedAt          int64  `json:"created_at"`
+	// Status is the domain's overall state, e.g. "pending_dns" or "active".
+	Status string `json:"status"`
+	// Apex is set for a bare domain (example.com), which needs A/AAAA records.
+	Apex bool `json:"apex"`
+	// Records are the DNS records a custom domain needs, with what was found.
+	Records []DNSRecord `json:"records"`
+	Error   *string     `json:"error"`
+	// LastCheckedAt, NextCheckAt and VerifiedAt are millisecond timestamps.
+	LastCheckedAt *int64 `json:"last_checked_at"`
+	NextCheckAt   *int64 `json:"next_check_at"`
+	VerifiedAt    *int64 `json:"verified_at"`
+	CreatedAt     int64  `json:"created_at"`
+}
+
+// DNSRecord is one DNS record a domain needs and the state it was found in.
+type DNSRecord struct {
+	// Type is CNAME, A, AAAA or TXT.
+	Type  string `json:"type"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	// Purpose is "routing" or "ownership".
+	Purpose string `json:"purpose"`
+	// State is "unknown", "ok", "missing" or "wrong".
+	State string  `json:"state"`
+	Note  *string `json:"note"`
+}
+
+// CostEstimate is a monthly price in the smallest unit of Currency.
+type CostEstimate struct {
+	MonthlyCents int    `json:"monthly_cents"`
+	Currency     string `json:"currency"`
 }
 
 // Node is a server running the node agent.
@@ -328,15 +358,17 @@ type Node struct {
 	// ProviderServerMissingAt is when the provider first reported that
 	// server gone, in Unix milliseconds.
 	ProviderServerMissingAt *int64 `json:"provider_server_missing_at"`
-	// WorkloadsBlocked says why the node gets no workloads or builds
-	// ("upgrade_agent" or "no_encryption_key"); nil when it can run them.
+	// EstimatedMonthlyCost is the provider's price for a provisioned server.
+	EstimatedMonthlyCost *CostEstimate `json:"estimated_monthly_cost"`
+	PublicIP             *string       `json:"public_ip"`
+	OS                   *string       `json:"os"`
+	Arch                 *string       `json:"arch"`
+	Kernel               *string       `json:"kernel"`
+	DockerVersion        *string       `json:"docker_version"`
+	AgentVersion         *string       `json:"agent_version"`
+	// WorkloadsBlocked says why the server takes no workloads, e.g.
+	// "upgrade_agent"; nil when it takes them.
 	WorkloadsBlocked *string         `json:"workloads_blocked"`
-	PublicIP         *string         `json:"public_ip"`
-	OS               *string         `json:"os"`
-	Arch             *string         `json:"arch"`
-	Kernel           *string         `json:"kernel"`
-	DockerVersion    *string         `json:"docker_version"`
-	AgentVersion     *string         `json:"agent_version"`
 	Capabilities     json.RawMessage `json:"capabilities"`
 	CPUTotal         *float64        `json:"cpu_total"`
 	MemTotal         *float64        `json:"mem_total"`
@@ -600,10 +632,13 @@ type NodeProvision struct {
 	IPv4     *string `json:"ipv4"`
 	IPv6     *string `json:"ipv6"`
 	// NodeID is set once the server's agent joined.
-	NodeID     *string `json:"node_id"`
-	CreatedAt  int64   `json:"created_at"`
-	UpdatedAt  int64   `json:"updated_at"`
-	FinishedAt *int64  `json:"finished_at"`
+	NodeID *string `json:"node_id"`
+	// CancelRequestedAt is when someone asked to cancel the run.
+	CancelRequestedAt    *int64        `json:"cancel_requested_at"`
+	EstimatedMonthlyCost *CostEstimate `json:"estimated_monthly_cost"`
+	CreatedAt            int64         `json:"created_at"`
+	UpdatedAt            int64         `json:"updated_at"`
+	FinishedAt           *int64        `json:"finished_at"`
 }
 
 // Provisioning run statuses, from NODE_PROVISION_STATUSES.
@@ -613,17 +648,199 @@ const (
 	ProvisionBooting       = "booting"
 	ProvisionJoined        = "joined"
 	ProvisionFailed        = "failed"
+	ProvisionCancelled     = "cancelled"
 	ProvisionCleanupFailed = "cleanup_failed"
 )
 
 // ProvisionStatuses lists every provisioning run status.
 var ProvisionStatuses = []string{
 	ProvisionQueued, ProvisionCreating, ProvisionBooting,
-	ProvisionJoined, ProvisionFailed, ProvisionCleanupFailed,
+	ProvisionJoined, ProvisionFailed, ProvisionCancelled, ProvisionCleanupFailed,
 }
 
 // IsProvisionFinished reports whether a provisioning run has stopped: the
-// server joined, or the run failed.
+// server joined, or the run failed or was cancelled.
 func IsProvisionFinished(status string) bool {
-	return status == ProvisionJoined || status == ProvisionFailed || status == ProvisionCleanupFailed
+	return status == ProvisionJoined || status == ProvisionFailed || status == ProvisionCancelled || status == ProvisionCleanupFailed
+}
+
+// -----------------------------------------------------------------------------
+// Templates
+// -----------------------------------------------------------------------------
+
+// Template input types, from TEMPLATE_INPUT_TYPES in packages/shared.
+const (
+	InputString  = "string"
+	InputSecret  = "secret"
+	InputNumber  = "number"
+	InputBoolean = "boolean"
+	InputSelect  = "select"
+)
+
+// TemplateInputTypes lists every template input type.
+var TemplateInputTypes = []string{InputString, InputSecret, InputNumber, InputBoolean, InputSelect}
+
+// TemplateSummary is a template as the gallery lists it.
+type TemplateSummary struct {
+	ID string `json:"id"`
+	// Version is bumped whenever the template changes.
+	Version     int    `json:"version"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// Icon is `builtin:<name>` for an icon the dashboard ships, or an https URL.
+	Icon         *string  `json:"icon"`
+	Category     string   `json:"category"`
+	Tags         []string `json:"tags"`
+	DocsURL      *string  `json:"docs_url"`
+	ServiceCount int      `json:"service_count"`
+	// Requirements are platform features the template needs beyond plain
+	// services: "databases", "volumes".
+	Requirements []string `json:"requirements"`
+	// Supported is false when the control plane lacks a requirement;
+	// deploying then answers 409.
+	Supported bool `json:"supported"`
+}
+
+// TemplateInput is a value the deployer supplies.
+type TemplateInput struct {
+	Key         string  `json:"key"`
+	Label       string  `json:"label"`
+	Description *string `json:"description"`
+	// Type is one of [TemplateInputTypes].
+	Type     string `json:"type"`
+	Required bool   `json:"required"`
+	// Default is used when the input is left empty; never set for secrets.
+	Default *string `json:"default"`
+	// Options are the choices of a select input.
+	Options []string `json:"options"`
+}
+
+// TemplateVariable is a variable a template sets.
+type TemplateVariable struct {
+	Key string `json:"key"`
+	// Secret means it is stored write-only: generated, marked secret, or
+	// filled from a secret input.
+	Secret bool `json:"secret"`
+	// Generated means a fresh value is minted on every deploy.
+	Generated bool `json:"generated"`
+	// Value is as written, references and `${{input.KEY}}` included; nil
+	// for secret variables.
+	Value       *string `json:"value"`
+	Description *string `json:"description"`
+}
+
+// TemplateSource says where a template service's code comes from: an image,
+// a git repository, or a database engine.
+type TemplateSource struct {
+	// Type is "image", "git" or "database".
+	Type    string `json:"type"`
+	Image   string `json:"image,omitempty"`
+	RepoURL string `json:"repo_url,omitempty"`
+	Branch  string `json:"branch,omitempty"`
+	RootDir string `json:"root_dir,omitempty"`
+	Engine  string `json:"engine,omitempty"`
+	// Version is the database engine's major version, nil for the default.
+	Version *string `json:"version,omitempty"`
+}
+
+// MarshalJSON writes only the fields of the source's type, keeping a
+// database source's `"version": null`.
+func (s TemplateSource) MarshalJSON() ([]byte, error) {
+	switch s.Type {
+	case "image":
+		return json.Marshal(map[string]any{"type": s.Type, "image": s.Image})
+	case "git":
+		return json.Marshal(map[string]any{"type": s.Type, "repo_url": s.RepoURL, "branch": s.Branch, "root_dir": s.RootDir})
+	case "database":
+		return json.Marshal(map[string]any{"type": s.Type, "engine": s.Engine, "version": s.Version})
+	}
+	type plain TemplateSource
+	return json.Marshal(plain(s))
+}
+
+// TemplateService is one service a template creates.
+type TemplateService struct {
+	// Ref is the default slug; suffixed -2, -3, … when taken in the project.
+	Ref    string         `json:"ref"`
+	Name   string         `json:"name"`
+	Kind   string         `json:"kind"`
+	Icon   *string        `json:"icon"`
+	Source TemplateSource `json:"source"`
+	// Port is the port the service listens on, or nil for no listener.
+	Port *int `json:"port"`
+	// Public means it gets a public generated hostname.
+	Public       bool               `json:"public"`
+	StartCommand *string            `json:"start_command"`
+	Variables    []TemplateVariable `json:"variables"`
+}
+
+// TemplateDetail is a template with everything a deploy needs.
+type TemplateDetail struct {
+	TemplateSummary
+	Inputs          []TemplateInput    `json:"inputs"`
+	Services        []TemplateService  `json:"services"`
+	SharedVariables []TemplateVariable `json:"shared_variables"`
+}
+
+// TemplateDeployOptions are the fields both template deploy bodies share.
+type TemplateDeployOptions struct {
+	// Inputs are values for the template's inputs, by key.
+	Inputs map[string]string `json:"inputs"`
+	// Deploy starts a first deployment of every created service.
+	Deploy bool `json:"deploy"`
+	// ConfirmWriteOnly acknowledges that generated and secret variables
+	// become write-only. Without it a template that sets any fails with
+	// confirmation_required.
+	ConfirmWriteOnly bool `json:"confirm_write_only"`
+	// AcknowledgePublic lists public-prefix keys to store although their
+	// value looks like a credential.
+	AcknowledgePublic []string `json:"acknowledge_public,omitempty"`
+}
+
+// CreateProjectFromTemplateInput is the body of POST
+// /v1/workspaces/{workspaceId}/projects/from-template.
+type CreateProjectFromTemplateInput struct {
+	TemplateID string `json:"template_id"`
+	// Name is the project's name; the template's when empty.
+	Name string `json:"name,omitempty"`
+	// Slug is derived from the name when empty; -2, -3, … is added when taken.
+	Slug        string `json:"slug,omitempty"`
+	Description string `json:"description,omitempty"`
+	TemplateDeployOptions
+}
+
+// DeployTemplateInput is the body of POST
+// /v1/projects/{projectId}/templates/deploy.
+type DeployTemplateInput struct {
+	TemplateID string `json:"template_id"`
+	// EnvironmentID gets the template's variables and first deployments.
+	EnvironmentID string `json:"environment_id"`
+	TemplateDeployOptions
+}
+
+// TemplateRef names one version of a template.
+type TemplateRef struct {
+	ID      string `json:"id"`
+	Version int    `json:"version"`
+}
+
+// TemplateDeployError is a service whose first deployment could not start.
+// The service exists regardless.
+type TemplateDeployError struct {
+	ServiceID string `json:"service_id"`
+	Message   string `json:"message"`
+}
+
+// TemplateDeployment is what deploying a template created.
+type TemplateDeployment struct {
+	Template    TemplateRef `json:"template"`
+	Project     Project     `json:"project"`
+	Environment Environment `json:"environment"`
+	// Services are the created services, in template order.
+	Services []Service `json:"services"`
+	// Deployments are the first deployments that started; empty when
+	// Deploy was false.
+	Deployments  []Deployment          `json:"deployments"`
+	DeployErrors []TemplateDeployError `json:"deploy_errors"`
+	Warnings     []VariableWarning     `json:"warnings"`
 }

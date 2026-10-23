@@ -118,11 +118,11 @@ export interface Invite {
 /** `POST /v1/workspaces/:id/invites` response. */
 export interface CreateInviteResponse {
   invite: Invite;
-  /** Absolute URL to share with the invitee. */
+  /** Absolute URL to share with the invitee; the token is in its fragment (`#token=…`). */
   url: string;
 }
 
-/** `GET /v1/invites/:token` (public). */
+/** `POST /v1/invites/lookup` response (public). */
 export interface InvitePreview {
   workspace_name: string;
   email: string;
@@ -130,13 +130,13 @@ export interface InvitePreview {
   expires_at: Millis;
 }
 
-/** `POST /v1/invites/:token/accept` request body. Name and password only when signed out. */
+/** `POST /v1/invites/accept` request body, without the token. Name and password only when signed out. */
 export interface AcceptInviteRequest {
   name?: string;
   password?: string;
 }
 
-/** `POST /v1/invites/:token/accept` response. */
+/** `POST /v1/invites/accept` response. */
 export interface AcceptInviteResponse {
   workspace_id: string;
 }
@@ -163,6 +163,11 @@ export interface Node {
   provider_server_id: string | null;
   /** When the provider was first found to no longer have the server. */
   provider_server_missing_at: Millis | null;
+  /**
+   * For servers Roundhouse provisioned: the plan's monthly price from the provider's
+   * catalogue when it was created. An estimate, not the bill.
+   */
+  estimated_monthly_cost: { monthly_cents: number; currency: string } | null;
   /** Why the node gets no workloads or builds; `null` when it can run them or hasn't connected. */
   workloads_blocked: "upgrade_agent" | "no_encryption_key" | null;
   region: string | null;

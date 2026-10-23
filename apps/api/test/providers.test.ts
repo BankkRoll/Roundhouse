@@ -12,7 +12,7 @@ import { PROVIDER_ROUTES, policyOf } from "../src/contracts";
 import { app } from "../src/index";
 import { setProviderTransport } from "../src/lib/cloud-providers";
 import { reconcileProviders } from "../src/lib/provisioning";
-import { addMember, type Client, call, eventually, install, joinBody } from "./helpers";
+import { addMember, type Client, call, eventually, install, joinBody, joinNode } from "./helpers";
 
 const RW = "hz-rw-0123456789abcdefWXYZ";
 const RO = "hz-ro-0123456789abcdefRDNL";
@@ -39,8 +39,11 @@ interface Provision {
   status: string;
   step: string | null;
   failure_reason: string | null;
+  failure_message: string | null;
   server_id: string | null;
   node_id: string | null;
+  cancel_requested_at: number | null;
+  estimated_monthly_cost: { monthly_cents: number; currency: string } | null;
 }
 
 async function connect(owner: Client, workspaceId: string, token = RW) {
@@ -362,7 +365,12 @@ describe("reconcile", () => {
     await waitFor(owner, workspaceId, body.id, ["joined"]);
 
     const db = createDb(env.DB);
-    expect(await reconcileProviders(db, env)).toEqual({ cleanedUp: 0, missing: 0, errors: 0 });
+    expect(await reconcileProviders(db, env)).toEqual({
+      cleanedUp: 0,
+      missing: 0,
+      errors: 0,
+      cancelled: 0,
+    });
     fake.servers.clear();
     expect(await reconcileProviders(db, env)).toMatchObject({ missing: 1 });
     const node = await owner.json<{ provider_server_missing_at: number | null }>(
@@ -394,5 +402,267 @@ describe("reconcile", () => {
     );
     expect(removed.status).toBe(204);
     expect(fake.servers.size).toBe(1);
+  });
+});
+
+function cancel(owner: Client, workspaceId: string, id: string) {
+  return owner.json<Provision>(`/v1/workspaces/${workspaceId}/node-provisions/${id}/cancel`, {
+    method: "POST",
+  });
+}
+
+async function offerPrice(owner: Client, workspaceId: string, plan: string, region: string) {
+  const { body } = await owner.json<{
+    offers: { plan: string; region: string; monthly_cents: number; currency: string }[];
+  }>(`/v1/workspaces/${workspaceId}/providers/hetzner/offers?role=node`);
+  const o = body.offers.find((x) => x.plan === plan && x.region === region)!;
+  return { monthly_cents: o.monthly_cents, currency: o.currency };
+}
+
+/** Inserts a run as if a workflow were handling it, without starting one. */
+async function insertRun(workspaceId: string, fields: Record<string, unknown>) {
+  const row: Record<string, unknown> = {
+    id: `prov_${crypto.randomUUID().replaceAll("-", "")}`,
+    workspace_id: workspaceId,
+    provider: "hetzner",
+    name: "web-9",
+    plan: "cx23",
+    region: "fsn1",
+    builder: 0,
+    status: "queued",
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    ...fields,
+  };
+  const cols = Object.keys(row);
+  await env.DB.prepare(
+    `INSERT INTO node_provisions (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
+  )
+    .bind(...Object.values(row))
+    .run();
+  return row.id as string;
+}
+
+async function liveJoinTokens(): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM node_join_tokens WHERE expires_at > ? AND used_at IS NULL",
+  )
+    .bind(Date.now())
+    .first<{ n: number }>();
+  return row!.n;
+}
+
+describe("cost estimates", () => {
+  it("records the chosen offer's catalogue price and shows it on the managed node only", async () => {
+    const { owner, workspaceId } = await install();
+    await connect(owner, workspaceId);
+    const price = await offerPrice(owner, workspaceId, "cx23", "fsn1");
+    const { body } = await provision(owner, workspaceId);
+    await waitFor(owner, workspaceId, body.id, ["booting"]);
+    const priced = await eventually(async () => {
+      const { body: p } = await getProvision(owner, workspaceId, body.id);
+      return p.estimated_monthly_cost ? p : undefined;
+    }, 10_000);
+    expect(priced.estimated_monthly_cost).toEqual(price);
+
+    const joined = await call("/v1/nodes/join", {
+      method: "POST",
+      json: joinBody(joinTokenFromUserData(), { name: "web-1" }),
+    });
+    const { node_id } = (await joined.json()) as { node_id: string };
+    await waitFor(owner, workspaceId, body.id, ["joined"]);
+    await joinNode(owner, workspaceId, { name: "by-hand" });
+
+    const detail = await owner.json<{ estimated_monthly_cost: unknown }>(
+      `/v1/workspaces/${workspaceId}/nodes/${node_id}`,
+    );
+    expect(detail.body.estimated_monthly_cost).toEqual(price);
+    const list = await owner.json<{
+      nodes: { name: string; estimated_monthly_cost: unknown }[];
+    }>(`/v1/workspaces/${workspaceId}/nodes`);
+    expect(list.body.nodes.map((n) => [n.name, n.estimated_monthly_cost])).toEqual([
+      ["by-hand", null],
+      ["web-1", price],
+    ]);
+  });
+
+  it("leaves the estimate unknown, and the run going, when the catalogue can't be read", async () => {
+    introspector = await introspectWorkflow(env.PROVISION_WORKFLOW);
+    const { owner, workspaceId } = await install();
+    await connect(owner, workspaceId);
+    let created = false;
+    fake.intercept((req) => {
+      if (fake.isCreate(req)) created = true;
+      // The adapter reads the catalogue before creating (its offer check);
+      // fail only the read for the price, after the server exists.
+      return created && req.method === "GET" && req.path === "/server_types"
+        ? fake.errorResponse(503)
+        : undefined;
+    });
+    const { body } = await provision(owner, workspaceId);
+    const [instance] = await eventually(async () => {
+      const found = await introspector!.get();
+      return found.length ? found : undefined;
+    });
+    expect(await instance!.waitForStepResult({ name: "record-price" })).toEqual({
+      recorded: false,
+    });
+    const { body: p } = await getProvision(owner, workspaceId, body.id);
+    expect(p).toMatchObject({ status: "booting", estimated_monthly_cost: null });
+  }, 30_000);
+});
+
+describe("cancelling a run", () => {
+  it("cancels a booting run: deletes the server, revokes the join token, audits once", async () => {
+    const { owner, workspaceId } = await install();
+    await connect(owner, workspaceId);
+    const { body } = await provision(owner, workspaceId);
+    const booting = await waitFor(owner, workspaceId, body.id, ["booting"]);
+    const token = joinTokenFromUserData();
+
+    const res = await cancel(owner, workspaceId, body.id);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      status: "cancelled",
+      failure_reason: "cancelled",
+      server_id: booting.server_id,
+      cancel_requested_at: expect.any(Number),
+    });
+    expect(fake.servers.size).toBe(0);
+    expect(await liveJoinTokens()).toBe(0);
+    const late = await call("/v1/nodes/join", { method: "POST", json: joinBody(token) });
+    expect(late.status).toBe(401);
+
+    const again = await cancel(owner, workspaceId, body.id);
+    expect(again).toMatchObject({ status: 200, body: { status: "cancelled" } });
+    const audit = await env.DB.prepare(
+      "SELECT metadata FROM audit_logs WHERE action = 'node.provision_cancelled'",
+    ).all<{ metadata: string }>();
+    expect(audit.results.map((r) => JSON.parse(r.metadata))).toEqual([
+      {
+        provider: "hetzner",
+        name: "web-1",
+        from_status: "booting",
+        status: "cancelled",
+        server_id: booting.server_id,
+      },
+    ]);
+    // Past the join timeout, nothing has overwritten the cancel.
+    await new Promise((r) => setTimeout(r, 9000));
+    expect((await getProvision(owner, workspaceId, body.id)).body.status).toBe("cancelled");
+  }, 30_000);
+
+  it("lets a run creating its server finish the cancel once the server exists", async () => {
+    const { owner, workspaceId } = await install();
+    await connect(owner, workspaceId);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fake.intercept(async (req) => {
+      if (fake.isCreate(req)) await gate;
+      return undefined;
+    });
+    const { body } = await provision(owner, workspaceId);
+    await eventually(async () => {
+      const { body: p } = await getProvision(owner, workspaceId, body.id);
+      return p.step === "create_server" ? p : undefined;
+    }, 10_000);
+
+    const res = await cancel(owner, workspaceId, body.id);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "creating", cancel_requested_at: expect.any(Number) });
+    release();
+
+    const done = await waitFor(owner, workspaceId, body.id, ["cancelled", "cleanup_failed"]);
+    expect(done).toMatchObject({ status: "cancelled", server_id: expect.any(String) });
+    expect(fake.requests.some((r) => fake.isDelete(r))).toBe(true);
+    expect(fake.servers.size).toBe(0);
+    expect(await liveJoinTokens()).toBe(0);
+  }, 30_000);
+
+  it("cancels a queued run without a provider call", async () => {
+    const { owner, workspaceId } = await install();
+    await connect(owner, workspaceId);
+    const id = await insertRun(workspaceId, { status: "queued" });
+    const before = fake.requests.length;
+    const res = await cancel(owner, workspaceId, id);
+    expect(res).toMatchObject({ status: 200, body: { status: "cancelled", server_id: null } });
+    expect(fake.requests.length).toBe(before);
+  });
+
+  it("ends cleanup_failed when the delete fails, and the reconcile finishes it", async () => {
+    const { owner, workspaceId } = await install();
+    await connect(owner, workspaceId);
+    let refuseDeletes = true;
+    fake.intercept((req) =>
+      refuseDeletes && fake.isDelete(req) ? fake.errorResponse(500) : undefined,
+    );
+    const { body } = await provision(owner, workspaceId);
+    const booting = await waitFor(owner, workspaceId, body.id, ["booting"]);
+    const res = await cancel(owner, workspaceId, body.id);
+    expect(res.body).toMatchObject({
+      status: "cleanup_failed",
+      server_id: booting.server_id,
+      failure_message: expect.stringContaining(`Deleting server ${booting.server_id} failed`),
+    });
+    expect(fake.servers.size).toBe(1);
+
+    refuseDeletes = false;
+    expect(await reconcileProviders(createDb(env.DB), env)).toMatchObject({ cleanedUp: 1 });
+    expect((await getProvision(owner, workspaceId, body.id)).body.status).toBe("cancelled");
+    expect(fake.servers.size).toBe(0);
+  }, 30_000);
+
+  it("finishes a stale cancel in the reconcile, deleting the server found by its labels", async () => {
+    const { owner, workspaceId } = await install();
+    await connect(owner, workspaceId);
+    const id = await insertRun(workspaceId, {
+      status: "creating",
+      cancel_requested_at: Date.now() - 2 * 60 * 60 * 1000,
+    });
+    const serverId = fake.seedServer({
+      name: "web-9",
+      labels: {
+        "roundhouse.managed": "true",
+        "roundhouse.node": "web-9",
+        "roundhouse.role": "node",
+        "roundhouse.workspace": workspaceId,
+      },
+    });
+    const other = fake.seedServer({
+      name: "web-10",
+      labels: {
+        "roundhouse.managed": "true",
+        "roundhouse.node": "web-10",
+        "roundhouse.role": "node",
+        "roundhouse.workspace": workspaceId,
+      },
+    });
+    expect(await reconcileProviders(createDb(env.DB), env)).toMatchObject({ cancelled: 1 });
+    const { body } = await getProvision(owner, workspaceId, id);
+    expect(body).toMatchObject({ status: "cancelled", server_id: serverId });
+    expect(fake.serverIds()).toEqual([other]);
+  });
+
+  it("refuses finished runs, other roles, and other workspaces", async () => {
+    const { owner, workspaceId } = await install();
+    await connect(owner, workspaceId);
+    const failed = await insertRun(workspaceId, { status: "failed" });
+    const joined = await insertRun(workspaceId, { status: "joined", name: "web-8" });
+    expect((await cancel(owner, workspaceId, failed)).status).toBe(409);
+    const j = await cancel(owner, workspaceId, joined);
+    expect(j.status).toBe(409);
+    expect(j.body).toMatchObject({ error: { message: expect.stringContaining("already joined") } });
+
+    const queued = await insertRun(workspaceId, { status: "queued", name: "web-7" });
+    const member = await addMember(owner, workspaceId, "m@example.com", "member");
+    expect((await cancel(member, workspaceId, queued)).status).toBe(403);
+    const { body: other } = await owner.json<{ id: string }>("/v1/workspaces", {
+      method: "POST",
+      json: { name: "Other" },
+    });
+    expect((await cancel(owner, other.id, queued)).status).toBe(404);
+    expect((await getProvision(owner, workspaceId, queued)).body.status).toBe("queued");
   });
 });

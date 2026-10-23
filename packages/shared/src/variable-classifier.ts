@@ -654,3 +654,63 @@ export function decideVariableTier(r: TierRequest): TierDecision {
   }
   return { ok: true, tier, locked: false };
 }
+
+// -----------------------------------------------------------------------------
+// Build inputs
+// -----------------------------------------------------------------------------
+
+/** Names a build arg or build-time variable may not take; see {@link isReservedBuildName}. */
+export const RESERVED_BUILD_NAMES: readonly string[] = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "SHELL",
+  "ENV",
+  "BASH_ENV",
+  "IFS",
+  "GODEBUG",
+  "GOTRACEBACK",
+  "TERM",
+  "NO_COLOR",
+  "SYSTEMROOT",
+  "BUILDKIT_HOST",
+];
+
+/** Name prefixes reserved like {@link RESERVED_BUILD_NAMES}; any `*_PROXY` name is too. */
+export const RESERVED_BUILD_NAME_PREFIXES: readonly string[] = [
+  "LD_",
+  "DYLD_",
+  "XDG_",
+  "GIT_",
+  "SSL_CERT_",
+  "MISE_",
+];
+
+/**
+ * Whether a name is reserved for the builder's own process environment.
+ * Mirrors `isReservedEnvName` in `agent/internal/builder/env.go`, which
+ * refuses such names at build time; the API refuses them at save so the
+ * error comes before a deploy fails.
+ *
+ * SECURITY: Railpack runs on the host with the build's args and secrets in
+ * its environment, so `LD_PRELOAD`, `PATH` or `GIT_SSH_COMMAND` would steer
+ * it (or git) into code from the repository being built (ADR 0014 M1).
+ * Case-insensitive like the agent.
+ *
+ * @param name - A build arg or variable name.
+ * @returns `true` when the builder would refuse it.
+ * @example
+ * isReservedBuildName("LD_PRELOAD"); // true
+ * isReservedBuildName("https_proxy"); // true
+ * isReservedBuildName("NODE_ENV"); // false
+ */
+export function isReservedBuildName(name: string): boolean {
+  const upper = name.toUpperCase();
+  return (
+    RESERVED_BUILD_NAMES.includes(upper) ||
+    upper.endsWith("_PROXY") ||
+    RESERVED_BUILD_NAME_PREFIXES.some((p) => upper.startsWith(p))
+  );
+}

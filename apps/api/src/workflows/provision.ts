@@ -10,11 +10,20 @@
  *    server itself if anything fails after creating it. Refusals
  *    (`ProvisionError`) end the run as `failed` (or `cleanup_failed` when
  *    the server may still exist) and revoke the token.
- * 2. `check-join-<n>` / `join-wait-<n>`: wait up to
+ * 2. `record-price`: the chosen offer's catalogue price, for the node's
+ *    cost estimate (best effort).
+ * 3. `check-join-<n>` / `join-wait-<n>`: wait up to
  *    {@link JOIN_TIMEOUT_MS} for the agent to use the token, then attach the
  *    node (provider, server ID, region).
- * 3. `deprovision-unjoined`: on timeout, delete the server (it never joined,
+ * 4. `deprovision-unjoined`: on timeout, delete the server (it never joined,
  *    so nothing runs on it), revoke the token, and fail with `join_timeout`.
+ *
+ * Cancelling (`POST …/node-provisions/{id}/cancel`) sets
+ * `cancel_requested_at`. A queued or booting run is finished by the route; a
+ * run creating its server is finished here, once the provider call returns
+ * and the server ID is known, by {@link finishCancel}. Every status write
+ * compares the current status, so the route, this workflow and the reconcile
+ * never both finish a run.
  *
  * SECURITY: Step results are persisted by the platform, so they carry only
  * IDs and statuses. The provider token is unsealed inside the step that uses
@@ -33,12 +42,17 @@ import {
   ProvisionError,
   type ProvisionStep,
 } from "@roundhouse/providers";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
 import { loadCredential, providerClient, unsealProviderToken } from "../lib/cloud-providers";
 import { mintJoinToken, revokeJoinToken } from "../lib/join-tokens";
-import { attachJoinedNode } from "../lib/provisioning";
+import {
+  ACTIVE_PROVISION_STATUSES,
+  attachJoinedNode,
+  finishCancel,
+  recordOfferPrice,
+} from "../lib/provisioning";
 
 /** Parameters of one run. */
 export interface ProvisionParams {
@@ -90,6 +104,7 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
       return { status: "failed" };
     }
     if (created.kind === "stop") return { status: "stopped" };
+    await step.do("record-price", DB_STEP, () => this.recordPrice(provisionId));
 
     const deadline = await step.do("join-deadline", async () => Date.now() + this.joinTimeoutMs());
     for (let i = 0; ; i++) {
@@ -140,6 +155,11 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
     if (!row) return { kind: "stop" };
     if (row.status === "booting" && row.serverId) return { kind: "ok" };
     if (row.status !== "queued" && row.status !== "creating") return { kind: "stop" };
+    if (row.cancelRequestedAt) {
+      // A creating run may have made a server in an attempt whose result was lost.
+      await finishCancel(db, this.env, provisionId, { lookup: row.status === "creating" });
+      return { kind: "stop" };
+    }
 
     const cred = await loadCredential(db, row.workspaceId, row.provider);
     if (!cred) {
@@ -158,7 +178,7 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
       workspaceId: row.workspaceId,
       createdBy: row.createdBy,
     });
-    await db
+    const [started] = await db
       .update(nodeProvisions)
       .set({
         status: "creating",
@@ -166,7 +186,19 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
         failureReason: null,
         failureMessage: null,
       })
-      .where(eq(nodeProvisions.id, provisionId));
+      .where(
+        and(
+          eq(nodeProvisions.id, provisionId),
+          inArray(nodeProvisions.status, ["queued", "creating"]),
+          isNull(nodeProvisions.cancelRequestedAt),
+        ),
+      )
+      .returning({ id: nodeProvisions.id });
+    if (!started) {
+      await revokeJoinToken(db, minted.id);
+      await finishCancel(db, this.env, provisionId, { lookup: row.status === "creating" });
+      return { kind: "stop" };
+    }
 
     let progress = Promise.resolve();
     const onStep = (s: ProvisionStep) => {
@@ -214,7 +246,7 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
       const keep = result.created || !previousTokenId ? minted.id : previousTokenId;
       const drop = keep === minted.id ? previousTokenId : minted.id;
       if (drop) await revokeJoinToken(db, drop);
-      await db
+      const [booting] = await db
         .update(nodeProvisions)
         .set({
           status: "booting",
@@ -224,7 +256,19 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
           ipv6: result.server.ipv6,
           joinTokenId: keep,
         })
-        .where(eq(nodeProvisions.id, provisionId));
+        .where(
+          and(
+            eq(nodeProvisions.id, provisionId),
+            eq(nodeProvisions.status, "creating"),
+            isNull(nodeProvisions.cancelRequestedAt),
+          ),
+        )
+        .returning({ id: nodeProvisions.id });
+      if (!booting) {
+        await revokeJoinToken(db, keep);
+        await this.cancelCreated(provisionId, result.server.id);
+        return { kind: "stop" };
+      }
       return { kind: "ok" };
     } catch (err) {
       await progress;
@@ -248,7 +292,45 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
     }
   }
 
-  /** Step 3: the server runs but its agent never joined. */
+  /**
+   * The run was cancelled while its server was being created: finish the
+   * cancel with the new server's ID. If something else already finished the
+   * run without knowing the server (the reconcile, after a long stall), delete
+   * it here, since nothing else will.
+   */
+  private async cancelCreated(provisionId: string, serverId: string): Promise<void> {
+    const db = this.db();
+    const row = await finishCancel(db, this.env, provisionId, { serverId });
+    if (!row || row.serverId === serverId) return;
+    const cred = await loadCredential(db, row.workspaceId, row.provider);
+    try {
+      if (!cred) throw new Error(`${PROVIDERS[row.provider].displayName} is not connected`);
+      const client = providerClient(row.provider, await unsealProviderToken(this.env, cred));
+      await client.deprovision({ serverId, expectedName: row.name, wait: false });
+    } catch (err) {
+      await db
+        .update(nodeProvisions)
+        .set({
+          status: "cleanup_failed",
+          serverId,
+          failureMessage: `Deleting server ${serverId} failed: ${errorMessage(err)}`.slice(0, 500),
+        })
+        .where(and(eq(nodeProvisions.id, provisionId), eq(nodeProvisions.status, "cancelled")));
+    }
+  }
+
+  /** Step 2: best effort, so a catalogue hiccup never fails the run. */
+  private async recordPrice(provisionId: string): Promise<{ recorded: boolean }> {
+    const db = this.db();
+    const [row] = await db.select().from(nodeProvisions).where(eq(nodeProvisions.id, provisionId));
+    if (!row || row.monthlyCents !== null) return { recorded: row?.monthlyCents != null };
+    const cred = await loadCredential(db, row.workspaceId, row.provider);
+    if (!cred) return { recorded: false };
+    const client = providerClient(row.provider, await unsealProviderToken(this.env, cred));
+    return { recorded: await recordOfferPrice(db, client, row) };
+  }
+
+  /** Step 4: the server runs but its agent never joined. */
   private async deprovisionUnjoined(provisionId: string): Promise<string> {
     const db = this.db();
     const row = await attachJoinedNode(db, provisionId);
@@ -276,7 +358,11 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
     return "failed";
   }
 
-  /** Ends a run unless it already settled, and audits it once. */
+  /**
+   * Ends a run unless it already settled, and audits it once. A run whose
+   * cancel was requested ends `cancelled` rather than `failed` when nothing
+   * is left running.
+   */
   private async fail(
     provisionId: string,
     status: "failed" | "cleanup_failed",
@@ -285,10 +371,15 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
     serverId: string | null = null,
   ): Promise<void> {
     const db = this.db();
+    const [current] = await db
+      .select({ cancelRequestedAt: nodeProvisions.cancelRequestedAt })
+      .from(nodeProvisions)
+      .where(eq(nodeProvisions.id, provisionId));
+    const final = status === "failed" && current?.cancelRequestedAt ? "cancelled" : status;
     const [row] = await db
       .update(nodeProvisions)
       .set({
-        status,
+        status: final,
         failureReason: reason,
         failureMessage: message.slice(0, 500),
         ...(serverId ? { serverId } : {}),
@@ -297,7 +388,7 @@ export class ProvisionWorkflow extends WorkflowEntrypoint<Env, ProvisionParams> 
       .where(
         and(
           eq(nodeProvisions.id, provisionId),
-          inArray(nodeProvisions.status, ["queued", "creating", "booting"]),
+          inArray(nodeProvisions.status, [...ACTIVE_PROVISION_STATUSES]),
         ),
       )
       .returning();

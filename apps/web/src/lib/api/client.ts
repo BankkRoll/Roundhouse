@@ -346,21 +346,23 @@ export const api = {
   /**
    * Previews an invite link (public). 404 when the link is invalid, used or expired.
    *
-   * @param token - Token from the invite URL.
+   * SECURITY: The token goes in the body, never the URL, so it stays out of access logs.
+   *
+   * @param token - Token from the invite link's fragment.
    * @param signal - Abort signal.
    * @returns Workspace name, invited email, role and expiry.
    */
   getInvite: (token: string, signal?: AbortSignal) =>
-    request<InvitePreview>("GET", `/v1/invites/${seg(token)}`, { signal }),
+    request<InvitePreview>("POST", "/v1/invites/lookup", { body: { token }, signal }),
   /**
    * Accepts an invite, creating the account first when signed out.
    *
-   * @param token - Token from the invite URL.
+   * @param token - Token from the invite link's fragment.
    * @param body - Name and password when signed out; empty otherwise.
    * @returns The joined workspace id.
    */
   acceptInvite: (token: string, body: AcceptInviteRequest) =>
-    request<AcceptInviteResponse>("POST", `/v1/invites/${seg(token)}/accept`, { body }),
+    request<AcceptInviteResponse>("POST", "/v1/invites/accept", { body: { ...body, token } }),
 
   /**
    * Lists a workspace's servers, sorted by name.

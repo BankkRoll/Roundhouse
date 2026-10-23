@@ -1,0 +1,21 @@
+{
+  "id": "prov_1",
+  "provider": "hetzner",
+  "name": "web-1",
+  "plan": "cx23",
+  "region": "fsn1",
+  "builder": false,
+  "status": "cancelled",
+  "step": null,
+  "failure_reason": "cancelled",
+  "failure_message": "Cancelled before the server joined",
+  "server_id": "srv_42",
+  "ipv4": null,
+  "ipv6": null,
+  "node_id": null,
+  "cancel_requested_at": 1792670401000,
+  "estimated_monthly_cost": null,
+  "created_at": 1792670400000,
+  "updated_at": 1792670401000,
+  "finished_at": 1792670401000
+}

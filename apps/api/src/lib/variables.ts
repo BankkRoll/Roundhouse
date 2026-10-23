@@ -1,36 +1,54 @@
 /**
- * Encrypted variables: each project's data key (DEK), sealing and unsealing
- * values, reference-syntax validation on write, and decrypting a whole
- * environment for resolution at deploy time or log redaction.
+ * Encrypted variables (ADR 0014 "Secrets", "Crypto"):
  *
- * Values are AES-256-GCM under the project DEK with AAD
- * `variable:<project>:<environment>:<scope>:<service|->:<key>`, so a value
- * can't be moved to another key, scope or project undetected. The DEK is
- * sealed under the master-derived KEK in `project_keys`.
+ * - each project's data key (DEK), sealed under the master keyring's KEK in
+ *   `project_keys`;
+ * - sealing and unsealing values: format 2 under the DEK with AAD
+ *   `variable:v2:<ws>:<prj>:<env>:<scope>:<svc|->:<key>:<row_id>:<version>`,
+ *   re-sealed on every version bump, so a value can't be moved to another
+ *   row or rolled back undetected; format 1 rows (AAD without workspace, row
+ *   and version) stay readable until the rotation workflow re-seals them;
+ * - keyed fingerprints, stored on every write;
+ * - the tier decision on write (classifier, locks, write-only confirmation,
+ *   public-prefix acknowledgement) and reference-syntax validation;
+ * - build-time checks: build args and build-time variables stay plain and
+ *   away from names the builder reserves;
+ * - decrypting a whole environment for resolution at deploy time or log
+ *   redaction.
  *
  * @module
  */
-import { type Db, projectKeys, services, variables } from "@roundhouse/db";
+import { type Db, projectKeys, projects, services, variables } from "@roundhouse/db";
 import {
   type ClassificationWarningCode,
   classifyVariable,
   decideVariableTier,
+  detectSecretValue,
+  hasHighEntropyToken,
+  isReservedBuildName,
   newId,
   parseReferences,
+  SHARED_NAMESPACE,
+  secretDerivedVariables,
+  secretLengthWarnings,
   type VariableScope,
   type VariableTier,
 } from "@roundhouse/shared";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
-  deriveProjectKey,
+  dataKeyInfo,
   generateDataKey,
-  projectKeyAad,
+  type KeySource,
+  openDataKey,
   type Sealed,
-  seal,
+  type SealedV2,
+  sealDataKey,
   sealWith,
   unsealWith,
+  valueFingerprint,
 } from "./crypto";
 import { ApiError, conflict, type ErrorCode, type ErrorDetail, notFound } from "./errors";
+import { variableAadV2 } from "./keyring";
 
 type VariableRow = typeof variables.$inferSelect;
 
@@ -44,7 +62,8 @@ export interface VariableTarget {
 }
 
 /**
- * AAD of one variable value.
+ * Format 1 AAD of one variable value. Only for reading rows written before
+ * format 2; new values are sealed with {@link sealVariable}.
  *
  * @param t - The variable's scope.
  * @param key - Variable name.
@@ -54,8 +73,69 @@ export function variableAad(t: VariableTarget, key: string): string {
   return `variable:${t.projectId}:${t.environmentId}:${t.scope}:${t.serviceId ?? "-"}:${key}`;
 }
 
+/** The coordinates of a stored variable that its format 2 AAD binds. */
+export type StoredVariable = Pick<
+  VariableRow,
+  "id" | "projectId" | "environmentId" | "scope" | "serviceId" | "key" | "version"
+>;
+
+function storedAad(key: CryptoKey, row: StoredVariable, format: 1 | 2): string {
+  if (format === 1) return variableAad(row, row.key);
+  return variableAadV2({
+    workspaceId: dataKeyInfo(key).workspaceId,
+    projectId: row.projectId,
+    environmentId: row.environmentId,
+    scope: row.scope,
+    serviceId: row.serviceId,
+    key: row.key,
+    rowId: row.id,
+    version: row.version,
+  });
+}
+
 /**
- * AAD of a deployment's sealed environment.
+ * Decrypts a stored variable, whichever format sealed it.
+ *
+ * @param key - The project DEK.
+ * @param row - The row (its id and version are part of the format 2 AAD).
+ * @returns The raw value.
+ * @throws When the ciphertext doesn't belong to this row and version.
+ */
+export function openVariable(
+  key: CryptoKey,
+  row: StoredVariable & { valueSealed: Sealed },
+): Promise<string> {
+  return unsealWith(key, row.valueSealed, storedAad(key, row, row.valueSealed.v));
+}
+
+/**
+ * Seals a value for a row at a version (format 2) and fingerprints it.
+ * Every write that bumps `version` must call this again.
+ *
+ * @param key - The project DEK.
+ * @param row - Where the value will be stored, at the version it will have.
+ * @param value - The raw value.
+ * @returns The columns to store.
+ */
+export async function sealVariable(
+  key: CryptoKey,
+  row: StoredVariable,
+  value: string,
+): Promise<{ valueSealed: SealedV2; fingerprint: string }> {
+  const [valueSealed, fingerprint] = await Promise.all([
+    sealWith(key, value, storedAad(key, row, 2)),
+    valueFingerprint(key, value),
+  ]);
+  return { valueSealed, fingerprint };
+}
+
+// -----------------------------------------------------------------------------
+// Deployment inputs
+// -----------------------------------------------------------------------------
+
+/**
+ * Format 1 AAD of a deployment's sealed environment. Only for reading;
+ * `sealDeploymentEnv` in `./desired-state` seals format 2.
  *
  * @param deploymentId - The deployment.
  * @returns The AAD string.
@@ -64,25 +144,32 @@ export function deploymentEnvAad(deploymentId: string): string {
   return `deployment-env:${deploymentId}`;
 }
 
+// -----------------------------------------------------------------------------
+// Project keys
+// -----------------------------------------------------------------------------
+
 /**
- * Creates a project's DEK sealed under the KEK, as a `project_keys` row to
- * insert in the same batch as the project.
+ * Creates a project's DEK sealed under the current KEK, as a `project_keys`
+ * row to insert in the same batch as the project.
  *
  * NOTE: Returns the row, not the insert: an async function returning a
  * Drizzle query would run it, because queries are thenables.
  *
- * @param masterKey - Base64 master key.
+ * @param keys - The keyring bindings, or `MASTER_KEY` alone.
  * @param projectId - New project's ID.
+ * @param workspaceId - Its workspace; part of the DEK's AAD.
  * @returns The row to insert.
  */
-export async function newProjectKeyRow(masterKey: string, projectId: string) {
-  const dekSealed = await seal(masterKey, generateDataKey(), projectKeyAad(projectId));
-  return { projectId, dekSealed } satisfies typeof projectKeys.$inferInsert;
+export async function newProjectKeyRow(keys: KeySource, projectId: string, workspaceId: string) {
+  const sealed = await sealDataKey(keys, generateDataKey(), workspaceId, projectId);
+  return { projectId, ...sealed } satisfies typeof projectKeys.$inferInsert;
 }
 
 // PERF: Every variable read and every log batch needs the DEK. Caching the
 // imported key per isolate skips a D1 read, an unseal and an import. Bounded
 // so a long-lived isolate serving many projects doesn't grow without limit.
+// A master key rotation re-wraps the DEK but never changes it, so a cached
+// key stays valid across one.
 const KEY_CACHE_LIMIT = 256;
 const keyCache = new Map<string, Promise<CryptoKey>>();
 
@@ -90,20 +177,24 @@ const keyCache = new Map<string, Promise<CryptoKey>>();
  * Loads (and caches) a project's DEK.
  *
  * @param db - Database client.
- * @param masterKey - Base64 master key.
+ * @param keys - The keyring bindings, or `MASTER_KEY` alone (previous keys
+ *   then come from the Worker's bindings).
  * @param projectId - The project.
  * @returns The usable AES-GCM key.
  * @throws {ApiError} 404 when the project has no key.
  */
-export function projectKey(db: Db, masterKey: string, projectId: string): Promise<CryptoKey> {
+export function projectKey(db: Db, keys: KeySource, projectId: string): Promise<CryptoKey> {
   const cached = keyCache.get(projectId);
   if (cached) return cached;
   const loading = (async () => {
-    const row = await db.query.projectKeys.findFirst({
-      where: eq(projectKeys.projectId, projectId),
-    });
+    const [row] = await db
+      .select({ dekSealed: projectKeys.dekSealed, workspaceId: projects.workspaceId })
+      .from(projectKeys)
+      .innerJoin(projects, eq(projects.id, projectKeys.projectId))
+      .where(eq(projectKeys.projectId, projectId))
+      .limit(1);
     if (!row) throw notFound("Project key");
-    return deriveProjectKey(masterKey, projectId, row.dekSealed as Sealed);
+    return openDataKey(keys, row.dekSealed as Sealed, row.workspaceId, projectId);
   })().catch((err) => {
     keyCache.delete(projectId);
     throw err;
@@ -115,6 +206,10 @@ export function projectKey(db: Db, masterKey: string, projectId: string): Promis
   keyCache.set(projectId, loading);
   return loading;
 }
+
+// -----------------------------------------------------------------------------
+// Reads and writes
+// -----------------------------------------------------------------------------
 
 /**
  * Rejects values whose `${{…}}` references are malformed, reporting every
@@ -167,7 +262,8 @@ export interface ListedVariable {
 
 /**
  * Lists a scope's variables. Only plain values are ever decrypted, and only
- * when `plain` says the caller may read them.
+ * when `plain` says the caller may read them; everyone else (viewers
+ * included) sees keys, tiers, flags and fingerprints.
  *
  * @param db - Database client.
  * @param key - Project DEK.
@@ -187,10 +283,7 @@ export async function listVariables(
       key: r.key,
       tier: r.tier,
       locked: r.locked,
-      value:
-        r.tier === "plain" && options.plain
-          ? await unsealWith(key, r.valueSealed, variableAad(t, r.key))
-          : null,
+      value: r.tier === "plain" && options.plain ? await openVariable(key, r) : null,
       fingerprint: r.fingerprint,
       available_at_build: r.availableAtBuild,
       mount_as_file: r.mountAsFile,
@@ -232,17 +325,37 @@ const detail = (key: string, code: string, message: string): ErrorDetail => ({
   message,
 });
 
+const plural = (keys: readonly string[], one: string, many: string) =>
+  keys.length === 1 ? one : many;
+
+const reservedMessage = (name: string) =>
+  `${name} is reserved for the builder's own environment and can't be passed to a build`;
+
+interface PlannedWrite {
+  entry: VariableSetEntry;
+  value: string;
+  tier: VariableTier;
+  locked: boolean;
+  availableAtBuild: boolean;
+  mountAsFile: boolean;
+}
+
 /**
  * Upserts and deletes a scope's variables in one batch, deciding each tier
- * with the shared classifier.
+ * with the shared classifier and sealing each value for its row and new
+ * version, with its fingerprint.
  *
- * Refuses the whole write (nothing is stored) when a value would become
- * secret without `confirm_write_only`, a public variable looks like a
- * credential without being acknowledged, a tier contradicts a lock, a
- * secret would become plain without a new value, or an `expected_version`
- * is stale.
- *
- * TODO(api-secrets-crypto): seal v2 and fill `fingerprint` (ADR 0014 "Crypto").
+ * Refuses the whole write (nothing is stored) when:
+ * - a tier contradicts a lock (`tier_locked`), or a secret would become
+ *   plain without a new value (`value_required`);
+ * - a build-time variable has a name the builder reserves (`invalid_request`);
+ * - a public variable looks like a credential and isn't in
+ *   `acknowledge_public` (`public_prefix_secret_value`);
+ * - a value would become secret without `confirm_write_only`
+ *   (`confirmation_required`, listing the keys);
+ * - a plain build-time variable references a secret, directly or through
+ *   other variables (`build_arg_secret`): build args end up in the image;
+ * - an `expected_version` is stale (409).
  *
  * @param db - Database client.
  * @param key - Project DEK.
@@ -271,10 +384,10 @@ export async function putVariables(
 
   const warnings: VariableWriteWarning[] = [];
   const problems: ErrorDetail[] = [];
+  const reserved: string[] = [];
   const needConfirm: string[] = [];
   const needAck: string[] = [];
-  const planned: { entry: VariableSetEntry; value: string; tier: VariableTier; locked: boolean }[] =
-    [];
+  const planned: PlannedWrite[] = [];
   for (const s of change.set) {
     const prior = existing.get(s.key);
     if (s.expected_version !== undefined && prior && prior.version !== s.expected_version) {
@@ -284,7 +397,7 @@ export async function putVariables(
       problems.push(detail(s.key, "value_required", "A new variable needs a value"));
       continue;
     }
-    const value = s.value ?? (await unsealWith(key, prior!.valueSealed, variableAad(t, s.key)));
+    const value = s.value ?? (await openVariable(key, prior!));
     const classification = classifyVariable(s.key, value);
     const decision = decideVariableTier({
       classification,
@@ -296,24 +409,50 @@ export async function putVariables(
       problems.push(detail(s.key, decision.code, decision.message));
       continue;
     }
-    for (const w of classification.warnings) {
+    const availableAtBuild = s.available_at_build ?? prior?.availableAtBuild ?? false;
+    if (availableAtBuild && isReservedBuildName(s.key)) reserved.push(s.key);
+    // The classifier warns about short secrets only for its own default
+    // tier; the stored tier is what decides whether logs can redact it.
+    const fromClassifier = classification.warnings.filter(
+      (w) => w.code !== "secret_too_short_to_redact" || decision.tier === "secret",
+    );
+    const lengthWarnings =
+      decision.tier === "secret" && classification.tier !== "secret"
+        ? secretLengthWarnings(s.key, value)
+        : [];
+    for (const w of [...fromClassifier, ...lengthWarnings]) {
       if (w.code === "public_prefix_secret_value" && !change.acknowledge_public.includes(s.key)) {
         needAck.push(s.key);
       }
       warnings.push({ key: s.key, code: w.code, message: w.message });
     }
     if (decision.tier === "secret" && prior?.tier !== "secret") needConfirm.push(s.key);
-    planned.push({ entry: s, value, tier: decision.tier, locked: decision.locked });
+    planned.push({
+      entry: s,
+      value,
+      tier: decision.tier,
+      locked: decision.locked,
+      availableAtBuild,
+      mountAsFile: s.mount_as_file ?? prior?.mountAsFile ?? false,
+    });
   }
   if (problems.length) {
     const first = problems[0]!;
     throw new ApiError(400, first.code as ErrorCode, `${first.field}: ${first.message}`, problems);
   }
+  if (reserved.length) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      reservedMessage(reserved.join(", ")),
+      reserved.map((k) => detail(k, "reserved_name", reservedMessage(k))),
+    );
+  }
   if (needAck.length) {
     throw new ApiError(
       400,
       "public_prefix_secret_value",
-      `${needAck.join(", ")} will ship to every browser but look${needAck.length === 1 ? "s" : ""} like a credential; add ${needAck.length === 1 ? "it" : "them"} to acknowledge_public to store anyway`,
+      `${needAck.join(", ")} will ship to every browser but ${plural(needAck, "looks", "look")} like a credential; add ${plural(needAck, "it", "them")} to acknowledge_public to store anyway`,
       needAck.map((k) => detail(k, "public_prefix_secret_value", "Looks like a credential")),
     );
   }
@@ -321,43 +460,44 @@ export async function putVariables(
     throw new ApiError(
       400,
       "confirmation_required",
-      `${needConfirm.join(", ")} will be write-only: nobody can read ${needConfirm.length === 1 ? "it" : "them"} back. Resend with confirm_write_only to continue`,
+      `${needConfirm.join(", ")} will be write-only: nobody can read ${plural(needConfirm, "it", "them")} back. Resend with confirm_write_only to continue`,
       needConfirm.map((k) => detail(k, "confirmation_required", "Becomes write-only")),
     );
   }
+  await assertPlainAtBuild(db, key, t, planned, change.delete);
 
   const now = new Date();
   const statements = [];
-  for (const { entry: s, value, tier, locked } of planned) {
-    const valueSealed = await sealWith(key, value, variableAad(t, s.key));
-    const prior = existing.get(s.key);
-    const flags = {
-      tier,
-      locked,
-      availableAtBuild: s.available_at_build ?? prior?.availableAtBuild ?? false,
-      mountAsFile: s.mount_as_file ?? prior?.mountAsFile ?? false,
+  for (const p of planned) {
+    const prior = existing.get(p.entry.key);
+    const coordinates: StoredVariable = {
+      id: prior?.id ?? newId("variable"),
+      projectId: t.projectId,
+      environmentId: t.environmentId,
+      scope: t.scope,
+      serviceId: t.serviceId,
+      key: p.entry.key,
+      version: prior ? prior.version + 1 : 1,
+    };
+    const sealed = await sealVariable(key, coordinates, p.value);
+    const columns = {
+      ...sealed,
+      tier: p.tier,
+      locked: p.locked,
+      availableAtBuild: p.availableAtBuild,
+      mountAsFile: p.mountAsFile,
       updatedBy: actorId,
+      version: coordinates.version,
     };
     if (prior) {
       statements.push(
         db
           .update(variables)
-          .set({ valueSealed, ...flags, version: prior.version + 1, updatedAt: now })
+          .set({ ...columns, updatedAt: now })
           .where(eq(variables.id, prior.id)),
       );
     } else {
-      statements.push(
-        db.insert(variables).values({
-          id: newId("variable"),
-          scope: t.scope,
-          projectId: t.projectId,
-          environmentId: t.environmentId,
-          serviceId: t.serviceId,
-          key: s.key,
-          valueSealed,
-          ...flags,
-        }),
-      );
+      statements.push(db.insert(variables).values({ ...coordinates, ...columns }));
     }
   }
   const deleted = change.delete.filter((k) => existing.has(k));
@@ -371,6 +511,169 @@ export async function putVariables(
   }
   return { set: planned.map((p) => p.entry.key), deleted, warnings };
 }
+
+/**
+ * Refuses plain build-time variables of a write whose resolution would reach
+ * a secret, against the environment as it will be after the write. Only
+ * loads the environment when such a variable has references at all.
+ */
+async function assertPlainAtBuild(
+  db: Db,
+  key: CryptoKey,
+  t: VariableTarget,
+  planned: readonly PlannedWrite[],
+  deletes: readonly string[],
+): Promise<void> {
+  const candidates = planned.filter(
+    (p) =>
+      p.tier === "plain" && p.availableAtBuild && parseReferences(p.value).references.length > 0,
+  );
+  if (!candidates.length) return;
+  const loaded = await loadEnvironmentVariables(db, key, t.projectId, t.environmentId);
+  let namespace = SHARED_NAMESPACE;
+  if (t.scope === "service") {
+    const [svc] = await db
+      .select({ slug: services.slug })
+      .from(services)
+      .where(eq(services.id, t.serviceId!))
+      .limit(1);
+    if (!svc) throw notFound("Service");
+    namespace = svc.slug;
+  }
+  const shared = t.scope === "shared";
+  const values = { ...(shared ? loaded.shared : (loaded.services[namespace] ?? {})) };
+  const secretKeys = new Set(shared ? loaded.sharedSecretKeys : loaded.secretKeys[namespace]);
+  for (const k of deletes) {
+    delete values[k];
+    secretKeys.delete(k);
+  }
+  for (const p of planned) {
+    values[p.entry.key] = p.value;
+    if (p.tier === "secret") secretKeys.add(p.entry.key);
+    else secretKeys.delete(p.entry.key);
+  }
+  const taint = secretDerivedVariables({
+    services: shared ? loaded.services : { ...loaded.services, [namespace]: values },
+    shared: shared ? values : loaded.shared,
+    secretServiceKeys: shared
+      ? loaded.secretKeys
+      : { ...loaded.secretKeys, [namespace]: [...secretKeys] },
+    secretSharedKeys: shared ? [...secretKeys] : loaded.sharedSecretKeys,
+  });
+  const tainted = new Set(shared ? taint.shared : (taint.services[namespace] ?? []));
+  const refused = candidates.map((p) => p.entry.key).filter((k) => tainted.has(k));
+  if (refused.length) throw buildArgSecret(refused, "references a secret");
+}
+
+function buildArgSecret(names: readonly string[], why: string): ApiError {
+  const message = (name: string) =>
+    `${name} ${why}; make it a secret variable with available_at_build and read it with RUN --mount=type=secret,id=${name}`;
+  return new ApiError(
+    400,
+    "build_arg_secret",
+    message(names.join(", ")),
+    names.map((n) => detail(n, "build_arg_secret", message(n))),
+  );
+}
+
+/** What {@link assertPlainBuildArgs} checks. */
+export interface BuildArgsCheck {
+  projectId: string;
+  environmentId: string;
+  /**
+   * Slug of the service the args belong to, which unqualified references
+   * name; `null` for a service not created yet (it has no variables).
+   */
+  serviceSlug: string | null;
+  /** The service config's `build` part, as it will be stored. */
+  build: { build_args?: Record<string, string>; secret_build_args?: string[] | undefined };
+}
+
+/**
+ * Checks a service config's build args before it is saved (ADR 0014
+ * "Builds"): build args end up in the image and its history, so they stay
+ * plain.
+ *
+ * - Names the builder reserves for its own process environment (`PATH`,
+ *   `LD_*`, `GIT_*`, `*_PROXY`, … see `isReservedBuildName`) are refused
+ *   with 400 `invalid_request`.
+ * - A value with a known credential format or a high-entropy token, or one
+ *   referencing a secret (or a plain variable derived from one) of the
+ *   environment, is refused with 400 `build_arg_secret`. Args named in
+ *   `secret_build_args` are already passed as BuildKit secrets and skip
+ *   this check. References the save can't resolve are checked again at
+ *   deploy.
+ *
+ * @param db - Database client.
+ * @param keys - The keyring bindings, or `MASTER_KEY` alone, to read the
+ *   environment's variables when an arg has references.
+ * @param input - The args and where they are saved.
+ * @throws {ApiError} 400 `invalid_request` or `build_arg_secret`, with one detail per arg.
+ * @example
+ * await assertPlainBuildArgs(db, c.env, {
+ *   projectId, environmentId, serviceSlug: service.slug, build: spec.build,
+ * });
+ */
+export async function assertPlainBuildArgs(
+  db: Db,
+  keys: KeySource,
+  input: BuildArgsCheck,
+): Promise<void> {
+  const args = Object.entries(input.build.build_args ?? {});
+  if (!args.length) return;
+  const reserved = args.map(([name]) => name).filter(isReservedBuildName);
+  if (reserved.length) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      reservedMessage(reserved.join(", ")),
+      reserved.map((k) => detail(k, "reserved_name", reservedMessage(k))),
+    );
+  }
+  const passedAsSecret = new Set(input.build.secret_build_args ?? []);
+  const plainArgs = args.filter(([name]) => !passedAsSecret.has(name));
+  const looksSecret = plainArgs
+    .filter(([, value]) => detectSecretValue(value) !== null || hasHighEntropyToken(value))
+    .map(([name]) => name);
+  if (looksSecret.length) throw buildArgSecret(looksSecret, "looks secret");
+
+  const withRefs = plainArgs
+    .map(([name, value]) => ({ name, refs: parseReferences(value).references }))
+    .filter((a) => a.refs.length > 0);
+  if (!withRefs.length) return;
+  const loaded = await loadEnvironmentVariables(
+    db,
+    await projectKey(db, keys, input.projectId),
+    input.projectId,
+    input.environmentId,
+  );
+  const taint = secretDerivedVariables({
+    services: loaded.services,
+    shared: loaded.shared,
+    secretServiceKeys: loaded.secretKeys,
+    secretSharedKeys: loaded.sharedSecretKeys,
+  });
+  const secretIds = new Set<string>();
+  for (const [slug, names] of Object.entries(loaded.secretKeys)) {
+    for (const n of [...names, ...(taint.services[slug] ?? [])]) secretIds.add(`${slug}.${n}`);
+  }
+  for (const n of [...loaded.sharedSecretKeys, ...taint.shared]) {
+    secretIds.add(`${SHARED_NAMESPACE}.${n}`);
+  }
+  const refused = withRefs
+    .filter((a) =>
+      a.refs.some((r) => {
+        const ns = r.namespace ?? input.serviceSlug;
+        return ns !== null && secretIds.has(`${ns}.${r.name}`);
+      }),
+    )
+    .map((a) => a.name);
+  if (refused.length) throw buildArgSecret(refused, "references a secret");
+}
+
+// -----------------------------------------------------------------------------
+// Whole environments
+// -----------------------------------------------------------------------------
 
 /** Every variable of an environment, decrypted. */
 export interface EnvironmentVariables {
@@ -429,14 +732,8 @@ export async function loadEnvironmentVariables(
     out.secretKeys[s.slug] = [];
   }
   for (const r of rows) {
-    const t: VariableTarget = {
-      projectId,
-      environmentId,
-      scope: r.scope,
-      serviceId: r.serviceId,
-    };
     if (r.scope === "shared") {
-      const value = await unsealWith(key, r.valueSealed, variableAad(t, r.key));
+      const value = await openVariable(key, r);
       out.shared[r.key] = value;
       if (r.tier === "secret") {
         out.sharedSecrets.push(value);
@@ -446,7 +743,7 @@ export async function loadEnvironmentVariables(
     }
     const slug = r.serviceId ? slugOf.get(r.serviceId) : undefined;
     if (!slug) continue;
-    const value = await unsealWith(key, r.valueSealed, variableAad(t, r.key));
+    const value = await openVariable(key, r);
     out.services[slug]![r.key] = value;
     if (r.tier === "secret") {
       out.secrets[slug]!.push(value);
@@ -457,8 +754,8 @@ export async function loadEnvironmentVariables(
 }
 
 /**
- * Copies every variable of one environment into another, re-sealing each
- * value for its new AAD. Returns rows to insert in the same batch as the
+ * Copies every variable of one environment into another, sealing each value
+ * for its new row. Returns rows to insert in the same batch as the
  * environment (rows, not inserts; see {@link newProjectKeyRow}).
  *
  * @param db - Database client.
@@ -481,25 +778,20 @@ export async function copiedVariableRows(
     .where(and(eq(variables.projectId, projectId), eq(variables.environmentId, fromEnvironmentId)));
   return Promise.all(
     rows.map(async (r) => {
-      const from: VariableTarget = {
-        projectId,
-        environmentId: fromEnvironmentId,
-        scope: r.scope,
-        serviceId: r.serviceId,
-      };
-      const to: VariableTarget = { ...from, environmentId: toEnvironmentId };
-      const plaintext = await unsealWith(key, r.valueSealed, variableAad(from, r.key));
-      return {
+      const coordinates: StoredVariable = {
         id: newId("variable"),
-        scope: r.scope,
         projectId,
         environmentId: toEnvironmentId,
+        scope: r.scope,
         serviceId: r.serviceId,
         key: r.key,
-        valueSealed: await sealWith(key, plaintext, variableAad(to, r.key)),
+        version: 1,
+      };
+      return {
+        ...coordinates,
+        ...(await sealVariable(key, coordinates, await openVariable(key, r))),
         tier: r.tier,
         locked: r.locked,
-        fingerprint: r.fingerprint,
         availableAtBuild: r.availableAtBuild,
         mountAsFile: r.mountAsFile,
         updatedBy: r.updatedBy,

@@ -1,7 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import { http } from "msw";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { db, WORKSPACE_ID } from "../../mocks/db";
+import { apiError } from "../../mocks/handlers";
 import { server } from "../../mocks/server";
 import { renderWithProviders } from "../../test/render";
 import { CloudProviderPanel } from "./cloud-provider-panel";
@@ -219,5 +221,73 @@ describe("cloud provider panel", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "A server named hel-1 already exists",
     );
+  });
+
+  async function startServer(user: ReturnType<typeof renderPanel>["user"], serverName: string) {
+    await screen.findByRole("radio", { name: /^cx22/ });
+    const name = screen.getByLabelText("Server name");
+    await user.clear(name);
+    await user.type(name, serverName);
+    await user.click(screen.getByRole("button", { name: "Create server" }));
+    await screen.findByRole("list", { name: "Provisioning progress" });
+  }
+
+  it("cancels a server still being created once the provider has made it", async () => {
+    connect();
+    const { user } = renderPanel();
+    await startServer(user, "slow-1");
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(screen.getByText(/Anything already created at Hetzner Cloud is deleted/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Cancel and delete" }));
+
+    expect(
+      await screen.findByText(/deleted as soon as Hetzner Cloud has finished creating it/),
+    ).toBeInTheDocument();
+    expect(await screen.findByText(/Cancelled\. Nothing is left running/)).toHaveTextContent(
+      /server \d+ was deleted/,
+    );
+    expect(db.providers.provisions[0]).toMatchObject({ status: "cancelled" });
+    expect(db.audit.at(-1)).toMatchObject({
+      action: "node.provision_cancelled",
+      metadata: { from_status: "creating" },
+    });
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start over" }));
+    expect(await screen.findByRole("button", { name: "Create server" })).toBeInTheDocument();
+  });
+
+  it("asks before cancelling, and cancels a booting server at once", async () => {
+    connect();
+    const { user } = renderPanel();
+    await startServer(user, "wait-1");
+    await screen.findByText("Waiting for the server to start");
+    await waitFor(() => expect(db.providers.provisions[0]?.status).toBe("booting"));
+
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Keep creating" }));
+    expect(db.providers.provisions[0]?.cancel_requested_at).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Cancel and delete" }));
+    expect(await screen.findByText(/Cancelled\. Nothing is left running/)).toBeInTheDocument();
+    expect(db.providers.provisions[0]).toMatchObject({ status: "cancelled" });
+    expect(db.nodes.some((node) => node.name === "wait-1")).toBe(false);
+  });
+
+  it("explains a cancel the API refused", async () => {
+    connect();
+    server.use(
+      http.post("*/v1/workspaces/:workspaceId/node-provisions/:provisionId/cancel", () =>
+        apiError(403, "reauth_required", "Confirm your password to continue"),
+      ),
+    );
+    const { user } = renderPanel();
+    await startServer(user, "slow-2");
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Cancel and delete" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Confirm your password to continue Sign in again, then retry.",
+    );
+    expect(db.providers.provisions[0]?.cancel_requested_at).toBeNull();
   });
 });

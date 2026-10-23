@@ -34,6 +34,7 @@ import type {
   Service,
   ServiceConfig,
 } from "../lib/api/deploy-types";
+import { generatedDomainState } from "./domains-db";
 
 /** A stored variable of a service or of a project environment (`shared`). */
 export interface DbVariable {
@@ -672,6 +673,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         target_port: 3000,
         verification_status: "verified",
         tls_status: "issued",
+        ...generatedDomainState(),
         created_at: now - 4 * DAY,
       },
       {
@@ -684,6 +686,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         target_port: 8080,
         verification_status: "verified",
         tls_status: "issued",
+        ...generatedDomainState(),
         created_at: now - 5 * DAY,
       },
       {
@@ -696,6 +699,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         target_port: 3000,
         verification_status: "verified",
         tls_status: "issued",
+        ...generatedDomainState(),
         created_at: now - 14 * DAY,
       },
     ],
@@ -703,6 +707,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
       apps_domain: "apps.example.com",
       tls_mode: "acme",
       log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
+      mcp_enabled: false,
     },
     github: {
       app: {
@@ -821,6 +826,7 @@ export function emptyDeploy(): DeployDb {
       apps_domain: null,
       tls_mode: "acme",
       log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
+      mcp_enabled: false,
     },
     github: {
       app: null,

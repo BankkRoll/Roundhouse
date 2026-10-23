@@ -1,16 +1,17 @@
 /**
- * Log ingest: secret redaction, NDJSON chunks in R2 at the ADR key layout,
- * the `log_chunks` index, and newest-first paging across chunks.
+ * Log ingest: redaction with each deployment's frozen secret set, NDJSON
+ * chunks in R2 at the ADR key layout, the `log_chunks` index, and
+ * newest-first paging across chunks.
  */
 import { env, introspectWorkflow } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { redact, redactionList } from "../src/lib/logs";
 import { addMember, eventually } from "./helpers";
 import {
   COMMIT_SHA,
   deploy,
   GIT_SERVICE,
   type Stage,
+  settleDeployments,
   stage,
   waitForStatus,
 } from "./pipeline-helpers";
@@ -20,6 +21,7 @@ beforeEach(async () => {
   introspector = await introspectWorkflow(env.DEPLOY_WORKFLOW);
 });
 afterEach(async () => {
+  await settleDeployments();
   await introspector?.dispose();
 });
 
@@ -58,14 +60,6 @@ async function chunkCount(deploymentId: string) {
   return row?.n ?? 0;
 }
 
-describe("redaction", () => {
-  it("replaces secrets longest first and ignores trivially short ones", () => {
-    const list = redactionList(["abc", "hunter22", "hunter2244", "hunter22"]);
-    expect(list).toEqual(["hunter2244", "hunter22"]);
-    expect(redact("pw=hunter2244 old=hunter22 abc", list)).toBe("pw=[REDACTED] old=[REDACTED] abc");
-  });
-});
-
 describe("runtime logs", () => {
   it("redacts secrets, stores NDJSON chunks in R2 and indexes them", async () => {
     const s = await stage();
@@ -82,6 +76,12 @@ describe("runtime logs", () => {
         set: [{ key: "SHARED_TOKEN", value: "tok-shared-777", tier: "secret" }],
         confirm_write_only: true,
       },
+    });
+    // Plain, but it resolves to the shared secret, so it is redacted too.
+    await s.owner.json(`/v1/services/${s.serviceId}/variables?environment_id=${s.envId}`, {
+      method: "PUT",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: `${{…}}` is variable-reference syntax, not a template.
+      json: { set: [{ key: "TOKEN", value: "${{shared.SHARED_TOKEN}}", tier: "plain" }] },
     });
     const { id, workloadId } = await activeDeployment(s);
     const ts = Date.UTC(2026, 9, 22, 13, 5, 0);
@@ -208,5 +208,111 @@ describe("build logs", () => {
     expect(page.body.lines.map((l) => l.text)).toEqual(["#1 resolve", "#2 build", "#3 push"]);
     expect(page.body.lines.every((l) => l.workload_id === undefined)).toBe(true);
     expect((await s.owner.json("/v1/builds/bld_missing/logs")).status).toBe(404);
+  });
+});
+
+describe("redaction by deployment", () => {
+  async function storedTexts(s: Stage, filter: { deploymentId: string } | { buildId: string }) {
+    const [column, id] =
+      "deploymentId" in filter
+        ? ["deployment_id", filter.deploymentId]
+        : ["build_id", filter.buildId];
+    return eventually(async () => {
+      await flush(s.joined.node_id);
+      const rows = await env.DB.prepare(
+        `SELECT r2_key FROM log_chunks WHERE ${column} = ? ORDER BY id`,
+      )
+        .bind(id)
+        .all<{ r2_key: string }>();
+      if (!rows.results.length) return undefined;
+      const texts: string[] = [];
+      for (const r of rows.results) {
+        const text = await (await env.LOGS.get(r.r2_key))!.text();
+        for (const line of text.trim().split("\n")) texts.push(JSON.parse(line).text);
+      }
+      return texts;
+    });
+  }
+
+  const putSecret = (s: Stage, value: string) =>
+    s.owner.json(`/v1/services/${s.serviceId}/variables?environment_id=${s.envId}`, {
+      method: "PUT",
+      json: { set: [{ key: "API_SECRET", value, tier: "secret" }], confirm_write_only: true },
+    });
+
+  it("keeps redacting a rotated-out secret, and its encodings, for the deployment that has it", async () => {
+    const s = await stage();
+    await putSecret(s, "old-secret-0123");
+    const { id, workloadId } = await activeDeployment(s);
+    // Rotated without a redeploy: the running replica still holds the old value.
+    await putSecret(s, "new-secret-4567");
+    sendLines(s, id, workloadId, [
+      "using old-secret-0123",
+      `b64 ${btoa("old-secret-0123")}`,
+      `url ${encodeURIComponent("old-secret-0123")}`,
+      `hex ${[...new TextEncoder().encode("old-secret-0123")].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
+      "never had new-secret-4567",
+      "short abc",
+    ]);
+    expect(await storedTexts(s, { deploymentId: id })).toEqual([
+      "using [REDACTED]",
+      "b64 [REDACTED]",
+      "url [REDACTED]",
+      "hex [REDACTED]",
+      "never had new-secret-4567",
+      "short abc",
+    ]);
+  });
+
+  it("falls back to current secret variables for deployments from before frozen sets", async () => {
+    const s = await stage();
+    await putSecret(s, "legacy-secret-0123");
+    const { id, workloadId } = await activeDeployment(s);
+    await env.DB.prepare("UPDATE deployments SET secret_keys = NULL WHERE id = ?").bind(id).run();
+    sendLines(s, id, workloadId, ["leak legacy-secret-0123"]);
+    expect(await storedTexts(s, { deploymentId: id })).toEqual(["leak [REDACTED]"]);
+  });
+
+  it("redacts build output with the build's secrets and secret build args", async () => {
+    const s = await stage(
+      {
+        ...GIT_SERVICE,
+        config: {
+          build: {
+            builder: "dockerfile",
+            build_args: { NPM_TOKEN: "npm-marked-secret-1" },
+            secret_build_args: ["NPM_TOKEN"],
+          },
+        },
+      },
+      {
+        buildLogs: [
+          "#1 token build-secret-0123",
+          "#2 npm npm-marked-secret-1",
+          `#3 ${btoa("build-secret-0123")}`,
+        ],
+      },
+    );
+    await s.owner.json(`/v1/services/${s.serviceId}/variables?environment_id=${s.envId}`, {
+      method: "PUT",
+      json: {
+        set: [
+          {
+            key: "BUILD_SECRET",
+            value: "build-secret-0123",
+            tier: "secret",
+            available_at_build: true,
+          },
+        ],
+        confirm_write_only: true,
+      },
+    });
+    const d = await deploy(s.owner, s.serviceId, s.envId, { commit_sha: COMMIT_SHA });
+    const active = await waitForStatus(s.owner, d.id, ["active"]);
+    expect(await storedTexts(s, { buildId: active.build!.id })).toEqual([
+      "#1 token [REDACTED]",
+      "#2 npm [REDACTED]",
+      "#3 [REDACTED]",
+    ]);
   });
 });

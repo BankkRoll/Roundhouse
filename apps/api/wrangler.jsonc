@@ -11,7 +11,7 @@
     "directory": "../web/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/v1/*", "/api/*", "/install.sh", "/mcp"]
+    "run_worker_first": ["/v1/*", "/api/*", "/install.sh", "/mcp", "/oauth/*", "/.well-known/*"]
   },
   // NOTE: No `database_id` on purpose: `wrangler deploy` provisions the D1
   // database on the first deploy and reuses it afterwards, so a self-hoster
@@ -78,7 +78,8 @@
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "roundhouse_metrics" }],
   // Hourly retention: expired log chunks (R2 and D1), GitHub delivery IDs,
   // join tokens, sessions, invites, verifications. See src/lib/retention.ts.
-  "triggers": { "crons": ["17 * * * *"] },
+  // Every minute: custom-domain DNS checks that are due (src/lib/domains/check.ts).
+  "triggers": { "crons": ["17 * * * *", "* * * * *"] },
   "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": true }],
   "observability": { "enabled": true }
 }

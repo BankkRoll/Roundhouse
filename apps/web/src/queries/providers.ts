@@ -167,6 +167,27 @@ export function useProvisionNode(workspaceId: string) {
 }
 
 /**
+ * Cancels a provisioning run and puts the result in the cache, so the status view
+ * switches at once and keeps polling while the server is still being deleted.
+ *
+ * @param workspaceId - Workspace id.
+ * @returns A mutation taking the run id.
+ */
+export function useCancelProvision(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (provisionId: string) => providersApi.cancelProvision(workspaceId, provisionId),
+    onSuccess: (provision) => {
+      queryClient.setQueryData(queryKeys.nodeProvision(workspaceId, provision.id), provision);
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.nodeProvisions(workspaceId),
+        exact: true,
+      });
+    },
+  });
+}
+
+/**
  * Reads recent provisioning runs, polling quickly while any is in flight.
  *
  * @param workspaceId - Workspace id.

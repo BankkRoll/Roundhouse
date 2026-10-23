@@ -7,6 +7,7 @@ import type { Node } from "../../lib/api/types";
 import { formatAgentVersion, formatRelativeTime } from "../../lib/format";
 import { useNow } from "../../lib/use-now";
 import { provisionStepLabel } from "./cloud-offers";
+import { COST_ESTIMATE_NOTE, formatCostEstimate } from "./cost-estimate";
 import { nodeMeterRows, nodeSubtitle } from "./node-metrics";
 import { managedProvider, ProviderBadges } from "./provider-badge";
 
@@ -49,7 +50,17 @@ export function NodeCard({
       }
       status={node.status}
       metrics={nodeMeterRows(node)}
-      footer={`0 services · agent ${formatAgentVersion(node.agent_version) ?? "not reporting"}`}
+      footer={
+        <>
+          0 services · agent {formatAgentVersion(node.agent_version) ?? "not reporting"}
+          {managedProvider(node) && node.estimated_monthly_cost ? (
+            <span title={COST_ESTIMATE_NOTE}>
+              {" "}
+              · {formatCostEstimate(node.estimated_monthly_cost)} (estimate)
+            </span>
+          ) : null}
+        </>
+      }
       footerAside={
         node.last_heartbeat_at === null
           ? "never connected"
@@ -65,6 +76,7 @@ const PROVISION_STATUS_LABELS: Record<NodeProvision["status"], string> = {
   booting: "Booting",
   joined: "Joined",
   failed: "Failed",
+  cancelled: "Cancelled",
   cleanup_failed: "Cleanup failed",
 };
 

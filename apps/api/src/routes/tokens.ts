@@ -26,7 +26,7 @@ export const tokenRoutes = createRouter()
       .select({ token: apiTokens, creatorName: users.name })
       .from(apiTokens)
       .leftJoin(users, eq(users.id, apiTokens.userId))
-      .where(eq(apiTokens.workspaceId, workspaceId))
+      .where(and(eq(apiTokens.workspaceId, workspaceId), eq(apiTokens.kind, "api")))
       .orderBy(desc(apiTokens.id));
     return c.json({ tokens: rows.map((r) => toApiToken(r.token, r.creatorName)) }, 200);
   })
@@ -86,7 +86,13 @@ export const tokenRoutes = createRouter()
     const [token] = await db
       .select({ id: apiTokens.id, name: apiTokens.name, revokedAt: apiTokens.revokedAt })
       .from(apiTokens)
-      .where(and(eq(apiTokens.id, tokenId), eq(apiTokens.workspaceId, workspaceId)))
+      .where(
+        and(
+          eq(apiTokens.id, tokenId),
+          eq(apiTokens.workspaceId, workspaceId),
+          eq(apiTokens.kind, "api"),
+        ),
+      )
       .limit(1);
     if (!token) throw notFound("Token");
     const [revoked] = await db

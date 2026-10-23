@@ -32,18 +32,38 @@ func (g *gitignoreFlag) register(cmd *cobra.Command) {
 }
 
 func (a *App) initCmd() *cobra.Command {
-	var workspace, name, description string
+	var workspace, name, description, template string
 	var gi gitignoreFlag
+	var tf templateFlags
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Create a project and link this directory to it",
 		Long: `Create a project (with a production environment) in a workspace and link
-the current directory to it. Add services with "roundhouse services create".`,
+the current directory to it. Add services with "roundhouse services create".
+
+With --template, the project is created from a template and its services
+are deployed, as "roundhouse templates deploy" does; the --input, --yes,
+--no-deploy and --acknowledge-public flags apply to it.`,
 		Example: `  roundhouse init
-  roundhouse init --name shop --workspace acme --gitignore=false`,
+  roundhouse init --name shop --workspace acme --gitignore=false
+  roundhouse init --template n8n --input WEBHOOK_URL=https://n8n.example.com --yes`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
+			if template == "" {
+				for _, f := range []string{"input", "no-deploy", "yes", "acknowledge-public"} {
+					if cmd.Flags().Changed(f) {
+						return exitcode.New(exitcode.Usage, "--%s needs --template", f)
+					}
+				}
+			}
+			var inputs map[string]string
+			if template != "" {
+				var err error
+				if inputs, err = a.parseTemplateInputs(tf.inputs); err != nil {
+					return err
+				}
+			}
 			a.relinking = true
 			sess, err := a.connect()
 			if err != nil {
@@ -57,6 +77,9 @@ the current directory to it. Add services with "roundhouse services create".`,
 				if name, err = a.IO.Prompt("Project name:", filepath.Base(a.WorkDir), "pass --name"); err != nil {
 					return err
 				}
+			}
+			if template != "" {
+				return a.initFromTemplate(ctx, sess, ws, template, name, description, inputs, tf, &gi)
 			}
 			p, err := sess.client.CreateProject(ctx, ws.ID, api.CreateProjectInput{Name: name, Description: description})
 			if err != nil {
@@ -75,8 +98,48 @@ the current directory to it. Add services with "roundhouse services create".`,
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "workspace ID, slug or name")
 	cmd.Flags().StringVar(&name, "name", "", "project name (default: directory name)")
 	cmd.Flags().StringVar(&description, "description", "", "project description")
+	cmd.Flags().StringVar(&template, "template", "", "create the project from this template (see `roundhouse templates list`)")
 	gi.register(cmd)
+	tf.register(cmd)
 	return cmd
+}
+
+// initTemplateResult is the --json output of `init --template`.
+type initTemplateResult struct {
+	linkResult
+	Deployment *api.TemplateDeployment `json:"deployment"`
+}
+
+// initFromTemplate creates a project from a template and links the
+// directory to it, and to its service when it has only one. The link is
+// written even when a first deployment did not start, since the project
+// exists.
+func (a *App) initFromTemplate(ctx context.Context, sess *session, ws *api.Membership, templateID, name, description string,
+	inputs map[string]string, tf templateFlags, gi *gitignoreFlag) error {
+	res, d, err := a.createFromTemplate(ctx, sess.client, ws.ID, templateID, name, "", description, inputs, tf)
+	if err != nil {
+		return err
+	}
+	p := &api.ProjectDetail{Project: res.Project, Environments: []api.Environment{res.Environment}, Services: res.Services}
+	var svc *api.Service
+	if len(p.Services) == 1 {
+		svc = &p.Services[0]
+	}
+	if !a.jsonOut {
+		fmt.Fprintf(a.IO.Out, "%s Created project %s (slug %s) from template %s in workspace %s\n",
+			a.IO.OutColor().Green("✓"), p.Name, p.Slug, d.Name, ws.Name)
+	}
+	reportErr := a.reportTemplateDeployment(d, res, false)
+	link, err := a.saveLink(sess, ws.ID, p, &p.Environments[0], svc, gi)
+	if err != nil {
+		return err
+	}
+	if a.jsonOut {
+		writeJSON(a.IO.Out, initTemplateResult{linkResult: *link, Deployment: res})
+	} else {
+		a.printLinked(p, &p.Environments[0], svc)
+	}
+	return reportErr
 }
 
 func (a *App) linkCmd() *cobra.Command {
@@ -198,6 +261,19 @@ func (a *App) chooseLinkService(p *api.ProjectDetail, ref string) (*api.Service,
 }
 
 func (a *App) writeLink(sess *session, workspaceID string, p *api.ProjectDetail, env *api.Environment, svc *api.Service, gi *gitignoreFlag) error {
+	res, err := a.saveLink(sess, workspaceID, p, env, svc, gi)
+	if err != nil {
+		return err
+	}
+	if a.jsonOut {
+		return a.printJSON(res)
+	}
+	a.printLinked(p, env, svc)
+	return nil
+}
+
+// saveLink writes the link file and applies the --gitignore choice.
+func (a *App) saveLink(sess *session, workspaceID string, p *api.ProjectDetail, env *api.Environment, svc *api.Service, gi *gitignoreFlag) (*linkResult, error) {
 	l := &config.Link{
 		URL:             sess.url,
 		WorkspaceID:     workspaceID,
@@ -214,15 +290,16 @@ func (a *App) writeLink(sess *session, workspaceID string, p *api.ProjectDetail,
 	}
 	path, err := config.WriteLink(a.WorkDir, l)
 	if err != nil {
-		return fmt.Errorf("write link: %w", err)
+		return nil, fmt.Errorf("write link: %w", err)
 	}
 	gitignore, err := a.updateGitignore(gi)
 	if err != nil {
 		a.IO.Warn("could not update .gitignore: %v", err)
 	}
-	if a.jsonOut {
-		return a.printJSON(linkResult{Path: path, Link: l, Gitignore: gitignore})
-	}
+	return &linkResult{Path: path, Link: l, Gitignore: gitignore}, nil
+}
+
+func (a *App) printLinked(p *api.ProjectDetail, env *api.Environment, svc *api.Service) {
 	c := a.IO.OutColor()
 	target := p.Name + " / " + env.Name
 	if svc != nil {
@@ -232,7 +309,6 @@ func (a *App) writeLink(sess *session, workspaceID string, p *api.ProjectDetail,
 	if svc == nil && len(p.Services) > 1 {
 		fmt.Fprintln(a.IO.Out, "  No service linked; pass --service to commands or run `roundhouse link --service <name>`.")
 	}
-	return nil
 }
 
 // updateGitignore applies the --gitignore choice, asking on a terminal when

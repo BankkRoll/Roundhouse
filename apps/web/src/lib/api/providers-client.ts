@@ -119,4 +119,18 @@ export const providersApi = {
       `/v1/workspaces/${seg(workspaceId)}/node-provisions/${seg(provisionId)}`,
       { signal },
     ),
+  /**
+   * Cancels an unfinished run: its join token is revoked and any server it created is
+   * deleted. A run still creating its server comes back with `cancel_requested_at` set
+   * and ends `cancelled` once the provider has created it.
+   *
+   * @param workspaceId - Workspace id.
+   * @param provisionId - Run id.
+   * @returns The run after the request.
+   */
+  cancelProvision: (workspaceId: string, provisionId: string) =>
+    request<NodeProvision>(
+      "POST",
+      `/v1/workspaces/${seg(workspaceId)}/node-provisions/${seg(provisionId)}/cancel`,
+    ),
 };

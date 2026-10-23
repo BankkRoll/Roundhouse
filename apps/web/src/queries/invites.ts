@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { forgetInviteToken } from "../features/auth/invite-token";
 import { api } from "../lib/api/client";
 import type { AcceptInviteRequest } from "../lib/api/types";
 import { queryKeys } from "./keys";
@@ -6,7 +7,7 @@ import { queryKeys } from "./keys";
 /**
  * Reads the public preview of an invite link.
  *
- * @param token - Invite token from the URL.
+ * @param token - Invite token from the link's fragment.
  * @returns The preview query. A 404 means the link is invalid, already used, or expired.
  */
 export function useInvitePreview(token: string) {
@@ -21,7 +22,7 @@ export function useInvitePreview(token: string) {
  * Accepts an invite, creating an account first when the visitor is signed out. Refreshes
  * `/v1/me` so the new workspace is known before navigating to it.
  *
- * @param token - Invite token from the URL.
+ * @param token - Invite token from the link's fragment; forgotten once accepted.
  * @returns A mutation resolving to the joined workspace id.
  */
 export function useAcceptInvite(token: string) {
@@ -30,6 +31,9 @@ export function useAcceptInvite(token: string) {
     mutationFn: (body: AcceptInviteRequest) => api.acceptInvite(token, body),
     // SECURITY: The variables hold the new account's password; see useCompleteSetup.
     gcTime: 0,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.me }),
+    onSuccess: () => {
+      forgetInviteToken();
+      return queryClient.invalidateQueries({ queryKey: queryKeys.me });
+    },
   });
 }

@@ -37,6 +37,12 @@ export type ErrorCode =
   | "provider_not_connected"
   | "provider_token_invalid"
   | "provider_read_only"
+  | "domain_taken"
+  | "hostname_not_allowed"
+  | "mcp_disabled"
+  | "change_set_changed"
+  | "change_set_conflict"
+  | "invalid_references"
   | "internal";
 
 /**

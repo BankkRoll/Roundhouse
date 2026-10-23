@@ -23,6 +23,7 @@ import {
   deploy,
   GIT_SERVICE,
   isDesired,
+  settleDeployments,
   stage,
   waitForStatus,
 } from "./pipeline-helpers";
@@ -32,6 +33,7 @@ beforeEach(async () => {
   introspector = await introspectWorkflow(env.DEPLOY_WORKFLOW);
 });
 afterEach(async () => {
+  await settleDeployments();
   await introspector?.dispose();
 });
 

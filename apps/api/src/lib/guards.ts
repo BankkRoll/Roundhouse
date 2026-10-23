@@ -89,7 +89,7 @@ export function rateLimitBucket(method: string, path: string): string | null {
   if (p === "/api/auth" || p.startsWith("/api/auth/")) return "auth";
   if (p === "/v1/setup") return "setup";
   if (p === "/v1/nodes/join") return "join";
-  if (/^\/v1\/invites\/[^/]+\/accept$/.test(p)) return "invite";
+  if (p === "/v1/invites/accept" || p === "/v1/invites/lookup") return "invite";
   if (p === "/v1/webhooks/github") return "webhook";
   return null;
 }

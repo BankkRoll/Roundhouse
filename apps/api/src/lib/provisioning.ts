@@ -7,8 +7,12 @@
  *   by the workflow while it waits and by reads, so the join route (which
  *   knows nothing about providers) needs no hook.
  * - {@link deprovisionNodeServer}: deletes a managed node's cloud server.
+ * - {@link finishCancel}: ends a cancelled run, deleting any server it made.
+ * - {@link nodeCostEstimates}: the catalogue price recorded for each
+ *   provider-managed node, for display as an estimate.
  * - {@link reconcileProviders}: the hourly pass that retries failed
- *   cleanups and flags managed servers deleted behind Roundhouse's back.
+ *   cleanups, finishes cancels whose run stopped answering, and flags
+ *   managed servers deleted behind Roundhouse's back.
  *
  * @module
  */
@@ -20,22 +24,26 @@ import {
   providerCredentials,
 } from "@roundhouse/db";
 import {
+  errorMessage,
   isNotFound,
   isProviderId,
   PROVIDERS,
+  type Provider,
   type ProviderId,
   ProvisionError,
 } from "@roundhouse/providers";
-import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
 import { auditInsert, recordAudit } from "./audit";
 import {
   connectedProvider,
+  loadCredential,
   providerClient,
   providerFailure,
   unsealProviderToken,
 } from "./cloud-providers";
 import { ApiError } from "./errors";
 import type { KeyEnv } from "./instance-secrets";
+import { revokeJoinToken } from "./join-tokens";
 
 type ProvisionRow = typeof nodeProvisions.$inferSelect;
 type NodeRow = typeof nodes.$inferSelect;
@@ -65,10 +73,79 @@ export function toApiProvision(row: ProvisionRow) {
     ipv4: row.ipv4,
     ipv6: row.ipv6,
     node_id: row.nodeId,
+    cancel_requested_at: row.cancelRequestedAt ? +row.cancelRequestedAt : null,
+    estimated_monthly_cost: costOf(row),
     created_at: +row.createdAt,
     updated_at: +row.updatedAt,
     finished_at: row.finishedAt ? +row.finishedAt : null,
   };
+}
+
+/** A recorded catalogue price; see `CostEstimate` in the API schemas. */
+export interface CostEstimate {
+  monthly_cents: number;
+  currency: string;
+}
+
+function costOf(row: Pick<ProvisionRow, "monthlyCents" | "currency">): CostEstimate | null {
+  return row.monthlyCents !== null && row.currency
+    ? { monthly_cents: row.monthlyCents, currency: row.currency }
+    : null;
+}
+
+/**
+ * The monthly price recorded for each provider-managed node in a workspace,
+ * from the run that created it. One query per workspace, so lists stay
+ * cheap whatever their size.
+ *
+ * @param db - Database.
+ * @param workspaceId - Workspace.
+ * @returns Estimates by node ID; nodes without one are absent.
+ */
+export async function nodeCostEstimates(
+  db: Db,
+  workspaceId: string,
+): Promise<Map<string, CostEstimate>> {
+  const rows = await db
+    .select({
+      nodeId: nodeProvisions.nodeId,
+      monthlyCents: nodeProvisions.monthlyCents,
+      currency: nodeProvisions.currency,
+    })
+    .from(nodeProvisions)
+    .where(
+      and(
+        eq(nodeProvisions.workspaceId, workspaceId),
+        eq(nodeProvisions.status, "joined"),
+        isNotNull(nodeProvisions.nodeId),
+        isNotNull(nodeProvisions.monthlyCents),
+      ),
+    );
+  const out = new Map<string, CostEstimate>();
+  for (const r of rows) {
+    const cost = costOf(r);
+    if (r.nodeId && cost) out.set(r.nodeId, cost);
+  }
+  return out;
+}
+
+/**
+ * Adds `estimated_monthly_cost` to serialised nodes. Only provider-managed
+ * nodes get one: a node removed from its provider (`keep_server`) or joined
+ * by hand bills nothing Roundhouse knows about.
+ *
+ * @param nodes - Serialised nodes (`toApiNode`).
+ * @param costs - From {@link nodeCostEstimates}.
+ * @returns The nodes with the field set (`null` when unknown).
+ */
+export function withCostEstimates<N extends { id: string; provider_server_id: string | null }>(
+  nodes: N[],
+  costs: Map<string, CostEstimate>,
+): (N & { estimated_monthly_cost: CostEstimate | null })[] {
+  return nodes.map((n) => ({
+    ...n,
+    estimated_monthly_cost: n.provider_server_id ? (costs.get(n.id) ?? null) : null,
+  }));
 }
 
 /**
@@ -196,6 +273,183 @@ export async function deprovisionNodeServer(
 }
 
 // -----------------------------------------------------------------------------
+// Prices
+// -----------------------------------------------------------------------------
+
+/**
+ * Records the run's plan price from the provider's live catalogue, for the
+ * cost estimate shown on the node. Best effort: a failure leaves the estimate
+ * unknown and never affects the run.
+ *
+ * @param db - Database.
+ * @param client - Provider client for the run's workspace.
+ * @param run - The run.
+ * @returns Whether a price was recorded.
+ */
+export async function recordOfferPrice(
+  db: Db,
+  client: Provider,
+  run: Pick<ProvisionRow, "id" | "plan" | "region" | "builder">,
+): Promise<boolean> {
+  try {
+    const offers = await client.listOffers(
+      { role: run.builder ? "builder" : "node", region: run.region, includeDeprecated: true },
+      { timeoutMs: 20_000 },
+    );
+    const offer = offers.find((o) => o.plan === run.plan && o.region === run.region);
+    if (!offer) return false;
+    await db
+      .update(nodeProvisions)
+      .set({ monthlyCents: offer.price.monthlyCents, currency: offer.price.currency })
+      .where(eq(nodeProvisions.id, run.id));
+    return true;
+  } catch (err) {
+    logFailure("price", client.id, err);
+    return false;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Cancel
+// -----------------------------------------------------------------------------
+
+/**
+ * How long a requested cancel may wait for its run before the reconcile
+ * finishes it. Longer than the workflow's create step can run with all its
+ * retries (about 40 minutes), so a slow but live run finishes its own cancel.
+ */
+export const STALE_CANCEL_MS = 60 * 60 * 1000;
+
+/** Options for {@link finishCancel}. */
+export interface FinishCancelOptions {
+  /** A server the caller knows the run created, when the row doesn't record it yet. */
+  serverId?: string | null;
+  /**
+   * Look the server up by its managed labels when no ID is known: for runs
+   * that may have created one without recording it (a create step that was
+   * cut off).
+   */
+  lookup?: boolean;
+}
+
+/**
+ * Ends a run whose cancel was requested: claims it as `cancelled`, revokes
+ * its join token, and deletes its server (only one carrying this run's
+ * managed node label). The run ends `cleanup_failed`, which the hourly
+ * reconcile retries, when the delete fails.
+ *
+ * Every writer of a run compares its status first, so this and the workflow
+ * can race safely: whichever claims the run first finishes it.
+ *
+ * @param db - Database.
+ * @param keys - The keyring bindings.
+ * @param provisionId - The run; it must have `cancel_requested_at` set.
+ * @param options - A known server, or permission to look one up.
+ * @returns The run afterwards, or `undefined` when it doesn't exist.
+ */
+export async function finishCancel(
+  db: Db,
+  keys: KeyEnv,
+  provisionId: string,
+  options: FinishCancelOptions = {},
+): Promise<ProvisionRow | undefined> {
+  const [claimed] = await db
+    .update(nodeProvisions)
+    .set({
+      status: "cancelled",
+      failureReason: "cancelled",
+      failureMessage: "Cancelled before the server joined",
+      ...(options.serverId ? { serverId: options.serverId } : {}),
+      finishedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(nodeProvisions.id, provisionId),
+        inArray(nodeProvisions.status, [...ACTIVE_PROVISION_STATUSES]),
+        isNotNull(nodeProvisions.cancelRequestedAt),
+      ),
+    )
+    .returning();
+  if (!claimed) {
+    const [current] = await db
+      .select()
+      .from(nodeProvisions)
+      .where(eq(nodeProvisions.id, provisionId));
+    return current;
+  }
+  if (claimed.joinTokenId) await revokeJoinToken(db, claimed.joinTokenId);
+
+  const name = PROVIDERS[claimed.provider].displayName;
+  const cred = await loadCredential(db, claimed.workspaceId, claimed.provider);
+  let serverId = claimed.serverId;
+  if (!serverId && !options.lookup) return claimed;
+  if (!cred) {
+    const what = serverId ? `server ${serverId}` : `a server named ${claimed.name}`;
+    return cleanupFailed(
+      db,
+      claimed,
+      serverId,
+      `${name} was disconnected, so ${what} could not be deleted; check the ${name} console`,
+    );
+  }
+  try {
+    const client = providerClient(claimed.provider, await unsealProviderToken(keys, cred));
+    if (!serverId) {
+      const servers = await client.listManaged(
+        { workspaceId: claimed.workspaceId },
+        { timeoutMs: 20_000 },
+      );
+      serverId =
+        servers.find(
+          (s) => s.managed?.node === claimed.name && s.managed.workspaceId === claimed.workspaceId,
+        )?.id ?? null;
+      if (!serverId) return claimed;
+    }
+    await client.deprovision(
+      { serverId, expectedName: claimed.name, wait: false },
+      { timeoutMs: 20_000 },
+    );
+  } catch (err) {
+    if (serverId && isNotFound(err)) return recordServer(db, claimed, serverId);
+    const message = serverId
+      ? `Deleting server ${serverId} failed: ${errorMessage(err)}`
+      : `Could not check ${name} for a server to delete: ${errorMessage(err)}`;
+    // NOTE: Without an ID there is nothing the reconcile can retry; the
+    // message tells the operator to check the provider console.
+    return cleanupFailed(db, claimed, serverId, message);
+  }
+  return recordServer(db, claimed, serverId);
+}
+
+async function recordServer(db: Db, run: ProvisionRow, serverId: string): Promise<ProvisionRow> {
+  if (run.serverId === serverId) return run;
+  const [row] = await db
+    .update(nodeProvisions)
+    .set({ serverId })
+    .where(eq(nodeProvisions.id, run.id))
+    .returning();
+  return row ?? run;
+}
+
+async function cleanupFailed(
+  db: Db,
+  run: ProvisionRow,
+  serverId: string | null,
+  message: string,
+): Promise<ProvisionRow> {
+  const [row] = await db
+    .update(nodeProvisions)
+    .set({
+      status: "cleanup_failed",
+      failureMessage: message.slice(0, 500),
+      ...(serverId ? { serverId } : {}),
+    })
+    .where(and(eq(nodeProvisions.id, run.id), eq(nodeProvisions.status, "cancelled")))
+    .returning();
+  return row ?? run;
+}
+
+// -----------------------------------------------------------------------------
 // Reconcile
 // -----------------------------------------------------------------------------
 
@@ -207,11 +461,15 @@ export interface ReconcileReport {
   missing: number;
   /** Credentials the pass could not use (rejected token, API down). */
   errors: number;
+  /** Requested cancels finished here because their run stopped answering. */
+  cancelled: number;
 }
 
 /**
- * Retries the delete of servers a failed run left behind (`cleanup_failed`),
- * then compares each workspace's managed servers with its nodes and flags
+ * Finishes cancels requested more than {@link STALE_CANCEL_MS} ago whose run
+ * never got to them (its workflow died mid-create), retries the delete of
+ * servers a failed or cancelled run left behind (`cleanup_failed`), then
+ * compares each workspace's managed servers with its nodes and flags
  * nodes whose server is gone (or clears the flag when it is back). One
  * listing per credential, so the cost is bounded by connected providers.
  *
@@ -225,7 +483,21 @@ export async function reconcileProviders(
   keys: KeyEnv,
   now = new Date(),
 ): Promise<ReconcileReport> {
-  const report: ReconcileReport = { cleanedUp: 0, missing: 0, errors: 0 };
+  const report: ReconcileReport = { cleanedUp: 0, missing: 0, errors: 0, cancelled: 0 };
+  const stuck = await db
+    .select({ id: nodeProvisions.id })
+    .from(nodeProvisions)
+    .where(
+      and(
+        inArray(nodeProvisions.status, [...ACTIVE_PROVISION_STATUSES]),
+        lt(nodeProvisions.cancelRequestedAt, new Date(+now - STALE_CANCEL_MS)),
+      ),
+    );
+  for (const run of stuck) {
+    const done = await finishCancel(db, keys, run.id, { lookup: true });
+    if (done?.status === "cancelled" || done?.status === "cleanup_failed") report.cancelled++;
+  }
+
   const credentials = await db.select().from(providerCredentials);
   const byWorkspace = new Map(credentials.map((c) => [`${c.workspaceId}:${c.provider}`, c]));
 
@@ -311,7 +583,7 @@ export async function reconcileProviders(
 async function markCleanedUp(db: Db, run: ProvisionRow): Promise<void> {
   await db
     .update(nodeProvisions)
-    .set({ status: "failed" })
+    .set({ status: run.failureReason === "cancelled" ? "cancelled" : "failed" })
     .where(and(eq(nodeProvisions.id, run.id), eq(nodeProvisions.status, "cleanup_failed")));
   await recordAudit(db, {
     workspaceId: run.workspaceId,

@@ -17,6 +17,7 @@ import type {
   services,
 } from "@roundhouse/db";
 import type { TlsMode } from "@roundhouse/shared";
+import type { DnsRecord } from "./domains/records";
 
 type Row<T extends { $inferSelect: unknown }> = T["$inferSelect"];
 
@@ -209,9 +210,10 @@ export function toApiPlacement(p: Row<typeof placements>, nodeName: string | nul
 /**
  * @param d - Domain row.
  * @param tlsMode - Current TLS mode, which decides the URL scheme.
+ * @param records - The DNS records a custom domain needs (`expectedRecords`); none by default.
  * @returns The `Domain` wire shape.
  */
-export function toApiDomain(d: Row<typeof domains>, tlsMode: TlsMode) {
+export function toApiDomain(d: Row<typeof domains>, tlsMode: TlsMode, records: DnsRecord[] = []) {
   return {
     id: d.id,
     service_id: d.serviceId,
@@ -222,6 +224,13 @@ export function toApiDomain(d: Row<typeof domains>, tlsMode: TlsMode) {
     target_port: d.targetPort,
     verification_status: d.verificationStatus,
     tls_status: d.tlsStatus,
+    status: d.status,
+    apex: d.apex,
+    records,
+    error: d.error,
+    last_checked_at: ms(d.lastCheckedAt),
+    next_check_at: ms(d.nextCheckAt),
+    verified_at: ms(d.verifiedAt),
     created_at: +d.createdAt,
   };
 }

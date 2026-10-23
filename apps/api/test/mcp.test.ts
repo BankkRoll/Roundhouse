@@ -2,8 +2,9 @@
  * The MCP server at `/mcp`: transport rules (POST only, Origin, body size,
  * the per-token tool-call budget), bearer-only `tok_` authentication, the
  * `insufficient_scope` challenge, RBAC through the token creator's current
- * role, audit records for mutations, the advertised tool schemas, and that
- * no tool ever returns a secret value. Calls go through the official MCP
+ * role, audit records for mutations, the advertised tool schemas, that no
+ * tool ever returns a secret value, and the `mcp_enabled` instance setting
+ * (off by default; every other test turns it on first). Calls go through the official MCP
  * client SDK against the Worker, except where a test needs the raw HTTP
  * exchange.
  */
@@ -29,9 +30,19 @@ const DERIVED_VALUE = "prefix-${{web.API_SECRET}}";
 
 let introspector: Awaited<ReturnType<typeof introspectWorkflow>> | undefined;
 
-beforeEach(() => {
+/** Turns MCP on the way an instance admin would leave it: the stored setting. */
+async function enableMcp(enabled = true) {
+  await env.DB.prepare(
+    "INSERT OR REPLACE INTO instance_settings (key, value, created_at, updated_at) VALUES ('mcp_enabled', ?, ?, ?)",
+  )
+    .bind(JSON.stringify(enabled), Date.now(), Date.now())
+    .run();
+}
+
+beforeEach(async () => {
   sent = [];
   (env as { MCP_LIMITER?: RateLimit }).MCP_LIMITER = { limit: async () => ({ success: true }) };
+  await enableMcp();
 });
 
 afterEach(async () => {
@@ -107,6 +118,90 @@ const callBody = (name: string, args: Record<string, unknown> = {}) => ({
   id: 1,
   method: "tools/call",
   params: { name, arguments: args },
+});
+
+describe("mcp_enabled", () => {
+  it("is off on a new install: 404 with a JSON-RPC error, before any authentication", async () => {
+    await env.DB.prepare("DELETE FROM instance_settings WHERE key = 'mcp_enabled'").run();
+    const { owner, workspaceId } = await install();
+    expect((await owner.json("/v1/instance/settings")).body).toMatchObject({ mcp_enabled: false });
+    const secret = await mint(owner, workspaceId, API_TOKEN_PRESETS.read);
+    let budgetChecks = 0;
+    (env as { MCP_LIMITER?: RateLimit }).MCP_LIMITER = {
+      limit: async () => {
+        budgetChecks++;
+        return { success: true };
+      },
+    };
+
+    for (const headers of [
+      {} as Record<string, string>,
+      { authorization: `Bearer ${secret}` },
+      { authorization: "Bearer tok_not_a_real_token" },
+    ]) {
+      const res = await rpc(callBody("list_workspaces"), headers);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("www-authenticate")).toBeNull();
+      expect(res.headers.get("cache-control")).toContain("no-store");
+      expect(await res.json()).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        error: {
+          code: -32000,
+          message: expect.stringContaining("MCP is disabled on this instance"),
+          data: { code: "mcp_disabled" },
+        },
+      });
+    }
+    expect(budgetChecks).toBe(0);
+    const used = await env.DB.prepare("SELECT last_used_at FROM api_tokens").first<{
+      last_used_at: number | null;
+    }>();
+    expect(used!.last_used_at).toBeNull();
+  });
+
+  it("answers a batch per request and anything else with the API error body", async () => {
+    await enableMcp(false);
+    const batch = await rpc([
+      { jsonrpc: "2.0", id: "a", method: "tools/list" },
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+      { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "list_workspaces" } },
+    ]);
+    expect(batch.status).toBe(404);
+    expect(((await batch.json()) as { id: unknown }[]).map((m) => m.id)).toEqual(["a", 7]);
+
+    for (const res of [
+      await rpc("not json"),
+      await SELF.fetch(`${ORIGIN}/mcp`),
+      await SELF.fetch(`${ORIGIN}/mcp`, { method: "DELETE" }),
+    ]) {
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ error: { code: "mcp_disabled" } });
+    }
+  });
+
+  it("serves agents once an instance admin turns it on", async () => {
+    await env.DB.prepare("DELETE FROM instance_settings WHERE key = 'mcp_enabled'").run();
+    const { owner, workspaceId } = await install();
+    const secret = await mint(owner, workspaceId, API_TOKEN_PRESETS.read);
+    expect(
+      (await rpc(callBody("list_workspaces"), { authorization: `Bearer ${secret}` })).status,
+    ).toBe(404);
+    const on = await owner.json("/v1/instance/settings", {
+      method: "PATCH",
+      json: { mcp_enabled: true },
+    });
+    expect(on.status).toBe(200);
+    const client = await connect(secret);
+    const listed = await tool<{ workspaces: { id: string }[] }>(client, "list_workspaces");
+    expect(listed.body.workspaces.map((w) => w.id)).toEqual([workspaceId]);
+    await client.close();
+
+    await owner.json("/v1/instance/settings", { method: "PATCH", json: { mcp_enabled: false } });
+    expect(
+      (await rpc(callBody("list_workspaces"), { authorization: `Bearer ${secret}` })).status,
+    ).toBe(404);
+  });
 });
 
 describe("transport and authentication", () => {
@@ -233,7 +328,12 @@ describe("tools/list", () => {
       "list_variables",
       "resolve_variables",
       "set_variables",
+      "stage_config_change",
+      "list_changes",
+      "apply_changes",
       "list_nodes",
+      "list_templates",
+      "deploy_template",
     ]);
     for (const t of tools) {
       expect(t.inputSchema.type).toBe("object");
@@ -241,12 +341,25 @@ describe("tools/list", () => {
       expect(t.name).not.toMatch(/secret|shell|exec|delete|token|member/);
     }
     const byName = new Map(tools.map((t) => [t.name, t]));
-    for (const name of ["list_projects", "get_deployment", "read_logs", "list_variables"]) {
+    for (const name of [
+      "list_projects",
+      "get_deployment",
+      "read_logs",
+      "list_variables",
+      "list_changes",
+    ]) {
       expect(byName.get(name)!.annotations?.readOnlyHint).toBe(true);
     }
-    for (const name of ["deploy_service", "rollback_deployment", "set_variables"]) {
+    for (const name of [
+      "deploy_service",
+      "rollback_deployment",
+      "set_variables",
+      "stage_config_change",
+      "apply_changes",
+    ]) {
       expect(byName.get(name)!.annotations?.readOnlyHint).toBe(false);
     }
+    expect(byName.get("apply_changes")!.annotations?.destructiveHint).toBe(true);
     const setVars = byName.get("set_variables")!.inputSchema as {
       properties: Record<string, unknown>;
       required?: string[];
@@ -361,8 +474,8 @@ describe("authorization", () => {
   });
 });
 
-describe("variables", () => {
-  it("writes plain values, refuses new secrets without confirm_write_only, and audits keys only", async () => {
+describe("staged changes", () => {
+  it("stages variables instead of writing them, refuses new secrets without confirm_write_only, and never echoes values", async () => {
     const { owner, workspaceId } = await install();
     const project = await createProject(owner, workspaceId);
     const svc = await createService(owner, project.id);
@@ -370,16 +483,23 @@ describe("variables", () => {
     const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.deploy));
     const target = { service_id: svc.service.id, environment_id: envId };
 
-    const plain = await tool<{ variables: { key: string; value: string | null }[] }>(
-      client,
-      "set_variables",
-      { ...target, set: [{ key: "LOG_LEVEL", value: "debug" }] },
-    );
+    const plain = await tool<{
+      status: string;
+      change_set_id: string;
+      revision: number;
+      summary: string[];
+      review_url: string;
+    }>(client, "set_variables", { ...target, set: [{ key: "LOG_LEVEL", value: "debug" }] });
     expect(plain.isError).toBe(false);
-    // The deploy preset lacks variables:read_plain, so even plain values stay hidden.
-    expect(plain.body.variables).toEqual([
-      expect.objectContaining({ key: "LOG_LEVEL", value: null, tier: "plain" }),
-    ]);
+    expect(plain.body).toMatchObject({ status: "staged", summary: ["set web.LOG_LEVEL"] });
+    expect(plain.body.review_url).toBe(
+      `${ORIGIN}/w/${workspaceId}/p/${project.id}?review=${plain.body.change_set_id}`,
+    );
+    // Nothing is written until the set is applied.
+    const before = await owner.json<{ variables: unknown[] }>(
+      `/v1/services/${svc.service.id}/variables?environment_id=${envId}`,
+    );
+    expect(before.body.variables).toEqual([]);
 
     const unconfirmed = await tool<{ error: { code: string } }>(client, "set_variables", {
       ...target,
@@ -387,27 +507,113 @@ describe("variables", () => {
     });
     expect(unconfirmed.isError).toBe(true);
     expect(unconfirmed.body.error.code).toBe("confirmation_required");
+    expect(unconfirmed.text).not.toContain(SECRET_VALUE);
 
-    const confirmed = await tool(client, "set_variables", {
-      ...target,
-      set: [{ key: "STRIPE_KEY", value: SECRET_VALUE, tier: "secret" }],
-      confirm_write_only: true,
-    });
+    const confirmed = await tool<{ change_set_id: string; revision: number }>(
+      client,
+      "set_variables",
+      {
+        ...target,
+        set: [{ key: "STRIPE_KEY", value: SECRET_VALUE, tier: "secret" }],
+        confirm_write_only: true,
+      },
+    );
     expect(confirmed.isError).toBe(false);
-    expect(confirmed.text).not.toContain(SECRET_VALUE);
+    // The token's open set for the environment is reused.
+    expect(confirmed.body.change_set_id).toBe(plain.body.change_set_id);
 
+    const listed = await tool<{ change_sets: { changes: { op: Record<string, unknown> }[] }[] }>(
+      client,
+      "list_changes",
+      { environment_id: envId },
+    );
+    expect(listed.body.change_sets).toHaveLength(1);
+    expect(listed.body.change_sets[0]!.changes.map((c) => c.op.key)).toEqual([
+      "LOG_LEVEL",
+      "STRIPE_KEY",
+    ]);
+
+    const applied = await tool<{ status: string; deployment_ids: string[] }>(
+      client,
+      "apply_changes",
+      {
+        change_set_id: confirmed.body.change_set_id,
+        expected_revision: confirmed.body.revision,
+        deploy: "none",
+      },
+    );
+    expect(applied.body).toMatchObject({ status: "applied", deployment_ids: [] });
+    const after = await owner.json<{
+      variables: { key: string; tier: string; value: string | null }[];
+    }>(`/v1/services/${svc.service.id}/variables?environment_id=${envId}`);
+    expect(after.body.variables).toEqual([
+      expect.objectContaining({ key: "LOG_LEVEL", tier: "plain" }),
+      expect.objectContaining({ key: "STRIPE_KEY", tier: "secret", value: null }),
+    ]);
+
+    for (const out of [plain, unconfirmed, confirmed, listed, applied]) {
+      expect(out.text).not.toContain(SECRET_VALUE);
+      expect(out.text).not.toContain("debug");
+    }
     const audit = await env.DB.prepare(
-      "SELECT actor_type, actor_id, metadata FROM audit_logs WHERE action = 'variables.updated' ORDER BY seq",
-    ).all<{ actor_type: string; actor_id: string; metadata: string }>();
-    expect(audit.results).toHaveLength(2);
+      "SELECT action, actor_type, metadata FROM audit_logs WHERE actor_type = 'token' ORDER BY seq",
+    ).all<{ action: string; actor_type: string; metadata: string }>();
+    expect(audit.results.map((r) => r.action)).toEqual([
+      "change_set.created",
+      "variables.updated",
+      "change_set.applied",
+    ]);
     for (const row of audit.results) {
-      expect(row.actor_type).toBe("token");
-      expect(row.actor_id).toMatch(/^tok_/);
-      expect(JSON.parse(row.metadata)).toMatchObject({ via: "mcp", tool: "set_variables" });
+      expect(JSON.parse(row.metadata)).toMatchObject({ via: "mcp" });
       expect(row.metadata).not.toContain(SECRET_VALUE);
       expect(row.metadata).not.toContain("debug");
     }
     await client.close();
+  });
+
+  it("applies only its own sets on unprotected environments; otherwise awaits a human", async () => {
+    const { owner, workspaceId } = await install();
+    const project = await createProject(owner, workspaceId);
+    const svc = await createService(owner, project.id);
+    const envId = project.environments[0]!.id;
+    const agent = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.deploy));
+    const other = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.deploy));
+
+    const staged = await tool<{ change_set_id: string; revision: number; review_url: string }>(
+      agent,
+      "stage_config_change",
+      { service_id: svc.service.id, environment_id: envId, patch: { deploy: { replicas: 2 } } },
+    );
+    expect(staged.isError).toBe(false);
+
+    const foreign = await tool<{ status: string; review_url: string }>(other, "apply_changes", {
+      change_set_id: staged.body.change_set_id,
+      expected_revision: staged.body.revision,
+    });
+    expect(foreign.body).toMatchObject({
+      status: "awaiting_confirmation",
+      review_url: staged.body.review_url,
+    });
+
+    const stale = await tool<{ status: string }>(agent, "apply_changes", {
+      change_set_id: staged.body.change_set_id,
+      expected_revision: staged.body.revision + 5,
+    });
+    expect(stale.body.status).toBe("awaiting_confirmation");
+
+    await env.DB.prepare("UPDATE environments SET protected = 1 WHERE id = ?").bind(envId).run();
+    const guarded = await tool<{ status: string }>(agent, "apply_changes", {
+      change_set_id: staged.body.change_set_id,
+      expected_revision: staged.body.revision,
+    });
+    expect(guarded.body.status).toBe("awaiting_confirmation");
+
+    const config = await owner.json<{ version: number }>(
+      `/v1/services/${svc.service.id}/config?environment_id=${envId}`,
+    );
+    expect(config.body.version).toBe(1);
+    await agent.close();
+    await other.close();
   });
 });
 

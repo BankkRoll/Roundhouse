@@ -64,6 +64,7 @@ import {
 } from "./common";
 import { db, nextId } from "./db";
 import type { DbApiToken, DbDeployment, DbVariable } from "./deploy-db";
+import { generatedDomainState } from "./domains-db";
 
 // -----------------------------------------------------------------------------
 // Validation with the contract's schemas
@@ -553,7 +554,12 @@ function projectOfDeployment(deployment: DbDeployment): string | undefined {
   return db.deploy.services.find((service) => service.id === deployment.service_id)?.project_id;
 }
 
-function announceDeployment(row: DbDeployment) {
+/**
+ * Broadcasts a deployment's current state to sockets of its project.
+ *
+ * @param row - The deployment.
+ */
+export function announceDeployment(row: DbDeployment) {
   const projectId = projectOfDeployment(row);
   if (projectId)
     broadcastRealtime(projectId, { type: "deployment.updated", deployment: toDeployment(row) });
@@ -614,7 +620,17 @@ const realtimeHandler = realtimeLink.addEventListener("connection", ({ client })
 // Handlers
 // -----------------------------------------------------------------------------
 
-function createConfigs(
+/**
+ * Builds config version 1 of a new service in every environment of its project: the
+ * platform defaults for `source`, with each part of `overrides` merged over them.
+ *
+ * @param service - The new service.
+ * @param source - Where its code comes from.
+ * @param overrides - Config parts by name; `healthcheck` and `null` replace whole.
+ * @param userId - Creator.
+ * @returns One config per environment, not yet stored.
+ */
+export function createConfigs(
   service: Service,
   source: ServiceConfig["source"],
   overrides: Record<string, Record<string, unknown> | null | undefined>,
@@ -648,7 +664,14 @@ function createConfigs(
     });
 }
 
-function ensureGeneratedDomain(service: Service, config: ServiceConfig) {
+/**
+ * Adds a generated domain for a service in a config's environment when the config asks
+ * for one and the instance has an apps domain.
+ *
+ * @param service - The service.
+ * @param config - Its config in one environment.
+ */
+export function ensureGeneratedDomain(service: Service, config: ServiceConfig) {
   const appsDomain = db.deploy.instance.apps_domain;
   if (!appsDomain || !config.networking.generated_domain || config.networking.port === null) return;
   const exists = db.deploy.domains.some(
@@ -675,6 +698,7 @@ function ensureGeneratedDomain(service: Service, config: ServiceConfig) {
     target_port: config.networking.port,
     verification_status: "verified",
     tls_status: db.deploy.instance.tls_mode === "off" ? "disabled" : "pending",
+    ...generatedDomainState(),
     created_at: Date.now(),
   });
 }
@@ -740,7 +764,19 @@ function newDeployment(
   };
 }
 
-function startDeployment(
+/**
+ * Queues a deployment (with a build for git sources), superseding older in-flight ones of
+ * the same service and environment.
+ *
+ * @param service - The service.
+ * @param environmentId - Target environment.
+ * @param config - The config version to deploy.
+ * @param commitSha - Commit to build; random when omitted.
+ * @param trigger - What started it.
+ * @param userId - Who started it.
+ * @returns The stored deployment.
+ */
+export function startDeployment(
   service: Service,
   environmentId: string,
   config: ServiceConfig,
@@ -1565,6 +1601,8 @@ export const deployHandlers = [
       db.deploy.instance.tls_mode = input.body.tls_mode as typeof db.deploy.instance.tls_mode;
     if (input.body.log_retention_days !== undefined)
       db.deploy.instance.log_retention_days = input.body.log_retention_days as number;
+    if (input.body.mcp_enabled !== undefined)
+      db.deploy.instance.mcp_enabled = input.body.mcp_enabled as boolean;
     // NOTE: Instances have no audit log of their own; like the API, the change is recorded
     // in every workspace the caller owns.
     const owned = db.memberships.filter((row) => row.user_id === user?.id && row.role === "owner");

@@ -9,12 +9,35 @@ import { useNodeProvisions } from "../../queries/providers";
 import { useShellActions } from "../shell/shell-actions";
 import { CapacitySection } from "./capacity-section";
 import { pendingProvisions } from "./cloud-offers";
+import {
+  COST_ESTIMATE_NOTE,
+  type CostTotal,
+  costTotals,
+  formatCostEstimate,
+} from "./cost-estimate";
 import { fleetHeadline, summarizeFleet } from "./node-metrics";
 import { ServerGrid, ServerGridSkeleton } from "./server-grid";
 
+/** The workspace's estimated monthly cloud spend, one figure per currency. */
+function CostSummary({ totals }: { totals: CostTotal[] }) {
+  return (
+    <p className="mt-3 text-xs text-muted-foreground" title={COST_ESTIMATE_NOTE}>
+      Estimated cloud cost:{" "}
+      {totals.map((total, index) => (
+        <span key={total.currency}>
+          {index > 0 ? " + " : null}
+          <span className="text-foreground tabular-nums">{formatCostEstimate(total)}</span> (
+          {total.servers} {total.servers === 1 ? "server" : "servers"})
+        </span>
+      ))}
+      . Provider catalogue prices when each server was created, not your bill.
+    </p>
+  );
+}
+
 /**
  * Servers overview: live cards for every node, servers still being created at a cloud
- * provider, and capacity planning.
+ * provider, the estimated monthly cost of provisioned ones, and capacity planning.
  *
  * @param props - Workspace id.
  * @returns The page.
@@ -26,6 +49,7 @@ export function ServersPage({ workspaceId }: { workspaceId: string }) {
   const canManage = can("nodes:manage");
   const provisions = useNodeProvisions(workspaceId, can("nodes:read"));
   const pending = nodes.data ? pendingProvisions(provisions.data ?? [], nodes.data) : [];
+  const totals = nodes.data ? costTotals(nodes.data) : [];
 
   const addButton = canManage ? (
     <Button variant="primary" onClick={openAddServer}>
@@ -56,6 +80,7 @@ export function ServersPage({ workspaceId }: { workspaceId: string }) {
       ) : (
         <>
           <ServerGrid workspaceId={workspaceId} nodes={nodes.data} provisions={pending} />
+          {totals.length > 0 ? <CostSummary totals={totals} /> : null}
           <CapacitySection nodes={nodes.data} />
         </>
       )}

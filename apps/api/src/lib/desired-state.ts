@@ -8,6 +8,8 @@
  *   install's ingress settings and, for builder nodes, the registry.
  * - {@link refreshNodes}: bumps nodes' `desired_generation` and asks their
  *   Durable Objects to push the new state.
+ * - {@link sealDeploymentEnv}/{@link openDeploymentEnv} and the build
+ *   counterparts: a deployment's frozen inputs under the project DEK.
  *
  * @module
  */
@@ -45,10 +47,136 @@ import {
 } from "@roundhouse/shared";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { NodeConnection } from "../durable/node-connection";
-import type { Sealed } from "./crypto";
-import { unsealWith } from "./crypto";
+import { type Sealed, sealWith, unsealWith } from "./crypto";
+import { deploymentBuildAadV2, deploymentEnvAadV2 } from "./keyring";
 import { getIngressSettings } from "./settings";
 import { deploymentEnvAad, projectKey } from "./variables";
+
+/** Which deployment a sealed input belongs to; every part is in its AAD. */
+export interface DeploymentRef {
+  workspaceId: string;
+  projectId: string;
+  deploymentId: string;
+}
+
+/** A deployment's build inputs, as sealed in `deployments.build_env_sealed`. */
+export interface DeploymentBuildInputs {
+  /** Plain values passed as `--build-arg`. */
+  args: Record<string, string>;
+  /** BuildKit secrets (`available_at_build` secrets), sealed to the builder in `build_secrets_sealed`. */
+  secrets: Record<string, string>;
+  /**
+   * Names of `args` the service config marks secret (ADR 0003
+   * `secret_build_args`): the builder passes them as BuildKit secrets and
+   * they are redacted from build logs.
+   */
+  secret_args: string[];
+}
+
+/**
+ * Seals a deployment's resolved environment under the project DEK.
+ *
+ * @param key - Project DEK.
+ * @param ref - The deployment; bound into the AAD.
+ * @param payload - Environment variables and `mount_as_file` values.
+ * @returns The value for `deployments.env_sealed`.
+ */
+export function sealDeploymentEnv(
+  key: CryptoKey,
+  ref: DeploymentRef,
+  payload: SealedWorkloadEnv,
+): Promise<Sealed> {
+  return sealWith(
+    key,
+    JSON.stringify(payload),
+    deploymentEnvAadV2(ref.workspaceId, ref.projectId, ref.deploymentId),
+  );
+}
+
+/**
+ * Opens `deployments.env_sealed`.
+ *
+ * Format 2 values open only under `deployment-env:v2:<ws>:<prj>:<dep>`.
+ * Format 1 values were sealed before ADR 0014 under `deployment-env:<id>`
+ * with a flat `{ KEY: value }` body; they are still read, so deployments
+ * that predate the change keep running until rotation re-seals them.
+ *
+ * @param key - Project DEK.
+ * @param sealed - The stored value.
+ * @param ref - The deployment.
+ * @returns The environment split into `env` and `files`.
+ * @throws When the value doesn't open under its format's AAD.
+ */
+export async function openDeploymentEnv(
+  key: CryptoKey,
+  sealed: Sealed,
+  ref: DeploymentRef,
+): Promise<SealedWorkloadEnv> {
+  // SECURITY: the AAD follows the format, never a fallback: a v2 value that
+  // opened under the short v1 AAD would no longer be bound to its project.
+  const aad =
+    sealed.v === 2
+      ? deploymentEnvAadV2(ref.workspaceId, ref.projectId, ref.deploymentId)
+      : deploymentEnvAad(ref.deploymentId);
+  const text = await unsealWith(key, sealed, aad);
+  const body = JSON.parse(text) as Record<string, unknown>;
+  // Flat bodies hold only strings, so an object under `env` marks the split shape.
+  if (typeof body.env === "object" && body.env !== null) {
+    return {
+      env: body.env as Record<string, string>,
+      files: (body.files ?? {}) as Record<string, string>,
+    };
+  }
+  return { env: body as Record<string, string>, files: {} };
+}
+
+/**
+ * Seals a deployment's build inputs under the project DEK.
+ *
+ * @param key - Project DEK.
+ * @param ref - The deployment; bound into the AAD.
+ * @param inputs - Build args and secrets.
+ * @returns The value for `deployments.build_env_sealed`.
+ */
+export function sealDeploymentBuild(
+  key: CryptoKey,
+  ref: DeploymentRef,
+  inputs: DeploymentBuildInputs,
+): Promise<Sealed> {
+  return sealWith(
+    key,
+    JSON.stringify(inputs),
+    deploymentBuildAadV2(ref.workspaceId, ref.projectId, ref.deploymentId),
+  );
+}
+
+/**
+ * Opens `deployments.build_env_sealed`. The column came with ADR 0014, so
+ * every value of it is bound to `deployment-build:v2:<ws>:<prj>:<dep>`.
+ *
+ * @param key - Project DEK.
+ * @param sealed - The stored value.
+ * @param ref - The deployment.
+ * @returns The build inputs.
+ */
+export async function openDeploymentBuild(
+  key: CryptoKey,
+  sealed: Sealed,
+  ref: DeploymentRef,
+): Promise<DeploymentBuildInputs> {
+  const body = JSON.parse(
+    await unsealWith(
+      key,
+      sealed,
+      deploymentBuildAadV2(ref.workspaceId, ref.projectId, ref.deploymentId),
+    ),
+  ) as Partial<DeploymentBuildInputs>;
+  return {
+    args: body.args ?? {},
+    secrets: body.secrets ?? {},
+    secret_args: body.secret_args ?? [],
+  };
+}
 
 /** Deployments whose replicas belong on nodes. */
 export const LIVE_DEPLOYMENT_STATUSES: readonly DeploymentStatus[] = [
@@ -272,6 +400,7 @@ export async function buildDesiredState(
       deployment: deployments,
       serviceSlug: services.slug,
       projectId: services.projectId,
+      workspaceId: projects.workspaceId,
       environmentSlug: environments.slug,
       config: serviceConfigs,
     })
@@ -338,9 +467,11 @@ export async function buildDesiredState(
     const d = r.deployment;
     if (!d.image || !d.envSealed) continue;
     const key = await projectKey(db, masterKey, r.projectId);
-    const env = JSON.parse(
-      await unsealWith(key, d.envSealed as Sealed, deploymentEnvAad(d.id)),
-    ) as Record<string, string>;
+    const payload = await openDeploymentEnv(key, d.envSealed as Sealed, {
+      workspaceId: r.workspaceId,
+      projectId: r.projectId,
+      deploymentId: d.id,
+    });
     const networking = r.config.networking;
     body.workloads.push(
       await workloadSpec({
@@ -351,11 +482,13 @@ export async function buildDesiredState(
         serviceId: d.serviceId,
         deploymentId: d.id,
         image: d.image,
-        // TODO(api-secrets-crypto): split mount_as_file variables into `files`.
-        envSealed: await sealWorkloadEnv(nodeKey, nodeId, r.placement.workloadId, node.generation, {
-          env,
-          files: {},
-        }),
+        envSealed: await sealWorkloadEnv(
+          nodeKey,
+          nodeId,
+          r.placement.workloadId,
+          node.generation,
+          payload,
+        ),
         config: r.config,
         hostnames: (hostnames.get(`${d.serviceId}:${d.environmentId}`) ?? [])
           .filter((h) => h.type !== "generated" || networking.generated_domain)

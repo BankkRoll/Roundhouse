@@ -61,9 +61,11 @@ export type NodeProvisionStatus =
   | "joined"
   /** Nothing is left running; `failure_reason` says why. */
   | "failed"
+  /** An operator cancelled the run and nothing is left running. */
+  | "cancelled"
   /**
-   * Failed, and deleting the server failed too: it may still bill. The
-   * hourly reconcile retries the delete.
+   * Failed or cancelled, and deleting the server failed too: it may still
+   * bill. The hourly reconcile retries the delete.
    */
   | "cleanup_failed";
 
@@ -96,6 +98,20 @@ export const nodeProvisions = sqliteTable(
       onDelete: "set null",
     }),
     nodeId: text("node_id").references(() => nodes.id, { onDelete: "set null" }),
+    /**
+     * Set when an operator asks to cancel. A run still creating its server
+     * finishes the cancel itself once the provider call returns, since only
+     * it knows the server; the workflow checks this between steps.
+     */
+    cancelRequestedAt: timestamp("cancel_requested_at"),
+    /**
+     * The chosen offer's monthly price in minor units, from the provider's
+     * catalogue when the server was created. An estimate for display only:
+     * the provider's invoice is authoritative.
+     */
+    monthlyCents: integer("monthly_cents"),
+    /** ISO 4217 currency of {@link monthlyCents}. */
+    currency: text("currency"),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
     ...timestamps,
     finishedAt: timestamp("finished_at"),

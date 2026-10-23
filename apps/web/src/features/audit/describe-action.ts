@@ -5,7 +5,9 @@ import {
   ActivityIcon,
   Building2Icon,
   CloudIcon,
+  GlobeIcon,
   KeyRoundIcon,
+  PlugIcon,
   ServerIcon,
   UserPlusIcon,
   UsersIcon,
@@ -34,6 +36,7 @@ const VERBS: Record<AuditAction, string> = {
   "invite.created": "invited",
   "invite.revoked": "revoked the invite for",
   "invite.accepted": "joined via invite",
+  "invite.rejected_token": "was refused an invite link",
   "node.join_token_created": "created a join token",
   "node.joined": "connected",
   "node.removed": "removed server",
@@ -42,6 +45,7 @@ const VERBS: Record<AuditAction, string> = {
   "node.provisioned": "created server",
   "node.provision_failed": "failed to create server",
   "node.deprovisioned": "deleted cloud server",
+  "node.provision_cancelled": "cancelled creating server",
   "provider.connected": "connected",
   "provider.disconnected": "disconnected",
   "project.created": "created project",
@@ -89,6 +93,16 @@ const VERBS: Record<AuditAction, string> = {
   "auth.two_factor_disabled": "disabled two-factor authentication",
   "auth.backup_codes_regenerated": "regenerated backup codes",
   "auth.two_factor_failed": "entered a wrong two-factor code",
+  "domain.added": "added domain",
+  "domain.verified": "verified domain",
+  "domain.failed": "could not verify domain",
+  "domain.removed": "removed domain",
+  "mcp_client.authorized": "connected MCP client",
+  "mcp_client.revoked": "disconnected MCP client",
+  "template.deployed": "deployed template",
+  "change_set.created": "proposed changes",
+  "change_set.applied": "applied staged changes",
+  "change_set.discarded": "discarded staged changes",
 };
 
 /**
@@ -106,6 +120,14 @@ const TARGETS: Partial<Record<AuditAction, (metadata: Metadata) => string | null
     return role ? `as ${role}` : null;
   },
   "member.left": () => null,
+  "domain.added": hostnameOf,
+  "domain.verified": hostnameOf,
+  "domain.failed": hostnameOf,
+  "domain.removed": hostnameOf,
+  "invite.rejected_token": (metadata) => {
+    const reason = stringField(metadata, "reason");
+    return reason ? `(${reason.replace(/_/g, " ")})` : null;
+  },
   "provider.connected": providerName,
   "provider.disconnected": providerName,
   "github.installation_rejected": (metadata) => {
@@ -127,11 +149,17 @@ const ICONS: Record<string, LucideIcon> = {
   provider: CloudIcon,
   api_token: KeyRoundIcon,
   token: KeyRoundIcon,
+  domain: GlobeIcon,
+  mcp_client: PlugIcon,
 };
 
 function stringField(metadata: Metadata, key: string): string | null {
   const value = metadata?.[key];
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function hostnameOf(metadata: Metadata): string | null {
+  return stringField(metadata, "hostname");
 }
 
 function providerName(metadata: Metadata): string | null {

@@ -6,8 +6,9 @@
 import { env } from "cloudflare:test";
 import { createDb } from "@roundhouse/db";
 import { describe, expect, it } from "vitest";
-import { unsealWith } from "../src/lib/crypto";
-import { projectKey, variableAad } from "../src/lib/variables";
+import { dataKeyInfo, unsealWith } from "../src/lib/crypto";
+import { variableAadV2 } from "../src/lib/keyring";
+import { projectKey } from "../src/lib/variables";
 import { addMember, install } from "./helpers";
 import { createProject, createService } from "./pipeline-helpers";
 
@@ -69,21 +70,29 @@ describe("service variables", () => {
       expect(r.value_sealed).not.toContain("sk_live");
       expect(r.value_sealed).not.toContain("debug");
     }
-    // Round trip with the project DEK and the row's AAD.
+    // Round trip with the project DEK and the row's format 2 AAD.
     const key = await projectKey(createDb(env.DB), env.MASTER_KEY!, s.project.id);
-    const target = {
+    const row = await env.DB.prepare("SELECT * FROM variables WHERE key = 'API_KEY'").first<{
+      id: string;
+      value_sealed: string;
+      version: number;
+    }>();
+    const sealed = JSON.parse(row!.value_sealed);
+    expect(sealed).toMatchObject({ v: 2, kid: dataKeyInfo(key).dekId });
+    const coordinates = {
+      workspaceId: s.workspaceId,
       projectId: s.project.id,
       environmentId: s.envId,
       scope: "service" as const,
       serviceId: s.serviceId,
+      key: "API_KEY",
+      rowId: row!.id,
+      version: row!.version,
     };
-    const apiKey = rows.results.find((r) => r.key === "API_KEY")!;
-    expect(
-      await unsealWith(key, JSON.parse(apiKey.value_sealed), variableAad(target, "API_KEY")),
-    ).toBe("sk_live_abcdef");
+    expect(await unsealWith(key, sealed, variableAadV2(coordinates))).toBe("sk_live_abcdef");
     // Bound to its key: the same ciphertext under another key's AAD fails.
     await expect(
-      unsealWith(key, JSON.parse(apiKey.value_sealed), variableAad(target, "LOG_LEVEL")),
+      unsealWith(key, sealed, variableAadV2({ ...coordinates, key: "LOG_LEVEL" })),
     ).rejects.toThrow();
   });
 

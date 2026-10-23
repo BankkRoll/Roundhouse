@@ -1,5 +1,5 @@
 /** Sections that exist in navigation but ship in a later phase. */
-export type UpcomingFeature = "canvas" | "logs" | "templates" | "usage";
+export type UpcomingFeature = "canvas" | "logs" | "usage";
 
 /** Copy for each upcoming section's placeholder. Update phases here as the roadmap moves. */
 export const UPCOMING: Record<UpcomingFeature, { title: string; phase: string; body: string }> = {
@@ -12,11 +12,6 @@ export const UPCOMING: Record<UpcomingFeature, { title: string; phase: string; b
     title: "Logs",
     phase: "Later phase",
     body: "Search across every service at once, with saved searches and level filters. Live logs for one service are on its Logs tab today.",
-  },
-  templates: {
-    title: "Templates",
-    phase: "Later phase",
-    body: "One-click starting points for databases, queues and common app stacks.",
   },
   usage: {
     title: "Usage",

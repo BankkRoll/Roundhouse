@@ -31,6 +31,20 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 
    Tokens are single-use and expire after 15 minutes.
 
+## Templates
+
+**Templates** in the dashboard (or `roundhouse templates list`) are one-click
+starting points: Railpack starters (static site, Vite + React, Express,
+Node.js HTTP, FastAPI, Go + Gin) and official images (nginx, whoami, Uptime
+Kuma, n8n). Deploying one creates a project, or adds services to an existing
+one, with their config, variables and a first deploy. Secrets a template
+generates are minted on the control plane and stored write-only.
+
+The catalogue is code, in `apps/api/src/lib/template-catalogue.ts`; the
+manifest format (`schema_version: 1`, ADR 0012) and its validation live in
+`packages/shared/src/template.ts`. Templates that need databases or volumes
+are accepted by the format but refused until those features ship.
+
 ## Develop
 
 Requires Node 22.19+, pnpm 10, Go 1.26.

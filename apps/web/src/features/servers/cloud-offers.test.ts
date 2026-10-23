@@ -30,6 +30,8 @@ function run(overrides: Partial<NodeProvision>): NodeProvision {
     ipv4: null,
     ipv6: null,
     node_id: null,
+    cancel_requested_at: null,
+    estimated_monthly_cost: null,
     created_at: 1,
     updated_at: 1,
     finished_at: null,

@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { RealtimeServerMessage } from "../lib/api/deploy-types";
+import { applyChangeRealtime } from "./changes";
 import { appendDeploymentEvent, upsertDeployment } from "./deployments";
 import { queryKeys } from "./keys";
 import { invalidateProjectSummaries } from "./projects";
@@ -21,12 +22,14 @@ const PLACEMENT_EVENTS = new Set([
  *
  * @param queryClient - Shared query client.
  * @param message - A validated server message.
+ * @param projectId - Project whose socket sent it; needed for canvas layout frames.
  * @example
  * client = new RealtimeClient({ url, onMessage: (m) => applyRealtimeMessage(queryClient, m) });
  */
 export function applyRealtimeMessage(
   queryClient: QueryClient,
   message: RealtimeServerMessage,
+  projectId?: string,
 ): void {
   switch (message.type) {
     case "deployment.updated":
@@ -54,6 +57,7 @@ export function applyRealtimeMessage(
       invalidateProjectSummaries(queryClient, message.service.project_id);
       return;
     default:
+      if (projectId) applyChangeRealtime(queryClient, message, projectId);
       return;
   }
 }

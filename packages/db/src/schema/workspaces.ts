@@ -130,9 +130,23 @@ export const apiTokens = sqliteTable(
     lastUsedAt: timestamp("last_used_at"),
     expiresAt: timestamp("expires_at"),
     revokedAt: timestamp("revoked_at"),
+    /** `api` for `tok_` tokens; `oauth` for MCP access tokens, which only `/mcp` accepts. */
+    kind: text("kind").$type<"api" | "oauth">().notNull().default("api"),
+    /** Resource an `oauth` token was issued for (RFC 8707); `null` for `api` tokens. */
+    audience: text("audience"),
+    /**
+     * The `oauth_grants` row an `oauth` token was issued under. Not a foreign
+     * key, to keep this module free of an import cycle with `./oauth`; grants
+     * are revoked, never deleted, except by the same user or workspace
+     * cascade that removes their tokens.
+     */
+    oauthGrantId: text("oauth_grant_id"),
     ...timestamps,
   },
-  (t) => [index("api_tokens_workspace_idx").on(t.workspaceId)],
+  (t) => [
+    index("api_tokens_workspace_idx").on(t.workspaceId),
+    index("api_tokens_oauth_grant_idx").on(t.oauthGrantId),
+  ],
 );
 
 /**

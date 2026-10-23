@@ -72,6 +72,7 @@ const ROUTE_MODULES = [
   "audit",
   "projects",
   "services",
+  "domains",
   "variables",
   "deployments",
   "github",
@@ -79,6 +80,8 @@ const ROUTE_MODULES = [
   "realtime",
   "tokens",
   "providers",
+  "templates",
+  "changes",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -402,20 +405,19 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
-  it("invites: preview and accept", async () => {
+  it("invites: preview and accept, with the token in the body", async () => {
+    const lookup = (token: string) => call("POST", "/v1/invites/lookup", { token });
+    const accept = (token: string, body: Record<string, unknown> = {}) =>
+      call("POST", "/v1/invites/accept", { token, ...body });
     await fresh(async () => {
       as(null);
-      expect((await call("GET", `/v1/invites/${INVITE_TOKEN}`)).status).toBe(200);
-      expect((await call("GET", "/v1/invites/inv_nope")).status).toBe(404);
-      expect(
-        (await call("POST", `/v1/invites/${INVITE_TOKEN}/accept`, { name: "Erin" })).status,
-      ).toBe(400);
-      expect(
-        (await call("POST", "/v1/invites/inv_nope/accept", { name: "E", password: "x".repeat(12) }))
-          .status,
-      ).toBe(404);
+      expect((await lookup(INVITE_TOKEN)).status).toBe(200);
+      expect((await lookup("inv_nope")).status).toBe(404);
+      expect((await call("POST", "/v1/invites/lookup", {})).status).toBe(400);
+      expect((await accept(INVITE_TOKEN, { name: "Erin" })).status).toBe(400);
+      expect((await accept("inv_nope", { name: "E", password: "x".repeat(12) })).status).toBe(404);
       as("viewer");
-      expect(await call("POST", `/v1/invites/${INVITE_TOKEN}/accept`, {})).toMatchObject({
+      expect(await accept(INVITE_TOKEN)).toMatchObject({
         status: 403,
         body: { error: { code: "email_mismatch" } },
       });
@@ -423,36 +425,28 @@ describe("MSW mocks match the API contract", () => {
       const seeded = db.invites[0];
       if (seeded) seeded.email = USERS.member.email;
       expect(
-        await call("POST", `/v1/invites/${INVITE_TOKEN}/accept`, {
-          name: "Cara",
-          password: "a-long-enough-password",
-        }),
+        await accept(INVITE_TOKEN, { name: "Cara", password: "a-long-enough-password" }),
       ).toMatchObject({ status: 409, body: { error: { code: "account_exists" } } });
       if (seeded) seeded.email = "erin@example.com";
       expect(
-        (
-          await call("POST", `/v1/invites/${INVITE_TOKEN}/accept`, {
-            name: "Erin",
-            password: "a-long-enough-password",
-          })
-        ).status,
+        (await accept(INVITE_TOKEN, { name: "Erin", password: "a-long-enough-password" })).status,
       ).toBe(200);
       expect(db.invites[0]?.accepted_at).toEqual(expect.any(Number));
-      expect((await call("GET", `/v1/invites/${INVITE_TOKEN}`)).status).toBe(404);
-      expect((await call("POST", `/v1/invites/${INVITE_TOKEN}/accept`, {})).status).toBe(404);
+      expect((await lookup(INVITE_TOKEN)).status).toBe(404);
+      expect((await accept(INVITE_TOKEN)).status).toBe(404);
     });
 
     await fresh(async () => {
       const seeded = db.invites[0];
       if (seeded) seeded.expires_at = Date.now() - 1;
-      expect((await call("GET", `/v1/invites/${INVITE_TOKEN}`)).status).toBe(404);
+      expect((await lookup(INVITE_TOKEN)).status).toBe(404);
       if (seeded) {
         seeded.expires_at = Date.now() + 60_000;
         seeded.email = USERS.viewer.email;
       }
       db.memberships = db.memberships.filter((row) => row.user_id !== USERS.viewer.id);
       as("viewer");
-      expect((await call("POST", `/v1/invites/${INVITE_TOKEN}/accept`, {})).status).toBe(200);
+      expect((await accept(INVITE_TOKEN)).status).toBe(200);
     });
   });
 
@@ -997,6 +991,72 @@ describe("MSW mocks match the API contract", () => {
       expect((await call("GET", "/v1/services/svc_nope/domains")).status).toBe(404);
       as(null);
       expect((await call("GET", S)).status).toBe(401);
+    });
+  });
+
+  it("custom domains: add, check through to active, remove", async () => {
+    await fresh(async () => {
+      const S = `/v1/services/${SEED.web}/domains`;
+      const env = SEED.production;
+      const added = await call("POST", S, { environment_id: env, hostname: "Shop.Example.com" });
+      expect(added).toMatchObject({
+        status: 201,
+        body: {
+          hostname: "shop.example.com",
+          type: "custom",
+          status: "pending_dns",
+          records: [
+            { type: "CNAME", purpose: "routing", state: "missing" },
+            { type: "TXT", name: "_roundhouse.shop.example.com", purpose: "ownership" },
+          ],
+        },
+      });
+      const id = (added.body as { id: string }).id;
+      expect(
+        (await call("POST", S, { environment_id: env, hostname: "shop.example.com" })).body,
+      ).toMatchObject({ error: { code: "domain_taken" } });
+      expect(
+        (await call("POST", S, { environment_id: env, hostname: "*.example.com" })).status,
+      ).toBe(422);
+      expect(
+        (await call("POST", S, { environment_id: env, hostname: "x.apps.example.com" })).status,
+      ).toBe(422);
+      expect((await call("POST", S, { environment_id: env, hostname: "no way" })).status).toBe(400);
+      expect(
+        (
+          await call("POST", `/v1/services/${SEED.worker}/domains`, {
+            environment_id: env,
+            hostname: "w.example.com",
+          })
+        ).status,
+      ).toBe(409);
+
+      expect((await call("POST", `/v1/domains/${id}/check`)).body).toMatchObject({
+        status: "pending_verification",
+      });
+      expect((await call("POST", `/v1/domains/${id}/check`)).body).toMatchObject({
+        status: "active",
+        verification_status: "verified",
+      });
+      expect((await call("GET", `/v1/domains/${id}`)).status).toBe(200);
+      expect((await call("POST", "/v1/domains/dom_web/check")).status).toBe(409);
+      expect((await call("DELETE", "/v1/domains/dom_web")).status).toBe(409);
+      expect(db.audit.map((entry) => entry.action)).toEqual(
+        expect.arrayContaining(["domain.added", "domain.verified"]),
+      );
+
+      as("viewer");
+      expect((await call("GET", `/v1/domains/${id}`)).status).toBe(200);
+      expect((await call("DELETE", `/v1/domains/${id}`)).status).toBe(403);
+      expect((await call("POST", `/v1/domains/${id}/check`)).status).toBe(403);
+      expect(
+        (await call("POST", S, { environment_id: env, hostname: "v.example.com" })).status,
+      ).toBe(403);
+      as("owner");
+      expect((await call("DELETE", `/v1/domains/${id}`)).status).toBe(204);
+      expect((await call("GET", `/v1/domains/${id}`)).status).toBe(404);
+      as(null);
+      expect((await call("GET", `/v1/domains/${id}`)).status).toBe(401);
     });
   });
 
@@ -1575,6 +1635,348 @@ describe("MSW mocks match the API contract", () => {
       as("owner");
       expect((await call("GET", `${OTHER_WS}/integrations`)).status).toBe(404);
       expect((await call("GET", `${OTHER_WS}/node-provisions/${leakingId}`)).status).toBe(404);
+    });
+  });
+
+  it("cloud providers: cancel a run, and estimate the cost of provisioned servers", async () => {
+    await fresh(async () => {
+      const token = "hz-0123456789abcdef0123456789abcdef";
+      expect((await call("PUT", `${WS}/integrations/hetzner`, { token })).status).toBe(200);
+      const start = async (name: string) =>
+        (
+          await call("POST", `${WS}/nodes/provision`, {
+            provider: "hetzner",
+            plan: "cx22",
+            region: "fsn1",
+            name,
+          })
+        ).body as ProvisionBody;
+      const cancel = (id: string) => call("POST", `${WS}/node-provisions/${id}/cancel`);
+
+      const queued = await start("web-1");
+      expect(await cancel(queued.id)).toMatchObject({
+        status: 200,
+        body: { status: "cancelled", cancel_requested_at: expect.any(Number) },
+      });
+      expect((await cancel(queued.id)).status).toBe(200);
+
+      const creating = await start("web-2");
+      await call("GET", `${WS}/node-provisions/${creating.id}`);
+      expect(await cancel(creating.id)).toMatchObject({
+        status: 200,
+        body: { status: "creating", cancel_requested_at: expect.any(Number) },
+      });
+      expect(await call("GET", `${WS}/node-provisions/${creating.id}`)).toMatchObject({
+        body: { status: "cancelled", server_id: expect.any(String) },
+      });
+
+      const priced = await start("web-3");
+      let run: ProvisionBody | undefined;
+      for (let i = 0; i < 3; i++) {
+        run = (await call("GET", `${WS}/node-provisions/${priced.id}`)).body as ProvisionBody;
+      }
+      expect(run?.status).toBe("joined");
+      expect(await cancel(priced.id)).toMatchObject({
+        status: 409,
+        body: { error: { message: expect.stringContaining("already joined") } },
+      });
+      const node = (await call("GET", `${WS}/nodes/${run?.node_id}`)).body as {
+        estimated_monthly_cost: unknown;
+      };
+      expect(node.estimated_monthly_cost).toEqual({ monthly_cents: 451, currency: "EUR" });
+      expect((await call("POST", `${WS}/node-provisions/npr_nope/cancel`)).status).toBe(404);
+      expect(db.audit.filter((e) => e.action === "node.provision_cancelled")).toHaveLength(2);
+
+      as("member");
+      expect((await cancel(priced.id)).status).toBe(403);
+      as(null);
+      expect((await cancel(priced.id)).status).toBe(401);
+    });
+  });
+
+  it("templates: gallery, detail, create a project, deploy into one", async () => {
+    await fresh(async () => {
+      const list = await call("GET", `${WS}/templates`);
+      expect(list.status).toBe(200);
+      const summaries = (list.body as { templates: { id: string; supported: boolean }[] })
+        .templates;
+      expect(summaries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "n8n", supported: true }),
+          expect.objectContaining({ id: "postgres-app", supported: false }),
+        ]),
+      );
+      const detail = await call("GET", `${WS}/templates/webhook-relay`);
+      expect(detail.status).toBe(200);
+      expect(detail.body).toMatchObject({
+        services: [
+          {
+            ref: "relay",
+            variables: expect.arrayContaining([
+              expect.objectContaining({ key: "SIGNING_SECRET", secret: true, value: null }),
+              expect.objectContaining({ key: "RELAY_TOKEN", generated: true, value: null }),
+            ]),
+          },
+          expect.anything(),
+        ],
+      });
+      expect((await call("GET", `${WS}/templates/Not_A_Slug`)).status).toBe(400);
+      expect((await call("GET", `${WS}/templates/nope`)).status).toBe(404);
+
+      const FROM = `${WS}/projects/from-template`;
+      expect((await call("POST", FROM, { inputs: {} })).status).toBe(400);
+      expect((await call("POST", FROM, { template_id: "nope" })).status).toBe(404);
+      expect(await call("POST", FROM, { template_id: "postgres-app" })).toMatchObject({
+        status: 409,
+        body: { error: { code: "conflict" } },
+      });
+      expect(await call("POST", FROM, { template_id: "webhook-relay" })).toMatchObject({
+        status: 400,
+        body: {
+          error: {
+            code: "invalid_request",
+            details: [
+              { field: "inputs.TARGET_URL", code: "required" },
+              { field: "inputs.SIGNING_SECRET", code: "required" },
+            ],
+          },
+        },
+      });
+      const inputs = { TARGET_URL: "http://hooks.internal:9000", SIGNING_SECRET: "s3cret-value" };
+      expect(await call("POST", FROM, { template_id: "webhook-relay", inputs })).toMatchObject({
+        status: 400,
+        body: { error: { code: "confirmation_required" } },
+      });
+      const created = await call("POST", FROM, {
+        template_id: "webhook-relay",
+        name: "Hooks",
+        inputs,
+        confirm_write_only: true,
+      });
+      expect(created).toMatchObject({
+        status: 201,
+        body: {
+          template: { id: "webhook-relay", version: 2 },
+          project: { name: "Hooks", slug: "hooks" },
+          environment: { slug: "production" },
+          services: [{ slug: "relay" }, { slug: "worker" }],
+          deploy_errors: [],
+        },
+      });
+      expect(JSON.stringify(created.body)).not.toContain("s3cret-value");
+      const result = created.body as { project: { id: string }; deployments: unknown[] };
+      expect(result.deployments).toHaveLength(2);
+      expect(db.deploy.variables.find((row) => row.key === "SIGNING_SECRET")?.tier).toBe("secret");
+      expect(
+        db.audit.filter((row) => row.target_id === result.project.id).map((row) => row.action),
+      ).toEqual(["project.created", "template.deployed"]);
+
+      const DEPLOY = `/v1/projects/${SEED.project}/templates/deploy`;
+      const into = { template_id: "whoami", environment_id: SEED.production, deploy: false };
+      expect((await call("POST", DEPLOY, { template_id: "whoami" })).status).toBe(400);
+      const first = await call("POST", DEPLOY, into);
+      expect(first).toMatchObject({
+        status: 201,
+        body: { services: [{ slug: "whoami" }], deployments: [] },
+      });
+      expect(await call("POST", DEPLOY, into)).toMatchObject({
+        status: 201,
+        body: { services: [{ slug: "whoami-2" }] },
+      });
+      expect((await call("POST", DEPLOY, { ...into, environment_id: "env_nope" })).status).toBe(
+        404,
+      );
+      expect((await call("POST", "/v1/projects/prj_nope/templates/deploy", into)).status).toBe(404);
+      expect((await call("POST", DEPLOY, { ...into, template_id: "file-browser" })).status).toBe(
+        409,
+      );
+
+      as("member");
+      expect((await call("POST", FROM, { template_id: "whoami" })).status).toBe(403);
+      expect((await call("POST", DEPLOY, into)).status).toBe(201);
+      as("viewer");
+      expect((await call("GET", `${WS}/templates`)).status).toBe(200);
+      expect((await call("GET", `${WS}/templates/whoami`)).status).toBe(200);
+      expect((await call("POST", FROM, { template_id: "whoami" })).status).toBe(403);
+      expect((await call("POST", DEPLOY, into)).status).toBe(403);
+      as(null);
+      expect((await call("POST", FROM, {})).status).toBe(400);
+      expect((await call("GET", `${WS}/templates`)).status).toBe(401);
+      expect((await call("GET", `${WS}/templates/whoami`)).status).toBe(401);
+      expect((await call("POST", FROM, { template_id: "whoami" })).status).toBe(401);
+      expect((await call("POST", DEPLOY, into)).status).toBe(401);
+      as("owner");
+      expect((await call("GET", `${OTHER_WS}/templates`)).status).toBe(404);
+      expect((await call("GET", `${OTHER_WS}/templates/whoami`)).status).toBe(404);
+      expect(
+        (await call("POST", `${OTHER_WS}/projects/from-template`, { template_id: "whoami" }))
+          .status,
+      ).toBe(404);
+    });
+  });
+
+  it("canvas and change sets: stage, review, conflict, resolve, apply, discard", async () => {
+    await fresh(async () => {
+      const ENV = `/v1/environments/${SEED.production}`;
+      const canvas = await call(
+        "GET",
+        `/v1/projects/${SEED.project}/canvas?environment_id=${SEED.production}`,
+      );
+      expect(canvas.status).toBe(200);
+      expect((await call("GET", `/v1/projects/${SEED.project}/canvas`)).status).toBe(400);
+      expect((await call("GET", `/v1/projects/prj_nope/canvas?environment_id=x`)).status).toBe(404);
+      const layout = await call("PATCH", `/v1/projects/${SEED.project}/canvas/layout`, {
+        positions: { [SEED.api]: { x: 320, y: 0 } },
+        expected_version: 0,
+      });
+      expect(layout).toMatchObject({ status: 200, body: { version: 1 } });
+      expect(
+        (
+          await call("PATCH", `/v1/projects/${SEED.project}/canvas/layout`, {
+            positions: {},
+            expected_version: 0,
+          })
+        ).status,
+      ).toBe(409);
+
+      expect(await call("GET", `${ENV}/draft`)).toMatchObject({
+        status: 200,
+        body: { change_set: null },
+      });
+      const patch = { type: "config.patch", service: SEED.api, patch: { deploy: { replicas: 3 } } };
+      const staged = await call("POST", `${ENV}/draft/ops`, { op: patch });
+      expect(staged).toMatchObject({
+        status: 200,
+        body: { is_draft: true, revision: 2, op_count: 1 },
+      });
+      const set = staged.body as { id: string; revision: number; changes: { id: string }[] };
+      expect(
+        (await call("POST", `${ENV}/draft/ops`, { op: patch, expected_revision: 1 })).status,
+      ).toBe(409);
+      expect((await call("POST", `${ENV}/draft/ops`, { op: { type: "nope" } })).status).toBe(400);
+      expect(
+        await call("POST", `${ENV}/draft/ops`, {
+          op: {
+            type: "variable.set",
+            scope: "service",
+            service: SEED.api,
+            key: "API_TOKEN",
+            value: "tok-123456789",
+            tier: "secret",
+          },
+        }),
+      ).toMatchObject({ status: 400, body: { error: { code: "confirmation_required" } } });
+      const secret = await call("POST", `${ENV}/draft/ops`, {
+        op: {
+          type: "variable.set",
+          scope: "service",
+          service: SEED.api,
+          key: "API_TOKEN",
+          value: "tok-123456789",
+          tier: "secret",
+          confirm_write_only: true,
+        },
+      });
+      expect(secret.status).toBe(200);
+      expect(JSON.stringify(secret.body)).not.toContain("tok-123456789");
+
+      expect((await call("GET", `/v1/change-sets/${set.id}`)).status).toBe(200);
+      expect((await call("GET", `/v1/change-sets/chs_nope`)).status).toBe(404);
+      expect((await call("GET", `${ENV}/change-sets?status=all`)).status).toBe(200);
+      const review = await call("GET", `/v1/change-sets/${set.id}/diff`);
+      expect(review).toMatchObject({ status: 200, body: { conflicts: [] } });
+
+      const other = await call("POST", `${ENV}/change-sets`, {
+        title: "From the API",
+        ops: [
+          {
+            type: "variable.set",
+            scope: "service",
+            service: SEED.web,
+            key: "MODE",
+            value: "batch",
+          },
+        ],
+      });
+      expect(other).toMatchObject({ status: 201, body: { is_draft: false, op_count: 1 } });
+      const otherSet = other.body as { id: string; revision: number; changes: { id: string }[] };
+      const extra = await call("POST", `/v1/change-sets/${otherSet.id}/ops`, {
+        op: { type: "variable.set", scope: "service", service: SEED.web, key: "LEVEL", value: "2" },
+      });
+      expect(extra.status).toBe(200);
+      const extraSet = extra.body as { revision: number; changes: { id: string }[] };
+      expect(
+        (
+          await call(
+            "DELETE",
+            `/v1/change-sets/${otherSet.id}/ops/${extraSet.changes[1]!.id}?expected_revision=${extraSet.revision}`,
+          )
+        ).status,
+      ).toBe(200);
+      expect((await call("DELETE", `/v1/change-sets/${otherSet.id}/ops/stg_nope`)).status).toBe(
+        404,
+      );
+      expect((await call("POST", `/v1/change-sets/${otherSet.id}/discard`, {})).status).toBe(200);
+      expect((await call("POST", `/v1/change-sets/${otherSet.id}/discard`, {})).status).toBe(409);
+
+      // A direct edit to the same pointer makes the staged patch conflict.
+      const latest = db.deploy.configs
+        .filter((c) => c.service_id === SEED.api && c.environment_id === SEED.production)
+        .sort((a, b) => b.version - a.version)[0]!;
+      db.deploy.configs.push({
+        ...latest,
+        id: "cfg_direct",
+        version: latest.version + 1,
+        deploy: { ...latest.deploy, replicas: 5 },
+      });
+      const current = (await call("GET", `/v1/change-sets/${set.id}`)).body as {
+        revision: number;
+        changes: { id: string }[];
+      };
+      const refused = await call("POST", `/v1/change-sets/${set.id}/apply`, {
+        expected_revision: current.revision,
+      });
+      expect(refused).toMatchObject({
+        status: 409,
+        body: { error: { code: "change_set_conflict" } },
+      });
+      expect(
+        (await call("POST", `/v1/change-sets/${set.id}/apply`, { expected_revision: 1 })).status,
+      ).toBe(409);
+      const conflicted = (await call("GET", `/v1/change-sets/${set.id}`)).body as {
+        revision: number;
+        changes: { id: string }[];
+      };
+      expect(
+        (
+          await call("POST", `/v1/change-sets/${set.id}/ops/${conflicted.changes[0]!.id}/resolve`, {
+            keep: "mine",
+            expected_revision: 1,
+          })
+        ).status,
+      ).toBe(409);
+      const resolved = await call(
+        "POST",
+        `/v1/change-sets/${set.id}/ops/${conflicted.changes[0]!.id}/resolve`,
+        {
+          keep: "mine",
+          expected_revision: conflicted.revision,
+        },
+      );
+      expect(resolved.status).toBe(200);
+      const applied = await call("POST", `/v1/change-sets/${set.id}/apply`, {
+        expected_revision: (resolved.body as { revision: number }).revision,
+      });
+      expect(applied).toMatchObject({ status: 200, body: { change_set: { status: "applied" } } });
+      expect((applied.body as { deployment_ids: string[] }).deployment_ids.length).toBeGreaterThan(
+        0,
+      );
+      expect(JSON.stringify(applied.body)).not.toContain("tok-123456789");
+
+      as("viewer");
+      expect((await call("POST", `${ENV}/draft/ops`, { op: patch })).status).toBe(403);
+      as(null);
+      expect((await call("GET", `${ENV}/draft`)).status).toBe(401);
     });
   });
 

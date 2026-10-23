@@ -108,7 +108,7 @@ describe("projects in the shell and on Home", () => {
 describe("project page", () => {
   it("loads every service card from one summary request", async () => {
     const paths = await requestsDuring(async () => {
-      renderApp(PROJECT_PATH);
+      renderApp(`${PROJECT_PATH}?view=list`);
       const list = await screen.findByRole("list", { name: "Services" });
       const api = within(list).getByRole("link", { name: "api" }).closest("li")!;
       await waitFor(() => expect(api).toHaveTextContent("api-production-q3zk.apps.example.com"));
@@ -122,7 +122,7 @@ describe("project page", () => {
   });
 
   it("lists services with source, status and config, and shows who is here", async () => {
-    renderApp(PROJECT_PATH);
+    renderApp(`${PROJECT_PATH}?view=list`);
     expect(await findPageHeading("storefront")).toBeInTheDocument();
     const list = await screen.findByRole("list", { name: "Services" });
     const web = within(list).getByRole("link", { name: "web" }).closest("li")!;
@@ -147,14 +147,14 @@ describe("project page", () => {
   });
 
   it("deploys a service from its card", async () => {
-    const { user } = renderApp(PROJECT_PATH);
+    const { user } = renderApp(`${PROJECT_PATH}?view=list`);
     await user.click(await screen.findByRole("button", { name: "Deploy api" }));
     expect(await screen.findByText("Deploying api")).toBeInTheDocument();
     expect(db.deploy.deployments.at(-1)).toMatchObject({ service_id: SEED.api, status: "queued" });
   });
 
   it("updates a card when the socket reports a deployment change", async () => {
-    renderApp(PROJECT_PATH);
+    renderApp(`${PROJECT_PATH}?view=list`);
     const list = await screen.findByRole("list", { name: "Services" });
     const worker = within(list).getByRole("link", { name: "worker" }).closest("li")!;
     await waitFor(() => expect(worker).toHaveTextContent(/deploying/i));

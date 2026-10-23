@@ -1,12 +1,15 @@
 import { Button, EmptyState, toast } from "@roundhouse/ui";
-import { Link } from "@tanstack/react-router";
-import { BoxesIcon, PlusIcon, SettingsIcon } from "lucide-react";
+import { SegmentedControl } from "@roundhouse/ui/controls";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { BoxesIcon, ListIcon, NetworkIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { PageHeader } from "../../components/page-header";
 import { errorMessage } from "../../lib/api/client";
 import type { Service } from "../../lib/api/deploy-types";
 import { usePermissions } from "../../lib/permissions";
 import { useNow } from "../../lib/use-now";
+import { useDraft } from "../../queries/changes";
 import { useDeploy } from "../../queries/deployments";
+import { CanvasView } from "../canvas/canvas-view";
 import { useShellActions } from "../shell/shell-actions";
 import { ProjectPresence } from "./presence";
 import { ServiceList, useServiceViews } from "./service-list";
@@ -14,8 +17,9 @@ import { useProjectEnvironment } from "./use-project-environment";
 
 /**
  * A project's overview: its services in the selected environment, who is viewing, and
- * the actions to add or deploy services. The list is the Phase 1 stand-in for the
- * canvas; both take the same {@link useServiceViews} model.
+ * the actions to add or deploy services. The canvas (ADR 0006) is the default view and
+ * stages edits; the list (`?view=list`) is the accessible alternative with the same
+ * actions. Both take the same {@link useServiceViews} model.
  *
  * @param props - Workspace and project ids.
  * @returns The page.
@@ -35,6 +39,16 @@ export function ProjectPage({
   const services = project.data?.services ?? [];
   const views = useServiceViews(projectId, services, environment);
   const deployingId = deploy.isPending ? (deploy.variables?.serviceId ?? null) : null;
+  const search = useSearch({ strict: false }) as { view?: "list"; review?: string };
+  const navigate = useNavigate();
+  const draft = useDraft(environment?.id);
+  const view = search.view === "list" ? "list" : "canvas";
+  const setSearch = (patch: { view?: "list"; review?: string }) =>
+    void navigate({
+      to: ".",
+      search: (previous: Record<string, unknown>) => ({ ...previous, ...patch }),
+      replace: true,
+    });
 
   function onDeploy(service: Service) {
     if (!environment) return;
@@ -72,6 +86,17 @@ export function ProjectPage({
         actions={
           <>
             <ProjectPresence className="mr-2" />
+            {services.length > 0 || draft.data ? (
+              <SegmentedControl
+                label="View"
+                value={view}
+                onValueChange={(next) => setSearch({ view: next === "list" ? "list" : undefined })}
+                options={[
+                  { value: "canvas", label: <NetworkIcon />, ariaLabel: "Canvas" },
+                  { value: "list", label: <ListIcon />, ariaLabel: "List" },
+                ]}
+              />
+            ) : null}
             {can("projects:manage") ? (
               <Button asChild variant="secondary">
                 <Link
@@ -88,7 +113,7 @@ export function ProjectPage({
           </>
         }
       />
-      {services.length === 0 ? (
+      {services.length === 0 && !draft.data ? (
         <EmptyState
           icon={<BoxesIcon />}
           title="No services yet"
@@ -99,6 +124,16 @@ export function ProjectPage({
           }
           action={newService}
           className="py-16"
+        />
+      ) : view === "canvas" && environment ? (
+        <CanvasView
+          workspaceId={workspaceId}
+          projectId={projectId}
+          environment={environment}
+          envParam={envParam}
+          views={views}
+          reviewId={search.review}
+          onReviewClosed={() => setSearch({ review: undefined })}
         />
       ) : (
         <ServiceList

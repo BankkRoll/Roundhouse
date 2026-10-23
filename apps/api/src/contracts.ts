@@ -80,11 +80,15 @@ import {
 
 export * from "./contracts/access";
 export * from "./contracts/auth";
+export * from "./contracts/changes";
+export * from "./contracts/domains";
 export * from "./contracts/instance";
 export * from "./contracts/keys";
+export * from "./contracts/oauth";
 export * from "./contracts/params";
 export * from "./contracts/policy";
 export * from "./contracts/providers";
+export * from "./contracts/templates";
 export * from "./contracts/variables";
 
 // -----------------------------------------------------------------------------
@@ -566,6 +570,7 @@ export const getInstanceSettings = defineRoute(sessionOnly("instance:manage"), {
  * pushes new desired state to every node; existing generated domains keep
  * their hostnames when `apps_domain` changes, new ones use the new domain.
  * `log_retention_days` applies from the next hourly retention run.
+ * `mcp_enabled` turns the MCP endpoint for coding agents on or off at once.
  *
  * The change is recorded as an instance-level `instance.settings_updated`
  * entry (no workspace), visible to instance admins only. Needs a fresh

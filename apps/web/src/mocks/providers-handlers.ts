@@ -7,7 +7,9 @@
  * `bad-…` is rejected (400 `provider_token_invalid`), anything else connects. A run
  * advances one status per `GET …/node-provisions/{id}`: queued → creating → booting →
  * joined, adding the node on the last step. Names starting `fail-` fail while booting,
- * and `leak-` fail with `cleanup_failed`.
+ * and `leak-` fail with `cleanup_failed`. `slow-` runs stay creating and `wait-` runs
+ * stay booting until cancelled. A cancelled run still creating its server ends
+ * `cancelled` on its next poll, as the workflow finishes the cancel once the server exists.
  *
  * @module
  */
@@ -71,17 +73,40 @@ function toProvision({ workspace_id: _ws, ...run }: DbProvision) {
 
 const ACTIVE = new Set(["queued", "creating", "booting", "cleanup_failed"]);
 
+/** The run's plan price from the mock catalogue, as the workflow records it. */
+function offerPrice(run: DbProvision): DbProvision["estimated_monthly_cost"] {
+  const offer = MOCK_OFFERS[run.provider].find(
+    (row) => row.plan === run.plan && row.region === run.region,
+  );
+  return offer ? { monthly_cents: offer.monthly_cents, currency: offer.currency } : null;
+}
+
 /** Moves a run one status forward, as the provisioning workflow would between polls. */
 function advance(run: DbProvision): void {
   const now = Date.now();
   run.updated_at = now;
   const failing = run.name.startsWith("fail-") || run.name.startsWith("leak-");
+  const stuck =
+    (run.name.startsWith("slow-") && run.status === "creating") ||
+    (run.name.startsWith("wait-") && run.status === "booting");
+  if (stuck && run.cancel_requested_at === null) return;
   switch (run.status) {
     case "queued":
       Object.assign(run, { status: "creating", step: "create_server" });
       return;
     case "creating":
+      if (run.cancel_requested_at !== null) {
+        Object.assign(run, {
+          status: "cancelled",
+          failure_reason: "cancelled",
+          failure_message: "Cancelled before the server joined",
+          server_id: String(48_000_000 + db.counter),
+          finished_at: now,
+        });
+        return;
+      }
       Object.assign(run, {
+        estimated_monthly_cost: offerPrice(run),
         status: "booting",
         step: "wait_until_running",
         server_id: String(48_000_000 + db.counter),
@@ -118,6 +143,7 @@ function advance(run: DbProvision): void {
           name: run.name,
           provider: run.provider,
           provider_server_id: run.server_id,
+          estimated_monthly_cost: run.estimated_monthly_cost,
           region: run.region,
           public_ip: run.ipv4,
           created_at: now,
@@ -325,6 +351,8 @@ export const providerHandlers = [
       ipv4: null,
       ipv6: null,
       node_id: null,
+      cancel_requested_at: null,
+      estimated_monthly_cost: null,
       created_at: now,
       updated_at: now,
       finished_at: null,
@@ -362,6 +390,54 @@ export const providerHandlers = [
     );
     if (!run) return notFound("Provisioning run");
     advance(run);
+    return HttpResponse.json(toProvision(run));
+  }),
+
+  http.post("*/v1/workspaces/:workspaceId/node-provisions/:provisionId/cancel", ({ params }) => {
+    const workspaceId = String(params.workspaceId);
+    const access = requireWorkspace(workspaceId, "nodes:manage");
+    if (!access.ok) return access.response;
+    const run = db.providers.provisions.find(
+      (row) => row.id === params.provisionId && row.workspace_id === workspaceId,
+    );
+    if (!run) return notFound("Provisioning run");
+    if (run.cancel_requested_at !== null) return HttpResponse.json(toProvision(run));
+    if (!["queued", "creating", "booting"].includes(run.status)) {
+      return apiError(
+        409,
+        "conflict",
+        run.status === "joined"
+          ? `${run.name} already joined; remove the server instead`
+          : `This run already finished (${run.status})`,
+      );
+    }
+    const now = Date.now();
+    const from = run.status;
+    run.cancel_requested_at = now;
+    run.updated_at = now;
+    if (from !== "creating") {
+      Object.assign(run, {
+        status: "cancelled",
+        failure_reason: "cancelled",
+        failure_message: "Cancelled before the server joined",
+        finished_at: now,
+      });
+    }
+    recordAudit({
+      workspaceId,
+      actorType: "user",
+      actorId: access.user.id,
+      action: "node.provision_cancelled",
+      targetType: "node_provision",
+      targetId: run.id,
+      metadata: {
+        provider: run.provider,
+        name: run.name,
+        from_status: from,
+        status: run.status,
+        server_id: run.server_id,
+      },
+    });
     return HttpResponse.json(toProvision(run));
   }),
 ];

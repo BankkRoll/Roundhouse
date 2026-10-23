@@ -151,6 +151,31 @@ export const getNodeProvision = defineRoute(session("nodes:read"), {
   responses: { 200: json(NodeProvisionSchema), ...errors(401, 403, 404) },
 });
 
+/**
+ * Cancels a run that has not finished (`queued`, `creating` or
+ * `booting`): stops its workflow, revokes its join token and deletes any
+ * server it created. A queued or booting run is `cancelled` (or
+ * `cleanup_failed`, when the delete fails) when this returns; a run still
+ * creating its server keeps its status, with `cancel_requested_at` set,
+ * until the provider call returns and the server can be deleted. Repeating
+ * the call returns the run unchanged; a finished run is 409.
+ */
+export const cancelNodeProvision = defineRoute(
+  session("nodes:manage", ["node.provision_cancelled"], { reauth: true }),
+  {
+    method: "post",
+    path: "/v1/workspaces/{workspaceId}/node-provisions/{provisionId}/cancel",
+    tags: ["providers"],
+    summary: "Cancel a provisioning run",
+    security: sessionAuth,
+    request: { params: ProvisionParams },
+    responses: {
+      200: json(NodeProvisionSchema),
+      ...errors(401, 403, 404, 409),
+    },
+  },
+);
+
 /** Every cloud provider route, by name. */
 export const PROVIDER_ROUTES = {
   listIntegrations,
@@ -161,4 +186,5 @@ export const PROVIDER_ROUTES = {
   provisionNode,
   listNodeProvisions,
   getNodeProvision,
+  cancelNodeProvision,
 } as const;

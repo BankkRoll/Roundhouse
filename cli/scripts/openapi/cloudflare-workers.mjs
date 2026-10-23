@@ -2,3 +2,5 @@
 export class DurableObject {}
 export class WorkflowEntrypoint {}
 export class WorkerEntrypoint {}
+// The worker's bindings; empty because the dump never handles a request.
+export const env = {};
