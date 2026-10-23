@@ -769,16 +769,18 @@ describe("MSW mocks match the API contract", () => {
   it.each([
     ["service", `/v1/services/${SEED.web}/variables`],
     ["shared", `/v1/projects/${SEED.project}/variables`],
-  ])("%s variables: masked list, put with reference checks, audited reveal", async (_, V) => {
+  ])("%s variables: masked list, put with reference checks, secrets write-only", async (_, V) => {
     await fresh(async () => {
       const env = `?environment_id=${SEED.production}`;
       expect((await call("GET", V)).status).toBe(400);
       expect((await call("GET", `${V}?environment_id=env_nope`)).status).toBe(404);
       const list = await call("GET", `${V}${env}`);
       expect(list.status).toBe(200);
-      const variables = (list.body as { variables: { is_secret: boolean; value: string | null }[] })
+      const variables = (list.body as { variables: { tier: string; value: string | null }[] })
         .variables;
-      expect(variables.filter((v) => v.is_secret).every((v) => v.value === null)).toBe(true);
+      expect(variables.filter((v) => v.tier === "secret").every((v) => v.value === null)).toBe(
+        true,
+      );
 
       expect((await call("PUT", `${V}${env}`, { set: [{ key: "1BAD", value: "x" }] })).status).toBe(
         400,
@@ -806,43 +808,34 @@ describe("MSW mocks match the API contract", () => {
       });
       const put = await call("PUT", `${V}${env}`, {
         set: [
-          { key: "TOKEN", value: "t0p", is_secret: true },
+          { key: "TOKEN", value: "t0p", tier: "secret" },
           { key: "PLAIN", value: `\${{shared.REGION}}` },
         ],
         delete: ["NODE_ENV"],
+        confirm_write_only: true,
       });
       expect(put.status).toBe(200);
       expect(
         (put.body as { variables: { key: string; value: string | null }[] }).variables,
       ).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ key: "TOKEN", value: null, is_secret: true }),
+          expect.objectContaining({ key: "TOKEN", value: null, tier: "secret" }),
           expect.objectContaining({ key: "PLAIN", value: `\${{shared.REGION}}` }),
         ]),
       );
-      expect((await call("POST", `${V}/reveal${env}`, { keys: [] })).status).toBe(400);
-      expect(await call("POST", `${V}/reveal${env}`, { keys: ["TOKEN"] })).toMatchObject({
-        status: 200,
-        body: { variables: [{ key: "TOKEN", value: "t0p" }] },
-      });
-      expect(db.audit.at(-1)).toMatchObject({
-        action: "variables.revealed",
-        metadata: { keys: ["TOKEN"] },
-      });
+      // ADR 0014: secrets are write-only; there is no reveal route to call.
       expect(JSON.stringify(db.audit.at(-1))).not.toContain("t0p");
 
       as("member");
       expect((await call("PUT", `${V}${env}`, { set: [{ key: "M", value: "1" }] })).status).toBe(
         200,
       );
-      expect((await call("POST", `${V}/reveal${env}`, { keys: ["TOKEN"] })).status).toBe(403);
       as("viewer");
       expect((await call("GET", `${V}${env}`)).status).toBe(200);
       expect((await call("PUT", `${V}${env}`, { set: [] })).status).toBe(403);
       as(null);
       expect((await call("GET", `${V}${env}`)).status).toBe(401);
       expect((await call("PUT", `${V}${env}`, { set: [] })).status).toBe(401);
-      expect((await call("POST", `${V}/reveal${env}`, { keys: ["TOKEN"] })).status).toBe(401);
     });
   });
 

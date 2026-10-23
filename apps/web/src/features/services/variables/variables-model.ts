@@ -27,7 +27,7 @@ export const EMPTY_DRAFT: VariablesDraft = { set: new Map(), remove: new Set() }
 /** One row of the editor: the saved variable with any staged change applied. */
 export interface VariableRow {
   key: string;
-  /** Plain value; `null` for a saved secret nobody revealed or re-entered. */
+  /** Plain value; `null` for a saved secret (write-only) unless re-entered. */
   value: string | null;
   isSecret: boolean;
   change: "none" | "added" | "changed" | "deleted";
@@ -106,7 +106,7 @@ export function mergeRows(saved: readonly Variable[], draft: VariablesDraft): Va
     rows.set(variable.key, {
       key: variable.key,
       value: staged ? staged.value : variable.value,
-      isSecret: staged ? staged.isSecret : variable.is_secret,
+      isSecret: staged ? staged.isSecret : variable.tier === "secret",
       change: draft.remove.has(variable.key) ? "deleted" : staged ? "changed" : "none",
       version: variable.version,
     });
@@ -131,9 +131,11 @@ export function toPutBody(draft: VariablesDraft): { body: VariablesPutBody; setK
     body: {
       set: setKeys.map((key) => {
         const staged = draft.set.get(key)!;
-        return { key, value: staged.value, is_secret: staged.isSecret };
+        return { key, value: staged.value, tier: staged.isSecret ? "secret" : "plain" };
       }),
       delete: [...draft.remove].sort(),
+      // TODO(web): ask in a dialog listing the keys before confirming (ADR 0014).
+      confirm_write_only: true,
     },
     setKeys,
   };

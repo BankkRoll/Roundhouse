@@ -279,8 +279,10 @@ func TestRecreateIsZeroDowntime(t *testing.T) {
 		return len(r) == 1 && slices.Equal(r[0].Upstreams, []string{old.ip + ":80"})
 	})
 
+	// The environment is fixed per workload ID (ADR 0014), so a changed
+	// command stands in for any hashed change.
 	w2 := w
-	w2.Env = map[string]string{"GREETING": "bonjour"}
+	w2.Command = []string{"nginx", "-g", "daemon off;"}
 	w2 = rehash(w2)
 	h.rt.Apply(desired(2, w2))
 	var next *fakeContainer

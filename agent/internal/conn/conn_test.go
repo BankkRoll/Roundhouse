@@ -569,3 +569,17 @@ func TestRunWithoutLoggerOrState(t *testing.T) {
 	cp.push(t, priv, desired("m_1", 1, time.Now().Add(time.Minute)))
 	waitFor(t, "in-memory generation", func() bool { return c.ObservedGeneration() == 1 })
 }
+
+func TestAgentOutdatedRetriesAtMaxBackoff(t *testing.T) {
+	outdated := errors.Join(errors.New("read"), websocket.CloseError{Code: closeAgentOutdated, Reason: "agent_outdated"})
+	if !isAgentOutdated(outdated) {
+		t.Fatal("4002 not recognised")
+	}
+	if d := retryDelay(NewBackoff(time.Second, time.Minute), outdated); d != time.Minute {
+		t.Errorf("outdated retry in %v, want the maximum", d)
+	}
+	removed := websocket.CloseError{Code: 4001, Reason: "node removed"}
+	if isAgentOutdated(removed) || isAgentOutdated(errors.New("eof")) {
+		t.Error("other closes are not agent_outdated")
+	}
+}

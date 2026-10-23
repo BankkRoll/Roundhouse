@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import type { JoinResponse } from "@openrail/protocol";
+import { type JoinResponse, MIN_PROTOCOL_VERSION } from "@openrail/protocol";
 
 /** Base URL for requests through the Worker under test. */
 export const ORIGIN = "https://cp.test";
@@ -110,6 +110,17 @@ export async function addMember(
   return client(cookieFrom(res));
 }
 
+// RFC 7748 section 6.1 (Bob): public, test-only. The fake agents open
+// sealed environments with it, like `fixtures/sealed-box.json`.
+/** Raw X25519 private key every test node joins with. */
+export const NODE_ENCRYPTION_PRIVATE_KEY = Uint8Array.from(
+  "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb".match(/../g)!,
+  (h) => Number.parseInt(h, 16),
+);
+
+/** Public half of {@link NODE_ENCRYPTION_PRIVATE_KEY}, base64. */
+export const NODE_ENCRYPTION_PUBLIC_KEY = "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=";
+
 /** A join request body with sensible defaults. */
 export function joinBody(token: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -120,6 +131,7 @@ export function joinBody(token: string, overrides: Record<string, unknown> = {})
     os: "ubuntu 24.04",
     arch: "amd64",
     public_key: "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+    encryption_public_key: NODE_ENCRYPTION_PUBLIC_KEY,
     public_ip: "203.0.113.10",
     hardware: { cpu_cores: 8, mem_bytes: 16 * 2 ** 30, disk_bytes: 160 * 2 ** 30 },
     capabilities: { docker: true, gvisor: false, builder: true },
@@ -199,11 +211,14 @@ export async function connectAgent(
   };
 }
 
-/** A valid `hello` frame for `nodeId`. */
+/**
+ * A valid `hello` frame for `nodeId`, from the oldest accepted agent, which
+ * gets no workloads or builds.
+ */
 export function hello(nodeId: string, overrides: Record<string, unknown> = {}) {
   return {
     type: "hello",
-    protocol_version: 1,
+    protocol_version: MIN_PROTOCOL_VERSION,
     node_id: nodeId,
     agent_version: "0.1.0",
     os: "ubuntu 24.04",

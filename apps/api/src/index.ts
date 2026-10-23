@@ -5,8 +5,11 @@
  * - REST API under `/v1` (OpenAPI document at `/v1/openapi.json`)
  * - Better Auth under `/api/auth/*`
  * - Agent join/connect endpoints and the install script
- * - The project realtime socket (`ProjectRoom`) and the deploy workflow
- *   (`DeployWorkflow`), exported for their bindings
+ * - The project realtime socket (`ProjectRoom`), the audit chain sealer
+ *   (`AuditChain`), and the deploy and key rotation workflows
+ *   (`DeployWorkflow`, `KeyRotationWorkflow`), exported for their bindings
+ * - `Cache-Control: no-store` on every API and auth response, and the
+ *   two-factor gate in front of `/v1/*` mutations (ADR 0014)
  * - Static SPA assets (served by the platform for everything else)
  *
  * @module
@@ -15,14 +18,20 @@ import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import { authFor, createRouter, withDb } from "./context";
 import type { Env } from "./env";
+import { noStore } from "./lib/cache-control";
 import { ApiError, errorBody, errorCodeForStatus } from "./lib/errors";
 import { rateLimitSecrets, sameOriginMutations } from "./lib/guards";
+import { twoFactorGate } from "./lib/two-factor-gate";
+import { accessRoutes } from "./routes/access";
 import { agentRoutes } from "./routes/agent";
 import { auditRoutes } from "./routes/audit";
+import { authSecurityRoutes } from "./routes/auth-security";
 import { deploymentRoutes } from "./routes/deployments";
 import { githubRoutes } from "./routes/github";
 import { instanceRoutes } from "./routes/instance";
+import { instanceAdminRoutes } from "./routes/instance-admin";
 import { inviteRoutes } from "./routes/invites";
+import { keyRoutes } from "./routes/keys";
 import { nodeRoutes } from "./routes/nodes";
 import { projectRoutes } from "./routes/projects";
 import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
@@ -32,9 +41,11 @@ import { variableRoutes } from "./routes/variables";
 import { workspaceRoutes } from "./routes/workspaces";
 import { SESSION_SCHEME } from "./schemas";
 
+export { AuditChain } from "./durable/audit-chain";
 export { NodeConnection } from "./durable/node-connection";
 export { ProjectRoom } from "./durable/project-room";
 export { DeployWorkflow } from "./workflows/deploy";
+export { KeyRotationWorkflow } from "./workflows/key-rotation";
 
 /** Version of the REST API advertised in the OpenAPI document. */
 const API_VERSION = "0.1.0";
@@ -54,9 +65,12 @@ app.use("*", (c, next) =>
     ? next()
     : headers(c, next),
 );
+app.use("/v1/*", noStore);
+app.use("/api/auth/*", noStore);
 app.use("*", withDb);
 app.use("*", rateLimitSecrets);
 app.use("/v1/*", sameOriginMutations);
+app.use("/v1/*", twoFactorGate);
 
 app.on(["GET", "POST"], "/api/auth/*", async (c) => (await authFor(c)).handler(c.req.raw));
 
@@ -73,7 +87,11 @@ app
   .route("/", deploymentRoutes)
   .route("/", instanceRoutes)
   .route("/", githubRoutes)
-  .route("/", realtimeRoutes);
+  .route("/", realtimeRoutes)
+  .route("/", accessRoutes)
+  .route("/", authSecurityRoutes)
+  .route("/", instanceAdminRoutes)
+  .route("/", keyRoutes);
 
 app.openAPIRegistry.registerComponent("securitySchemes", SESSION_SCHEME, {
   type: "apiKey",

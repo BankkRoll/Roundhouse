@@ -1,5 +1,5 @@
 /**
- * Protocol 2 handling in the node's Durable Object: version gating, desired
+ * Agent protocol handling in the node's Durable Object: version gating, desired
  * state computed from D1 on every (re)connect, workload statuses scoped to
  * the reporting node, build results, credential TTLs, and frame limits.
  */
@@ -8,6 +8,8 @@ import {
   CREDENTIAL_FRAME_TTL_MS,
   type DesiredState,
   MAX_AGENT_FRAME_BYTES,
+  MIN_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
 } from "@openrail/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CloseCode } from "../src/durable/node-connection";
@@ -35,50 +37,88 @@ const nodeStub = (nodeId: string) =>
   env.NODE_CONNECTION.get(env.NODE_CONNECTION.idFromName(nodeId));
 
 describe("protocol versions", () => {
-  it("accepts version 1 agents but sends them no workloads, registry or builds", async () => {
+  it("accepts pre-sealing agents but sends them no workloads, registry or builds", async () => {
     const { owner, workspaceId } = await install();
     const joined = await joinNode(owner, workspaceId);
-    const agent = await connectWorkloadAgent(joined, {}, { protocol_version: 1 });
+    const agent = await connectWorkloadAgent(
+      joined,
+      {},
+      { protocol_version: MIN_PROTOCOL_VERSION },
+    );
     const desired = agent.desired()!;
     expect(desired.workloads).toEqual([]);
     expect(desired.registry).toBeNull();
     const row = await env.DB.prepare("SELECT protocol_version FROM nodes WHERE id = ?")
       .bind(joined.node_id)
       .first<{ protocol_version: number }>();
-    expect(row?.protocol_version).toBe(1);
+    expect(row?.protocol_version).toBe(MIN_PROTOCOL_VERSION);
 
     const result = await nodeStub(joined.node_id).sendBuildJob({
       build_id: "bld_x",
       deployment_id: "dep_x",
+      project_id: "prj_x",
+      service_id: "svc_x",
       source: { type: "git", url: "https://github.com/a/b", commit_sha: COMMIT_SHA },
       builder: "railpack",
       context_dir: ".",
       build_args: {},
       image_repository: "127.0.0.1:5000/prj_x/svc_x",
-      cache_key: "svc_x",
+      cache_key: "prj_x.svc_x",
       timeout_s: 600,
     });
     expect(result).toEqual({ sent: false, reason: "protocol_too_old" });
     expect(agent.received.some((m) => m.type === "build_job")).toBe(false);
   });
 
-  it("never places workloads on a version 1 node", async () => {
+  it("never places workloads on a node without an encryption key", async () => {
     const s = await stage();
-    const old = await joinNode(s.owner, s.workspaceId, { name: "old-1" });
-    const v1 = await connectWorkloadAgent(old, {}, { protocol_version: 1 });
+    const keyless = await joinNode(s.owner, s.workspaceId, {
+      name: "keyless-1",
+      encryption_public_key: undefined,
+    });
+    const agent = await connectWorkloadAgent(keyless);
     const d = await deploy(s.owner, s.serviceId, s.envId);
     const active = await waitForStatus(s.owner, d.id, ["active"]);
     expect(active.placements!.every((p) => p.node_id === s.joined.node_id)).toBe(true);
-    expect(v1.received.filter(isDesired).every((m) => m.workloads.length === 0)).toBe(true);
+    expect(agent.received.filter(isDesired).every((m) => m.workloads.length === 0)).toBe(true);
+    expect(agent.desired()!.registry).toBeNull();
   });
 
-  it.each([0, 3])("rejects protocol version %i", async (version) => {
+  // TODO(api-secrets-crypto): a signed hello.encryption_key registers a key
+  // once for a node that has none, and is ignored when one is stored.
+  it.todo("registers a signed encryption key from hello, once");
+
+  it("never places workloads on a pre-sealing node", async () => {
+    const s = await stage();
+    const old = await joinNode(s.owner, s.workspaceId, { name: "old-1" });
+    const v3 = await connectWorkloadAgent(old, {}, { protocol_version: MIN_PROTOCOL_VERSION });
+    const d = await deploy(s.owner, s.serviceId, s.envId);
+    const active = await waitForStatus(s.owner, d.id, ["active"]);
+    expect(active.placements!.every((p) => p.node_id === s.joined.node_id)).toBe(true);
+    expect(v3.received.filter(isDesired).every((m) => m.workloads.length === 0)).toBe(true);
+  });
+
+  it.each([0, PROTOCOL_VERSION + 1])("rejects protocol version %i", async (version) => {
     const { owner, workspaceId } = await install();
     const joined = await joinNode(owner, workspaceId);
     const agent = await connectAgent(joined);
     agent.send(hello(joined.node_id, { protocol_version: version }));
     expect((await agent.closed).code).toBe(CloseCode.policy);
   });
+
+  it.each([1, MIN_PROTOCOL_VERSION - 1])(
+    "tells a version %i agent it is outdated",
+    async (version) => {
+      const { owner, workspaceId } = await install();
+      const joined = await joinNode(owner, workspaceId);
+      const agent = await connectAgent(joined);
+      agent.send(hello(joined.node_id, { protocol_version: version }));
+      expect(await agent.closed).toEqual({
+        code: CloseCode.agentOutdated,
+        reason: "agent_outdated",
+      });
+    },
+  );
 
   it("gives builder nodes a registry and others none", async () => {
     const { owner, workspaceId } = await install();
@@ -107,7 +147,10 @@ describe("desired state", () => {
     s.agent.ws.close();
     const again = await connectWorkloadAgent(s.joined);
     const after = again.desired()!;
-    expect(after.workloads).toEqual(before.workloads);
+    // env_sealed is re-sealed for every frame; what it carries must not change.
+    const unsealed = (m: typeof before) => m.workloads.map(({ env_sealed: _, ...w }) => w);
+    expect(unsealed(after)).toEqual(unsealed(before));
+    for (const w of after.workloads) expect(again.env(w.id)).toEqual(s.agent.env(w.id));
     expect(after.generation).toBe(before.generation);
     expect(after.workloads[0]!.spec_hash).toMatch(/^[a-f0-9]{64}$/);
   });

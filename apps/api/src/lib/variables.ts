@@ -11,7 +11,15 @@
  * @module
  */
 import { type Db, projectKeys, services, variables } from "@openrail/db";
-import { newId, parseReferences, type VariableScope } from "@openrail/shared";
+import {
+  type ClassificationWarningCode,
+  classifyVariable,
+  decideVariableTier,
+  newId,
+  parseReferences,
+  type VariableScope,
+  type VariableTier,
+} from "@openrail/shared";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   deriveProjectKey,
@@ -22,7 +30,7 @@ import {
   sealWith,
   unsealWith,
 } from "./crypto";
-import { ApiError, type ErrorDetail, notFound } from "./errors";
+import { ApiError, conflict, type ErrorCode, type ErrorDetail, notFound } from "./errors";
 
 type VariableRow = typeof variables.$inferSelect;
 
@@ -143,55 +151,114 @@ function scopeWhere(t: VariableTarget) {
   );
 }
 
-/** A variable as listed: secrets masked. */
+/** A variable as listed; see `VariableSchema`. Never carries a secret value. */
 export interface ListedVariable {
   key: string;
+  tier: VariableTier;
+  locked: boolean;
   value: string | null;
-  is_secret: boolean;
+  fingerprint: string | null;
+  available_at_build: boolean;
+  mount_as_file: boolean;
   version: number;
   updated_at: number;
+  updated_by: string | null;
 }
 
 /**
- * Lists a scope's variables, decrypting only non-secret values.
+ * Lists a scope's variables. Only plain values are ever decrypted, and only
+ * when `plain` says the caller may read them.
  *
  * @param db - Database client.
  * @param key - Project DEK.
  * @param t - Scope.
+ * @param options - `plain`: the caller holds `variables:read_plain`.
  * @returns Variables sorted by key.
  */
 export async function listVariables(
   db: Db,
   key: CryptoKey,
   t: VariableTarget,
+  options: { plain: boolean },
 ): Promise<ListedVariable[]> {
   const rows = await db.select().from(variables).where(scopeWhere(t)).orderBy(variables.key);
   return Promise.all(
     rows.map(async (r) => ({
       key: r.key,
-      value: r.isSecret ? null : await unsealWith(key, r.valueSealed, variableAad(t, r.key)),
-      is_secret: r.isSecret,
+      tier: r.tier,
+      locked: r.locked,
+      value:
+        r.tier === "plain" && options.plain
+          ? await unsealWith(key, r.valueSealed, variableAad(t, r.key))
+          : null,
+      fingerprint: r.fingerprint,
+      available_at_build: r.availableAtBuild,
+      mount_as_file: r.mountAsFile,
       version: r.version,
       updated_at: +r.updatedAt,
+      updated_by: r.updatedBy,
     })),
   );
 }
 
+/** One upsert; see `VariableSetEntrySchema`. */
+export interface VariableSetEntry {
+  key: string;
+  value?: string;
+  tier?: VariableTier;
+  available_at_build?: boolean;
+  mount_as_file?: boolean;
+  expected_version?: number;
+}
+
+/** A whole variables write; see `VariablesPutSchema`. */
+export interface VariablesChange {
+  set: VariableSetEntry[];
+  delete: string[];
+  confirm_write_only: boolean;
+  acknowledge_public: string[];
+}
+
+/** One classifier warning of a write. */
+export interface VariableWriteWarning {
+  key: string;
+  code: ClassificationWarningCode;
+  message: string;
+}
+
+const detail = (key: string, code: string, message: string): ErrorDetail => ({
+  field: key,
+  code,
+  message,
+});
+
 /**
- * Upserts and deletes a scope's variables in one batch.
+ * Upserts and deletes a scope's variables in one batch, deciding each tier
+ * with the shared classifier.
+ *
+ * Refuses the whole write (nothing is stored) when a value would become
+ * secret without `confirm_write_only`, a public variable looks like a
+ * credential without being acknowledged, a tier contradicts a lock, a
+ * secret would become plain without a new value, or an `expected_version`
+ * is stale.
+ *
+ * TODO(api-secrets-crypto): seal v2 and fill `fingerprint` (ADR 0014 "Crypto").
  *
  * @param db - Database client.
  * @param key - Project DEK.
  * @param t - Scope.
- * @param change - Values to set and keys to delete.
- * @returns Keys that changed, for the audit record.
+ * @param change - The validated request body.
+ * @param actorId - User making the change, stored as `updated_by`.
+ * @returns Keys that changed, for the audit record, and warnings for the response.
+ * @throws {ApiError} 400 with `details` per key, or 409 for a stale version.
  */
 export async function putVariables(
   db: Db,
   key: CryptoKey,
   t: VariableTarget,
-  change: { set: { key: string; value: string; is_secret?: boolean }[]; delete: string[] },
-): Promise<{ set: string[]; deleted: string[] }> {
+  change: VariablesChange,
+  actorId: string | null,
+): Promise<{ set: string[]; deleted: string[]; warnings: VariableWriteWarning[] }> {
   const existing = new Map<string, VariableRow>();
   const keys = [...change.set.map((s) => s.key), ...change.delete];
   if (keys.length) {
@@ -201,21 +268,81 @@ export async function putVariables(
       .where(and(scopeWhere(t), inArray(variables.key, keys)));
     for (const r of rows) existing.set(r.key, r);
   }
+
+  const warnings: VariableWriteWarning[] = [];
+  const problems: ErrorDetail[] = [];
+  const needConfirm: string[] = [];
+  const needAck: string[] = [];
+  const planned: { entry: VariableSetEntry; value: string; tier: VariableTier; locked: boolean }[] =
+    [];
+  for (const s of change.set) {
+    const prior = existing.get(s.key);
+    if (s.expected_version !== undefined && prior && prior.version !== s.expected_version) {
+      throw conflict(`${s.key} changed since version ${s.expected_version}`);
+    }
+    if (s.value === undefined && !prior) {
+      problems.push(detail(s.key, "value_required", "A new variable needs a value"));
+      continue;
+    }
+    const value = s.value ?? (await unsealWith(key, prior!.valueSealed, variableAad(t, s.key)));
+    const classification = classifyVariable(s.key, value);
+    const decision = decideVariableTier({
+      classification,
+      ...(s.tier ? { requested: s.tier } : {}),
+      ...(prior ? { previous: prior.tier } : {}),
+      valueProvided: s.value !== undefined,
+    });
+    if (!decision.ok) {
+      problems.push(detail(s.key, decision.code, decision.message));
+      continue;
+    }
+    for (const w of classification.warnings) {
+      if (w.code === "public_prefix_secret_value" && !change.acknowledge_public.includes(s.key)) {
+        needAck.push(s.key);
+      }
+      warnings.push({ key: s.key, code: w.code, message: w.message });
+    }
+    if (decision.tier === "secret" && prior?.tier !== "secret") needConfirm.push(s.key);
+    planned.push({ entry: s, value, tier: decision.tier, locked: decision.locked });
+  }
+  if (problems.length) {
+    const first = problems[0]!;
+    throw new ApiError(400, first.code as ErrorCode, `${first.field}: ${first.message}`, problems);
+  }
+  if (needAck.length) {
+    throw new ApiError(
+      400,
+      "public_prefix_secret_value",
+      `${needAck.join(", ")} will ship to every browser but look${needAck.length === 1 ? "s" : ""} like a credential; add ${needAck.length === 1 ? "it" : "them"} to acknowledge_public to store anyway`,
+      needAck.map((k) => detail(k, "public_prefix_secret_value", "Looks like a credential")),
+    );
+  }
+  if (needConfirm.length && !change.confirm_write_only) {
+    throw new ApiError(
+      400,
+      "confirmation_required",
+      `${needConfirm.join(", ")} will be write-only: nobody can read ${needConfirm.length === 1 ? "it" : "them"} back. Resend with confirm_write_only to continue`,
+      needConfirm.map((k) => detail(k, "confirmation_required", "Becomes write-only")),
+    );
+  }
+
   const now = new Date();
   const statements = [];
-  for (const s of change.set) {
-    const valueSealed = await sealWith(key, s.value, variableAad(t, s.key));
+  for (const { entry: s, value, tier, locked } of planned) {
+    const valueSealed = await sealWith(key, value, variableAad(t, s.key));
     const prior = existing.get(s.key);
+    const flags = {
+      tier,
+      locked,
+      availableAtBuild: s.available_at_build ?? prior?.availableAtBuild ?? false,
+      mountAsFile: s.mount_as_file ?? prior?.mountAsFile ?? false,
+      updatedBy: actorId,
+    };
     if (prior) {
       statements.push(
         db
           .update(variables)
-          .set({
-            valueSealed,
-            isSecret: s.is_secret ?? prior.isSecret,
-            version: prior.version + 1,
-            updatedAt: now,
-          })
+          .set({ valueSealed, ...flags, version: prior.version + 1, updatedAt: now })
           .where(eq(variables.id, prior.id)),
       );
     } else {
@@ -228,7 +355,7 @@ export async function putVariables(
           serviceId: t.serviceId,
           key: s.key,
           valueSealed,
-          isSecret: s.is_secret ?? false,
+          ...flags,
         }),
       );
     }
@@ -242,35 +369,7 @@ export async function putVariables(
   if (statements.length) {
     await db.batch(statements as [(typeof statements)[number], ...typeof statements]);
   }
-  return { set: change.set.map((s) => s.key), deleted };
-}
-
-/**
- * Decrypts the given keys of a scope.
- *
- * @param db - Database client.
- * @param key - Project DEK.
- * @param t - Scope.
- * @param keys - Keys to reveal; unknown keys are skipped.
- * @returns Plaintext values in request order.
- */
-export async function revealVariables(
-  db: Db,
-  key: CryptoKey,
-  t: VariableTarget,
-  keys: readonly string[],
-): Promise<{ key: string; value: string }[]> {
-  const rows = await db
-    .select()
-    .from(variables)
-    .where(and(scopeWhere(t), inArray(variables.key, [...keys])));
-  const byKey = new Map(rows.map((r) => [r.key, r]));
-  const out: { key: string; value: string }[] = [];
-  for (const k of keys) {
-    const r = byKey.get(k);
-    if (r) out.push({ key: k, value: await unsealWith(key, r.valueSealed, variableAad(t, k)) });
-  }
-  return out;
+  return { set: planned.map((p) => p.entry.key), deleted, warnings };
 }
 
 /** Every variable of an environment, decrypted. */
@@ -327,14 +426,14 @@ export async function loadEnvironmentVariables(
     if (r.scope === "shared") {
       const value = await unsealWith(key, r.valueSealed, variableAad(t, r.key));
       out.shared[r.key] = value;
-      if (r.isSecret) out.sharedSecrets.push(value);
+      if (r.tier === "secret") out.sharedSecrets.push(value);
       continue;
     }
     const slug = r.serviceId ? slugOf.get(r.serviceId) : undefined;
     if (!slug) continue;
     const value = await unsealWith(key, r.valueSealed, variableAad(t, r.key));
     out.services[slug]![r.key] = value;
-    if (r.isSecret) out.secrets[slug]!.push(value);
+    if (r.tier === "secret") out.secrets[slug]!.push(value);
   }
   return out;
 }
@@ -380,7 +479,12 @@ export async function copiedVariableRows(
         serviceId: r.serviceId,
         key: r.key,
         valueSealed: await sealWith(key, plaintext, variableAad(to, r.key)),
-        isSecret: r.isSecret,
+        tier: r.tier,
+        locked: r.locked,
+        fingerprint: r.fingerprint,
+        availableAtBuild: r.availableAtBuild,
+        mountAsFile: r.mountAsFile,
+        updatedBy: r.updatedBy,
       } satisfies typeof variables.$inferInsert;
     }),
   );

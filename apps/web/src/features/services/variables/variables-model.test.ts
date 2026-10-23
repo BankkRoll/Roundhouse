@@ -58,8 +58,30 @@ describe("parseDotenv", () => {
 
 describe("staging", () => {
   const saved = [
-    { key: "A", value: "1", is_secret: false, version: 1, updated_at: 0 },
-    { key: "S", value: null, is_secret: true, version: 2, updated_at: 0 },
+    {
+      key: "A",
+      value: "1",
+      tier: "plain" as const,
+      version: 1,
+      updated_at: 0,
+      locked: false,
+      fingerprint: null,
+      available_at_build: false,
+      mount_as_file: false,
+      updated_by: null,
+    },
+    {
+      key: "S",
+      value: null,
+      tier: "secret" as const,
+      version: 2,
+      updated_at: 0,
+      locked: false,
+      fingerprint: null,
+      available_at_build: false,
+      mount_as_file: false,
+      updated_by: null,
+    },
   ];
 
   it("merges staged sets and deletes into rows", () => {
@@ -74,10 +96,11 @@ describe("staging", () => {
     expect(toPutBody(draft)).toEqual({
       body: {
         set: [
-          { key: "A", value: "2", is_secret: false },
-          { key: "NEW", value: "x", is_secret: true },
+          { key: "A", value: "2", tier: "plain" },
+          { key: "NEW", value: "x", tier: "secret" },
         ],
         delete: ["S"],
+        confirm_write_only: true,
       },
       setKeys: ["A", "NEW"],
     });

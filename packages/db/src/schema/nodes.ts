@@ -33,6 +33,16 @@ export const nodes = sqliteTable(
     wgPubkey: text("wg_pubkey"),
     /** Agent's Ed25519 identity key from join, base64. */
     identityPublicKey: text("identity_public_key").notNull(),
+    /**
+     * Agent's X25519 encryption key, base64: variables and build secrets are
+     * sealed to it. Set at join, or once through a signed
+     * `hello.encryption_key` for nodes that joined before protocol 4.
+     * Nodes without one get no workloads or builds.
+     */
+    encryptionPublicKey: text("encryption_public_key"),
+    /** `nodeEncryptionKeyId(encryption_public_key)`. */
+    encryptionKeyId: text("encryption_key_id"),
+    encryptionKeyRegisteredAt: timestamp("encryption_key_registered_at"),
     /** SHA-256 of the bearer credential the agent uses to connect. */
     credentialHash: text("credential_hash").notNull().unique(),
     status: text("status").$type<NodeStatus>().notNull().default("pending"),
@@ -43,7 +53,7 @@ export const nodes = sqliteTable(
     agentVersion: text("agent_version"),
     /**
      * `hello.protocol_version` of the agent's latest connection. Builds and
-     * workloads only go to agents at `WORKLOADS_PROTOCOL_VERSION` or later.
+     * workloads only go to agents at `SEALED_ENV_PROTOCOL_VERSION` or later.
      */
     protocolVersion: integer("protocol_version").notNull().default(1),
     capabilities: json<Capabilities>("capabilities"),

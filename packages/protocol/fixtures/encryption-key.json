@@ -1,0 +1,9 @@
+{
+  "node_id": "node_fixture",
+  "identity_public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "encryption_key": {
+    "public_key": "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=",
+    "kid": "f35e5616160a30bf",
+    "sig": "YYP4nuTJ74fGf1DHd8Wq7TEj+0AwP1Nw9NtcUYJZWVR6V+OLg+imJ+RkL7+YlHmPorMge7oi+kCfVTc58UdHAQ=="
+  }
+}

@@ -16,13 +16,18 @@ const spec: WorkloadSpec = {
   deployment_id: "dep_1",
   replica: 0,
   image: "nginx:1.27",
-  env: { B: "2", A: "1" },
+  env_sealed: {
+    v: 1,
+    kid: "0123456789abcdef",
+    epk: "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
+    ct: "AAAA",
+  },
   ports: [{ container_port: 80, protocol: "http" }],
   routes: [{ hostname: "a.example.com", container_port: 80 }],
   healthcheck: null,
   resources: { cpu_millis: 100, memory_mb: 64, pids: 64 },
   restart: { policy: "always", max_retries: 0 },
-  network: "openrail-prj_1",
+  network: "openrail-prj_1-env_1",
   labels: {},
   drain_s: 5,
   spec_hash: "0".repeat(64),
@@ -72,7 +77,7 @@ describe("computeSpecHash", () => {
   it("ignores key order and the existing hash", async () => {
     const reordered = Object.fromEntries(Object.entries(spec).reverse()) as WorkloadSpec;
     const hash = await computeSpecHash(spec);
-    expect(await computeSpecHash({ ...reordered, env: { A: "1", B: "2" } })).toBe(hash);
+    expect(await computeSpecHash(reordered)).toBe(hash);
     expect(await computeSpecHash({ ...spec, spec_hash: "f".repeat(64) })).toBe(hash);
   });
 
@@ -82,6 +87,12 @@ describe("computeSpecHash", () => {
       routes: [],
       registry_auth: { server: "ghcr.io", username: "u", password: "p" },
       drain_s: 600,
+      env_sealed: {
+        v: 1,
+        kid: "fedcba9876543210",
+        epk: "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
+        ct: "BBBB",
+      },
     }[field];
     expect(await computeSpecHash({ ...spec, [field]: changed })).toBe(await computeSpecHash(spec));
     expect(specHashInput(spec)).not.toContain(`"${field}"`);
@@ -89,7 +100,7 @@ describe("computeSpecHash", () => {
 
   it.each<[string, Partial<WorkloadSpec>]>([
     ["image", { image: "nginx:1.28" }],
-    ["env value", { env: { A: "1", B: "3" } }],
+    ["network", { network: "openrail-prj_1-env_2" }],
     ["command", { command: ["sh"] }],
     ["ports", { ports: [{ container_port: 81, protocol: "http" }] }],
     ["resources", { resources: { cpu_millis: 101, memory_mb: 64, pids: 64 } }],

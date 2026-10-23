@@ -245,7 +245,7 @@ export const githubRoutes = createRouter()
         if (err instanceof GithubApiError) return settingsRedirect(c, { error: "exchange_failed" });
         throw err;
       }
-      await storeGithubApp(db, masterKey, app);
+      await storeGithubApp(db, c.env, app);
       await recordAudit(db, {
         workspaceId: stored.workspace_id,
         actorType: "user",
@@ -270,7 +270,7 @@ export const githubRoutes = createRouter()
       const workspaceId = state.w;
       await requireWorkspace(c, workspaceId, policyOf(githubCallback).action!);
       if (query.setup_action === "request") return settingsRedirect(c, { status: "requested" });
-      const app = await loadGithubApp(db, masterKey);
+      const app = await loadGithubApp(db, c.env);
       if (!app) throw new ApiError(400, "github_not_configured", "No GitHub App is configured");
       let info: Awaited<ReturnType<typeof getInstallation>>;
       try {
@@ -310,7 +310,8 @@ export const githubRoutes = createRouter()
     const query = c.req.valid("query");
     await requireWorkspace(c, query.workspace_id, policyOf(listGithubRepositories).action!);
     const db = c.get("db");
-    const app = await loadGithubApp(db, requireMasterKey(c));
+    requireMasterKey(c);
+    const app = await loadGithubApp(db, c.env);
     if (!app) throw new ApiError(400, "github_not_configured", "No GitHub App is configured");
     const installs = await db
       .select()
@@ -358,7 +359,8 @@ export const githubRoutes = createRouter()
       throw new ApiError(413, "payload_too_large", "Webhook payload too large");
     }
     const db = c.get("db");
-    const app = await loadGithubApp(db, requireMasterKey(c));
+    requireMasterKey(c);
+    const app = await loadGithubApp(db, c.env);
     if (!app) throw new ApiError(401, "unauthorized", "No GitHub App is configured");
     // SECURITY: Nothing is parsed or looked up from the body before this.
     if (!(await verifyWebhookSignature(app.webhookSecret, raw, headers["x-hub-signature-256"]))) {

@@ -39,6 +39,8 @@ const me = createRoute({
           name: z.string(),
           email: z.string(),
           image: z.string().nullable(),
+          /** Holds the install-wide actions (ADR 0014, F3). */
+          instance_admin: z.boolean(),
         }),
         workspaces: z.array(
           z.object({
@@ -171,7 +173,16 @@ export const workspaceRoutes = createRouter()
       .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
       .where(and(eq(workspaceMembers.userId, user.id), isNull(workspaces.deletedAt)))
       .orderBy(asc(workspaces.name));
-    return c.json({ user, workspaces: rows }, 200);
+    const [flags] = await c
+      .get("db")
+      .select({ instanceAdmin: users.instanceAdmin })
+      .from(users)
+      .where(eq(users.id, user.id))
+      .limit(1);
+    return c.json(
+      { user: { ...user, instance_admin: flags?.instanceAdmin ?? false }, workspaces: rows },
+      200,
+    );
   })
   .openapi(create, async (c) => {
     const user = await requireUser(c);

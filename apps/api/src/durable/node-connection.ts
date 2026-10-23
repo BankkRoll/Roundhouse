@@ -4,7 +4,8 @@
  *
  * Responsibilities:
  * - validate every agent frame against the protocol schemas, with size and
- *   per-type rate limits, and reject agents below `MIN_PROTOCOL_VERSION`;
+ *   per-type rate limits, and close agents below `MIN_PROTOCOL_VERSION`
+ *   with `agent_outdated`;
  * - persist heartbeat snapshots and detect silent nodes with an alarm;
  * - apply `workload_status` (and `hello.statuses`) to placements, move
  *   deployments between `active` and `crashed`, and wake deploy workflows;
@@ -12,7 +13,7 @@
  * - redact, store (R2 + `log_chunks`) and forward `logs` to the project room;
  * - sign and send control frames: `welcome`, `desired_state` (always
  *   computed from D1, so a reconnect gets the truth) and `build_job`, never
- *   sending workloads or builds below `WORKLOADS_PROTOCOL_VERSION`, and giving
+ *   sending workloads or builds below `SEALED_ENV_PROTOCOL_VERSION`, and giving
  *   credential-carrying frames at most `CREDENTIAL_FRAME_TTL_MS`.
  *
  * Only the Worker can reach this object, and it authenticates the agent
@@ -49,6 +50,7 @@ import {
   MAX_CONTROL_FRAME_BYTES,
   MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  SEALED_ENV_PROTOCOL_VERSION,
   signEnvelope,
   WORKLOADS_PROTOCOL_VERSION,
   type WorkloadState,
@@ -80,6 +82,8 @@ export const CloseCode = {
   tooBig: 1009,
   replaced: 4000,
   removed: 4001,
+  /** `agent_outdated`: the agent is below `MIN_PROTOCOL_VERSION` and must be upgraded (ADR 0013). */
+  agentOutdated: 4002,
 } as const;
 
 /**
@@ -227,10 +231,10 @@ export class NodeConnection extends DurableObject<Env> {
       if (attachment.helloReceived) return ws.close(CloseCode.policy, "duplicate hello");
       if (message.node_id !== attachment.nodeId)
         return ws.close(CloseCode.policy, "node id mismatch");
-      if (
-        message.protocol_version > PROTOCOL_VERSION ||
-        message.protocol_version < MIN_PROTOCOL_VERSION
-      ) {
+      if (message.protocol_version < MIN_PROTOCOL_VERSION) {
+        return ws.close(CloseCode.agentOutdated, "agent_outdated");
+      }
+      if (message.protocol_version > PROTOCOL_VERSION) {
         return ws.close(
           CloseCode.policy,
           `unsupported protocol version ${message.protocol_version}`,
@@ -375,7 +379,7 @@ export class NodeConnection extends DurableObject<Env> {
     const ws = this.greetedSocket();
     if (!ws) return { sent: false, reason: "not_connected" };
     const attachment = ws.deserializeAttachment() as Attachment;
-    if (attachment.protocolVersion < WORKLOADS_PROTOCOL_VERSION) {
+    if (attachment.protocolVersion < SEALED_ENV_PROTOCOL_VERSION) {
       return { sent: false, reason: "protocol_too_old" };
     }
     const now = Date.now();
@@ -807,7 +811,7 @@ export class NodeConnection extends DurableObject<Env> {
     // The agent rejects malformed or over-long-lived frames anyway; checking
     // here turns a silent agent-side rejection into a control-plane error.
     const checked = ControlMessageSchema.parse(message);
-    const key = await loadSigningKey(this.db, masterKey.trim());
+    const key = await loadSigningKey(this.db, this.env);
     const frame = JSON.stringify(await signEnvelope(checked, key.privateKey, key.kid));
     if (frame.length > MAX_CONTROL_FRAME_BYTES) {
       throw new Error(`control frame of ${frame.length} bytes exceeds the agent's read limit`);

@@ -31,6 +31,7 @@ func TestFixturesRoundTrip(t *testing.T) {
 		{"hello.json", &Hello{}},
 		{"heartbeat.json", &Heartbeat{}},
 		{"hello-statuses.json", &Hello{}},
+		{"hello-encryption-key.json", &Hello{}},
 		{"workload-status.json", &WorkloadStatus{}},
 		{"logs-runtime.json", &Logs{}},
 		{"logs-build.json", &Logs{}},
@@ -67,14 +68,15 @@ func TestFixturesRoundTrip(t *testing.T) {
 
 func TestDecodeAgentMessageFixtures(t *testing.T) {
 	cases := map[string]AgentMessage{
-		"hello.json":               &Hello{},
-		"hello-statuses.json":      &Hello{},
-		"heartbeat.json":           &Heartbeat{},
-		"workload-status.json":     &WorkloadStatus{},
-		"logs-runtime.json":        &Logs{},
-		"logs-build.json":          &Logs{},
-		"build-result-ok.json":     &BuildResult{},
-		"build-result-failed.json": &BuildResult{},
+		"hello.json":                &Hello{},
+		"hello-statuses.json":       &Hello{},
+		"hello-encryption-key.json": &Hello{},
+		"heartbeat.json":            &Heartbeat{},
+		"workload-status.json":      &WorkloadStatus{},
+		"logs-runtime.json":         &Logs{},
+		"logs-build.json":           &Logs{},
+		"build-result-ok.json":      &BuildResult{},
+		"build-result-failed.json":  &BuildResult{},
 	}
 	for file, want := range cases {
 		t.Run(file, func(t *testing.T) {
@@ -232,6 +234,9 @@ func TestVerifySignedDesiredStateFixture(t *testing.T) {
 		t.Fatalf("fixture is missing parts: %+v", ds)
 	}
 	for _, w := range ds.Workloads {
+		if want := EnvironmentNetworkName(*w.ProjectID, *w.EnvironmentID); w.Network != want {
+			t.Errorf("%s: network %s, want %s", w.ID, w.Network, want)
+		}
 		got, err := ComputeSpecHash(w)
 		if err != nil {
 			t.Fatal(err)
@@ -253,6 +258,35 @@ func TestVerifySignedBuildJobFixture(t *testing.T) {
 		t.Error("fixture should carry a git token")
 	}
 	assertRoundTrip(t, job, payload)
+}
+
+// TestNetworkNamesFixture is the Go half of the network-name agreement
+// check: the TypeScript suite recomputes the same cases.
+func TestNetworkNamesFixture(t *testing.T) {
+	var f struct {
+		Cases []struct {
+			ProjectID     string `json:"project_id"`
+			EnvironmentID string `json:"environment_id"`
+			Network       string `json:"network"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(readFixture(t, "network-names.json"), &f); err != nil {
+		t.Fatal(err)
+	}
+	hashed := false
+	for _, c := range f.Cases {
+		got := EnvironmentNetworkName(c.ProjectID, c.EnvironmentID)
+		if got != c.Network {
+			t.Errorf("EnvironmentNetworkName(%s, %s) = %s, want %s", c.ProjectID, c.EnvironmentID, got, c.Network)
+		}
+		if !networkRE.MatchString(got) {
+			t.Errorf("%s is not a valid network name", got)
+		}
+		hashed = hashed || strings.HasPrefix(got, HashedNetworkPrefix)
+	}
+	if !hashed {
+		t.Error("fixture has no hashed case")
+	}
 }
 
 // TestSpecHashFixture is the Go half of the spec-hash agreement check: the

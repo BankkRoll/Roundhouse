@@ -7,6 +7,7 @@ import {
   type ControlMessage,
   computeSpecHash,
   EnvelopeSchema,
+  environmentNetworkName,
   generateSigningKey,
   importSigningKey,
   JoinRequestSchema,
@@ -27,6 +28,7 @@ describe("shared fixtures", () => {
     ["hello.json", AgentMessageSchema],
     ["heartbeat.json", AgentMessageSchema],
     ["hello-statuses.json", AgentMessageSchema],
+    ["hello-encryption-key.json", AgentMessageSchema],
     ["workload-status.json", AgentMessageSchema],
     ["logs-runtime.json", AgentMessageSchema],
     ["logs-build.json", AgentMessageSchema],
@@ -69,6 +71,25 @@ describe("shared fixtures", () => {
     const f = fixture("signed-desired-state.json") as SignedFixture;
     const payload = JSON.parse(f.envelope.payload) as { workloads: unknown[] };
     for (const raw of payload.workloads) expect(() => v1Workload.parse(raw)).not.toThrow();
+  });
+
+  it("reproduces every environment network name", async () => {
+    const { cases } = fixture("network-names.json") as {
+      cases: { project_id: string; environment_id: string; network: string }[];
+    };
+    expect(cases.some((c) => c.network.startsWith("openrail-env-"))).toBe(true);
+    for (const c of cases) {
+      expect(await environmentNetworkName(c.project_id, c.environment_id)).toBe(c.network);
+    }
+  });
+
+  it("puts every signed service workload on its environment network", async () => {
+    const f = fixture("signed-desired-state.json") as SignedFixture;
+    const payload = JSON.parse(f.envelope.payload) as { workloads: unknown[] };
+    for (const raw of payload.workloads) {
+      const w = WorkloadSpecSchema.parse(raw);
+      expect(w.network).toBe(await environmentNetworkName(w.project_id!, w.environment_id!));
+    }
   });
 
   it("reproduces every spec-hash case", async () => {

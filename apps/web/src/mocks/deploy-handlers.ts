@@ -17,7 +17,6 @@
 import {
   type Action,
   CANCELLABLE_DEPLOYMENT_STATUSES,
-  can,
   defaultServiceConfig,
   generatedHostname,
   parseReferences,
@@ -262,7 +261,18 @@ function latestConfig(serviceId: string, environmentId: string): ServiceConfig |
 }
 
 function toVariable({ key, value, is_secret, version, updated_at }: DbVariable): Variable {
-  return { key, value: is_secret ? null : value, is_secret, version, updated_at };
+  return {
+    key,
+    tier: is_secret ? "secret" : "plain",
+    locked: false,
+    value: is_secret ? null : value,
+    fingerprint: null,
+    available_at_build: false,
+    mount_as_file: false,
+    version,
+    updated_at,
+    updated_by: null,
+  };
 }
 
 function variablesOf(scope: DbVariable["scope"], ownerId: string, environmentId: string) {
@@ -486,12 +496,9 @@ function logPage(key: string, query: Record<string, unknown>) {
 function ownerOfAnyWorkspace(): Response | null {
   const user = currentUser();
   if (!user) return unauthorized();
-  const owner = db.memberships.some(
-    (row) => row.user_id === user.id && can(row.role, actionOf("getInstanceSettings")),
-  );
-  return owner
+  return user.instance_admin
     ? null
-    : apiError(403, "forbidden", "Only workspace owners can manage this instance");
+    : apiError(403, "forbidden", "Only instance admins can perform instance:manage");
 }
 
 async function hmacHex(secret: string, body: string): Promise<string> {
@@ -961,8 +968,8 @@ export const deployHandlers = [
   ...(["service", "shared"] as const).flatMap((scope) => {
     const names =
       scope === "service"
-        ? (["listServiceVariables", "putServiceVariables", "revealServiceVariables"] as const)
-        : (["listSharedVariables", "putSharedVariables", "revealSharedVariables"] as const);
+        ? (["listServiceVariables", "putServiceVariables"] as const)
+        : (["listSharedVariables", "putSharedVariables"] as const);
     const resolve = (id: string, action: Action) => {
       if (scope === "service") {
         const found = serviceAccess(id, action);
@@ -1000,11 +1007,11 @@ export const deployHandlers = [
         if (!found.ok) return found.response;
         const environment = environmentOf(found.projectId, input.query.environment_id);
         if (!environment) return notFound("Environment");
-        const set = input.body.set as { key: string; value: string; is_secret?: boolean }[];
+        const set = input.body.set as { key: string; value?: string; tier?: "plain" | "secret" }[];
         const remove = input.body.delete as string[];
         // Mirrors the API's assertValidReferences: every malformed reference, by key.
         const details = set.flatMap(({ key, value }) =>
-          parseReferences(value).errors.map((e) => ({
+          parseReferences(value ?? "").errors.map((e) => ({
             field: key,
             code: e.code,
             message: e.message,
@@ -1027,8 +1034,8 @@ export const deployHandlers = [
             (row) => row.key === entry.key,
           );
           if (existing) {
-            existing.value = entry.value;
-            existing.is_secret = entry.is_secret ?? existing.is_secret;
+            existing.value = entry.value ?? existing.value;
+            existing.is_secret = entry.tier ? entry.tier === "secret" : existing.is_secret;
             existing.version += 1;
             existing.updated_at = now;
           } else {
@@ -1037,8 +1044,8 @@ export const deployHandlers = [
               owner_id: ownerId,
               environment_id: environment.id,
               key: entry.key,
-              value: entry.value,
-              is_secret: entry.is_secret ?? false,
+              value: entry.value ?? "",
+              is_secret: entry.tier === "secret",
               version: 1,
               updated_at: now,
             });
@@ -1066,32 +1073,10 @@ export const deployHandlers = [
             deleted: remove,
           },
         });
-        return HttpResponse.json(listVariables(scope, ownerId, environment.id));
-      }),
-
-      http.post(mswPath(names[2]), async ({ request, params }) => {
-        const input = await validate(names[2], request, params);
-        if (!input.ok) return input.response;
-        const ownerId = input.params[ownerParam] ?? "";
-        const found = resolve(ownerId, actionOf(names[2]));
-        if (!found.ok) return found.response;
-        const environment = environmentOf(found.projectId, input.query.environment_id);
-        if (!environment) return notFound("Environment");
-        const keys = input.body.keys as string[];
-        const variables = variablesOf(scope, ownerId, environment.id)
-          .filter((row) => keys.includes(row.key))
-          .map((row) => ({ key: row.key, value: row.value }));
-        // SECURITY: Audited with the keys only, never the values, like the API.
-        recordAudit({
-          workspaceId: found.workspaceId,
-          actorType: "user",
-          actorId: found.guard.user.id,
-          action: "variables.revealed",
-          targetType: scope === "service" ? "service" : "project",
-          targetId: ownerId,
-          metadata: { environment_id: environment.id, keys: variables.map((entry) => entry.key) },
+        return HttpResponse.json({
+          ...listVariables(scope, ownerId, environment.id),
+          warnings: [],
         });
-        return HttpResponse.json({ variables });
       }),
     ];
   }),

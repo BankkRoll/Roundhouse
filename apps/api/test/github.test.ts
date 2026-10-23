@@ -86,7 +86,7 @@ async function testKeys() {
 
 async function seedApp() {
   const k = await testKeys();
-  await storeGithubApp(createDb(env.DB), env.MASTER_KEY!, {
+  await storeGithubApp(createDb(env.DB), env, {
     id: APP_ID,
     slug: "openrail-cp-a1b2c3",
     name: "OpenRail cp a1b2c3",

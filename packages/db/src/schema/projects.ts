@@ -11,10 +11,12 @@ import type {
   HealthcheckConfig,
   NetworkingConfig,
   PlacementConfig,
+  ProtectionRules,
   ResourcesConfig,
   ServiceKind,
   ServiceSource,
   VariableScope,
+  VariableTier,
 } from "@openrail/shared";
 import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
@@ -23,10 +25,11 @@ import { id, json, timestamp, timestamps } from "./columns";
 import { workspaces } from "./workspaces";
 
 /**
- * AES-256-GCM ciphertext as stored in JSON columns. Same shape as the API's
- * `Sealed`; the AAD binds it to its row, so it can't be moved elsewhere.
+ * AES-256-GCM ciphertext as stored in JSON columns, version 1: sealed with
+ * the single-key scheme of ADR 0003 and its short AADs. Still readable;
+ * the key rotation workflow re-seals it to {@link SealedValueV2}.
  */
-export interface SealedValue {
+export interface SealedValueV1 {
   /** Format version. */
   v: 1;
   /** 96-bit nonce, base64. */
@@ -34,6 +37,25 @@ export interface SealedValue {
   /** Ciphertext with the GCM tag appended, base64. */
   ct: string;
 }
+
+/**
+ * AES-256-GCM ciphertext, version 2 (ADR 0014). `kid` names the key that
+ * sealed it: a master-key KEK id for values sealed under the KEK (project
+ * DEKs, instance secrets), or the project DEK id for values sealed under a
+ * DEK. AADs are the long v2 forms that bind workspace, project and row.
+ */
+export interface SealedValueV2 {
+  v: 2;
+  /** 8 lowercase hex characters. */
+  kid: string;
+  /** 96-bit nonce, base64. */
+  iv: string;
+  /** Ciphertext with the GCM tag appended, base64. */
+  ct: string;
+}
+
+/** Any stored ciphertext. Same shape as the API's `Sealed`. */
+export type SealedValue = SealedValueV1 | SealedValueV2;
 
 /** A group of services deployed together, with its own environments and network. */
 export const projects = sqliteTable(
@@ -71,6 +93,14 @@ export const environments = sqliteTable(
     prNumber: integer("pr_number"),
     /** Branch a `preview` environment deploys. */
     sourceBranch: text("source_branch"),
+    /**
+     * Whether {@link environments.protectionRules} apply. New `production`
+     * environments start protected; the migration leaves existing ones as
+     * they were (unprotected) so upgrading changes nobody's access.
+     */
+    protected: integer("protected", { mode: "boolean" }).notNull().default(false),
+    /** `NULL` means `DEFAULT_PROTECTION_RULES`. */
+    protectionRules: json<ProtectionRules>("protection_rules"),
     ...timestamps,
   },
   (t) => [uniqueIndex("environments_project_slug_uq").on(t.projectId, t.slug)],
@@ -133,7 +163,8 @@ export const serviceConfigs = sqliteTable(
 /**
  * An environment variable, on one service (`scope = 'service'`) or shared by
  * every service of an environment (`scope = 'shared'`). Values are sealed
- * with the project's data key.
+ * with the project's data key. `secret` values are write-only: no API ever
+ * returns them (ADR 0014).
  */
 export const variables = sqliteTable(
   "variables",
@@ -149,11 +180,31 @@ export const variables = sqliteTable(
     /** Set exactly when `scope` is `service`. */
     serviceId: text("service_id").references(() => services.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
-    /** Sealed under the project DEK with AAD `variable:<id>`. */
+    /** Sealed under the project DEK; AAD `variableAad` (v1) or `variableAadV2` (v2) in the API. */
     valueSealed: json<SealedValue>("value_sealed").notNull(),
-    /** Secret values are masked in responses and redacted from logs. */
-    isSecret: integer("is_secret", { mode: "boolean" }).notNull().default(false),
-    /** Bumped on every write, for optimistic concurrency. */
+    /** `secret` values are never returned and are redacted from logs. */
+    tier: text("tier").$type<VariableTier>().notNull().default("plain"),
+    /** The classifier locked the tier (public prefix or recognised credential). */
+    locked: integer("locked", { mode: "boolean" }).notNull().default(false),
+    /**
+     * First 8 hex of HMAC-SHA256(fingerprint key of the project, value), so
+     * people can tell whether two values match without seeing either. `NULL`
+     * until the rotation workflow backfills rows written before ADR 0014.
+     */
+    fingerprint: text("fingerprint"),
+    /** Who last wrote the value or its flags. */
+    updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
+    /**
+     * Also delivered to builds: plain values as build args, secrets as
+     * BuildKit secrets (`RUN --mount=type=secret,id=KEY`).
+     */
+    availableAtBuild: integer("available_at_build", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Delivered as the file `/run/secrets/<KEY>` on a tmpfs instead of an
+     * environment variable, so `docker inspect` doesn't show it.
+     */
+    mountAsFile: integer("mount_as_file", { mode: "boolean" }).notNull().default(false),
+    /** Bumped on every write, for optimistic concurrency; part of the v2 AAD. */
     version: integer("version").notNull().default(1),
     ...timestamps,
   },
@@ -175,11 +226,22 @@ export const variables = sqliteTable(
 );
 
 /** A project's data encryption key, sealed under the master-derived KEK. One per project. */
-export const projectKeys = sqliteTable("project_keys", {
-  projectId: text("project_id")
-    .primaryKey()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  /** The 256-bit DEK, sealed with AAD `project-key:<project_id>`. */
-  dekSealed: json<SealedValue>("dek_sealed").notNull(),
-  ...timestamps,
-});
+export const projectKeys = sqliteTable(
+  "project_keys",
+  {
+    projectId: text("project_id")
+      .primaryKey()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** The 256-bit DEK, sealed under the KEK; see `projectKeyAad` / `projectKeyAadV2`. */
+    dekSealed: json<SealedValue>("dek_sealed").notNull(),
+    /**
+     * KEK id (`kid`) the DEK is sealed under, mirrored from `dek_sealed` so the
+     * rotation workflow can find stale rows by index. `NULL` for v1 rows.
+     */
+    kekKid: text("kek_kid"),
+    /** First 8 hex of SHA-256 of the raw DEK; the `kid` of values sealed under it. */
+    dekId: text("dek_id"),
+    ...timestamps,
+  },
+  (t) => [index("project_keys_kek_kid_idx").on(t.kekKid)],
+);

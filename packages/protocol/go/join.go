@@ -16,10 +16,14 @@ type JoinRequest struct {
 	Arch         Arch   `json:"arch"`
 	// PublicKey is the agent's Ed25519 identity public key, standard base64
 	// of the raw 32 bytes.
-	PublicKey    string       `json:"public_key"`
-	PublicIP     *string      `json:"public_ip"`
-	Hardware     Hardware     `json:"hardware"`
-	Capabilities Capabilities `json:"capabilities"`
+	PublicKey string `json:"public_key"`
+	// EncryptionPublicKey is the agent's X25519 public key, standard base64
+	// of the raw 32 bytes, separate from the identity key. Variables and
+	// build secrets are sealed to it.
+	EncryptionPublicKey string       `json:"encryption_public_key,omitempty"`
+	PublicIP            *string      `json:"public_ip"`
+	Hardware            Hardware     `json:"hardware"`
+	Capabilities        Capabilities `json:"capabilities"`
 }
 
 // JoinResponse is the 201 response of POST /v1/nodes/join.

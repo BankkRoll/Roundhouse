@@ -214,6 +214,7 @@ const phase0Handlers = [
       name: name ?? "",
       email: (email ?? "").toLowerCase(),
       image: null,
+      instance_admin: true,
       password: password ?? "",
     });
     const workspace = createWorkspaceFor(userId, workspace_name ?? "");
@@ -262,7 +263,13 @@ const phase0Handlers = [
     const user = currentUser();
     if (!user) return unauthorized();
     const me: Me = {
-      user: { id: user.id, name: user.name, email: user.email, image: user.image },
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        image: user.image,
+        instance_admin: user.instance_admin ?? false,
+      },
       workspaces: db.memberships
         .filter((row) => row.user_id === user.id)
         .flatMap((row) => {

@@ -5,6 +5,7 @@
  * @module
  */
 import { z } from "zod";
+import { EncryptionPublicKeyString } from "./box";
 import { CapabilitiesSchema, HardwareSchema, ShortText } from "./messages";
 
 /** Raw 32-byte Ed25519 public key, standard base64 (44 chars, one pad). */
@@ -24,6 +25,13 @@ export const JoinRequestSchema = z.object({
   arch: z.enum(["amd64", "arm64"]),
   /** Agent's Ed25519 identity public key, base64 (raw 32 bytes). */
   public_key: Ed25519PublicKey,
+  /**
+   * Agent's X25519 encryption public key, base64 (raw 32 bytes), separate
+   * from the identity key. Variables and build secrets are sealed to it.
+   * Optional so pre-4 agents can still join; such nodes get no workloads
+   * until they register one through `hello.encryption_key`.
+   */
+  encryption_public_key: EncryptionPublicKeyString.optional(),
   /** Self-reported; never trust it for routing or access control. */
   public_ip: z.union([z.ipv4(), z.ipv6()]).nullable(),
   hardware: HardwareSchema,

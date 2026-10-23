@@ -55,6 +55,8 @@ export interface User {
   name: string;
   email: string;
   image: string | null;
+  /** Holds install-wide actions; only `/v1/me` reports it. */
+  instance_admin?: boolean;
 }
 
 /** `POST /api/auth/sign-in/email` request body (Better Auth). */

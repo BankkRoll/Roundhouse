@@ -68,6 +68,15 @@ const (
 
 var errUnauthorized = errors.New("control plane rejected credential")
 
+// closeAgentOutdated is the close code the control plane answers a hello
+// below its MIN_PROTOCOL_VERSION with (ADR 0013). Retrying cannot help; only
+// an upgrade can.
+const closeAgentOutdated websocket.StatusCode = 4002
+
+// isAgentOutdated reports whether err is the control plane refusing this
+// agent's protocol version.
+func isAgentOutdated(err error) bool { return websocket.CloseStatus(err) == closeAgentOutdated }
+
 // ErrNotConnected is returned by [Client.Send] when no session is up. Callers
 // either drop the frame (statuses: hello resynchronises them) or keep it for
 // later (logs, build results).
@@ -179,6 +188,9 @@ func (c *Client) Run(ctx context.Context) error {
 		if errors.Is(err, errUnauthorized) {
 			c.Logger.Error("control plane rejected this node's credential; the node may have been removed. Re-join with `openrail-agent join --force`",
 				"err", err, "retry_in", delay)
+		} else if isAgentOutdated(err) {
+			c.Logger.Error("control plane no longer supports this agent's protocol version; upgrade with `install.sh --upgrade`",
+				"protocol_version", protocol.ProtocolVersion, "retry_in", delay)
 		} else {
 			c.Logger.Warn("disconnected from control plane", "err", err, "retry_in", delay)
 		}
@@ -202,7 +214,7 @@ func shouldResetBackoff(connected bool, lasted time.Duration) bool {
 // retryDelay picks the wait before the next dial. Auth failures will not fix
 // themselves quickly, so they wait the full cap instead of escalating.
 func retryDelay(b *Backoff, err error) time.Duration {
-	if errors.Is(err, errUnauthorized) {
+	if errors.Is(err, errUnauthorized) || isAgentOutdated(err) {
 		return b.Max
 	}
 	return b.Next()

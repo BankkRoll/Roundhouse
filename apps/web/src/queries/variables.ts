@@ -64,22 +64,3 @@ export function useSaveVariables(serviceId: string, environmentId: string) {
       queryClient.setQueryData(queryKeys.variables(serviceId, environmentId), data),
   });
 }
-
-/**
- * Reveals secret values. Each call is audited by the API, so the dashboard never caches
- * or prefetches the result beyond the component that asked.
- *
- * @param serviceId - Service id.
- * @param environmentId - Environment id.
- * @returns A mutation taking the keys and resolving to `{ key: value }`.
- */
-export function useRevealVariables(serviceId: string, environmentId: string) {
-  return useMutation({
-    mutationFn: async (keys: string[]) => {
-      const { variables } = await deployApi.revealServiceVariables(serviceId, environmentId, keys);
-      return Object.fromEntries(variables.map((variable) => [variable.key, variable.value]));
-    },
-    // SECURITY: Plaintext secrets must not linger in the MutationCache after use.
-    gcTime: 0,
-  });
-}

@@ -25,13 +25,17 @@ import {
 import {
   computeSpecHash,
   type DesiredState,
+  environmentNetworkName,
   type Healthcheck,
   MAX_WORKLOADS_PER_NODE,
-  projectNetworkName,
   REGISTRY_LISTEN,
   type RegistryConfig,
-  WORKLOADS_PROTOCOL_VERSION,
+  SEALED_ENV_PROTOCOL_VERSION,
+  type SealedBox,
+  type SealedWorkloadEnv,
+  sealBox,
   type WorkloadSpec,
+  workloadEnvAad,
 } from "@openrail/protocol";
 import {
   DEFAULT_PIDS_LIMIT,
@@ -65,7 +69,7 @@ export type DesiredStateBody = Omit<DesiredState, "id" | "node_id" | "iat" | "ex
  * {@link PRIVATE_DOMAIN_LABEL} for the agent to register as a network alias.
  *
  * @param serviceSlug - Service slug.
- * @param environmentSlug - Environment slug; one project network spans every environment.
+ * @param environmentSlug - Environment slug.
  * @returns E.g. `api.production.internal`.
  */
 export function privateDomain(serviceSlug: string, environmentSlug: string): string {
@@ -123,7 +127,8 @@ export interface WorkloadInput {
   serviceId: string;
   deploymentId: string;
   image: string;
-  env: Record<string, string>;
+  /** The replica's environment, sealed to its node; see {@link sealWorkloadEnv}. */
+  envSealed: SealedBox;
   config: Pick<ServiceConfigSpec, "deploy" | "resources" | "healthcheck" | "networking">;
   hostnames: string[];
   privateDomain: string;
@@ -150,7 +155,7 @@ export async function workloadSpec(w: WorkloadInput): Promise<WorkloadSpec> {
     ...(w.config.deploy.start_command
       ? { command: ["/bin/sh", "-c", w.config.deploy.start_command] }
       : {}),
-    env: w.env,
+    env_sealed: w.envSealed,
     ports: port ? [{ container_port: port, protocol: "http" }] : [],
     routes: port ? w.hostnames.map((hostname) => ({ hostname, container_port: port })) : [],
     healthcheck: healthcheckSpec(w.config.healthcheck ?? null, port),
@@ -160,11 +165,52 @@ export async function workloadSpec(w: WorkloadInput): Promise<WorkloadSpec> {
       pids: DEFAULT_PIDS_LIMIT,
     },
     restart: restartSpec(w.config.deploy),
-    network: projectNetworkName(w.projectId),
+    network: await environmentNetworkName(w.projectId, w.environmentId),
     labels: { [PRIVATE_DOMAIN_LABEL]: w.privateDomain },
     drain_s: w.config.deploy.drain_s,
   };
   return { ...spec, spec_hash: await computeSpecHash(spec) };
+}
+
+/**
+ * Seals a replica's environment to its node for one `desired_state` frame.
+ *
+ * @param nodePublicKey - The node's X25519 key (`nodes.encryption_public_key`).
+ * @param nodeId - The node.
+ * @param workloadId - The replica.
+ * @param generation - Generation of the frame that will carry it.
+ * @param payload - Environment variables, and values to mount as files.
+ * @returns The box for `WorkloadSpec.env_sealed`.
+ */
+export function sealWorkloadEnv(
+  nodePublicKey: string,
+  nodeId: string,
+  workloadId: string,
+  generation: number,
+  payload: SealedWorkloadEnv,
+): Promise<SealedBox> {
+  return sealBox(
+    nodePublicKey,
+    JSON.stringify(payload),
+    "workload-env",
+    workloadEnvAad(nodeId, workloadId, generation),
+  );
+}
+
+/**
+ * Whether a node may be given workloads or builds: its agent must open
+ * sealed boxes and have registered the key to seal them to. A node without a
+ * key could only be sent plaintext variables, so it gets nothing (ADR 0014
+ * "Node sealing").
+ *
+ * @param node - The node's protocol version and encryption key.
+ * @returns `true` when the node can run sealed workloads and builds.
+ */
+export function runsSealedWorkloads(node: {
+  protocolVersion: number;
+  encryptionPublicKey: string | null;
+}): boolean {
+  return node.protocolVersion >= SEALED_ENV_PROTOCOL_VERSION && node.encryptionPublicKey !== null;
 }
 
 /** Registry a builder node runs. Phase 1 always stores blobs on the builder's disk. */
@@ -194,13 +240,15 @@ export async function buildDesiredState(
       generation: nodes.desiredGeneration,
       protocolVersion: nodes.protocolVersion,
       capabilities: nodes.capabilities,
+      encryptionPublicKey: nodes.encryptionPublicKey,
     })
     .from(nodes)
     .where(and(eq(nodes.id, nodeId), isNull(nodes.deletedAt)))
     .limit(1);
   if (!node) return null;
   const ingress = await getIngressSettings(db);
-  const runsWorkloads = node.protocolVersion >= WORKLOADS_PROTOCOL_VERSION;
+  const nodeKey = node.encryptionPublicKey;
+  const runsWorkloads = runsSealedWorkloads(node);
   const body: DesiredStateBody = {
     type: "desired_state",
     generation: node.generation,
@@ -209,7 +257,7 @@ export async function buildDesiredState(
     apps_domain: ingress.appsDomain,
     registry: runsWorkloads && node.capabilities?.builder ? BUILDER_REGISTRY : null,
   };
-  if (!runsWorkloads) return body;
+  if (!runsWorkloads || nodeKey === null) return body;
 
   const rows = await db
     .select({
@@ -296,7 +344,11 @@ export async function buildDesiredState(
         serviceId: d.serviceId,
         deploymentId: d.id,
         image: d.image,
-        env,
+        // TODO(api-secrets-crypto): split mount_as_file variables into `files`.
+        envSealed: await sealWorkloadEnv(nodeKey, nodeId, r.placement.workloadId, node.generation, {
+          env,
+          files: {},
+        }),
         config: r.config,
         hostnames: (hostnames.get(`${d.serviceId}:${d.environmentId}`) ?? [])
           .filter((h) => h.type !== "generated" || networking.generated_domain)

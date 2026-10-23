@@ -9,7 +9,12 @@ import { generateSigningKey, importSigningKey } from "@openrail/protocol";
 import { DEFAULT_TLS_MODE, TLS_MODES, type TlsMode } from "@openrail/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { seal, unseal } from "./crypto";
+import {
+  type KeyEnv,
+  SealedSchema,
+  sealInstanceSecret,
+  unsealInstanceSecret,
+} from "./instance-secrets";
 
 /** Keys used in `instance_settings`. */
 export const SettingKey = {
@@ -35,7 +40,7 @@ export const SETUP_LOCK_TTL_MS = 120_000;
 const StoredSigningKeySchema = z.object({
   kid: z.string(),
   public_key: z.string(),
-  private_key: z.object({ v: z.literal(1), iv: z.string(), ct: z.string() }),
+  private_key: SealedSchema,
 });
 
 type StoredSigningKey = z.infer<typeof StoredSigningKeySchema>;
@@ -119,23 +124,23 @@ export async function releaseSetupLock(db: Db, token: number): Promise<void> {
  * sealed under the master-derived KEK.
  *
  * @param db - Database client.
- * @param masterKey - Base64 master key.
+ * @param keys - The master keyring bindings (`c.env`).
  * @returns The new public key, base64.
  */
-export async function createSigningKey(db: Db, masterKey: string): Promise<string> {
-  const keys = await generateSigningKey();
+export async function createSigningKey(db: Db, keys: KeyEnv): Promise<string> {
+  const pair = await generateSigningKey();
   const kid = `k${Date.now().toString(36)}`;
   const value: StoredSigningKey = {
     kid,
-    public_key: keys.publicKey,
-    private_key: await seal(masterKey, keys.privateKey, `setting:${SettingKey.signingKey}`),
+    public_key: pair.publicKey,
+    private_key: await sealInstanceSecret(keys, pair.privateKey, SettingKey.signingKey),
   };
   await db
     .insert(instanceSettings)
     .values({ key: SettingKey.signingKey, value })
     .onConflictDoUpdate({ target: instanceSettings.key, set: { value } });
   cached = undefined;
-  return keys.publicKey;
+  return pair.publicKey;
 }
 
 // PERF: Every join and every signed control frame needs the key. Caching it
@@ -146,16 +151,16 @@ let cached: Promise<SigningKey> | undefined;
  * Loads the signing key, caching it for the lifetime of the isolate.
  *
  * @param db - Database client.
- * @param masterKey - Base64 master key.
+ * @param keys - The master keyring bindings (`env`).
  * @returns The usable signing key.
  * @throws When setup hasn't created a key yet or the stored key is corrupt.
  */
-export function loadSigningKey(db: Db, masterKey: string): Promise<SigningKey> {
+export function loadSigningKey(db: Db, keys: KeyEnv): Promise<SigningKey> {
   cached ??= (async () => {
     const raw = await getSetting<unknown>(db, SettingKey.signingKey);
     if (raw === undefined) throw new Error("signing key not initialised; run setup first");
     const stored = StoredSigningKeySchema.parse(raw);
-    const pkcs8 = await unseal(masterKey, stored.private_key, `setting:${SettingKey.signingKey}`);
+    const pkcs8 = await unsealInstanceSecret(keys, stored.private_key, SettingKey.signingKey);
     return {
       kid: stored.kid,
       publicKey: stored.public_key,

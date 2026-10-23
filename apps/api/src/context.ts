@@ -5,8 +5,14 @@
  * @module
  */
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { createDb, type Db, workspaceMembers, workspaces } from "@openrail/db";
-import { type Action, can, type Role } from "@openrail/shared";
+import { createDb, type Db, users, workspaceMembers, workspaces } from "@openrail/db";
+import {
+  type Action,
+  can,
+  type InstanceAction,
+  isInstanceAction,
+  type Role,
+} from "@openrail/shared";
 import { APIError } from "better-auth/api";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
@@ -15,6 +21,7 @@ import { type AuthOptions, createAuth } from "./auth";
 import type { Env } from "./env";
 import { isValidMasterKey } from "./lib/crypto";
 import { ApiError, errorBody } from "./lib/errors";
+import { publicOrigin } from "./lib/origin";
 
 /** The signed-in user as exposed to handlers. */
 export interface SessionUser {
@@ -68,13 +75,13 @@ export const withDb = createMiddleware<AppEnv>(async (c, next) => {
 });
 
 /**
- * The control plane's public origin, derived from the request.
+ * The control plane's public origin; see `publicOrigin` (ADR 0014: never the request's `Host`).
  *
  * @param c - Request context.
  * @returns E.g. `https://cp.example.com`.
  */
 export function originOf(c: AppContext): string {
-  return new URL(c.req.url).origin;
+  return publicOrigin(c);
 }
 
 /**
@@ -204,7 +211,11 @@ export async function requireWorkspace(
     )
     .limit(1);
   if (!row) throw new ApiError(404, "not_found", "Workspace not found");
-  if (!can(row.role, action)) {
+  // TODO(api-authz-rbac-github): resolve with `resolveAccess` (grants, teams,
+  // environment protection, token scopes) instead of the coarse role check.
+  if (isInstanceAction(action)) {
+    await requireInstanceAction(c, action);
+  } else if (!can(row.role, action)) {
     throw new ApiError(403, "forbidden", `Your role (${row.role}) cannot perform ${action}`);
   }
   return { workspaceId, memberId: row.memberId, role: row.role, user };
@@ -221,24 +232,30 @@ export function clientIp(c: AppContext): string | null {
 }
 
 /**
- * Checks an install-wide action, which has no owning workspace: the caller
- * must hold it in at least one live workspace (in practice, be an owner).
+ * Checks an install-wide action against the caller's `users.instance_admin`
+ * flag (ADR 0014, F3: owning a workspace no longer grants it).
+ *
+ * TODO(api-authz-rbac-github): also enforce the policy's `reauth` and route
+ * through `resolveAccess`; reject API tokens.
  *
  * @param c - Request context.
- * @param action - Usually `instance:manage`.
+ * @param action - An instance action, e.g. `instance:manage`.
  * @returns The signed-in user.
- * @throws {ApiError} 401 when signed out, 403 when no membership grants `action`.
+ * @throws {ApiError} 401 when signed out, 403 when not an instance admin.
  */
-export async function requireInstanceAction(c: AppContext, action: Action): Promise<SessionUser> {
+export async function requireInstanceAction(
+  c: AppContext,
+  action: InstanceAction,
+): Promise<SessionUser> {
   const user = await requireUser(c);
-  const rows = await c
+  const [row] = await c
     .get("db")
-    .select({ role: workspaceMembers.role })
-    .from(workspaceMembers)
-    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
-    .where(and(eq(workspaceMembers.userId, user.id), isNull(workspaces.deletedAt)));
-  if (!rows.some((r) => can(r.role, action))) {
-    throw new ApiError(403, "forbidden", `Only workspace owners can perform ${action}`);
+    .select({ instanceAdmin: users.instanceAdmin })
+    .from(users)
+    .where(eq(users.id, user.id))
+    .limit(1);
+  if (!row?.instanceAdmin) {
+    throw new ApiError(403, "forbidden", `Only instance admins can perform ${action}`);
   }
   return user;
 }

@@ -6,13 +6,17 @@
  * @module
  */
 export * from "./audit";
+export * from "./auth-policy";
 export * from "./constants";
 export * from "./deployments";
 export * from "./hostnames";
 export * from "./ids";
 export * from "./projects";
 export * from "./rbac";
+export * from "./redaction";
 export * from "./scheduler";
 export * from "./service-config";
 export * from "./slug";
+export * from "./variable-classifier";
+export * from "./variable-taint";
 export * from "./variables";

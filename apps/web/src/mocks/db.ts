@@ -68,7 +68,13 @@ export const WORKSPACE_ID = "ws_acme";
 
 /** Seeded users by role in {@link WORKSPACE_ID}. */
 export const USERS = {
-  owner: { id: "usr_ada", name: "Ada Lovelace", email: "ada@example.com", image: null },
+  owner: {
+    id: "usr_ada",
+    name: "Ada Lovelace",
+    email: "ada@example.com",
+    image: null,
+    instance_admin: true,
+  },
   admin: { id: "usr_bob", name: "Bob Builder", email: "bob@example.com", image: null },
   member: { id: "usr_cara", name: "Cara Mel", email: "cara@example.com", image: null },
   viewer: { id: "usr_dan", name: "Dan Viewer", email: "dan@example.com", image: null },

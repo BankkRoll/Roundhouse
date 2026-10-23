@@ -13,7 +13,13 @@ import { type Db, instanceSettings } from "@openrail/db";
 import { fromBase64, toBase64 } from "@openrail/protocol";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { type Sealed, seal, unseal } from "./crypto";
+import type { Sealed } from "./crypto";
+import {
+  SealedSchema as InstanceSealedSchema,
+  type KeyEnv,
+  sealInstanceSecret,
+  unsealInstanceSecret,
+} from "./instance-secrets";
 import { SettingKey } from "./settings";
 
 /** GitHub REST API origin. */
@@ -136,7 +142,7 @@ export async function appJwt(appId: number, key: CryptoKey, now = Date.now()): P
 // Stored App
 // -----------------------------------------------------------------------------
 
-const SealedSchema = z.object({ v: z.literal(1), iv: z.string(), ct: z.string() });
+const SealedSchema = InstanceSealedSchema;
 
 const StoredAppSchema = z.object({
   id: z.number().int(),
@@ -173,20 +179,16 @@ export interface ManifestConversion {
   pem: string;
 }
 
-const aad = (field: string) => `setting:${SettingKey.githubApp}:${field}`;
+const APP = SettingKey.githubApp;
 
 /**
  * Stores the App's credentials, every secret sealed under the KEK.
  *
  * @param db - Database client.
- * @param masterKey - Base64 master key.
+ * @param keys - The master keyring bindings (`c.env`).
  * @param app - GitHub's manifest conversion response.
  */
-export async function storeGithubApp(
-  db: Db,
-  masterKey: string,
-  app: ManifestConversion,
-): Promise<void> {
+export async function storeGithubApp(db: Db, keys: KeyEnv, app: ManifestConversion): Promise<void> {
   const value: z.infer<typeof StoredAppSchema> = {
     id: app.id,
     slug: app.slug,
@@ -194,9 +196,9 @@ export async function storeGithubApp(
     html_url: app.html_url,
     owner_login: app.owner?.login ?? null,
     client_id: app.client_id,
-    client_secret: await seal(masterKey, app.client_secret, aad("client_secret")),
-    webhook_secret: await seal(masterKey, app.webhook_secret, aad("webhook_secret")),
-    private_key: await seal(masterKey, app.pem, aad("private_key")),
+    client_secret: await sealInstanceSecret(keys, app.client_secret, APP, "client_secret"),
+    webhook_secret: await sealInstanceSecret(keys, app.webhook_secret, APP, "webhook_secret"),
+    private_key: await sealInstanceSecret(keys, app.pem, APP, "private_key"),
   };
   await db
     .insert(instanceSettings)
@@ -232,10 +234,10 @@ export async function githubAppInfo(db: Db): Promise<GithubAppInfo | null> {
  * Loads the App with its secrets unsealed.
  *
  * @param db - Database client.
- * @param masterKey - Base64 master key.
+ * @param keys - The master keyring bindings (`c.env`).
  * @returns The App, or `null` when none has been created.
  */
-export async function loadGithubApp(db: Db, masterKey: string): Promise<GithubApp | null> {
+export async function loadGithubApp(db: Db, keys: KeyEnv): Promise<GithubApp | null> {
   const row = await db.query.instanceSettings.findFirst({
     where: eq(instanceSettings.key, SettingKey.githubApp),
   });
@@ -247,8 +249,13 @@ export async function loadGithubApp(db: Db, masterKey: string): Promise<GithubAp
     slug: a.slug,
     name: a.name,
     htmlUrl: a.html_url,
-    webhookSecret: await unseal(masterKey, a.webhook_secret as Sealed, aad("webhook_secret")),
-    privateKeyPem: await unseal(masterKey, a.private_key as Sealed, aad("private_key")),
+    webhookSecret: await unsealInstanceSecret(
+      keys,
+      a.webhook_secret as Sealed,
+      APP,
+      "webhook_secret",
+    ),
+    privateKeyPem: await unsealInstanceSecret(keys, a.private_key as Sealed, APP, "private_key"),
   };
 }
 

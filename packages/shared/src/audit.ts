@@ -4,6 +4,8 @@
  *
  * - {@link AUDIT_ACTIONS}: every action the control plane records.
  * - {@link AUDIT_ACTOR_TYPES}: every kind of principal that can perform one.
+ * - {@link INSTANCE_AUDIT_ACTIONS}: actions recorded without a workspace,
+ *   visible to instance admins only.
  *
  * @module
  */
@@ -34,7 +36,9 @@ export const AUDIT_ACTIONS = [
   "service.updated",
   "service.deleted",
   "variables.updated",
+  /** @deprecated Secrets are write-only since ADR 0014; kept so older entries still have a label. */
   "variables.revealed",
+  "variables.resolved",
   "deployment.created",
   "deployment.rolled_back",
   "deployment.cancelled",
@@ -42,7 +46,35 @@ export const AUDIT_ACTIONS = [
   "deployment.failed",
   "github.app_created",
   "github.installation_added",
+  "github.installation_rejected",
+  "github.installation_released",
   "instance.settings_updated",
+  "instance.admin_granted",
+  "instance.admin_revoked",
+  "instance.key_rotation_started",
+  "instance.key_rotation_completed",
+  "instance.key_rotation_failed",
+  "token.created",
+  "token.revoked",
+  "workspace.access_settings_updated",
+  "team.created",
+  "team.updated",
+  "team.deleted",
+  "team.member_added",
+  "team.member_removed",
+  "access.granted",
+  "access.changed",
+  "access.revoked",
+  "environment.protection_updated",
+  "node.encryption_key_registered",
+  "auth.sign_in_succeeded",
+  "auth.sign_in_failed",
+  "auth.account_locked",
+  "auth.reauthenticated",
+  "auth.two_factor_enabled",
+  "auth.two_factor_disabled",
+  "auth.backup_codes_regenerated",
+  "auth.two_factor_failed",
 ] as const;
 
 /** An audited action name. */
@@ -53,3 +85,27 @@ export const AUDIT_ACTOR_TYPES = ["user", "token", "node", "system"] as const;
 
 /** Who performed an audited action. */
 export type AuditActorType = (typeof AUDIT_ACTOR_TYPES)[number];
+
+/**
+ * Actions recorded with `workspace_id = NULL`: they concern the install or a
+ * user account rather than one workspace, so only instance admins see them
+ * (through `GET /v1/instance/audit`).
+ */
+export const INSTANCE_AUDIT_ACTIONS = [
+  "instance.setup_completed",
+  "instance.settings_updated",
+  "instance.admin_granted",
+  "instance.admin_revoked",
+  "instance.key_rotation_started",
+  "instance.key_rotation_completed",
+  "instance.key_rotation_failed",
+  "github.app_created",
+  "auth.sign_in_succeeded",
+  "auth.sign_in_failed",
+  "auth.account_locked",
+  "auth.reauthenticated",
+  "auth.two_factor_enabled",
+  "auth.two_factor_disabled",
+  "auth.backup_codes_regenerated",
+  "auth.two_factor_failed",
+] as const satisfies readonly AuditAction[];

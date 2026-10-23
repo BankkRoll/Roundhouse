@@ -28,7 +28,6 @@ import type {
   LogPage,
   Project,
   ProjectDetail,
-  RevealedVariables,
   Service,
   ServiceConfig,
   UpdatedService,
@@ -36,6 +35,7 @@ import type {
   UpdateServiceBody,
   Variable,
   VariablesPutBody,
+  VariablesPutResult,
 } from "./deploy-types";
 
 const seg = encodeURIComponent;
@@ -198,22 +198,9 @@ export const deployApi = {
    * @returns The full masked list afterwards.
    */
   putServiceVariables: (serviceId: string, environmentId: string, body: VariablesPutBody) =>
-    request<{ variables: Variable[] }>("PUT", `/v1/services/${seg(serviceId)}/variables`, {
+    request<VariablesPutResult>("PUT", `/v1/services/${seg(serviceId)}/variables`, {
       query: { environment_id: environmentId },
       body,
-    }),
-  /**
-   * Returns plaintext for secret keys. The API audits every call.
-   *
-   * @param serviceId - Service id.
-   * @param environmentId - Environment id.
-   * @param keys - Keys to reveal.
-   * @returns The revealed values.
-   */
-  revealServiceVariables: (serviceId: string, environmentId: string, keys: string[]) =>
-    request<RevealedVariables>("POST", `/v1/services/${seg(serviceId)}/variables/reveal`, {
-      query: { environment_id: environmentId },
-      body: { keys },
     }),
   /**
    * Lists a project environment's shared variables, secrets masked.

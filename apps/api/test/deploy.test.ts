@@ -63,10 +63,10 @@ describe("image deployments", () => {
     expect(workload).toMatchObject({
       kind: "service",
       image: "nginx:1.27",
-      network: `openrail-${s.project.id}`,
+      network: `openrail-${s.project.id}-${s.envId}`,
       ports: [{ container_port: 8080, protocol: "http" }],
     });
-    expect(workload.env).toMatchObject({
+    expect(s.agent.env(workload.id)).toMatchObject({
       GREETING: "hi from web",
       PORT: "8080",
       OPENRAIL_DEPLOYMENT_ID: created.id,
@@ -225,7 +225,7 @@ describe("git deployments", () => {
     expect(job.exp - job.iat).toBeLessThanOrEqual(60_000);
     expect("token" in (job as { source: object }).source).toBe(false);
     const workload = s.agent.desired()!.workloads[0]!;
-    expect(workload.env.OPENRAIL_GIT_COMMIT_SHA).toBe(COMMIT_SHA);
+    expect(s.agent.env(workload.id)?.OPENRAIL_GIT_COMMIT_SHA).toBe(COMMIT_SHA);
     expect(s.agent.desired()!.registry).toEqual({
       listen: "127.0.0.1:5000",
       storage: { type: "filesystem" },

@@ -6,8 +6,6 @@ import {
   CheckIcon,
   ClipboardPasteIcon,
   CopyIcon,
-  EyeIcon,
-  EyeOffIcon,
   KeyRoundIcon,
   PencilIcon,
   PlusIcon,
@@ -23,7 +21,6 @@ import { usePermissions } from "../../../lib/permissions";
 import { useDeploy } from "../../../queries/deployments";
 import { queryKeys } from "../../../queries/keys";
 import {
-  useRevealVariables,
   useSaveVariables,
   useServiceVariables,
   useSharedVariables,
@@ -215,8 +212,8 @@ function RowEditor({
 }
 
 /**
- * A service's variables: a table editor with masked secrets (revealed one at a time,
- * audited by the API), bulk `.env` paste, `${{` reference autocomplete, and staged
+ * A service's variables: a table editor with write-only secrets (ADR 0014: they can be
+ * replaced, never read back), bulk `.env` paste, `${{` reference autocomplete, and staged
  * changes saved together as one new version, then a prompt to deploy.
  *
  * @param props - Workspace, project and service ids.
@@ -227,16 +224,13 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
   const service = findService(project.data, serviceId);
   const { can } = usePermissions(workspaceId);
   const canManage = can("variables:manage");
-  const canReveal = can("variables:reveal");
   const variables = useServiceVariables(serviceId, environment?.id);
   const shared = useSharedVariables(projectId, environment?.id, canManage);
   const save = useSaveVariables(serviceId, environment?.id ?? "");
-  const reveal = useRevealVariables(serviceId, environment?.id ?? "");
   const deploy = useDeploy();
   const [draft, setDraft] = useState<VariablesDraft>(EMPTY_DRAFT);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
-  const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, FieldError>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedPrompt, setSavedPrompt] = useState(false);
@@ -289,7 +283,7 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
     setKeyError(null);
     setEditor({
       key: row.key,
-      value: row.value ?? revealed[row.key] ?? "",
+      value: row.value ?? "",
       isSecret: row.isSecret,
       isNew: false,
     });
@@ -311,7 +305,6 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
       editor.value === "" &&
       savedKeys.has(key) &&
       !draft.set.has(key) &&
-      revealed[key] === undefined &&
       rows.find((row) => row.key === key)?.value === null;
     if (untouchedSecret) {
       // The saved secret is unknown here, so a blank field means "keep it" and it can't
@@ -353,7 +346,6 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
     save.mutate(body, {
       onSuccess: () => {
         setDraft(EMPTY_DRAFT);
-        setRevealed({});
         setSavedPrompt(true);
         toast({ title: "Variables saved", description: "Deploy to apply them.", tone: "success" });
       },
@@ -369,18 +361,6 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
         if (mapped) setFieldErrors({ [mapped.key]: mapped });
         else setSaveError(errorMessage(error));
       },
-    });
-  }
-
-  function onReveal(key: string) {
-    if (revealed[key] !== undefined) {
-      setRevealed(({ [key]: _hidden, ...rest }) => rest);
-      return;
-    }
-    reveal.mutate([key], {
-      onSuccess: (values) => setRevealed((current) => ({ ...current, ...values })),
-      onError: (error) =>
-        toast({ title: "Could not reveal", description: errorMessage(error), tone: "error" }),
     });
   }
 
@@ -501,7 +481,7 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
           <ul aria-label="Variables list">
             {rows.map((row) => {
               const badge = CHANGE_BADGE[row.change];
-              const plain = row.value ?? revealed[row.key];
+              const plain = row.value ?? undefined;
               const masked = plain === undefined;
               const error = fieldErrors[row.key] ?? null;
               return (
@@ -536,17 +516,6 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
                         {error ? <SpanError error={error} value={plain} /> : null}
                       </div>
                       <div className="flex items-center justify-end gap-0.5">
-                        {row.isSecret && row.value === null && canReveal ? (
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            onClick={() => onReveal(row.key)}
-                            aria-label={masked ? `Reveal ${row.key}` : `Hide ${row.key}`}
-                            loading={reveal.isPending && reveal.variables?.[0] === row.key}
-                          >
-                            {masked ? <EyeIcon /> : <EyeOffIcon />}
-                          </Button>
-                        ) : null}
                         {!masked && plain ? (
                           <Button
                             variant="ghost"

@@ -23,7 +23,6 @@ import type {
   RealtimeClientMessage,
   RealtimeServerMessage,
   ResponseOf,
-  revealServiceVariables,
   ServiceConfig,
   updateInstanceSettings,
   updateProject,
@@ -61,8 +60,8 @@ export type UpdateServiceBody = BodyOf<typeof updateService>;
 export type UpdatedService = ResponseOf<typeof updateService, 200>;
 /** `PUT …/variables` body. */
 export type VariablesPutBody = BodyOf<typeof putServiceVariables>;
-/** `POST …/variables/reveal` response. */
-export type RevealedVariables = ResponseOf<typeof revealServiceVariables, 200>;
+/** `PUT …/variables` response: the list and the classifier warnings. */
+export type VariablesPutResult = ResponseOf<typeof putServiceVariables, 200>;
 /** `POST /v1/services/{serviceId}/deployments` body. */
 export type CreateDeploymentBody = BodyOf<typeof createDeployment>;
 /** A page of deployments, newest first. */
