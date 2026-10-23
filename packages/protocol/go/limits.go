@@ -181,6 +181,8 @@ var (
 	nodeIDRE           = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	requestIDRE        = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	dbNameRE           = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_$-]{0,63}$`)
+	dbUserRE           = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$`)
+	dbPasswordRE       = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,256}$`)
 	ageRecipientRE     = regexp.MustCompile(`^age1[02-9ac-hj-np-z]{58}$`)
 	ageIdentityRE      = regexp.MustCompile(`^AGE-SECRET-KEY-1[02-9AC-HJ-NP-Z]{58}$`)
 	bcryptRE           = regexp.MustCompile(`^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$`)
