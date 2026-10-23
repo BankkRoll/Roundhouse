@@ -97,7 +97,8 @@ export const setupRoutes = createRouter()
       createdWorkspaceId = workspace.id;
       await createSigningKey(db, c.env);
       await recordAudit(db, {
-        workspaceId: workspace.id,
+        // Instance-level (ADR 0014): only instance admins see it.
+        workspaceId: null,
         actorType: "user",
         actorId: userId,
         action: "instance.setup_completed",

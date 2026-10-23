@@ -47,6 +47,21 @@ export const ChainedAuditLogSchema = z
   })
   .openapi("ChainedAuditLog");
 
+/** Filters of `GET /v1/instance/audit-logs`. */
+export const InstanceAuditQuery = z.object({
+  /** `id` of the last entry of the previous page. */
+  cursor: z.string().min(1).max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  /** Only this action. */
+  action: z.enum(AUDIT_ACTIONS).optional(),
+  /** Only entries by this actor (user, token, node). */
+  actor_id: z.string().min(1).max(200).optional(),
+  /** Only entries at or after this time (Unix ms). */
+  since: z.coerce.number().int().nonnegative().optional(),
+  /** Only entries before this time (Unix ms). */
+  until: z.coerce.number().int().nonnegative().optional(),
+});
+
 /** A page of the instance audit log, newest first. */
 export const InstanceAuditPageSchema = z
   .object({ entries: z.array(ChainedAuditLogSchema), next_cursor: z.string().nullable() })
@@ -62,7 +77,13 @@ export const AuditChainVerificationSchema = z
     head_hash: z.string().nullable(),
     /** First entry whose hash or link doesn't match, when not `ok`. */
     broken_at_seq: z.number().int().positive().nullable(),
-    /** Entries not sealed yet (normally seconds old). */
+    /** Entries not sealed yet (sealed every minute). */
     unsealed: z.number().int().nonnegative(),
+    /**
+     * Head and checkpoints recorded outside the database (by the AuditChain
+     * Durable Object) that were compared with the log; a rewrite that
+     * recomputes every later hash still disagrees with them.
+     */
+    checkpoints: z.number().int().nonnegative(),
   })
   .openapi("AuditChainVerification");
