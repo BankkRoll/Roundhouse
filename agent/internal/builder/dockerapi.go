@@ -142,6 +142,16 @@ func checkDockerStatus(resp *http.Response) error {
 	return &dockerError{status: resp.StatusCode, msg: msg}
 }
 
+// securityOptions returns the engine's security features as /info reports
+// them, e.g. "name=apparmor" and "name=seccomp,profile=builtin".
+func (d *dockerAPI) securityOptions(ctx context.Context) ([]string, error) {
+	var info struct {
+		SecurityOptions []string `json:"SecurityOptions"`
+	}
+	err := d.do(ctx, http.MethodGet, "/info", nil, nil, &info)
+	return info.SecurityOptions, err
+}
+
 // -----------------------------------------------------------------------------
 // Networks, volumes, images
 // -----------------------------------------------------------------------------

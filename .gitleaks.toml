@@ -3,11 +3,20 @@
 useDefault = true
 
 [allowlist]
-description = "Intentional test fixtures and placeholders"
+description = "Intentional test fixtures, fakes and placeholders"
 paths = [
   '''apps/api/vitest\.config\.ts''',
   '''e2e/constants\.mjs''',
-  '''apps/web/src/mocks/db\.ts''',
+  '''apps/web/src/mocks/''',
   '''install/install\.sh''',
   '''infra/release-signing\.md''',
+  '''(^|/)test/''',
+  '''(^|/)testdata/''',
+  '''(^|/)fixtures/''',
+  '''\.test\.(ts|tsx|mjs)$''',
+  '''_test\.go$''',
+  '''cli/internal/apitest/''',
+  '''packages/protocol/scripts/gen-fixtures.ts''',
 ]
+# Drizzle column references, not values: `r2Key: logChunks.r2Key`.
+regexes = ['''^logChunks.r2Key$''']

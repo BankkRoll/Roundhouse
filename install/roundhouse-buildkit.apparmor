@@ -1,0 +1,20 @@
+# Managed by the Roundhouse installer; rewritten on every run.
+#
+# Lets rootless BuildKit (sys_buildkitd on builder nodes) create its user
+# namespace on hosts with kernel.apparmor_restrict_unprivileged_userns=1,
+# without lifting that restriction for the rest of the host. The profile
+# attaches to no executable: only a container started with
+# --security-opt apparmor=roundhouse-buildkit runs under it. Apart from the
+# userns rule it is unconfined, like the apparmor=unconfined that BuildKit
+# documents for rootless containers.
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile roundhouse-buildkit flags=(unconfined) {
+  userns,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/roundhouse-buildkit>
+}

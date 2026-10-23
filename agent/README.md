@@ -169,6 +169,15 @@ into an image in the local registry and answers with `build_result`.
    `buildctl dial-stdio`, run through the Docker exec API. Dockerfile builds
    use BuildKit's built-in frontend; Railpack builds use
    `ghcr.io/railwayapp/railpack-frontend:v0.43.0`, pinned by digest.
+   Where AppArmor restricts unprivileged user namespaces (Ubuntu 23.10+),
+   rootless BuildKit cannot start unconfined, so `sys_buildkitd` runs under
+   the `roundhouse-buildkit` profile that `install.sh` loads: the agent uses
+   it when `/sys/kernel/security/apparmor/profiles` lists it or, when that is
+   unreadable, when the engine can start a container under it, and
+   `unconfined` otherwise. `ROUNDHOUSE_BUILDKIT_APPARMOR_PROFILE` overrides
+   the choice (for example with a site-specific profile). If BuildKit still
+   fails to create its user namespace, the build error says how to load the
+   profile; the next build picks it up without restarting the agent.
 4. **Push.** BuildKit pushes `<image_repository>:<build_id>` and the
    `cache_key`'s registry cache through a proxy the agent opens on the build
    network's gateway for that build only. It requires a random per-build

@@ -67,10 +67,11 @@ try {
   await teardown();
   rmSync(ARTIFACTS, { recursive: true, force: true });
 
-  const skipWeb =
-    process.env.PHASE1_SKIP_WEB_BUILD === "1" &&
-    existsSync(join(ROOT, "apps", "web", "dist", "index.html"));
-  if (withUi && !skipWeb) {
+  // NOTE: the dashboard is built even with PHASE1_UI=0 when it is missing,
+  // because wrangler refuses to start without assets.directory (apps/web/dist).
+  const haveWeb = existsSync(join(ROOT, "apps", "web", "dist", "index.html"));
+  const skipWeb = haveWeb && (process.env.PHASE1_SKIP_WEB_BUILD === "1" || !withUi);
+  if (!skipWeb) {
     log("run", "building the dashboard");
     await runInherit("pnpm", ["--filter", "@roundhouse/web", "build"], {
       cwd: ROOT,

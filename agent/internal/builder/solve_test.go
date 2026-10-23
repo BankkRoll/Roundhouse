@@ -190,7 +190,7 @@ func TestDaemonConfig(t *testing.T) {
 			t.Errorf("config missing %q:\n%s", want, cfg)
 		}
 	}
-	spec := d.containerSpec("172.30.0.1", "hash")
+	spec := d.containerSpec("172.30.0.1", AppArmorProfile, "hash")
 	host := spec["HostConfig"].(map[string]any)
 	if host["NetworkMode"] != NetworkName || host["Privileged"] != nil {
 		t.Errorf("host config %+v", host)

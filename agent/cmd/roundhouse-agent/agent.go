@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -76,9 +77,10 @@ func newAgent(cfg config.Config, client *conn.Client, log *slog.Logger) (*agent,
 		// runtime runs at [protocol.RegistryListen]; until it is healthy a
 		// build fails at push time with the registry error.
 		b, err = builder.New(builder.Options{
-			Logger:       log,
-			DataDir:      dataDir,
-			RegistryAddr: protocol.RegistryListen,
+			Logger:          log,
+			DataDir:         dataDir,
+			RegistryAddr:    protocol.RegistryListen,
+			AppArmorProfile: os.Getenv("ROUNDHOUSE_BUILDKIT_APPARMOR_PROFILE"),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("builder: %w", err)

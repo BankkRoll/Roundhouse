@@ -153,6 +153,21 @@ export function SiteHeader() {
       )}
     >
       <div
+        role="status"
+        data-testid="dev-banner"
+        className="bg-accent px-4 py-1.5 text-center text-[13px] font-medium text-accent-foreground"
+      >
+        {PRODUCT_NAME} is under active development and not ready for production yet.{" "}
+        <a
+          href={REPO_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Follow along on GitHub
+        </a>
+      </div>
+      <div
         className={cn(
           "lp-wrap flex items-center gap-3 transition-[height] duration-300",
           scrolled ? "h-14" : "h-[68px]",
