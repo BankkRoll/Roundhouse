@@ -80,7 +80,9 @@ const (
 // Rootless BuildKit needs seccomp, AppArmor and the /proc masks relaxed so
 // it can create its own user, mount and PID namespaces; that is the
 // configuration BuildKit documents for containerised rootless use and is far
-// narrower than the --privileged a rootful daemon needs.
+// narrower than the --privileged a rootful daemon needs. Where AppArmor also
+// restricts unprivileged user namespaces, "unconfined" is not enough and the
+// daemon runs under [AppArmorProfile] instead; see apparmor.go.
 type daemon struct {
 	docker *dockerAPI
 	log    *slog.Logger
@@ -90,11 +92,16 @@ type daemon struct {
 	cacheMaxBytes int64
 	minFreeBytes  int64
 	memoryBytes   int64
+	// apparmorOverride is [Options.AppArmorProfile]; empty resolves it.
+	apparmorOverride string
 
 	mu sync.Mutex
 	// gateway is the build network's gateway, where the registry proxy
 	// listens; set by ensure.
 	gateway string
+	// apparmor is the resolved AppArmor profile; empty until ensure
+	// resolves it, and again after a user namespace denial.
+	apparmor string
 }
 
 // daemonConfig renders buildkitd.toml.
@@ -123,11 +130,12 @@ func (d *daemon) daemonConfig() string {
 `, reserved, d.cacheMaxBytes, d.minFreeBytes, registryProxyHost, d.proxyPort)
 }
 
-// containerSpec is the create body for sys_buildkitd.
-func (d *daemon) containerSpec(gateway, configHash string) map[string]any {
+// containerSpec is the create body for sys_buildkitd, running under the
+// AppArmor profile apparmor.
+func (d *daemon) containerSpec(gateway, apparmor, configHash string) map[string]any {
 	host := map[string]any{
 		"NetworkMode": NetworkName,
-		"SecurityOpt": []string{"seccomp=unconfined", "apparmor=unconfined"},
+		"SecurityOpt": []string{"seccomp=unconfined", "apparmor=" + apparmor},
 		// Empty lists are the API form of --security-opt systempaths=unconfined.
 		"MaskedPaths":   []string{},
 		"ReadonlyPaths": []string{},
@@ -172,8 +180,13 @@ func (d *daemon) ensure(ctx context.Context) error {
 		return fmt.Errorf("cache volume: %w", err)
 	}
 
+	apparmor, err := d.appArmorProfile(ctx)
+	if err != nil {
+		return fmt.Errorf("AppArmor profile: %w", err)
+	}
+
 	cfg := d.daemonConfig()
-	sum := sha256.Sum256([]byte(d.image + "\x00" + gateway + "\x00" + cfg + "\x00" + fmt.Sprint(d.memoryBytes)))
+	sum := sha256.Sum256([]byte(d.image + "\x00" + gateway + "\x00" + apparmor + "\x00" + cfg + "\x00" + fmt.Sprint(d.memoryBytes)))
 	hash := hex.EncodeToString(sum[:12])
 
 	info, err := d.docker.inspectContainer(ctx, ContainerName)
@@ -196,15 +209,10 @@ func (d *daemon) ensure(ctx context.Context) error {
 		return fmt.Errorf("inspect %s: %w", ContainerName, err)
 	}
 
-	if ok, err := d.docker.imageExists(ctx, d.image); err != nil {
+	if err := d.ensureImage(ctx); err != nil {
 		return err
-	} else if !ok {
-		d.log.Info("pulling BuildKit image", "image", d.image)
-		if err := d.docker.pullImage(ctx, d.image); err != nil {
-			return err
-		}
 	}
-	id, err := d.docker.createContainer(ctx, ContainerName, d.containerSpec(gateway, hash))
+	id, err := d.docker.createContainer(ctx, ContainerName, d.containerSpec(gateway, apparmor, hash))
 	if err != nil {
 		return fmt.Errorf("create %s: %w", ContainerName, err)
 	}
@@ -219,9 +227,19 @@ func (d *daemon) ensure(ctx context.Context) error {
 	if err := d.docker.startContainer(ctx, id); err != nil {
 		return fmt.Errorf("start %s: %w", ContainerName, err)
 	}
-	d.log.Info("started BuildKit daemon", "container", ContainerName, "image", d.image)
+	d.log.Info("started BuildKit daemon", "container", ContainerName, "image", d.image, "apparmor_profile", apparmor)
 	d.gateway = gateway
 	return nil
+}
+
+// ensureImage pulls the BuildKit image unless the engine already has it.
+func (d *daemon) ensureImage(ctx context.Context) error {
+	ok, err := d.docker.imageExists(ctx, d.image)
+	if err != nil || ok {
+		return err
+	}
+	d.log.Info("pulling BuildKit image", "image", d.image)
+	return d.docker.pullImage(ctx, d.image)
 }
 
 // ensureNetwork creates the build network if needed and returns its IPv4
@@ -269,8 +287,15 @@ func (d *daemon) connect(ctx context.Context, errOut io.Writer) (*bkclient.Clien
 			if ctx.Err() != nil {
 				return nil, context.Cause(ctx)
 			}
-			logs := d.docker.containerLogs(context.WithoutCancel(ctx), ContainerName, 20)
-			return nil, fmt.Errorf("BuildKit daemon did not become ready: %v\n%s", lastErr, strings.TrimSpace(logs))
+			logs := strings.TrimSpace(d.docker.containerLogs(context.WithoutCancel(ctx), ContainerName, 20))
+			if userNamespaceDenied(logs) {
+				profile := d.currentAppArmorProfile()
+				d.forgetAppArmorProfile()
+				hint := userNamespaceHint(profile)
+				d.log.Error("BuildKit daemon cannot start: "+hint, "container", ContainerName)
+				return nil, fmt.Errorf("BuildKit daemon did not become ready: %s\n%s", hint, logs)
+			}
+			return nil, fmt.Errorf("BuildKit daemon did not become ready: %v\n%s", lastErr, logs)
 		case <-time.After(500 * time.Millisecond):
 		}
 	}

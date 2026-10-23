@@ -226,4 +226,90 @@ fi
 grep -q "signed checksums are for agent-v${VERSION}" /tmp/mismatch.log ||
 	fail "unexpected failure: $(cat /tmp/mismatch.log)"
 
+log "BuildKit AppArmor profile"
+profile_file=/etc/apparmor.d/roundhouse-buildkit
+# securityfs is never mounted in a container, so the real install above
+# must have skipped the profile whatever the host kernel does.
+[ ! -e "$profile_file" ] || fail "profile installed without AppArmor's policy interface"
+
+# The step itself runs against fixture kernel interfaces and a stub parser,
+# by sourcing the installer and calling the function an install calls.
+aa=/tmp/aa
+mkdir -p "$aa/bin" "$aa/fs/features/namespaces"
+touch "$aa/fs/features/namespaces/userns_create"
+cat >"$aa/bin/apparmor_parser" <<'EOF'
+#!/bin/sh
+echo "$*" >>/tmp/aa/parser.log
+if [ -e /tmp/aa/parser-fails ]; then
+	echo "AppArmor parser error: Could not open 'abi/4.0'" >&2
+	exit 1
+fi
+EOF
+chmod +x "$aa/bin/apparmor_parser"
+# aa_step <enabled Y|N> <restrict 0|1|-> [fs dir]; "-" means no sysctl.
+aa_step() {
+	printf '%s\n' "$1" >"$aa/enabled"
+	rm -f "$aa/restrict"
+	if [ "$2" != - ]; then printf '%s\n' "$2" >"$aa/restrict"; fi
+	PATH="$aa/bin:$PATH" ROUNDHOUSE_INSTALL_SOURCE_ONLY=1 AA_FS="${3:-$aa/fs}" bash -c '
+		. /tmp/install.sh
+		APPARMOR_ENABLED=/tmp/aa/enabled
+		APPARMOR_FS="$AA_FS"
+		USERNS_RESTRICT_SYSCTL=/tmp/aa/restrict
+		install_buildkit_apparmor
+	' >"$aa/out" 2>&1
+}
+parser_calls() { if [ -f "$aa/parser.log" ]; then wc -l <"$aa/parser.log"; else echo 0; fi; }
+
+aa_step N 1 || fail "AppArmor disabled: step failed: $(cat "$aa/out")"
+[ ! -e "$profile_file" ] || fail "AppArmor disabled: profile installed"
+[ "$(parser_calls)" -eq 0 ] || fail "AppArmor disabled: parser called"
+
+aa_step Y 1 || fail "restricted host: step failed: $(cat "$aa/out")"
+cmp "$profile_file" /src/install/roundhouse-buildkit.apparmor || fail "installed profile differs from install/roundhouse-buildkit.apparmor"
+[ "$(stat -c %a "$profile_file")" = 644 ] || fail "profile mode $(stat -c %a "$profile_file")"
+grep -qxF -e "-r ${profile_file}" "$aa/parser.log" || fail "profile not loaded: $(cat "$aa/parser.log")"
+
+mtime="$(stat -c %Y "$profile_file")"
+sleep 1
+aa_step Y 1 || fail "re-run failed: $(cat "$aa/out")"
+[ "$(stat -c %Y "$profile_file")" = "$mtime" ] || fail "re-run rewrote an unchanged profile"
+[ "$(parser_calls)" -eq 2 ] || fail "re-run did not reload the profile"
+
+# Kernels that mediate user namespaces without Ubuntu's sysctl.
+rm -f "$profile_file"
+aa_step Y - || fail "no sysctl: step failed: $(cat "$aa/out")"
+[ -f "$profile_file" ] || fail "no sysctl: profile not installed"
+
+touch "$aa/parser-fails"
+aa_step Y 0 || fail "parser failure without the restriction must only warn: $(cat "$aa/out")"
+grep -q 'skipped the roundhouse-buildkit AppArmor profile' "$aa/out" || fail "no warning: $(cat "$aa/out")"
+[ ! -e "$profile_file" ] || fail "unloadable profile left in /etc/apparmor.d"
+
+if aa_step Y 1; then fail "parser failure with the restriction on was not fatal"; fi
+grep -q 'kernel.apparmor_restrict_unprivileged_userns=1' "$aa/out" || fail "unexpected failure: $(cat "$aa/out")"
+rm -f "$aa/parser-fails"
+
+aa_step Y 1 /nonexistent || fail "no securityfs: step failed: $(cat "$aa/out")"
+grep -q 'is not mounted' "$aa/out" || fail "no securityfs: no warning: $(cat "$aa/out")"
+[ ! -e "$profile_file" ] || fail "no securityfs: profile installed"
+
+# Ubuntu 24.04 ships AppArmor 4, whose parser can check the profile itself;
+# older releases cannot parse the userns rule, which is why a parser failure
+# is tolerated while the restriction is off.
+if grep -qx "ID=ubuntu" /etc/os-release && grep -qx "VERSION_ID=\"24.04\"" /etc/os-release; then
+	apt-get install -y -qq --no-install-recommends apparmor >/dev/null
+	# -Q compiles without loading, which needs no kernel support.
+	apparmor_parser -Q -K /src/install/roundhouse-buildkit.apparmor >/tmp/aa-parse.log 2>&1 ||
+		fail "apparmor_parser rejects install/roundhouse-buildkit.apparmor: $(cat /tmp/aa-parse.log)"
+	echo "apparmor_parser $(apparmor_parser --version | awk 'NR == 1 { print $NF }') accepts the profile"
+fi
+
+log "uninstall removes the AppArmor profile"
+aa_step Y 1 || fail "reinstalling the profile failed: $(cat "$aa/out")"
+PATH="$aa/bin:$PATH" bash /src/install/uninstall.sh >/tmp/uninstall.log 2>&1 || fail "uninstall failed: $(cat /tmp/uninstall.log)"
+[ ! -e "$profile_file" ] || fail "uninstall left ${profile_file}"
+grep -qxF -e "-R ${profile_file}" "$aa/parser.log" || fail "uninstall did not unload the profile"
+[ ! -e /usr/local/bin/roundhouse-agent ] || fail "uninstall left the agent binary"
+
 echo "PASS"

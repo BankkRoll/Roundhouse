@@ -20,7 +20,10 @@
 #   --builder         Make this node a builder: it builds images from git with
 #                     BuildKit and Railpack and hosts the local registry. Also
 #                     installs Railpack and pre-pulls the BuildKit and registry
-#                     images. Chosen at join time; re-runs on a builder keep it.
+#                     images, and where AppArmor can restrict unprivileged
+#                     user namespaces, loads the roundhouse-buildkit
+#                     AppArmor profile rootless BuildKit needs. Chosen at
+#                     join time; re-runs on a builder keep it.
 #   --binary <p>      DEV ONLY: install a local agent binary, skipping download
 #                     and signature verification.
 #
@@ -109,6 +112,17 @@ REGISTRY_IMAGE="registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9
 # which BuildKit's container must reach on the host.
 BUILD_BRIDGE=roundhouse-bk0
 REGISTRY_PROXY_PORT=5001
+
+# Where AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and
+# later), rootless BuildKit can start only under this profile, which grants
+# it `userns` and nothing else; the agent uses it once it is loaded. Its
+# source is install/roundhouse-buildkit.apparmor. The host-wide restriction
+# is left as the distribution set it.
+BUILDKIT_APPARMOR_PROFILE=roundhouse-buildkit
+BUILDKIT_APPARMOR_FILE=/etc/apparmor.d/roundhouse-buildkit
+APPARMOR_ENABLED=/sys/module/apparmor/parameters/enabled
+APPARMOR_FS=/sys/kernel/security/apparmor
+USERNS_RESTRICT_SYSCTL=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 
 # NOTE: these globals must not share names with /etc/os-release variables
 # (NAME, VERSION, ID, ...); os-release is only ever read in a subshell.
@@ -512,6 +526,11 @@ install_packages() {
 
 	install_caddy
 	if [ "$BUILDER" = 1 ]; then
+		if apparmor_mediates_userns && [ -d "$APPARMOR_FS" ] && ! command -v apparmor_parser >/dev/null; then
+			log "installing apparmor (apparmor_parser) for the BuildKit profile"
+			apt_install apparmor
+		fi
+		install_buildkit_apparmor
 		install_railpack
 		prepull_builder_images
 	fi
@@ -605,6 +624,84 @@ install_railpack() {
 	tar -xzf "${WORK_DIR}/${asset}" -C "${WORK_DIR}/railpack" railpack
 	install -m 0755 "${WORK_DIR}/railpack/railpack" "${RAILPACK_BIN}.new"
 	mv -f "${RAILPACK_BIN}.new" "$RAILPACK_BIN"
+}
+
+# userns_restricted reports whether AppArmor restricts unprivileged user
+# namespaces right now.
+userns_restricted() {
+	[ "$(cat "$USERNS_RESTRICT_SYSCTL" 2>/dev/null)" = 1 ]
+}
+
+# apparmor_mediates_userns reports whether AppArmor is active and this
+# kernel lets it mediate user namespace creation, which is when a profile's
+# `userns` rule matters. The restriction's current value is ignored: it can
+# be switched on at any time, and the profile is harmless while it is off.
+apparmor_mediates_userns() {
+	[ "$(cat "$APPARMOR_ENABLED" 2>/dev/null)" = Y ] || return 1
+	[ -e "$USERNS_RESTRICT_SYSCTL" ] || [ -e "${APPARMOR_FS}/features/namespaces/userns_create" ]
+}
+
+# install_buildkit_apparmor writes and loads the BuildKit AppArmor profile
+# where the kernel can restrict user namespaces. A failure is fatal only
+# while the restriction is on, because only then can BuildKit not start
+# without the profile.
+install_buildkit_apparmor() {
+	apparmor_mediates_userns || return 0
+	if [ ! -d "$APPARMOR_FS" ]; then
+		# NOTE: securityfs is not mounted inside containers, so policy cannot
+		# be loaded from one; whoever runs the host must load the profile.
+		warn "AppArmor's policy interface (${APPARMOR_FS}) is not mounted, so the ${BUILDKIT_APPARMOR_PROFILE} profile was not loaded; if kernel.apparmor_restrict_unprivileged_userns=1 on the host, load install/roundhouse-buildkit.apparmor there or BuildKit cannot start"
+		return 0
+	fi
+
+	local failure="" out profile
+	profile="$(
+		cat <<'APPARMOR'
+# Managed by the Roundhouse installer; rewritten on every run.
+#
+# Lets rootless BuildKit (sys_buildkitd on builder nodes) create its user
+# namespace on hosts with kernel.apparmor_restrict_unprivileged_userns=1,
+# without lifting that restriction for the rest of the host. The profile
+# attaches to no executable: only a container started with
+# --security-opt apparmor=roundhouse-buildkit runs under it. Apart from the
+# userns rule it is unconfined, like the apparmor=unconfined that BuildKit
+# documents for rootless containers.
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile roundhouse-buildkit flags=(unconfined) {
+  userns,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/roundhouse-buildkit>
+}
+APPARMOR
+	)"
+	if ! command -v apparmor_parser >/dev/null; then
+		failure="apparmor_parser is not installed (apt-get install apparmor)"
+	else
+		install -m 0755 -d "$(dirname "$BUILDKIT_APPARMOR_FILE")"
+		if [ ! -f "$BUILDKIT_APPARMOR_FILE" ] || [ "$(cat "$BUILDKIT_APPARMOR_FILE")" != "$profile" ]; then
+			(umask 022 && printf '%s\n' "$profile" >"$BUILDKIT_APPARMOR_FILE")
+		fi
+		# NOTE: loaded even when the file is unchanged, since it can be on
+		# disk but not in the kernel (after aa-teardown, or when this host
+		# gained AppArmor since the last run).
+		if out="$(apparmor_parser -r "$BUILDKIT_APPARMOR_FILE" 2>&1)"; then
+			log "loaded AppArmor profile ${BUILDKIT_APPARMOR_PROFILE} for rootless BuildKit"
+			return 0
+		fi
+		# A profile the parser rejects (AppArmor older than 4.0 has no
+		# userns rule) would also fail apparmor.service at every boot.
+		rm -f "$BUILDKIT_APPARMOR_FILE"
+		failure="apparmor_parser could not load ${BUILDKIT_APPARMOR_FILE}: ${out}"
+	fi
+	if userns_restricted; then
+		die "${failure}. BuildKit cannot start while kernel.apparmor_restrict_unprivileged_userns=1; fix this and re-run the installer (see \"AppArmor\" in install/README.md)"
+	fi
+	warn "${failure}; skipped the ${BUILDKIT_APPARMOR_PROFILE} AppArmor profile, which builds need only if kernel.apparmor_restrict_unprivileged_userns is set to 1"
 }
 
 # prepull_builder_images fetches the pinned BuildKit and registry images so
@@ -728,4 +825,9 @@ main() {
 	log "Roundhouse agent is running. Follow logs with: journalctl -u roundhouse-agent -f"
 }
 
-main "$@"
+# NOTE: ROUNDHOUSE_INSTALL_SOURCE_ONLY=1 makes sourcing this script define
+# its functions without running anything, so CI and install/test can run a
+# single step (such as install_buildkit_apparmor) exactly as an install does.
+if [ "${ROUNDHOUSE_INSTALL_SOURCE_ONLY:-0}" != 1 ]; then
+	main "$@"
+fi

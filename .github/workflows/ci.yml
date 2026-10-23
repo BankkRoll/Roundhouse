@@ -205,8 +205,9 @@ jobs:
           go-version-file: go.work
           cache-dependency-path: "**/go.sum"
       - run: pnpm install --frozen-lockfile
-      - run: node e2e/agent-smoke.mjs
+      # wrangler dev refuses to start without assets.directory (apps/web/dist).
       - run: pnpm --filter @roundhouse/web build
+      - run: node e2e/agent-smoke.mjs
       - run: pnpm --filter @roundhouse/e2e exec playwright install --with-deps chromium
       - name: Browser end-to-end tests
         run: pnpm --filter @roundhouse/e2e test:browser
@@ -242,6 +243,17 @@ jobs:
           cache-dependency-path: "**/go.sum"
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @roundhouse/e2e exec playwright install --with-deps chromium
+      # Ubuntu 24.04, and so this runner, restricts unprivileged user
+      # namespaces with AppArmor, which stops rootless BuildKit. This runs
+      # the installer's own step, and the agent then finds the profile the
+      # way it does on a real node.
+      - name: Load the BuildKit AppArmor profile as install.sh does
+        run: |
+          sudo bash -c 'ROUNDHOUSE_INSTALL_SOURCE_ONLY=1 . install/install.sh && install_buildkit_apparmor'
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+            sudo grep -E '^roundhouse-buildkit ' /sys/kernel/security/apparmor/profiles ||
+              { echo "::error::roundhouse-buildkit is not loaded although the restriction is on"; exit 1; }
+          fi
       - name: Phase 1 end-to-end suite
         env:
           CI: "true"

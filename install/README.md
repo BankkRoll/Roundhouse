@@ -1,11 +1,12 @@
 # install
 
-| File                       | What                                                        |
-| -------------------------- | ----------------------------------------------------------- |
-| `install.sh`               | Installs Docker, Caddy and the agent, joins, starts systemd |
-| `roundhouse-agent.service` | systemd unit (a copy is embedded in install.sh)             |
-| `uninstall.sh`             | Removes agent, config, and state. Leaves Docker and Caddy.  |
-| `test/container-test.sh`   | End-to-end installer test CI runs on each supported OS      |
+| File                           | What                                                        |
+| ------------------------------ | ----------------------------------------------------------- |
+| `install.sh`                   | Installs Docker, Caddy and the agent, joins, starts systemd |
+| `roundhouse-agent.service`     | systemd unit (a copy is embedded in install.sh)             |
+| `roundhouse-buildkit.apparmor` | BuildKit's AppArmor profile (a copy is embedded, too)       |
+| `uninstall.sh`                 | Removes agent, config, and state. Leaves Docker and Caddy.  |
+| `test/container-test.sh`       | End-to-end installer test CI runs on each supported OS      |
 
 The control plane serves `install.sh` at `/install.sh` with its own URL
 substituted for `__CONTROL_PLANE_URL__`.
@@ -62,6 +63,30 @@ loopback services such as Caddy's admin API or the registry. It pushes
 through a per-build, password-protected proxy the agent opens on that
 network's gateway, port 5001.
 
+### AppArmor
+
+Ubuntu 23.10 and later restrict unprivileged user namespaces
+(`kernel.apparmor_restrict_unprivileged_userns=1`), which rootless BuildKit
+needs. On builders whose kernel supports that restriction, whatever its
+current value, the installer writes `/etc/apparmor.d/roundhouse-buildkit`
+(source: `roundhouse-buildkit.apparmor`), installs `apparmor` if
+`apparmor_parser` is missing, and loads the profile; the agent then runs
+`sys_buildkitd` under it. The profile grants `userns` and is otherwise
+unconfined, like the `apparmor=unconfined` BuildKit is documented with, and
+attaches to no program, so the host-wide restriction stays on for
+everything else. If the profile cannot be loaded while the restriction is
+on, the installer stops; with it off, it warns and continues. AppArmor older
+than 4.0 (Ubuntu 22.04, Debian 12) cannot parse the `userns` rule, but those
+releases do not restrict user namespaces either.
+
+If builds fail with `fork/exec /proc/self/exe: permission denied`, check
+that `sudo grep roundhouse-buildkit /sys/kernel/security/apparmor/profiles`
+lists the profile and load it with `sudo apparmor_parser -r
+/etc/apparmor.d/roundhouse-buildkit` if it does not. As a last resort,
+`sysctl kernel.apparmor_restrict_unprivileged_userns=0` (persisted in
+`/etc/sysctl.d/`) also works, but lifts the restriction for every program
+on the host; the installer never does this.
+
 Pins live at the top of `install.sh` and must match
 `agent/internal/builder`; `TestInstallScriptPins` fails if they drift.
 
@@ -90,7 +115,9 @@ containers, and the registry listens on `127.0.0.1:5000` only.
   until the first release; see `infra/release-signing.md`.
 - The token is used within seconds of starting, before the slow package
   installs, and is single-use.
-- Keep `roundhouse-agent.service` and its copy in `install.sh` identical.
+- Keep `roundhouse-agent.service` and `roundhouse-buildkit.apparmor`
+  identical to their copies in `install.sh`; CI and
+  `TestInstallerEmbedsAppArmorProfile` check them.
 - The agent's sandbox (`roundhouse-agent.service`) also covers the `git` and
   `railpack` processes a builder runs; checkouts live in
   `/var/lib/roundhouse/builds` and are deleted after each build.

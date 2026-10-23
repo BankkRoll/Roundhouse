@@ -2,7 +2,8 @@
 /**
  * End-to-end smoke test: real control plane (`wrangler dev`) + real Go agent.
  *
- * 1. Applies D1 migrations locally and starts `wrangler dev` with a throwaway MASTER_KEY.
+ * 1. Builds the dashboard if apps/web/dist is missing, applies D1 migrations
+ *    locally and starts `wrangler dev` with a throwaway MASTER_KEY.
  * 2. Runs first-time setup and creates a join token through the public API.
  * 3. Builds the agent, joins it, and runs it.
  * 4. Asserts the node reports online with live usage, then kills the agent and
@@ -12,12 +13,13 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const API_DIR = join(ROOT, "apps", "api");
+const WEB_DIST = join(ROOT, "apps", "web", "dist");
 const PORT = Number(process.env.SMOKE_PORT ?? 8799);
 const BASE = `http://127.0.0.1:${PORT}`;
 const OFFLINE_BUDGET_MS = 45_000;
@@ -86,6 +88,13 @@ try {
   const persist = join(work, "state");
   const masterKey = randomBytes(32).toString("base64");
   writeFileSync(join(API_DIR, ".dev.vars.smoke"), `MASTER_KEY=${masterKey}\n`);
+
+  // NOTE: wrangler refuses to start without the directory its config names in
+  // assets.directory (apps/web/dist), even though this test never loads it.
+  if (!existsSync(join(WEB_DIST, "index.html"))) {
+    log("building the dashboard (wrangler serves apps/web/dist as static assets)");
+    run("pnpm", ["--filter", "@roundhouse/web", "build"], { cwd: ROOT });
+  }
 
   log("applying migrations");
   run("npx", ["wrangler", "d1", "migrations", "apply", "DB", "--local", "--persist-to", persist], {

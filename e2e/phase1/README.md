@@ -102,7 +102,7 @@ deployment's events are written to `e2e/phase1/.artifacts/` (uploaded by CI).
 | `PHASE1_PORT`               | `8797`  | `wrangler dev` port                                        |
 | `PHASE1_GIT_PORT`           | `18443` | git server port on the engine host                         |
 | `PHASE1_ROLLOUT_TIMEOUT_S`  | `60`    | control plane rollout timeout (`ROLLOUT_TIMEOUT_S`)        |
-| `PHASE1_UI=0`               |         | skip the dashboard spec                                    |
+| `PHASE1_UI=0`               |         | skip the dashboard spec (still builds a missing dashboard) |
 | `PHASE1_SKIP_WEB_BUILD=1`   |         | use the existing `apps/web/dist` instead of rebuilding it  |
 | `PHASE1_KEEP=1`             |         | leave the stack up; `node e2e/phase1/teardown.mjs` later   |
 | `PHASE1_KEEP_BUILD_CACHE=1` |         | keep BuildKit's cache volume between runs (faster locally) |

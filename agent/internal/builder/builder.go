@@ -71,6 +71,11 @@ type Options struct {
 	PruneInterval time.Duration
 	// MemoryBytes limits sys_buildkitd's memory; 0 means no limit.
 	MemoryBytes int64
+	// AppArmorProfile is the AppArmor profile sys_buildkitd runs under,
+	// such as "unconfined" or a site-specific profile. Empty picks
+	// [AppArmorProfile] when the engine's host has it loaded and
+	// "unconfined" otherwise.
+	AppArmorProfile string
 	// RegistryProxyPort is where the per-build registry proxy listens on the
 	// build network's gateway. Default [DefaultRegistryProxyPort].
 	RegistryProxyPort int
@@ -137,6 +142,9 @@ func New(opts Options) (Builder, error) {
 	if opts.RegistryProxyPort < 1 || opts.RegistryProxyPort > 65535 {
 		return nil, fmt.Errorf("builder: RegistryProxyPort %d out of range", opts.RegistryProxyPort)
 	}
+	if opts.AppArmorProfile != "" && !validAppArmorProfile(opts.AppArmorProfile) {
+		return nil, fmt.Errorf("builder: invalid AppArmor profile name %q", opts.AppArmorProfile)
+	}
 	docker, err := newDockerAPI(opts.DockerHost)
 	if err != nil {
 		return nil, fmt.Errorf("builder: %w", err)
@@ -153,6 +161,8 @@ func New(opts Options) (Builder, error) {
 			cacheMaxBytes: opts.CacheMaxBytes,
 			minFreeBytes:  opts.MinFreeBytes,
 			memoryBytes:   opts.MemoryBytes,
+
+			apparmorOverride: opts.AppArmorProfile,
 		},
 		http: &http.Client{Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}},
 	}, nil

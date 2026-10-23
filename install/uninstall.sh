@@ -10,11 +10,14 @@
 # Docker, Caddy, git, wireguard-tools and any containers (including a
 # builder's sys_buildkitd and registry, and their volumes) are left untouched:
 # they may be serving traffic or be used by other software. Remove them
-# yourself if this host is being decommissioned. Railpack and the Caddy
-# service override installed for Roundhouse are removed. The node also stays
+# yourself if this host is being decommissioned. Railpack, the Caddy
+# service override and the roundhouse-buildkit AppArmor profile installed for
+# Roundhouse are removed. The node also stays
 # registered with the control plane until you delete it from the dashboard.
 
 set -euo pipefail
+
+APPARMOR_PROFILE_FILE=/etc/apparmor.d/roundhouse-buildkit
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() {
@@ -35,6 +38,16 @@ rm -f /etc/systemd/system/caddy.service.d/roundhouse.conf
 rmdir /etc/systemd/system/caddy.service.d 2>/dev/null || true
 systemctl daemon-reload
 systemctl reset-failed roundhouse-agent.service >/dev/null 2>&1 || true
+
+if [ -f "$APPARMOR_PROFILE_FILE" ]; then
+	log "removing the roundhouse-buildkit AppArmor profile"
+	# NOTE: a failed unload must not stop the uninstall; without the file
+	# the profile is not loaded again at the next boot.
+	if command -v apparmor_parser >/dev/null; then
+		apparmor_parser -R "$APPARMOR_PROFILE_FILE" >/dev/null 2>&1 || true
+	fi
+	rm -f "$APPARMOR_PROFILE_FILE"
+fi
 
 log "removing binary, config and state"
 rm -f /usr/local/bin/roundhouse-agent /usr/local/bin/railpack

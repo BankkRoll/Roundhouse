@@ -346,3 +346,38 @@ on the Durable Object's alarm, whose lifetime the runtime owns, and a chunk
 whose deployment or build no longer exists is dropped before anything is
 written to R2. A foreign key failure in the window between that check and
 the insert deletes the R2 object and is not logged as an error.
+
+### BuildKit and AppArmor's user namespace restriction
+
+Ubuntu 23.10 and later set `kernel.apparmor_restrict_unprivileged_userns=1`,
+which stops an unconfined process from creating a usable user namespace.
+Rootless BuildKit's rootlesskit needs one, so `sys_buildkitd` under
+`apparmor=unconfined` crash-looped (`fork/exec /proc/self/exe: permission
+denied`) and every build failed on Ubuntu 24.04 hosts, including GitHub's
+runners. BuildKit's docs suggest setting the sysctl to 0; that lifts the
+restriction for the whole host, so we do not.
+
+Instead, on builders whose kernel lets AppArmor mediate user namespaces,
+`install.sh` writes `/etc/apparmor.d/roundhouse-buildkit`
+(`install/roundhouse-buildkit.apparmor`) and loads it with `apparmor_parser
+-r`. Following Ubuntu's pattern for applications that need user namespaces,
+the profile is `flags=(unconfined)` plus `userns,`: no broader than the
+`apparmor=unconfined` BuildKit documents for rootless containers, and it
+attaches to no executable, so only a container started with
+`apparmor=roundhouse-buildkit` runs under it. A load failure is fatal only
+while the restriction is on. `uninstall.sh` unloads and removes it.
+
+The agent picks `sys_buildkitd`'s profile once per process: the
+`ROUNDHOUSE_BUILDKIT_APPARMOR_PROFILE` override if set; `unconfined` if the
+engine does not report AppArmor; otherwise the profile when
+`/sys/kernel/security/apparmor/profiles` lists it, and, when that file cannot
+be read (an agent in a container), whether the engine can start a no-op
+container under it. The profile is part of the daemon's config hash, so a
+change recreates the container. When the daemon still fails with the user
+namespace signature, the build error says how to load the profile, and the
+next build resolves the profile again. CI's Phase 1 job loads the profile by
+calling the installer's own `install_buildkit_apparmor` on the runner.
+
+An enforcing profile scoped to what rootlesskit and buildkitd actually do
+would be tighter than either; it is left until it can be tested on real
+AppArmor hosts across BuildKit upgrades.
