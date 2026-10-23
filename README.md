@@ -39,7 +39,7 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | MCP server                      | Coding agents act through a scoped API, with OAuth sign-in     | Available                                                    |
 | **Security**                    |                                                                |                                                              |
 | Signed control channel          | Agents dial out and verify every Ed25519-signed message        | Available                                                    |
-| Audit log                       | Who did what and when, hash-chained                            | Available                                                    |
+| Audit log                       | Who did what and when                                          | Available                                                    |
 | Members & roles                 | Owner, admin, member and viewer across workspaces              | Available                                                    |
 
 ## Install
