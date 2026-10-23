@@ -72,7 +72,7 @@ function canonicalPath(path: string): string {
  *
  * @param method - HTTP method.
  * @param path - Request path as received, before any decoding.
- * @returns A bucket name (`auth`, `setup`, `join`, `invite`, `webhook`, or
+ * @returns A bucket name (`auth` for Better Auth and re-authentication, `setup`, `join`, `invite`, `webhook`, or
  *   `connect:<nodeId>`), or `null` if the request isn't limited.
  * @example
  * rateLimitBucket("POST", "/api/auth/change-password"); // "auth"
@@ -86,7 +86,7 @@ export function rateLimitBucket(method: string, path: string): string | null {
     return connect ? `connect:${connect[1]}` : null;
   }
   if (verb !== "POST") return null;
-  if (p === "/api/auth" || p.startsWith("/api/auth/")) return "auth";
+  if (p === "/api/auth" || p.startsWith("/api/auth/") || p === "/v1/auth/reauth") return "auth";
   if (p === "/v1/setup") return "setup";
   if (p === "/v1/nodes/join") return "join";
   if (p === "/v1/invites/accept" || p === "/v1/invites/lookup") return "invite";

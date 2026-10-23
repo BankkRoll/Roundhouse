@@ -6,6 +6,7 @@ import { env } from "cloudflare:test";
 import { LOGIN_FREE_ATTEMPTS, REAUTH_WINDOW_MS } from "@roundhouse/shared";
 import { describe, expect, it } from "vitest";
 import { DISABLED_AUTH_PATHS } from "../src/auth";
+import { rateLimitBucket } from "../src/lib/guards";
 import { addMember, call, install, nextTotpCode, signInAs } from "./helpers";
 
 const EMAIL = "mara@example.com";
@@ -121,6 +122,11 @@ describe("POST /v1/auth/reauth", () => {
       json: { email: EMAIL, password: PASSWORD },
     });
     expect(signIn.status).toBe(429);
+  });
+
+  it("shares the per-IP sign-in limiter", () => {
+    expect(rateLimitBucket("POST", "/v1/auth/reauth")).toBe("auth");
+    expect(rateLimitBucket("POST", "/v1//auth/reauth/")).toBe("auth");
   });
 
   it("is passed by members without 2FA with the password alone", async () => {
