@@ -5,19 +5,43 @@ It talks to the control plane's REST API and realtime socket only.
 
 ## Install
 
-Download a binary for your platform from the release, check it against
-`SHA256SUMS`, and put it on your `PATH`:
+Linux and macOS:
 
 ```sh
-sha256sum --ignore-missing -c SHA256SUMS
-install -m 0755 roundhouse-linux-amd64 /usr/local/bin/roundhouse
+curl -fsSL https://raw.githubusercontent.com/BankkRoll/Roundhouse/main/install/install-cli.sh | sh
 ```
+
+The script picks the archive for your OS and architecture from the newest
+`cli-v*` release, verifies the Ed25519 signature on `SHA256SUMS` against the
+release key pinned in it, checks the archive against `SHA256SUMS`, and
+installs `roundhouse` to `/usr/local/bin` (as root) or `~/.local/bin`.
+`--version 0.1.0` pins a release and `--dir <path>` picks the directory. The
+signature check needs OpenSSL 3; on macOS that is `brew install openssl@3`.
+All options are in [docs/configuration.md](../docs/configuration.md#cli-installer).
+
+By hand, or on Windows: download `roundhouse-<os>-<arch>.tar.gz` (`.zip` for
+Windows), `SHA256SUMS` and `SHA256SUMS.sig` from the
+[release](https://github.com/BankkRoll/Roundhouse/releases), then
+
+```sh
+openssl pkeyutl -verify -pubin -inkey cli-release.pub -rawin \
+  -in SHA256SUMS -sigfile SHA256SUMS.sig       # the key pinned in install-cli.sh
+sha256sum --ignore-missing -c SHA256SUMS
+tar -xzf roundhouse-linux-amd64.tar.gz roundhouse
+install -m 0755 roundhouse /usr/local/bin/roundhouse
+```
+
+Each release also has build provenance
+(`gh attestation verify roundhouse-linux-amd64.tar.gz --repo BankkRoll/Roundhouse`)
+and a CycloneDX SBOM per archive; see
+[infra/release-signing.md](../infra/release-signing.md).
 
 Or build from source (Go 1.26):
 
 ```sh
 go install github.com/BankkRoll/Roundhouse/cli/cmd/roundhouse@latest
-cli/scripts/build.sh   # every OS/arch into cli/dist, with SHA256SUMS
+cli/scripts/build.sh             # every OS/arch into cli/dist, with SHA256SUMS
+ARCHIVE=1 cli/scripts/build.sh   # release archives; a clean checkout of a tag rebuilds them exactly
 ```
 
 Shell completion: `roundhouse completion bash|zsh|fish|powershell --help`.
@@ -190,7 +214,10 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 
 Every command takes `--json`, `--profile`, `--no-input`, `--no-color` and
 `--debug` (HTTP traces with credentials redacted). Run
-`roundhouse <command> --help` for flags and examples.
+`roundhouse <command> --help` for flags and examples. Environment variables
+(`ROUNDHOUSE_URL`, `ROUNDHOUSE_TOKEN`, `ROUNDHOUSE_PROFILE`,
+`ROUNDHOUSE_CONFIG_DIR`, `NO_COLOR`) and files are listed in
+[docs/configuration.md](../docs/configuration.md#cli).
 
 ### Cloud servers
 

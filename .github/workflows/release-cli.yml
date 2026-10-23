@@ -1,0 +1,254 @@
+name: Release CLI
+
+on:
+  push:
+    tags: ["cli-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-tag:
+    name: Tag is on main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Tagged commit must be reviewed code on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on origin/main. Release only from main."
+            exit 1
+          fi
+      - name: Tag must be a version
+        run: |
+          if ! [[ "$GITHUB_REF_NAME" =~ ^cli-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$GITHUB_REF_NAME is not cli-v<major>.<minor>.<patch>[-prerelease]."
+            exit 1
+          fi
+
+  build:
+    name: Build archives and SBOMs
+    needs: verify-tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      CYCLONEDX_GOMOD_VERSION: v1.12.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          # Release builds never restore a cache another workflow could have written.
+          cache: false
+          cache-dependency-path: "**/go.sum"
+      - name: Build release archives
+        env:
+          ARCHIVE: "1"
+          OUT_DIR: ${{ github.workspace }}/dist
+        run: |
+          export VERSION="${GITHUB_REF_NAME#cli-v}"
+          cli/scripts/build.sh
+      - name: Rebuild and compare (reproducible build)
+        env:
+          ARCHIVE: "1"
+          OUT_DIR: ${{ runner.temp }}/rebuild
+        run: |
+          export VERSION="${GITHUB_REF_NAME#cli-v}"
+          cli/scripts/build.sh > /dev/null
+          if ! diff -u dist/SHA256SUMS "$OUT_DIR/SHA256SUMS"; then
+            echo "::error::Two builds of the same commit differ; the release would not be reproducible."
+            exit 1
+          fi
+      - name: Smoke test the linux/amd64 build
+        run: |
+          tar -xzf dist/roundhouse-linux-amd64.tar.gz -C "$RUNNER_TEMP" roundhouse
+          got="$("$RUNNER_TEMP/roundhouse" --version)"
+          echo "$got"
+          case "$got" in
+            "roundhouse ${GITHUB_REF_NAME#cli-v} ("*) ;;
+            *) echo "::error::--version printed '$got', expected the tag's version"; exit 1 ;;
+          esac
+      - name: SBOMs (CycloneDX, one per target)
+        working-directory: cli
+        run: |
+          go install "github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@${CYCLONEDX_GOMOD_VERSION}"
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${target%/*}" arch="${target#*/}"
+            # Module selection depends on the build constraints, so each SBOM
+            # is generated with its target's GOOS, GOARCH and CGO_ENABLED.
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" "$(go env GOPATH)/bin/cyclonedx-gomod" app \
+              -json -licenses -noserial -notimestamp -main cmd/roundhouse \
+              -output "../dist/roundhouse-${os}-${arch}.cdx.json" .
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: roundhouse-cli-dist
+          path: |
+            dist/roundhouse-*.tar.gz
+            dist/roundhouse-*.zip
+            dist/roundhouse-*.cdx.json
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Sign, attest, publish
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Holds CLI_RELEASE_SIGNING_KEY. Configure required reviewers and a
+    # tag-only deployment rule on this environment.
+    environment: cli-release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Tags are needed to find the previous CLI release for the notes.
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: roundhouse-cli-dist
+          path: dist
+      - name: Checksums
+        working-directory: dist
+        run: |
+          # The version line is signed with the checksums; install-cli.sh
+          # rejects a SHA256SUMS that names a different tag.
+          {
+            printf '# version: %s\n' "$GITHUB_REF_NAME"
+            sha256sum roundhouse-*.tar.gz roundhouse-*.zip roundhouse-*.cdx.json
+          } > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum -c --strict SHA256SUMS
+          [ "$(grep -c '\.tar\.gz$\|\.zip$' SHA256SUMS)" = 6 ] ||
+            { echo "::error::Expected 6 archives in SHA256SUMS."; exit 1; }
+      - name: Sign SHA256SUMS
+        working-directory: dist
+        env:
+          CLI_RELEASE_SIGNING_KEY: ${{ secrets.CLI_RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$CLI_RELEASE_SIGNING_KEY" ]; then
+            echo "::error::CLI_RELEASE_SIGNING_KEY is not set. See infra/release-signing.md."
+            exit 1
+          fi
+          umask 077
+          key="$RUNNER_TEMP/cli-release.key"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$CLI_RELEASE_SIGNING_KEY" > "$key"
+
+          openssl pkeyutl -sign -rawin -inkey "$key" -in SHA256SUMS -out SHA256SUMS.sig
+          openssl pkey -in "$key" -pubout -out "$RUNNER_TEMP/signing.pub"
+
+          # Verify exactly as install/install-cli.sh does before anything is published.
+          openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/signing.pub" -rawin \
+            -in SHA256SUMS -sigfile SHA256SUMS.sig
+      - name: Check signing key is one of the keys pinned in install-cli.sh
+        run: |
+          pinned_dir="$RUNNER_TEMP/pinned"
+          mkdir -p "$pinned_dir"
+          # Read the keys the way the installer does: as the shell value of
+          # RELEASE_PUBLIC_KEYS_PEM, one file per PEM block.
+          ROUNDHOUSE_INSTALL_SOURCE_ONLY=1 sh -c '. install/install-cli.sh && printf "%s\n" "$RELEASE_PUBLIC_KEYS_PEM"' |
+            awk -v dir="$pinned_dir" '
+              /^-----BEGIN PUBLIC KEY-----$/ { file = sprintf("%s/key-%d.pem", dir, n++) }
+              file != "" { print > file }
+              /^-----END PUBLIC KEY-----$/ { close(file); file = "" }
+            '
+          shopt -s nullglob
+          keys=("$pinned_dir"/key-*.pem)
+          if [ ${#keys[@]} -eq 0 ]; then
+            echo "::error::No PEM public key found in install/install-cli.sh. See infra/release-signing.md."
+            exit 1
+          fi
+          signing_der="$(openssl pkey -pubin -in "$RUNNER_TEMP/signing.pub" -outform DER | base64 -w0)"
+          for k in "${keys[@]}"; do
+            if [ "$(openssl pkey -pubin -in "$k" -outform DER | base64 -w0)" = "$signing_der" ]; then
+              echo "Signing key matches pinned $(basename "$k")"
+              exit 0
+            fi
+          done
+          echo "::error::CLI_RELEASE_SIGNING_KEY matches none of the public keys in install/install-cli.sh; installs would reject this release."
+          exit 1
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/roundhouse-*.tar.gz
+            dist/roundhouse-*.zip
+            dist/roundhouse-*.cdx.json
+            dist/SHA256SUMS
+      - name: Release notes
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#cli-v}"
+          {
+            echo "## Install"
+            echo
+            echo "Linux and macOS (verifies the signature and checksum):"
+            echo
+            echo '```sh'
+            echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install/install-cli.sh | sh -s -- --version ${version}"
+            echo '```'
+            echo
+            echo "Windows: download \`roundhouse-windows-amd64.zip\` (or \`-arm64\`) and check it against \`SHA256SUMS\`."
+            echo
+            echo "## Verify by hand"
+            echo
+            echo '```sh'
+            echo "openssl pkeyutl -verify -pubin -inkey cli-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig"
+            echo "sha256sum --ignore-missing -c SHA256SUMS"
+            echo "gh attestation verify roundhouse-linux-amd64.tar.gz --repo ${GITHUB_REPOSITORY}"
+            echo '```'
+            echo
+            echo "\`cli-release.pub\` is the key pinned in \`install/install-cli.sh\`; see \`infra/release-signing.md\`."
+            echo "Each archive has a CycloneDX SBOM (\`roundhouse-<os>-<arch>.cdx.json\`)."
+            echo
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          flags=()
+          case "$tag" in *-*) flags+=(--prerelease) ;; esac
+          # Generated notes start from the previous CLI release, not from
+          # whichever agent release happens to be newer.
+          previous="$(git describe --tags --abbrev=0 --match 'cli-v*' "${GITHUB_SHA}^" 2>/dev/null || true)"
+          if [ -n "$previous" ]; then flags+=(--notes-start-tag "$previous"); fi
+          # Published assets are immutable: a re-run must never swap signed
+          # files under an existing tag, so refuse rather than overwrite.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            assets="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')"
+            if [ "$assets" != "0" ]; then
+              echo "::error::Release $tag already has $assets asset(s). Cut a new tag instead of re-publishing."
+              exit 1
+            fi
+          else
+            # IMPORTANT: --latest=false keeps GitHub's "latest release" on the
+            # agent: install.sh downloads the agent from /releases/latest/.
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
+              --title "CLI ${tag#cli-}" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes "${flags[@]}"
+          fi
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
+            dist/roundhouse-*.tar.gz \
+            dist/roundhouse-*.zip \
+            dist/roundhouse-*.cdx.json \
+            dist/SHA256SUMS \
+            dist/SHA256SUMS.sig
