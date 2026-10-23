@@ -78,8 +78,8 @@ func ParseEnvelope(data []byte) (Envelope, error) {
 // returns the decoded payload, mirroring the TypeScript verifyEnvelope.
 //
 // Checks run in this order: envelope version, signature over the raw payload
-// bytes, payload schema, target node, expiry. The payload is not parsed until
-// the signature has been verified.
+// bytes, payload schema, self-announced signing kid, target node, expiry. The
+// payload is not parsed until the signature has been verified.
 //
 // Returned errors wrap one of [ErrBadSignature], [ErrMalformed], [ErrExpired]
 // or [ErrWrongNode], or are [ErrInvalidPublicKey].
@@ -103,6 +103,11 @@ func VerifyEnvelope(env Envelope, pub ed25519.PublicKey, nodeID string, now time
 	msg, err := DecodeControlMessage([]byte(env.Payload))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	// SECURITY: a key can't vouch for itself as its own successor (ADR 0014
+	// §13), so such an announcement is malformed rather than a no-op.
+	if AnnouncesSigningKID(env.KID, msg) {
+		return nil, fmt.Errorf("%w: frame announces its own signing kid %q", ErrMalformed, env.KID)
 	}
 	h := msg.Header()
 	if h.NodeID != nodeID {
@@ -157,6 +162,28 @@ func DecodeControlMessage(data []byte) (ControlMessage, error) {
 		msg = &BuildJob{}
 	case TypeBuildCancel:
 		msg = &BuildCancel{}
+	case TypeKeyAnnounce:
+		msg = &KeyAnnounce{}
+	case TypeVolumeDelete:
+		msg = &VolumeDelete{}
+	case TypeBackupJob:
+		msg = &BackupJob{}
+	case TypeBackupParts:
+		msg = &BackupParts{}
+	case TypeRestoreJob:
+		msg = &RestoreJob{}
+	case TypeVolumeCopyOut:
+		msg = &VolumeCopyOut{}
+	case TypeVolumeCopyIn:
+		msg = &VolumeCopyIn{}
+	case TypeDBQuery:
+		msg = &DBQuery{}
+	case TypeJobRun:
+		msg = &JobRun{}
+	case TypeJobCancel:
+		msg = &JobCancel{}
+	case TypeCertSync:
+		msg = &CertSync{}
 	default:
 		return nil, fmt.Errorf("unknown control message type %q", probe.Type)
 	}
@@ -195,6 +222,32 @@ func DecodeAgentMessage(data []byte) (AgentMessage, error) {
 		msg = &Logs{}
 	case TypeBuildResult:
 		msg = &BuildResult{}
+	case TypeMeshStatus:
+		msg = &MeshStatus{}
+	case TypeMeshKey:
+		msg = &MeshKey{}
+	case TypeVolumeStatus:
+		msg = &VolumeStatus{}
+	case TypeBackupPartsRequest:
+		msg = &BackupPartsRequest{}
+	case TypeBackupProgress:
+		msg = &BackupProgress{}
+	case TypeBackupResult:
+		msg = &BackupResult{}
+	case TypeRestoreResult:
+		msg = &RestoreResult{}
+	case TypeDBQueryResult:
+		msg = &DBQueryResult{}
+	case TypeJobStatus:
+		msg = &JobStatus{}
+	case TypeMetrics:
+		msg = &Metrics{}
+	case TypeCertAck:
+		msg = &CertAck{}
+	case TypeCertRequest:
+		msg = &CertRequest{}
+	case TypeCertStatus:
+		msg = &CertStatus{}
 	default:
 		return nil, fmt.Errorf("unknown agent message type %q", probe.Type)
 	}

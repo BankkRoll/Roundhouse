@@ -1,0 +1,6 @@
+{
+  "type": "backup_parts_request",
+  "backup_id": "bak_01JGGGGGGGGGGGGGGGGGGGGGGG",
+  "from_part": 17,
+  "count": 32
+}

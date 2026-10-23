@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
-  AgentMessageSchema,
+  AgentFrameSchema,
   ControlMessageSchema,
   EnvelopeSchema,
   JoinRequestSchema,
@@ -20,7 +20,8 @@ const outDir = join(dirname(fileURLToPath(import.meta.url)), "..", "schema");
 mkdirSync(outDir, { recursive: true });
 
 const schemas = {
-  "agent-message": AgentMessageSchema,
+  // The complete union: every frame of every accepted version.
+  "agent-message": AgentFrameSchema,
   "control-message": ControlMessageSchema,
   envelope: EnvelopeSchema,
   "join-request": JoinRequestSchema,

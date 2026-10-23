@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -42,7 +43,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	w, ok := msg.(*Welcome)
-	if !ok || *w != *welcome() {
+	if !ok || !reflect.DeepEqual(w, welcome()) {
 		t.Fatalf("got %#v", msg)
 	}
 }

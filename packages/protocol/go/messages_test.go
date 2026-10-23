@@ -576,11 +576,26 @@ func TestLocalImageRepository(t *testing.T) {
 	}
 }
 
-// TestProtocolVersions pins the ADR 0013 plan; messages.test.ts pins the
-// TypeScript constants to the same values.
+// TestProtocolVersions pins the ADR 0015 plan; messages.test.ts and
+// phase23.test.ts pin the TypeScript constants to the same values.
 func TestProtocolVersions(t *testing.T) {
-	if ProtocolVersion != 4 || MinProtocolVersion != ProtocolVersion-1 {
-		t.Errorf("versions %d..%d, want 3..4", MinProtocolVersion, ProtocolVersion)
+	if ProtocolVersion != 6 || MinProtocolVersion != 3 {
+		t.Errorf("versions %d..%d, want 3..6", MinProtocolVersion, ProtocolVersion)
+	}
+	for name, v := range map[string]int{
+		"mesh": MeshProtocolVersion, "volumes": VolumesProtocolVersion, "backups": BackupsProtocolVersion,
+		"db_query": DBQueryProtocolVersion, "key_rollover": KeyRolloverProtocolVersion,
+	} {
+		if v != 5 {
+			t.Errorf("%s gate %d, want 5", name, v)
+		}
+	}
+	for name, v := range map[string]int{
+		"jobs": JobsProtocolVersion, "metrics": MetricsProtocolVersion, "certs": CertsProtocolVersion,
+	} {
+		if v != 6 {
+			t.Errorf("%s gate %d, want 6", name, v)
+		}
 	}
 	if SealedEnvProtocolVersion != 4 || WorkloadsProtocolVersion != 2 {
 		t.Errorf("gates sealed=%d workloads=%d", SealedEnvProtocolVersion, WorkloadsProtocolVersion)

@@ -10,7 +10,13 @@
  * - `sealed-box.json` and `encryption-key.json`: cross-language vectors for
  *   sealed boxes and a node's signed encryption key;
  * - `spec-hash.json`: workload specs with their canonical text and hash;
- * - `network-names.json`: environment network names, readable and hashed.
+ * - `network-names.json`: environment network names, readable and hashed;
+ * - Phase 2–3 (ADR 0015): `signed-desired-state-phase2.json` (mesh,
+ *   volumes, a database workload, a route workload, a proxy registry) and
+ *   `-phase3.json` (managed TLS), `signed-welcome-next-keys.json`,
+ *   `signed-key-announce.json`, and one signed fixture per new control
+ *   frame, every secret in a real sealed box;
+ * - `formats.json`: expected results of the hand-written format helpers.
  *
  * The signing key comes from a fixed seed and Ed25519 signatures are
  * deterministic, so regenerating produces identical output unless a message
@@ -26,17 +32,32 @@ import { fileURLToPath } from "node:url";
 import { redact, redactionNeedles } from "../../shared/src/redaction";
 import {
   type BoxPurpose,
+  backupPartsAad,
   buildCacheKey,
   buildSecretsAad,
   type ControlMessage,
   ControlMessageSchema,
   CREDENTIAL_FRAME_TTL_MS,
+  certKeyAad,
   computeSpecHash,
+  dbCredentialAad,
   encryptionKeySignaturePayload,
   environmentNetworkName,
   importSigningKey,
+  ipv4InCidr,
+  isCidr,
+  isHostPort,
+  isIPv4,
+  isIPv4Cidr,
+  isIPv6,
+  isRouteHostname,
+  isSafeMountPath,
+  jobEnvAad,
   localImageRepository,
+  meshPsksAad,
   nodeEncryptionKeyId,
+  registryUpstreamAad,
+  restoreSecretsAad,
   type SealedBox,
   sealBox,
   signEnvelope,
@@ -387,12 +408,536 @@ write("network-names.json", {
   ),
 });
 
+// -----------------------------------------------------------------------------
+// Phase 2–3 (protocols 5 and 6, ADR 0015)
+// -----------------------------------------------------------------------------
+
+const DB_SERVICE = "svc_01JDDDDDDDDDDDDDDDDDDDDDDD";
+const DB_WORKLOAD = "wl_01JDDDDDDDDDDDDDDDDDDDDDDD";
+const VOLUME = "vol_01JDDDDDDDDDDDDDDDDDDDDDDD";
+const PHASE2_GENERATION = 21;
+
+const dbWorkload = await withHash({
+  id: DB_WORKLOAD,
+  kind: "service",
+  project_id: PROJECT,
+  environment_id: ENVIRONMENT,
+  service_id: DB_SERVICE,
+  deployment_id: "dep_01JDDDDDDDDDDDDDDDDDDDDDDD",
+  replica: 0,
+  image: `postgres@sha256:${"cd".repeat(32)}`,
+  env_sealed: await envBox(DB_WORKLOAD, PHASE2_GENERATION, {
+    POSTGRES_USER: "postgres",
+    POSTGRES_DB: "app",
+    POSTGRES_PASSWORD: "fixture-postgres-password",
+  }),
+  ports: [
+    {
+      container_port: 5432,
+      protocol: "tcp",
+      publish: { host_port: 20_001, host_ip: "0.0.0.0" },
+    },
+  ],
+  routes: [],
+  healthcheck: {
+    type: "exec",
+    command: ["sh", "-c", 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'],
+    interval_s: 5,
+    timeout_s: 5,
+    retries: 6,
+    start_period_s: 30,
+  },
+  resources: { cpu_millis: 1000, memory_mb: 1024, pids: 512 },
+  restart: { policy: "always", max_retries: 0 },
+  network: NETWORK,
+  labels: {},
+  drain_s: 0,
+  mounts: [{ volume_id: VOLUME, path: "/var/lib/postgresql", read_only: false }],
+  rollout: "stop_first",
+  stop_grace_s: 60,
+  publish_allowed_cidrs: ["203.0.113.7/32", "2001:db8::/48"],
+  mesh_ip: "10.200.1.10",
+  private_dns: true,
+});
+
+const routeWorkload = await withHash({
+  id: "wl_01JEEEEEEEEEEEEEEEEEEEEEEE",
+  kind: "route",
+  project_id: PROJECT,
+  environment_id: ENVIRONMENT,
+  service_id: SERVICE,
+  deployment_id: "dep_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  replica: 0,
+  image: `${localImageRepository(PROJECT, SERVICE)}@sha256:${"ab".repeat(32)}`,
+  env_sealed: null,
+  ports: [{ container_port: 3000, protocol: "http" }],
+  routes: [{ hostname: "api-production-x7k2.127.0.0.1.nip.io", container_port: 3000 }],
+  healthcheck: null,
+  resources: { cpu_millis: 10, memory_mb: 16, pids: 16 },
+  restart: { policy: "always", max_retries: 0 },
+  network: NETWORK,
+  labels: {},
+  drain_s: 0,
+  upstreams: [
+    { ip: "10.200.2.10", port: 3000 },
+    { ip: "10.200.2.11", port: 3000 },
+  ],
+});
+
+const RUN_ID = "crn_01JFFFFFFFFFFFFFFFFFFFFFFF";
+const JOB_WORKLOAD = "wl_01JFFFFFFFFFFFFFFFFFFFFFFF";
+const jobWorkload = await withHash({
+  id: JOB_WORKLOAD,
+  kind: "job",
+  project_id: PROJECT,
+  environment_id: ENVIRONMENT,
+  service_id: "svc_01JFFFFFFFFFFFFFFFFFFFFFFF",
+  deployment_id: "dep_01JFFFFFFFFFFFFFFFFFFFFFFF",
+  replica: 0,
+  image: "busybox:1.37",
+  command: ["sh", "-c", 'echo "$GREETING"'],
+  env_sealed: await seal(
+    JSON.stringify({ env: { GREETING: "hello from cron" }, files: {} }),
+    "job-env",
+    jobEnvAad(NODE_ID, RUN_ID, JOB_WORKLOAD),
+  ),
+  ports: [],
+  routes: [],
+  healthcheck: null,
+  resources: { cpu_millis: 250, memory_mb: 128, pids: 64 },
+  restart: { policy: "never", max_retries: 0 },
+  network: NETWORK,
+  labels: {},
+  drain_s: 0,
+  mesh_ip: "10.200.1.11",
+  private_dns: true,
+});
+
+const PEER_A = "node_peer_a";
+const PEER_B = "node_peer_b";
+// Deterministic, test-only 32-byte values; never real keys.
+const key32 = (byte: number) => toBase64(new Uint8Array(32).fill(byte));
+
+await writeSigned("signed-desired-state-phase2.json", {
+  type: "desired_state",
+  id: "msg_fixture_phase2",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  generation: PHASE2_GENERATION,
+  workloads: [dbWorkload, routeWorkload],
+  tls_mode: "acme",
+  apps_domain: "127.0.0.1.nip.io",
+  registry: {
+    listen: "127.0.0.1:5000",
+    storage: { type: "filesystem" },
+    mode: "proxy",
+    upstream: {
+      url: "http://10.200.2.1:5000",
+      username: "node_fixture",
+      password_sealed: await seal(
+        JSON.stringify({ password: "fixture-pull-password" }),
+        "registry-upstream",
+        registryUpstreamAad(NODE_ID, PHASE2_GENERATION),
+      ),
+    },
+  },
+  volumes: [
+    {
+      id: VOLUME,
+      size_mb: 5120,
+      project_id: PROJECT,
+      environment_id: ENVIRONMENT,
+      service_id: DB_SERVICE,
+      owner: null,
+    },
+  ],
+  mesh: {
+    supernet: "10.200.0.0/16",
+    node_index: 1,
+    address: "10.200.1.1",
+    dns_address: "10.200.1.2",
+    listen_port: 51820,
+    mtu: 1420,
+    accept_fwmark: 0x2000000,
+    rotate_key: false,
+    activate_epoch: null,
+    peers: [
+      {
+        node_id: PEER_A,
+        public_key: key32(0xa1),
+        endpoint: "203.0.113.20:51820",
+        allowed_ips: ["10.200.2.0/24"],
+        keepalive_s: 25,
+      },
+      {
+        node_id: PEER_B,
+        public_key: key32(0xb2),
+        endpoint: null,
+        allowed_ips: ["10.200.3.0/24", "10.200.4.0/24"],
+        keepalive_s: 0,
+      },
+    ],
+    psks_sealed: await seal(
+      JSON.stringify({ psks: { [PEER_A]: key32(0x11), [PEER_B]: key32(0x22) } }),
+      "mesh-psks",
+      meshPsksAad(NODE_ID, PHASE2_GENERATION),
+    ),
+    forward_pairs: [["10.200.3.0/24", "10.200.4.0/24"]],
+    node_addresses: ["10.200.1.1", "10.200.2.1", "10.200.3.1"],
+    addresses: [
+      { ip: "10.200.1.10", env_tag: 7, node_id: NODE_ID, routed_ports: [] },
+      { ip: "10.200.2.10", env_tag: 7, node_id: PEER_A, routed_ports: [3000] },
+      { ip: "10.200.2.11", env_tag: 7, node_id: PEER_A, routed_ports: [3000] },
+    ],
+  },
+});
+
+await writeSigned("signed-key-announce.json", {
+  type: "key_announce",
+  id: "msg_fixture_key_announce",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: FAR_FUTURE,
+  keys: [{ kid: "k2", public_key: key32(0x42), not_before: 1_700_086_400 }],
+});
+
+await writeSigned("signed-welcome-next-keys.json", {
+  type: "welcome",
+  id: "msg_fixture_welcome",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: FAR_FUTURE,
+  heartbeat_interval_ms: 10_000,
+  next_keys: [
+    { kid: "k2", public_key: key32(0x42), not_before: 1_700_086_400 },
+    { kid: "k3", public_key: key32(0x43), not_before: 1_702_678_400 },
+  ],
+  metrics_interval_ms: 15_000,
+});
+
+await writeSigned("signed-volume-delete.json", {
+  type: "volume_delete",
+  id: "msg_fixture_volume_delete",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: FAR_FUTURE,
+  volume_id: VOLUME,
+});
+
+const BACKUP_ID = "bak_01JGGGGGGGGGGGGGGGGGGGGGGG";
+const AGE_RECIPIENT = `age1${"q".repeat(58)}`;
+const AGE_IDENTITY = `AGE-SECRET-KEY-1${"Q".repeat(58)}`;
+const partUrl = (n: number) =>
+  `https://0123456789abcdef.r2.cloudflarestorage.com/roundhouse-backups/backups/${BACKUP_ID}.rhbk.zst.age?partNumber=${n}&uploadId=fixture&X-Amz-Signature=${"0".repeat(64)}`;
+const partsBox = (from: number, count: number) =>
+  seal(
+    JSON.stringify({
+      parts: Array.from({ length: count }, (_, i) => ({
+        part_number: from + i,
+        url: partUrl(from + i),
+      })),
+    }),
+    "backup-parts",
+    backupPartsAad(NODE_ID, BACKUP_ID),
+  );
+
+await writeSigned("signed-backup-job.json", {
+  type: "backup_job",
+  id: "msg_fixture_backup_job",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  backup_id: BACKUP_ID,
+  method: "dump",
+  engine: "postgres",
+  workload_id: DB_WORKLOAD,
+  volume_id: VOLUME,
+  quiesce: "none",
+  databases: ["app"],
+  age_recipient: AGE_RECIPIENT,
+  part_size_bytes: 16 * 1024 * 1024,
+  parts_sealed: await partsBox(1, 2),
+  timeout_s: 3600,
+});
+
+await writeSigned("signed-backup-parts.json", {
+  type: "backup_parts",
+  id: "msg_fixture_backup_parts",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  backup_id: BACKUP_ID,
+  parts_sealed: await partsBox(3, 2),
+});
+
+const RESTORE_ID = "rst_01JHHHHHHHHHHHHHHHHHHHHHHH";
+const MIGRATION_ID = "mig_01JHHHHHHHHHHHHHHHHHHHHHHH";
+const restoreBox = (id: string) =>
+  seal(
+    JSON.stringify({
+      download_url: `https://0123456789abcdef.r2.cloudflarestorage.com/roundhouse-backups/backups/${BACKUP_ID}.rhbk.zst.age?X-Amz-Signature=${"1".repeat(64)}`,
+      age_identity: AGE_IDENTITY,
+    }),
+    "restore",
+    restoreSecretsAad(NODE_ID, id),
+  );
+
+await writeSigned("signed-restore-job.json", {
+  type: "restore_job",
+  id: "msg_fixture_restore_job",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  restore_id: RESTORE_ID,
+  method: "dump",
+  engine: "postgres",
+  workload_id: DB_WORKLOAD,
+  volume_id: VOLUME,
+  backup_id: BACKUP_ID,
+  sha256: "ef".repeat(32),
+  size_bytes: 33_554_432,
+  secrets_sealed: await restoreBox(RESTORE_ID),
+  timeout_s: 3600,
+});
+
+await writeSigned("signed-volume-copy-out.json", {
+  type: "volume_copy_out",
+  id: "msg_fixture_copy_out",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  migration_id: MIGRATION_ID,
+  backup_id: BACKUP_ID,
+  volume_id: VOLUME,
+  workload_id: DB_WORKLOAD,
+  age_recipient: AGE_RECIPIENT,
+  part_size_bytes: 16 * 1024 * 1024,
+  parts_sealed: await partsBox(1, 1),
+  timeout_s: 7200,
+});
+
+await writeSigned("signed-volume-copy-in.json", {
+  type: "volume_copy_in",
+  id: "msg_fixture_copy_in",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  migration_id: MIGRATION_ID,
+  volume_id: VOLUME,
+  backup_id: BACKUP_ID,
+  sha256: "ef".repeat(32),
+  size_bytes: 33_554_432,
+  secrets_sealed: await restoreBox(MIGRATION_ID),
+  timeout_s: 7200,
+});
+
+const REQUEST_ID = "q_01JIIIIIIIIIIIIIIIIIIIIIII";
+await writeSigned("signed-db-query.json", {
+  type: "db_query",
+  id: "msg_fixture_db_query",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  request_id: REQUEST_ID,
+  workload_id: DB_WORKLOAD,
+  engine: "postgres",
+  credential_sealed: await seal(
+    JSON.stringify({ username: "roundhouse_ro", password: "fixture-ro-password" }),
+    "db-credential",
+    dbCredentialAad(NODE_ID, REQUEST_ID),
+  ),
+  mode: "read",
+  op: {
+    type: "raw",
+    statement: "SELECT id, name, avatar FROM users WHERE id = $1 OR name = $2",
+    params: ["1", null],
+  },
+  max_rows: 100,
+  max_bytes: 458_752,
+  timeout_ms: 30_000,
+});
+
+await writeSigned("signed-job-run.json", {
+  type: "job_run",
+  id: "msg_fixture_job_run",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  run_id: RUN_ID,
+  workload: jobWorkload,
+  timeout_s: 3600,
+  kill_grace_s: 10,
+});
+
+await writeSigned("signed-job-cancel.json", {
+  type: "job_cancel",
+  id: "msg_fixture_job_cancel",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: FAR_FUTURE,
+  run_id: RUN_ID,
+  reason: "replaced by crn_01JFFFFFFFFFFFFFFFFFFFFFFG",
+});
+
+const CERT_ID = "cer_01JJJJJJJJJJJJJJJJJJJJJJJJ";
+const CERT_PEM =
+  "-----BEGIN CERTIFICATE-----\nMIIBfixtureLEAF\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIBfixtureINTERMEDIATE\n-----END CERTIFICATE-----\n";
+const CERT_SHA256 = Buffer.from(
+  await crypto.subtle.digest("SHA-256", new TextEncoder().encode(CERT_PEM)),
+).toString("hex");
+const CERT_NOT_AFTER = 1_707_776_000_000;
+
+await writeSigned("signed-desired-state-phase3.json", {
+  type: "desired_state",
+  id: "msg_fixture_phase3",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: FAR_FUTURE,
+  generation: 31,
+  workloads: [],
+  tls_mode: "managed",
+  apps_domain: "apps.example.com",
+  registry: null,
+  ingress: {
+    acme_challenge_upstream: {
+      url: "https://control.example.com/v1/acme/http-01",
+      host: "control.example.com",
+    },
+    allowed_sources: ["173.245.48.0/20", "2400:cb00::/32"],
+    managed_hosts: ["*.apps.example.com", "shop.example.org"],
+  },
+  certificates: [{ id: CERT_ID, sha256: CERT_SHA256, not_after: CERT_NOT_AFTER }],
+});
+
+await writeSigned("signed-cert-sync.json", {
+  type: "cert_sync",
+  id: "msg_fixture_cert_sync",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  upserts: [
+    {
+      id: CERT_ID,
+      hostnames: ["*.apps.example.com", "apps.example.com"],
+      cert_pem: CERT_PEM,
+      sha256: CERT_SHA256,
+      key_sealed: await seal(
+        JSON.stringify({
+          key_pem: "-----BEGIN EC PRIVATE KEY-----\nMHcfixture\n-----END EC PRIVATE KEY-----\n",
+        }),
+        "cert-key",
+        certKeyAad(NODE_ID, CERT_ID, CERT_SHA256),
+      ),
+      not_after: CERT_NOT_AFTER,
+    },
+  ],
+  removes: ["cer_01JJJJJJJJJJJJJJJJJJJJJJJK"],
+});
+
+// A workload with every Phase 3 route field, for the spec-hash cases.
+const wildcardWorkload = await withHash({
+  ...minimalWorkload,
+  id: "wl_01JKKKKKKKKKKKKKKKKKKKKKKK",
+  ports: [{ container_port: 8080, protocol: "http" }],
+  routes: [
+    {
+      hostname: "*.apps.example.com",
+      container_port: 8080,
+      hsts: { max_age: 31_536_000, include_subdomains: true, preload: false },
+    },
+  ],
+});
+
+// Format helpers written by hand on both sides (no lookahead in Go RE2, no
+// netip in Workers), pinned to each other here.
+const formatFns = {
+  isIPv4,
+  isIPv6,
+  isCidr,
+  isIPv4Cidr,
+  isHostPort,
+  isSafeMountPath,
+  isRouteHostname,
+  ipv4InCidr: (input: string) => ipv4InCidr(...(input.split("|") as [string, string])),
+};
+const formatCases: [keyof typeof formatFns, string][] = [
+  ["isIPv4", "10.200.1.1"],
+  ["isIPv4", "256.1.1.1"],
+  ["isIPv4", "01.2.3.4"],
+  ["isIPv4", "1.2.3"],
+  ["isIPv4", "10a200b1c1"],
+  ["isIPv4", ""],
+  ["isIPv6", "::"],
+  ["isIPv6", "2001:db8::1"],
+  ["isIPv6", "::ffff:10.0.0.1"],
+  ["isIPv6", "1:2:3:4:5:6:7:8"],
+  ["isIPv6", "1:2:3:4:5:6:7::"],
+  ["isIPv6", "1:2:3:4:5:6:7:8:9"],
+  ["isIPv6", "::1:2:3:4:5:6:7:8"],
+  ["isIPv6", "1::2::3"],
+  ["isIPv6", "1.2.3.4::"],
+  ["isIPv6", ":1"],
+  ["isIPv6", "fe80::1%eth0"],
+  ["isIPv6", "12345::"],
+  ["isCidr", "10.0.0.0/8"],
+  ["isCidr", "10.0.0.0/33"],
+  ["isCidr", "10.0.0.0/08"],
+  ["isCidr", "10.0.0.0"],
+  ["isCidr", "2606:4700::/32"],
+  ["isCidr", "::/0"],
+  ["isCidr", "2606:4700::/129"],
+  ["isIPv4Cidr", "10.200.0.0/16"],
+  ["isIPv4Cidr", "2606:4700::/32"],
+  ["ipv4InCidr", "10.200.3.1|10.200.0.0/16"],
+  ["ipv4InCidr", "10.201.0.1|10.200.0.0/16"],
+  ["ipv4InCidr", "10.0.0.1|0.0.0.0/0"],
+  ["ipv4InCidr", "10.0.0.1|10.0.0.1/32"],
+  ["ipv4InCidr", "10.0.0.2|10.0.0.1/32"],
+  ["isHostPort", "203.0.113.7:51820"],
+  ["isHostPort", "[2001:db8::1]:51820"],
+  ["isHostPort", "node-a.example.com:51820"],
+  ["isHostPort", "localhost:1"],
+  ["isHostPort", "host:0"],
+  ["isHostPort", "host:65536"],
+  ["isHostPort", "host:080"],
+  ["isHostPort", "2001:db8::1:51820"],
+  ["isHostPort", ":51820"],
+  ["isHostPort", "Host.Example:1"],
+  ["isSafeMountPath", "/var/lib/postgresql"],
+  ["isSafeMountPath", "/"],
+  ["isSafeMountPath", "/data/"],
+  ["isSafeMountPath", "/a/../b"],
+  ["isSafeMountPath", "/a/./b"],
+  ["isSafeMountPath", "/a//b"],
+  ["isSafeMountPath", "/proc"],
+  ["isSafeMountPath", "/proc/self"],
+  ["isSafeMountPath", "/process"],
+  ["isSafeMountPath", "/run/secrets"],
+  ["isSafeMountPath", "/run/secrets2"],
+  ["isSafeMountPath", "relative"],
+  ["isRouteHostname", "*.apps.example.com"],
+  ["isRouteHostname", "apps.example.com"],
+  ["isRouteHostname", "*.com"],
+  ["isRouteHostname", "a.*.example.com"],
+  ["isRouteHostname", "*.*.example.com"],
+  ["isRouteHostname", "*example.com"],
+  ["isRouteHostname", "Example.com"],
+];
+write("formats.json", {
+  cases: formatCases.map(([fn, input]) => ({ fn, input, want: formatFns[fn](input) })),
+});
+
 write("spec-hash.json", {
   cases: [
     ["full", fullWorkload],
     ["minimal", minimalWorkload],
     ["escaping", escapingWorkload],
     ["system", systemWorkload],
+    ["volume-mesh", dbWorkload],
+    ["route", routeWorkload],
+    ["job", jobWorkload],
+    ["wildcard-hsts", wildcardWorkload],
   ].map(([name, spec]) => ({
     name,
     spec,

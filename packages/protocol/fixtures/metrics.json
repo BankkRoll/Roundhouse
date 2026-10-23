@@ -1,0 +1,32 @@
+{
+  "type": "metrics",
+  "ts": 1700000015000,
+  "interval_ms": 15000,
+  "source": "cgroup_v2",
+  "samples": [
+    {
+      "workload_id": "wl_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      "cpu_millis": 412,
+      "mem_bytes": 201326592,
+      "mem_limit_bytes": 536870912,
+      "net_rx_bytes": 52428,
+      "net_tx_bytes": 104857,
+      "disk_read_bytes": 0,
+      "disk_write_bytes": 4096,
+      "pids": 23,
+      "restarts": 0
+    },
+    {
+      "workload_id": "wl_01JDDDDDDDDDDDDDDDDDDDDDDD",
+      "cpu_millis": 35,
+      "mem_bytes": 104857600,
+      "mem_limit_bytes": 1073741824,
+      "net_rx_bytes": 2048,
+      "net_tx_bytes": 1024,
+      "disk_read_bytes": 8192,
+      "disk_write_bytes": 65536,
+      "pids": 9,
+      "restarts": 1
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"desired_state\",\"id\":\"msg_fixture_phase3\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":4102444800000,\"generation\":31,\"workloads\":[],\"tls_mode\":\"managed\",\"apps_domain\":\"apps.example.com\",\"registry\":null,\"ingress\":{\"acme_challenge_upstream\":{\"url\":\"https://control.example.com/v1/acme/http-01\",\"host\":\"control.example.com\"},\"allowed_sources\":[\"173.245.48.0/20\",\"2400:cb00::/32\"],\"managed_hosts\":[\"*.apps.example.com\",\"shop.example.org\"]},\"certificates\":[{\"id\":\"cer_01JJJJJJJJJJJJJJJJJJJJJJJJ\",\"sha256\":\"1438fd4397ae9f1c8b3ff12d857ff4f96fde94f148462c16eace7809e4033a6b\",\"not_after\":1707776000000}]}",
+    "sig": "iAfvIVi5LqOsvSLfBuUccgN2twGgVAxBNypZ0oFe4g6vXNYCk+MWyM7OyYIRqvSMcimZSmeLx986yextY4JGBQ=="
+  }
+}

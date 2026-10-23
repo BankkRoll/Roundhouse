@@ -6,10 +6,14 @@ import "slices"
 // Version 2 adds workloads, builds, statuses and logs; version 3 adds
 // [BuildCancel], [BuildJob].SecretBuildArgs and [BuildResult].Cancelled;
 // version 4 seals workload environments and build secrets to the node
-// (ADR 0014). Versions follow ADR 0013. See PROTOCOL_VERSION in messages.ts.
-const ProtocolVersion = 4
+// (ADR 0014); version 5 is Phase 2 (mesh, volumes, backups, queries,
+// signing-key rollover) and version 6 Phase 3 (jobs, metrics,
+// certificates). ADR 0015 records why phases sit one above ADR 0013's plan.
+// See PROTOCOL_VERSION in versions.ts.
+const ProtocolVersion = 6
 
-// MinProtocolVersion is the oldest version the control plane accepts (N-1).
+// MinProtocolVersion is the oldest version the control plane accepts. ADR
+// 0013 raises it with each phase's release, not with its contracts.
 const MinProtocolVersion = 3
 
 // WorkloadsProtocolVersion is the first version that receives workloads and
@@ -32,6 +36,45 @@ const SecretBuildArgsProtocolVersion = 3
 // Mirrors SEALED_ENV_PROTOCOL_VERSION in TypeScript.
 const SealedEnvProtocolVersion = 4
 
+// MeshProtocolVersion gates the WireGuard mesh (ADR 0005): [Hello].Mesh,
+// [DesiredState].Mesh, [MeshStatus], [MeshKey], route workloads, MeshIP,
+// PrivateDNS, Capabilities.Ingress and the registry's mode fields.
+// Mirrors MESH_PROTOCOL_VERSION in TypeScript.
+const MeshProtocolVersion = 5
+
+// VolumesProtocolVersion gates volumes (ADR 0004): [DesiredState].Volumes,
+// mounts, rollout, stop grace, exec probes, published ports,
+// [VolumeStatus], [VolumeDelete] and [Hello].VolumeQuota. Mirrors
+// VOLUMES_PROTOCOL_VERSION in TypeScript.
+const VolumesProtocolVersion = 5
+
+// BackupsProtocolVersion gates backup, restore and volume copy frames and
+// task log sources (ADR 0004). Mirrors BACKUPS_PROTOCOL_VERSION.
+const BackupsProtocolVersion = 5
+
+// DBQueryProtocolVersion gates [DBQuery] (ADR 0004). Mirrors
+// DB_QUERY_PROTOCOL_VERSION.
+const DBQueryProtocolVersion = 5
+
+// KeyRolloverProtocolVersion gates [Welcome].NextKeys, [KeyAnnounce] and
+// [Hello].PinnedKIDs (ADR 0014 §13). Mirrors KEY_ROLLOVER_PROTOCOL_VERSION.
+const KeyRolloverProtocolVersion = 5
+
+// JobsProtocolVersion gates [JobRun], [JobCancel], [JobStatus], job log
+// sources and job workloads (ADR 0010). Mirrors JOBS_PROTOCOL_VERSION.
+const JobsProtocolVersion = 6
+
+// MetricsProtocolVersion gates [Metrics] (ADR 0008); such an agent sends
+// them only when [Welcome].MetricsIntervalMS is set. Mirrors
+// METRICS_PROTOCOL_VERSION.
+const MetricsProtocolVersion = 6
+
+// CertsProtocolVersion gates [CertSync], [CertAck], [CertRequest],
+// [CertStatus], [DesiredState].Certificates and Ingress, [TLSManaged],
+// wildcard route hostnames and route HSTS (ADR 0009). Mirrors
+// CERTS_PROTOCOL_VERSION.
+const CertsProtocolVersion = 6
+
 // Message type discriminators carried in every frame's "type" field.
 const (
 	TypeHello          = "hello"
@@ -43,6 +86,32 @@ const (
 	TypeDesiredState   = "desired_state"
 	TypeBuildJob       = "build_job"
 	TypeBuildCancel    = "build_cancel"
+
+	TypeMeshStatus         = "mesh_status"
+	TypeMeshKey            = "mesh_key"
+	TypeVolumeStatus       = "volume_status"
+	TypeBackupPartsRequest = "backup_parts_request"
+	TypeBackupProgress     = "backup_progress"
+	TypeBackupResult       = "backup_result"
+	TypeRestoreResult      = "restore_result"
+	TypeDBQueryResult      = "db_query_result"
+	TypeJobStatus          = "job_status"
+	TypeMetrics            = "metrics"
+	TypeCertAck            = "cert_ack"
+	TypeCertRequest        = "cert_request"
+	TypeCertStatus         = "cert_status"
+
+	TypeKeyAnnounce   = "key_announce"
+	TypeVolumeDelete  = "volume_delete"
+	TypeBackupJob     = "backup_job"
+	TypeBackupParts   = "backup_parts"
+	TypeRestoreJob    = "restore_job"
+	TypeVolumeCopyOut = "volume_copy_out"
+	TypeVolumeCopyIn  = "volume_copy_in"
+	TypeDBQuery       = "db_query"
+	TypeJobRun        = "job_run"
+	TypeJobCancel     = "job_cancel"
+	TypeCertSync      = "cert_sync"
 )
 
 // Arch is a CPU architecture the control plane can schedule onto.
@@ -73,6 +142,8 @@ type Capabilities struct {
 	// Builder means the node runs BuildKit and the local registry and
 	// accepts [BuildJob].
 	Builder bool `json:"builder"`
+	// Ingress nil means true: the node runs Caddy for every route.
+	Ingress *bool `json:"ingress,omitempty"`
 }
 
 // NodeUsage is a point-in-time resource usage sample for the whole node.
@@ -90,8 +161,9 @@ type NodeUsage struct {
 // Agent → control
 // -----------------------------------------------------------------------------
 
-// AgentMessage is any frame an agent may send. It is implemented only by
-// [*Hello], [*Heartbeat], [*WorkloadStatus], [*Logs] and [*BuildResult].
+// AgentMessage is any frame an agent may send: [*Hello], [*Heartbeat],
+// [*WorkloadStatus], [*Logs], [*BuildResult], and from protocol 5–6 the
+// mesh, volume, backup, query, job, metrics and certificate reports.
 type AgentMessage interface {
 	agentMessage()
 }
@@ -119,6 +191,14 @@ type Hello struct {
 	// EncryptionKey registers the agent's X25519 key for nodes that joined
 	// without one. The control plane stores it only when the node has none.
 	EncryptionKey *NodeEncryptionKey `json:"encryption_key,omitempty"`
+	// Mesh reports the WireGuard public key and reachability when the
+	// agent's mesh is enabled.
+	Mesh *HelloMesh `json:"mesh,omitempty"`
+	// VolumeQuota is how this node enforces volume quotas.
+	VolumeQuota VolumeQuotaMode `json:"volume_quota,omitempty"`
+	// PinnedKIDs are the control-plane signing kids the agent accepts,
+	// current first.
+	PinnedKIDs []string `json:"pinned_kids,omitempty"`
 }
 
 func (*Hello) agentMessage() {}
@@ -194,19 +274,26 @@ type WorkloadStatus struct {
 
 func (*WorkloadStatus) agentMessage() {}
 
-// Log source types.
+// Log source types. [LogSourceJob] needs [JobsProtocolVersion];
+// [LogSourceTask] needs [BackupsProtocolVersion].
 const (
 	LogSourceRuntime = "runtime"
 	LogSourceBuild   = "build"
+	LogSourceJob     = "job"
+	LogSourceTask    = "task"
 )
 
 // LogSource says what a [Logs] frame belongs to: a running replica
-// (WorkloadID and DeploymentID set) or a build (BuildID set).
+// (WorkloadID and DeploymentID set), a build (BuildID), a job run (RunID
+// and WorkloadID) or a backup, restore or copy task (TaskID). It stays
+// comparable, since the agent keys log batches by it.
 type LogSource struct {
 	Type         string `json:"type"`
 	WorkloadID   string `json:"workload_id,omitempty"`
 	DeploymentID string `json:"deployment_id,omitempty"`
 	BuildID      string `json:"build_id,omitempty"`
+	RunID        string `json:"run_id,omitempty"`
+	TaskID       string `json:"task_id,omitempty"`
 }
 
 // LogStream is the output stream a log line came from.
@@ -283,9 +370,10 @@ type ControlHeader struct {
 // Header returns the routing and replay-protection fields of a control message.
 func (h ControlHeader) Header() ControlHeader { return h }
 
-// ControlMessage is any payload the control plane may sign and send. It is
-// implemented only by [*Welcome], [*DesiredState], [*BuildJob] and
-// [*BuildCancel]; use a type switch to handle each.
+// ControlMessage is any payload the control plane may sign and send:
+// [*Welcome], [*DesiredState], [*BuildJob], [*BuildCancel], and from
+// protocol 5–6 [*KeyAnnounce], the volume, backup, restore, copy and query
+// frames, [*JobRun], [*JobCancel] and [*CertSync]. Use a type switch.
 type ControlMessage interface {
 	// Header returns the message's routing and replay-protection fields.
 	Header() ControlHeader
@@ -298,6 +386,11 @@ type Welcome struct {
 	Type string `json:"type"`
 	ControlHeader
 	HeartbeatIntervalMS int64 `json:"heartbeat_interval_ms"`
+	// NextKeys are successor signing keys to pin, signed by the current key;
+	// never the envelope's own kid.
+	NextKeys []SigningKeyAnnouncement `json:"next_keys,omitempty"`
+	// MetricsIntervalMS asks for [Metrics] at this interval; nil means none.
+	MetricsIntervalMS *int64 `json:"metrics_interval_ms,omitempty"`
 }
 
 func (*Welcome) controlMessage() {}
@@ -311,14 +404,26 @@ type DesiredState struct {
 	// Generation is monotonic; agents ignore anything not newer than what
 	// they have applied.
 	Generation int64 `json:"generation"`
-	// Workloads lists every service workload; system workloads never appear.
+	// Workloads lists every service and route workload; system workloads
+	// and jobs never appear.
 	Workloads []WorkloadSpec `json:"workloads"`
 	TLSMode   TLSMode        `json:"tls_mode"`
 	// AppsDomain is the parent domain of generated hostnames, nil until an
 	// operator sets one.
 	AppsDomain *string `json:"apps_domain"`
-	// Registry is set only for builder nodes.
+	// Registry is set for builder nodes and, from [MeshProtocolVersion], for
+	// meshed replica and proxy nodes.
 	Registry *RegistryConfig `json:"registry"`
+	// Volumes lists every volume the node holds; nil from older control
+	// planes. Never delete a volume because it is missing here.
+	Volumes []VolumeSpec `json:"volumes,omitempty"`
+	// Mesh nil (absent or null) means mesh off: tear wg0 and its table down.
+	Mesh *MeshConfig `json:"mesh,omitempty"`
+	// Ingress holds node-level Caddy settings.
+	Ingress *IngressSettings `json:"ingress,omitempty"`
+	// Certificates lists the certificates the node must hold; bodies arrive
+	// in [CertSync].
+	Certificates []CertificateRef `json:"certificates,omitempty"`
 }
 
 func (*DesiredState) controlMessage() {}

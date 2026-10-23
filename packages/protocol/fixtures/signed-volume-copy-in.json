@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"volume_copy_in\",\"id\":\"msg_fixture_copy_in\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":1700000060000,\"migration_id\":\"mig_01JHHHHHHHHHHHHHHHHHHHHHHH\",\"volume_id\":\"vol_01JDDDDDDDDDDDDDDDDDDDDDDD\",\"backup_id\":\"bak_01JGGGGGGGGGGGGGGGGGGGGGGG\",\"sha256\":\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"size_bytes\":33554432,\"secrets_sealed\":{\"v\":1,\"kid\":\"f35e5616160a30bf\",\"epk\":\"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=\",\"ct\":\"z1Q/r4d3EjxQidqcfjOSLcF9oyklKFk9gRVTEVwGY/H5PO+AvcOz0wk/x8sPKRSQPDfRilgRiPGpQhPV4lBX3W9/1tJocSb4F5ojkTEOD8YNBDEdT/XzSHcUpC9AElP9GEnOCJJteHrqx3ZrnBfYVaRyBbtCc2vl+ZbOrEd3eXn2gi7szC2Lh3nyEQSdEH5j1AqnzN2i5dIRhY22x7AS/IWb0UaSCErvbvX5FxoU+BlJD45RcM64qwfwg5/za8iNMkxDvmHiuPuCB76wEY++ndibe0QAdYd1X49A49r1TtW7AvE93MvVrsncLe0sU8m3aM7nGEX0+RopistnPEEkjxiGmEblXbtLPHUKrHB9K1rkrCjU5YORPcY0DfNVrq1DXU1i5604gTa6lksIvLBh/eNv2TI7FW55MQ5ethSMuUnKALb9HxcAvg==\"},\"timeout_s\":7200}",
+    "sig": "Jd0rKAEKpoQr+Z9qXyEMdZhlXw056tE0iC2hFiPc6xN+ppMvAIm15nogl8EZ4APcM7Df2QoNQDHC1LWfpb1qDA=="
+  }
+}

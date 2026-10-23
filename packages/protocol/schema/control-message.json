@@ -28,6 +28,39 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
+        },
+        "next_keys": {
+          "maxItems": 2,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kid": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,64}$"
+              },
+              "public_key": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9+/]{43}=$"
+              },
+              "not_before": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "kid",
+              "public_key",
+              "not_before"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "metrics_interval_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000
         }
       },
       "required": [
@@ -82,7 +115,9 @@
                 "type": "string",
                 "enum": [
                   "service",
-                  "system"
+                  "system",
+                  "route",
+                  "job"
                 ]
               },
               "project_id": {
@@ -241,6 +276,28 @@
                         "http",
                         "tcp"
                       ]
+                    },
+                    "publish": {
+                      "type": "object",
+                      "properties": {
+                        "host_port": {
+                          "type": "integer",
+                          "minimum": 1024,
+                          "maximum": 65535
+                        },
+                        "host_ip": {
+                          "type": "string",
+                          "enum": [
+                            "0.0.0.0",
+                            "::"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "host_port",
+                        "host_ip"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -257,9 +314,7 @@
                   "type": "object",
                   "properties": {
                     "hostname": {
-                      "type": "string",
-                      "maxLength": 253,
-                      "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+                      "type": "string"
                     },
                     "container_port": {
                       "type": "integer",
@@ -270,6 +325,35 @@
                       "type": "string",
                       "maxLength": 256,
                       "pattern": "^\\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
+                    },
+                    "hsts": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "max_age": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 63072000
+                            },
+                            "include_subdomains": {
+                              "type": "boolean"
+                            },
+                            "preload": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "max_age",
+                            "include_subdomains",
+                            "preload"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -289,7 +373,8 @@
                         "enum": [
                           "http",
                           "tcp",
-                          "none"
+                          "none",
+                          "exec"
                         ]
                       },
                       "path": {
@@ -301,6 +386,15 @@
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 65535
+                      },
+                      "command": {
+                        "minItems": 1,
+                        "maxItems": 256,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 0
+                        }
                       },
                       "interval_s": {
                         "type": "integer",
@@ -325,7 +419,6 @@
                     },
                     "required": [
                       "type",
-                      "port",
                       "interval_s",
                       "timeout_s",
                       "retries",
@@ -411,6 +504,81 @@
               "spec_hash": {
                 "type": "string",
                 "pattern": "^[a-f0-9]{64}$"
+              },
+              "mounts": {
+                "minItems": 1,
+                "maxItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "volume_id": {
+                      "type": "string",
+                      "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "read_only": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "volume_id",
+                    "path",
+                    "read_only"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "rollout": {
+                "type": "string",
+                "enum": [
+                  "start_first",
+                  "stop_first"
+                ]
+              },
+              "stop_grace_s": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 600
+              },
+              "publish_allowed_cidrs": {
+                "minItems": 1,
+                "maxItems": 64,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "mesh_ip": {
+                "type": "string"
+              },
+              "private_dns": {
+                "type": "boolean"
+              },
+              "upstreams": {
+                "minItems": 1,
+                "maxItems": 256,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "ip": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65535
+                    }
+                  },
+                  "required": [
+                    "ip",
+                    "port"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -441,7 +609,8 @@
           "enum": [
             "acme",
             "internal",
-            "off"
+            "off",
+            "managed"
           ]
         },
         "apps_domain": {
@@ -520,6 +689,90 @@
                       "additionalProperties": false
                     }
                   ]
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "primary",
+                    "replica",
+                    "proxy"
+                  ]
+                },
+                "mesh_listen": {
+                  "type": "string",
+                  "pattern": "^[0-9.]+:5000$"
+                },
+                "upstream": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "maxLength": 2048,
+                      "pattern": "^https?:\\/\\/[^\\s/?#]+\\/?$"
+                    },
+                    "username": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9._-]{1,64}$"
+                    },
+                    "password_sealed": {
+                      "type": "object",
+                      "properties": {
+                        "v": {
+                          "type": "number",
+                          "const": 1
+                        },
+                        "kid": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{16}$"
+                        },
+                        "epk": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9+/]{43}=$"
+                        },
+                        "ct": {
+                          "type": "string",
+                          "maxLength": 524288,
+                          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "v",
+                        "kid",
+                        "epk",
+                        "ct"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "url",
+                    "username",
+                    "password_sealed"
+                  ],
+                  "additionalProperties": false
+                },
+                "pull_users": {
+                  "minItems": 1,
+                  "maxItems": 254,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "username": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._-]{1,64}$"
+                      },
+                      "bcrypt": {
+                        "type": "string",
+                        "pattern": "^\\$2[aby]\\$[0-9]{2}\\$[./A-Za-z0-9]{53}$"
+                      }
+                    },
+                    "required": [
+                      "username",
+                      "bcrypt"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
@@ -532,6 +785,366 @@
               "type": "null"
             }
           ]
+        },
+        "volumes": {
+          "maxItems": 128,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+              },
+              "size_mb": {
+                "type": "integer",
+                "minimum": 256,
+                "maximum": 1048576
+              },
+              "project_id": {
+                "type": "string",
+                "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+              },
+              "environment_id": {
+                "type": "string",
+                "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+              },
+              "service_id": {
+                "type": "string",
+                "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+              },
+              "owner": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,9}):(0|[1-9][0-9]{0,9})$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "size_mb",
+              "project_id",
+              "environment_id",
+              "service_id",
+              "owner"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "mesh": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "supernet": {
+                  "type": "string"
+                },
+                "node_index": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 254
+                },
+                "address": {
+                  "type": "string"
+                },
+                "dns_address": {
+                  "type": "string"
+                },
+                "listen_port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "mtu": {
+                  "type": "integer",
+                  "minimum": 1280,
+                  "maximum": 1500
+                },
+                "accept_fwmark": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                "rotate_key": {
+                  "type": "boolean"
+                },
+                "activate_epoch": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "peers": {
+                  "maxItems": 253,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "node_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      },
+                      "public_key": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9+/]{43}=$"
+                      },
+                      "endpoint": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "allowed_ips": {
+                        "minItems": 1,
+                        "maxItems": 256,
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "keepalive_s": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "const": 0
+                          },
+                          {
+                            "type": "number",
+                            "const": 25
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "node_id",
+                      "public_key",
+                      "endpoint",
+                      "allowed_ips",
+                      "keepalive_s"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "psks_sealed": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "v": {
+                          "type": "number",
+                          "const": 1
+                        },
+                        "kid": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{16}$"
+                        },
+                        "epk": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9+/]{43}=$"
+                        },
+                        "ct": {
+                          "type": "string",
+                          "maxLength": 524288,
+                          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "v",
+                        "kid",
+                        "epk",
+                        "ct"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "forward_pairs": {
+                  "maxItems": 4096,
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 2,
+                    "maxItems": 2
+                  }
+                },
+                "node_addresses": {
+                  "maxItems": 254,
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "addresses": {
+                  "maxItems": 4096,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "ip": {
+                        "type": "string"
+                      },
+                      "env_tag": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      "node_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      },
+                      "routed_ports": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 65535
+                        }
+                      }
+                    },
+                    "required": [
+                      "ip",
+                      "env_tag",
+                      "node_id",
+                      "routed_ports"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "supernet",
+                "node_index",
+                "address",
+                "dns_address",
+                "listen_port",
+                "mtu",
+                "accept_fwmark",
+                "rotate_key",
+                "activate_epoch",
+                "peers",
+                "psks_sealed",
+                "forward_pairs",
+                "node_addresses",
+                "addresses"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ingress": {
+          "type": "object",
+          "properties": {
+            "acme_challenge_upstream": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "maxLength": 2048,
+                      "pattern": "^https:\\/\\/[^\\s/?#]+(\\/[^\\s?#]*)?$"
+                    },
+                    "host": {
+                      "type": "string",
+                      "maxLength": 253,
+                      "pattern": "^[a-z0-9.-]+$"
+                    }
+                  },
+                  "required": [
+                    "url",
+                    "host"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "allowed_sources": {
+              "anyOf": [
+                {
+                  "minItems": 1,
+                  "maxItems": 256,
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "managed_hosts": {
+              "maxItems": 4096,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "acme_challenge_upstream",
+            "allowed_sources",
+            "managed_hosts"
+          ],
+          "additionalProperties": false
+        },
+        "certificates": {
+          "maxItems": 4096,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "not_after": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "id",
+              "sha256",
+              "not_after"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
@@ -751,6 +1364,1592 @@
         "iat",
         "exp",
         "build_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "key_announce"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "keys": {
+          "minItems": 1,
+          "maxItems": 2,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kid": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,64}$"
+              },
+              "public_key": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9+/]{43}=$"
+              },
+              "not_before": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "kid",
+              "public_key",
+              "not_before"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "keys"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "volume_delete"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "volume_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "volume_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "backup_job"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "backup_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "dump",
+            "snapshot"
+          ]
+        },
+        "engine": {
+          "type": "string",
+          "enum": [
+            "postgres",
+            "mysql",
+            "redis",
+            "mongodb"
+          ]
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "volume_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "quiesce": {
+          "type": "string",
+          "enum": [
+            "none",
+            "stop"
+          ]
+        },
+        "databases": {
+          "anyOf": [
+            {
+              "minItems": 1,
+              "maxItems": 64,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_$-]{0,63}$"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "age_recipient": {
+          "type": "string",
+          "pattern": "^age1[02-9ac-hj-np-z]{58}$"
+        },
+        "part_size_bytes": {
+          "type": "integer",
+          "minimum": 5242880,
+          "maximum": 5368709120
+        },
+        "parts_sealed": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "number",
+              "const": 1
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "epk": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{43}=$"
+            },
+            "ct": {
+              "type": "string",
+              "maxLength": 524288,
+              "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+            }
+          },
+          "required": [
+            "v",
+            "kid",
+            "epk",
+            "ct"
+          ],
+          "additionalProperties": false
+        },
+        "timeout_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 43200
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "backup_id",
+        "method",
+        "volume_id",
+        "quiesce",
+        "databases",
+        "age_recipient",
+        "part_size_bytes",
+        "parts_sealed",
+        "timeout_s"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "backup_parts"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "backup_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "parts_sealed": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "number",
+              "const": 1
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "epk": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{43}=$"
+            },
+            "ct": {
+              "type": "string",
+              "maxLength": 524288,
+              "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+            }
+          },
+          "required": [
+            "v",
+            "kid",
+            "epk",
+            "ct"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "backup_id",
+        "parts_sealed"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "restore_job"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "restore_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "dump",
+            "snapshot"
+          ]
+        },
+        "engine": {
+          "type": "string",
+          "enum": [
+            "postgres",
+            "mysql",
+            "redis",
+            "mongodb"
+          ]
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "volume_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "backup_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "secrets_sealed": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "number",
+              "const": 1
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "epk": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{43}=$"
+            },
+            "ct": {
+              "type": "string",
+              "maxLength": 524288,
+              "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+            }
+          },
+          "required": [
+            "v",
+            "kid",
+            "epk",
+            "ct"
+          ],
+          "additionalProperties": false
+        },
+        "timeout_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 43200
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "restore_id",
+        "method",
+        "volume_id",
+        "backup_id",
+        "sha256",
+        "size_bytes",
+        "secrets_sealed",
+        "timeout_s"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "volume_copy_out"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "migration_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "backup_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "volume_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "age_recipient": {
+          "type": "string",
+          "pattern": "^age1[02-9ac-hj-np-z]{58}$"
+        },
+        "part_size_bytes": {
+          "type": "integer",
+          "minimum": 5242880,
+          "maximum": 5368709120
+        },
+        "parts_sealed": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "number",
+              "const": 1
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "epk": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{43}=$"
+            },
+            "ct": {
+              "type": "string",
+              "maxLength": 524288,
+              "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+            }
+          },
+          "required": [
+            "v",
+            "kid",
+            "epk",
+            "ct"
+          ],
+          "additionalProperties": false
+        },
+        "timeout_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 43200
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "migration_id",
+        "backup_id",
+        "volume_id",
+        "age_recipient",
+        "part_size_bytes",
+        "parts_sealed",
+        "timeout_s"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "volume_copy_in"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "migration_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "volume_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "backup_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "secrets_sealed": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "number",
+              "const": 1
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "epk": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{43}=$"
+            },
+            "ct": {
+              "type": "string",
+              "maxLength": 524288,
+              "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+            }
+          },
+          "required": [
+            "v",
+            "kid",
+            "epk",
+            "ct"
+          ],
+          "additionalProperties": false
+        },
+        "timeout_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 43200
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "migration_id",
+        "volume_id",
+        "backup_id",
+        "sha256",
+        "size_bytes",
+        "secrets_sealed",
+        "timeout_s"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "db_query"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "engine": {
+          "type": "string",
+          "enum": [
+            "postgres",
+            "mysql",
+            "redis",
+            "mongodb"
+          ]
+        },
+        "credential_sealed": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "number",
+              "const": 1
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "epk": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{43}=$"
+            },
+            "ct": {
+              "type": "string",
+              "maxLength": 524288,
+              "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+            }
+          },
+          "required": [
+            "v",
+            "kid",
+            "epk",
+            "ct"
+          ],
+          "additionalProperties": false
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "read",
+            "write"
+          ]
+        },
+        "op": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "list_namespaces"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "list_tables"
+                },
+                "namespace": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "cursor": {
+                  "type": "string",
+                  "pattern": "^[0-9]{1,20}$"
+                },
+                "pattern": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "describe"
+                },
+                "namespace": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "table": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "type",
+                "table"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "rows"
+                },
+                "namespace": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "table": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "offset": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000000
+                },
+                "order_by": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "descending": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "type",
+                "table",
+                "offset"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "raw"
+                },
+                "statement": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "params": {
+                  "maxItems": 256,
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "argv": {
+                  "minItems": 1,
+                  "maxItems": 256,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 0
+                  }
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "provision_readonly"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 458752
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 30000
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "request_id",
+        "workload_id",
+        "engine",
+        "credential_sealed",
+        "mode",
+        "op",
+        "max_rows",
+        "max_bytes",
+        "timeout_ms"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "job_run"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "workload": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "service",
+                "system",
+                "route",
+                "job"
+              ]
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "environment_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "service_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "deployment_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "replica": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999
+            },
+            "image": {
+              "type": "string",
+              "maxLength": 1024,
+              "pattern": "^(?:[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?::[0-9]{1,5})?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$"
+            },
+            "registry_auth": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "server": {
+                      "type": "string",
+                      "maxLength": 260,
+                      "pattern": "^[A-Za-z0-9.-]+(:[0-9]{1,5})?$"
+                    },
+                    "username": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "password": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "server",
+                    "username",
+                    "password"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "command": {
+              "minItems": 1,
+              "maxItems": 256,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 0
+              }
+            },
+            "entrypoint": {
+              "minItems": 1,
+              "maxItems": 256,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 0
+              }
+            },
+            "env_sealed": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "v": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "kid": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{16}$"
+                    },
+                    "epk": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9+/]{43}=$"
+                    },
+                    "ct": {
+                      "type": "string",
+                      "maxLength": 524288,
+                      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+                    }
+                  },
+                  "required": [
+                    "v",
+                    "kid",
+                    "epk",
+                    "ct"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ports": {
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "container_port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "protocol": {
+                    "type": "string",
+                    "enum": [
+                      "http",
+                      "tcp"
+                    ]
+                  },
+                  "publish": {
+                    "type": "object",
+                    "properties": {
+                      "host_port": {
+                        "type": "integer",
+                        "minimum": 1024,
+                        "maximum": 65535
+                      },
+                      "host_ip": {
+                        "type": "string",
+                        "enum": [
+                          "0.0.0.0",
+                          "::"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_port",
+                      "host_ip"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "container_port",
+                  "protocol"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "routes": {
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "hostname": {
+                    "type": "string"
+                  },
+                  "container_port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "path_prefix": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "pattern": "^\\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
+                  },
+                  "hsts": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "max_age": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 63072000
+                          },
+                          "include_subdomains": {
+                            "type": "boolean"
+                          },
+                          "preload": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "max_age",
+                          "include_subdomains",
+                          "preload"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "hostname",
+                  "container_port"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "healthcheck": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "http",
+                        "tcp",
+                        "none",
+                        "exec"
+                      ]
+                    },
+                    "path": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "pattern": "^\\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65535
+                    },
+                    "command": {
+                      "minItems": 1,
+                      "maxItems": 256,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 0
+                      }
+                    },
+                    "interval_s": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 3600
+                    },
+                    "timeout_s": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 300
+                    },
+                    "retries": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 100
+                    },
+                    "start_period_s": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3600
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "interval_s",
+                    "timeout_s",
+                    "retries",
+                    "start_period_s"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "cpu_millis": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 512000
+                },
+                "memory_mb": {
+                  "type": "integer",
+                  "minimum": 16,
+                  "maximum": 2097152
+                },
+                "pids": {
+                  "type": "integer",
+                  "minimum": 16,
+                  "maximum": 65536
+                }
+              },
+              "required": [
+                "cpu_millis",
+                "memory_mb",
+                "pids"
+              ],
+              "additionalProperties": false
+            },
+            "restart": {
+              "type": "object",
+              "properties": {
+                "policy": {
+                  "type": "string",
+                  "enum": [
+                    "always",
+                    "on_failure",
+                    "never"
+                  ]
+                },
+                "max_retries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                }
+              },
+              "required": [
+                "policy",
+                "max_retries"
+              ],
+              "additionalProperties": false
+            },
+            "network": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+            },
+            "labels": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9]([A-Za-z0-9._/-]*[A-Za-z0-9])?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 0
+              }
+            },
+            "drain_s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3600
+            },
+            "spec_hash": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "mounts": {
+              "minItems": 1,
+              "maxItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "volume_id": {
+                    "type": "string",
+                    "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "read_only": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "volume_id",
+                  "path",
+                  "read_only"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "rollout": {
+              "type": "string",
+              "enum": [
+                "start_first",
+                "stop_first"
+              ]
+            },
+            "stop_grace_s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 600
+            },
+            "publish_allowed_cidrs": {
+              "minItems": 1,
+              "maxItems": 64,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "mesh_ip": {
+              "type": "string"
+            },
+            "private_dns": {
+              "type": "boolean"
+            },
+            "upstreams": {
+              "minItems": 1,
+              "maxItems": 256,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "ip": {
+                    "type": "string"
+                  },
+                  "port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  }
+                },
+                "required": [
+                  "ip",
+                  "port"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "project_id",
+            "environment_id",
+            "service_id",
+            "deployment_id",
+            "replica",
+            "image",
+            "env_sealed",
+            "ports",
+            "routes",
+            "healthcheck",
+            "resources",
+            "restart",
+            "network",
+            "labels",
+            "drain_s",
+            "spec_hash"
+          ],
+          "additionalProperties": false
+        },
+        "timeout_s": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 86400
+        },
+        "kill_grace_s": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "run_id",
+        "workload",
+        "timeout_s",
+        "kill_grace_s"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "job_cancel"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 0
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "run_id",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "cert_sync"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "upserts": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+              },
+              "hostnames": {
+                "minItems": 1,
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cert_pem": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "key_sealed": {
+                "type": "object",
+                "properties": {
+                  "v": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kid": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{16}$"
+                  },
+                  "epk": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9+/]{43}=$"
+                  },
+                  "ct": {
+                    "type": "string",
+                    "maxLength": 524288,
+                    "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+                  }
+                },
+                "required": [
+                  "v",
+                  "kid",
+                  "epk",
+                  "ct"
+                ],
+                "additionalProperties": false
+              },
+              "not_after": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "id",
+              "hostnames",
+              "cert_pem",
+              "sha256",
+              "key_sealed",
+              "not_after"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "removes": {
+          "maxItems": 256,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "upserts",
+        "removes"
       ],
       "additionalProperties": false
     }

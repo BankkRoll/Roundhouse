@@ -3,8 +3,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  AgentFrameSchema,
   AgentMessageSchema,
   type ControlMessage,
+  CREDENTIAL_FRAME_TTL_MS,
+  carriesCredentials,
   computeSpecHash,
   EnvelopeSchema,
   environmentNetworkName,
@@ -35,6 +38,23 @@ describe("shared fixtures", () => {
     ["build-result-ok.json", AgentMessageSchema],
     ["build-result-failed.json", AgentMessageSchema],
     ["build-result-cancelled.json", AgentMessageSchema],
+    ["hello-phase2.json", AgentFrameSchema],
+    ["mesh-status.json", AgentFrameSchema],
+    ["mesh-key.json", AgentFrameSchema],
+    ["volume-status.json", AgentFrameSchema],
+    ["backup-parts-request.json", AgentFrameSchema],
+    ["backup-progress.json", AgentFrameSchema],
+    ["backup-result-ok.json", AgentFrameSchema],
+    ["backup-result-failed.json", AgentFrameSchema],
+    ["restore-result.json", AgentFrameSchema],
+    ["db-query-result.json", AgentFrameSchema],
+    ["job-status.json", AgentFrameSchema],
+    ["metrics.json", AgentFrameSchema],
+    ["cert-ack.json", AgentFrameSchema],
+    ["cert-request.json", AgentFrameSchema],
+    ["cert-status.json", AgentFrameSchema],
+    ["logs-job.json", AgentFrameSchema],
+    ["logs-task.json", AgentFrameSchema],
     ["join-request.json", JoinRequestSchema],
     ["join-response.json", JoinResponseSchema],
   ] as const)("%s matches its schema", (file, schema) => {
@@ -46,6 +66,20 @@ describe("shared fixtures", () => {
     ["signed-desired-state.json", "desired_state"],
     ["signed-build-job.json", "build_job"],
     ["signed-build-cancel.json", "build_cancel"],
+    ["signed-desired-state-phase2.json", "desired_state"],
+    ["signed-desired-state-phase3.json", "desired_state"],
+    ["signed-welcome-next-keys.json", "welcome"],
+    ["signed-key-announce.json", "key_announce"],
+    ["signed-volume-delete.json", "volume_delete"],
+    ["signed-backup-job.json", "backup_job"],
+    ["signed-backup-parts.json", "backup_parts"],
+    ["signed-restore-job.json", "restore_job"],
+    ["signed-volume-copy-out.json", "volume_copy_out"],
+    ["signed-volume-copy-in.json", "volume_copy_in"],
+    ["signed-db-query.json", "db_query"],
+    ["signed-job-run.json", "job_run"],
+    ["signed-job-cancel.json", "job_cancel"],
+    ["signed-cert-sync.json", "cert_sync"],
   ])("verifies the checked-in %s", async (file, type) => {
     const f = fixture(file) as SignedFixture;
     const result = await verifyEnvelope(
@@ -55,6 +89,24 @@ describe("shared fixtures", () => {
       FIXTURE_IAT,
     );
     expect(result).toMatchObject({ ok: true, message: { type } });
+    if (result.ok && carriesCredentials(result.message as never)) {
+      const late = await verifyEnvelope(
+        EnvelopeSchema.parse(f.envelope),
+        f.public_key,
+        f.node_id,
+        FIXTURE_IAT + CREDENTIAL_FRAME_TTL_MS + 1,
+      );
+      expect(late).toEqual({ ok: false, reason: "expired" });
+    }
+  });
+
+  it("keeps the Phase 1 union a subset of the complete one", () => {
+    for (const file of ["hello.json", "logs-runtime.json", "build-result-ok.json"]) {
+      expect(AgentFrameSchema.parse(fixture(file))).toEqual(
+        AgentMessageSchema.parse(fixture(file)),
+      );
+    }
+    expect(AgentMessageSchema.safeParse(fixture("logs-job.json")).success).toBe(false);
   });
 
   it("signs workloads whose spec_hash matches their content", async () => {
@@ -98,7 +150,7 @@ describe("shared fixtures", () => {
     const { cases } = fixture("spec-hash.json") as {
       cases: { name: string; spec: unknown; canonical: string; spec_hash: string }[];
     };
-    expect(cases.length).toBeGreaterThanOrEqual(4);
+    expect(cases.length).toBeGreaterThanOrEqual(8);
     for (const c of cases) {
       const spec = WorkloadSpecSchema.parse(c.spec);
       expect(specHashInput(spec), c.name).toBe(c.canonical);

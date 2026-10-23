@@ -1,0 +1,9 @@
+{
+  "type": "backup_progress",
+  "backup_id": "bak_01JGGGGGGGGGGGGGGGGGGGGGGG",
+  "parts": [
+    { "part_number": 1, "etag": "\"9b2cf535f27731c974343645a3985328\"", "size": 16777216 },
+    { "part_number": 2, "etag": "\"6f5902ac237024bdd0c176cb93063dc4\"", "size": 16777216 }
+  ],
+  "bytes_raw": 104857600
+}

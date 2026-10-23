@@ -61,7 +61,9 @@ func checkValue(data []byte, t reflect.Type, path string) error {
 
 func checkElem(data []byte, t reflect.Type, path string) error {
 	if isNull(data) {
-		if t.Kind() == reflect.Pointer {
+		// An interface element (a db_query_result cell) is any JSON value,
+		// null included, as zod unknown is.
+		if t.Kind() == reflect.Pointer || t.Kind() == reflect.Interface {
 			return nil
 		}
 		return fmt.Errorf("%s: must not be null", path)
@@ -145,7 +147,7 @@ func fieldsOf(t reflect.Type) []shapeField {
 			name:     name,
 			typ:      sf.Type,
 			optional: strings.Contains(","+opts+",", ",omitempty,"),
-			nullable: sf.Type.Kind() == reflect.Pointer,
+			nullable: sf.Type.Kind() == reflect.Pointer || sf.Type.Kind() == reflect.Interface,
 		})
 	}
 	fieldCache.Store(t, out)

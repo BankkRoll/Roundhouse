@@ -7,6 +7,7 @@
 import { z } from "zod";
 import { fromBase64, toBase64 } from "./encoding";
 import { type ControlMessage, ControlMessageSchema } from "./messages";
+import { announcesSigningKid } from "./signing-keys";
 
 export { fromBase64, toBase64 };
 
@@ -94,7 +95,9 @@ export type EnvelopeRejection = "bad_signature" | "malformed" | "expired" | "wro
 
 /**
  * Verifies an envelope exactly as the Go agent does. Production verification
- * happens in the agent; this mirror exists for tests and fake agents.
+ * happens in the agent; this mirror exists for tests and fake agents. A
+ * payload announcing the envelope's own kid as a successor (`welcome.next_keys`,
+ * `key_announce`) is `malformed`.
  *
  * @param envelope - Envelope received off the wire.
  * @param publicKey - Raw control-plane public key, base64.
@@ -130,6 +133,7 @@ export async function verifyEnvelope(
   }
   const parsed = ControlMessageSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, reason: "malformed" };
+  if (announcesSigningKid(envelope.kid, parsed.data)) return { ok: false, reason: "malformed" };
   if (parsed.data.node_id !== nodeId) return { ok: false, reason: "wrong_node" };
   if (parsed.data.exp < now) return { ok: false, reason: "expired" };
   return { ok: true, message: parsed.data };

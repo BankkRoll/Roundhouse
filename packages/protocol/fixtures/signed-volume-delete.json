@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"volume_delete\",\"id\":\"msg_fixture_volume_delete\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":4102444800000,\"volume_id\":\"vol_01JDDDDDDDDDDDDDDDDDDDDDDD\"}",
+    "sig": "/0BQOQbyBWUnt0dq8lZag2EEbcyJXLETr9xHAttg+tF+xJOMnGd1JCQkRYML2ioapfQA8P9kitX6FbXsr4FIBg=="
+  }
+}

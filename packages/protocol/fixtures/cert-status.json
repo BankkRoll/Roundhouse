@@ -1,0 +1,7 @@
+{
+  "type": "cert_status",
+  "hostname": "shop.example.org",
+  "state": "failed",
+  "issuer": "acme-v02.api.letsencrypt.org",
+  "error": "HTTP-01 challenge failed: connection refused"
+}

@@ -2,12 +2,12 @@
 
 Wire protocol between the control plane and agents.
 
-| Path        | What                                                        |
-| ----------- | ----------------------------------------------------------- |
-| `src/`      | zod schemas (source of truth), limits, spec hash, envelopes |
-| `schema/`   | Generated JSON Schema. Do not edit                          |
-| `fixtures/` | Sample messages both TS and Go tests decode                 |
-| `go/`       | Go types, decoding, validation, spec hash, envelope checks  |
+| Path        | What                                                                                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/`      | zod schemas (source of truth), limits, spec hash, envelopes; one module per Phase 2–3 feature (`data`, `mesh`, `jobs`, `metrics`, `certs`, `signing-keys`) |
+| `schema/`   | Generated JSON Schema. Do not edit                                                                                                                         |
+| `fixtures/` | Sample messages both TS and Go tests decode                                                                                                                |
+| `go/`       | Go types, decoding, validation, spec hash, envelope checks                                                                                                 |
 
 ## Changing the protocol
 
@@ -39,6 +39,13 @@ from formatting in `biome.json`:
   encryption key signed by its identity key (ADR 0014).
 - `redaction.json`: the strings `redactionNeedles` (in `@roundhouse/shared`)
   and Go's `RedactionNeedles` must produce for a set of secrets.
+- `formats.json`: inputs and expected results of the hand-written format
+  helpers (`isIPv6`, `isCidr`, `isHostPort`, `isSafeMountPath`,
+  `isRouteHostname`, …), which both sides must reproduce.
+- Phase 2–3 signed frames (`signed-desired-state-phase2.json`,
+  `signed-desired-state-phase3.json`, `signed-welcome-next-keys.json`,
+  `signed-key-announce.json`, `signed-backup-job.json`, …): every new
+  control frame, with real sealed boxes the Go tests open.
 
 ### Go decoding rules
 
@@ -59,9 +66,22 @@ constraints (ranges, formats, sizes) live in each type's `Validate()`.
 ### Versions
 
 The control plane accepts `MIN_PROTOCOL_VERSION` through `PROTOCOL_VERSION`
-(N-1 and N; today 3 and 4, per ADR 0013's one-version-per-phase plan). A
-`hello` below the minimum is closed with code 4002 (`agent_outdated`). Bump
-`PROTOCOL_VERSION`, in both `src/messages.ts` and `go/messages.go`, when:
+(today 3 through 6). A `hello` below the minimum is closed with code 4002
+(`agent_outdated`). ADR 0013 planned one version per phase; sealed
+environments took 4 first, so each phase moved up by one (ADR 0015):
+
+| Version | Phase    | Gates (TS / Go)                                                                          | Adds                                                                                                                                                         |
+| ------- | -------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2       | 1        | `WORKLOADS_` / `WorkloadsProtocolVersion`                                                | workloads, builds, statuses, logs                                                                                                                            |
+| 3       | 1        | `BUILD_CANCEL_`, `SECRET_BUILD_ARGS_`                                                    | `build_cancel`, secret build args                                                                                                                            |
+| 4       | ADR 0014 | `SEALED_ENV_`                                                                            | `env_sealed`, `build_secrets_sealed`, `hello.encryption_key`                                                                                                 |
+| 5       | 2        | `MESH_`, `VOLUMES_`, `BACKUPS_`, `DB_QUERY_`, `KEY_ROLLOVER_` (`MeshProtocolVersion`, …) | mesh, route workloads, volumes and mounts, `exec` probes, `stop_first`, publish, backup/restore/copy, `db_query`, `task` logs, `volume_status`, key rollover |
+| 6       | 3        | `JOBS_`, `METRICS_`, `CERTS_` (`JobsProtocolVersion`, …)                                 | `job_*`, `metrics`, `cert_*`, wildcard routes, `hsts`, `desired_state.ingress` and `certificates`, `managed` TLS                                             |
+| 7       | 4        | not defined yet                                                                          | `exec_*`, `image_push`, `edge_gateway` (Phase 4 contracts)                                                                                                   |
+
+`MIN_PROTOCOL_VERSION` rises to N−1 with each phase's release, not with
+its contracts. Bump `PROTOCOL_VERSION`, in both `src/versions.ts` and
+`go/messages.go`, when:
 - a change is breaking; or
 - the control plane must know whether an agent understands something new
   before sending it. Version 2 gates `build_job` and workload placement.
@@ -72,12 +92,16 @@ The control plane accepts `MIN_PROTOCOL_VERSION` through `PROTOCOL_VERSION`
   and builds go only to agents at `SEALED_ENV_PROTOCOL_VERSION` that
   registered an encryption key.
 
-Give each gated feature its own constant (`WORKLOADS_PROTOCOL_VERSION`,
-`BUILD_CANCEL_PROTOCOL_VERSION`, `SECRET_BUILD_ARGS_PROTOCOL_VERSION`,
-`SEALED_ENV_PROTOCOL_VERSION`) and check it where the control plane sends
-the frame or field. Purely additive optional fields that an older agent may
-safely ignore need no bump. Changes to the envelope or signing scheme need an
-ADR.
+Give each gated feature its own constant (see the table) and check it where
+the control plane sends the frame or field. Purely additive optional fields
+that an older agent may safely ignore need no bump. Changes to the envelope
+or signing scheme need an ADR.
+
+`AgentMessageSchema` is the Phase 1 set of agent frames the node DO
+dispatches today; `AgentFrameSchema` is every agent frame (and generates
+`schema/agent-message.json`). Likewise `LogSourceSchema` and
+`AnyLogSourceSchema`. The DO moves to the complete unions with ADR 0013's
+frame-table split.
 
 ### Credentials on the wire
 
@@ -86,3 +110,11 @@ storage keys, or a sealed box: every workload's `env_sealed` and a build
 job's `build_secrets_sealed`) must have `exp - iat <= CREDENTIAL_FRAME_TTL_MS` (60 s). The
 schemas reject longer-lived ones; `carriesCredentials` tells the sender which
 TTL applies.
+
+Every secret a Phase 2–3 frame carries travels in a sealed box with its own
+purpose and AAD helper (`src/box.ts`, `go/boxes.go`): `job-env`
+(`jobEnvAad`), `mesh-psks`, `registry-upstream`, `backup-parts` (presigned
+part URLs), `restore` (download URL and age identity), `db-credential`, and
+`cert-key`. Frames that always carry one are listed in
+`CREDENTIAL_FRAME_TYPES`; `desired_state` also counts with sealed mesh PSKs
+or a proxy registry upstream, and `cert_sync` with any upsert.

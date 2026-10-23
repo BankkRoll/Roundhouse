@@ -15,10 +15,15 @@ import (
 // SpecHashExcludedFields are the WorkloadSpec fields left out of the spec
 // hash: they apply without recreating the container (routes via Caddy, drain
 // on the next switch) or rotate often (registry credentials, and env_sealed,
-// re-sealed for every frame over an environment fixed per workload ID).
+// re-sealed for every frame over an environment fixed per workload ID). The
+// Phase 2 rollout, stop grace, publish sources, mesh IP and upstreams apply
+// in place too; mounts, private DNS and published ports are hashed.
 // Env and SecretFiles never reach the JSON, so they are not hashed either.
 // Mirrors SPEC_HASH_EXCLUDED_FIELDS in TypeScript.
-var SpecHashExcludedFields = []string{"spec_hash", "routes", "registry_auth", "drain_s", "env_sealed"}
+var SpecHashExcludedFields = []string{
+	"spec_hash", "routes", "registry_auth", "drain_s", "env_sealed",
+	"rollout", "stop_grace_s", "publish_allowed_cidrs", "mesh_ip", "upstreams",
+}
 
 // ComputeSpecHash returns w's spec hash: lowercase hex SHA-256 of the
 // canonical JSON of w without [SpecHashExcludedFields]. It matches the

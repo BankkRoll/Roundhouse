@@ -15,11 +15,17 @@ type Validator interface {
 
 // CarriesCredentials reports whether msg carries a git token, a registry
 // password, object-storage keys or a sealed box. Such frames must expire within
-// [CredentialFrameTTLMS] of issue. Mirrors carriesCredentials in TypeScript.
+// [CredentialFrameTTLMS] of issue. Mirrors carriesCredentials in TypeScript:
+// backup, restore, copy, query and job frames always do; a desired state
+// with S3 registry storage, a proxy upstream, a workload credential or
+// sealed mesh PSKs does; a cert_sync with upserts does.
 func CarriesCredentials(msg ControlMessage) bool {
 	switch m := msg.(type) {
 	case *DesiredState:
-		if m.Registry != nil && m.Registry.Storage.Type == StorageS3 {
+		if m.Registry != nil && (m.Registry.Storage.Type == StorageS3 || m.Registry.Upstream != nil) {
+			return true
+		}
+		if m.Mesh != nil && m.Mesh.PSKsSealed != nil {
 			return true
 		}
 		for i := range m.Workloads {
@@ -29,6 +35,10 @@ func CarriesCredentials(msg ControlMessage) bool {
 		}
 	case *BuildJob:
 		return m.Source.Token != "" || m.BuildSecretsSealed != nil
+	case *CertSync:
+		return len(m.Upserts) > 0
+	case *BackupJob, *BackupParts, *RestoreJob, *VolumeCopyOut, *VolumeCopyIn, *DBQuery, *JobRun:
+		return true
 	}
 	return false
 }
@@ -56,6 +66,12 @@ func (m *Welcome) Validate() error {
 	if m.HeartbeatIntervalMS <= 0 {
 		return errors.New("heartbeat_interval_ms must be positive")
 	}
+	if err := validateAnnouncements(m.NextKeys); err != nil {
+		return fmt.Errorf("next_keys: %w", err)
+	}
+	if i := m.MetricsIntervalMS; i != nil && (*i < MinMetricsIntervalMS || *i > MaxMetricsIntervalMS) {
+		return errors.New("metrics_interval_ms: out of range")
+	}
 	return nil
 }
 
@@ -70,24 +86,55 @@ func (m *DesiredState) Validate() error {
 	if len(m.Workloads) > MaxWorkloadsPerNode {
 		return fmt.Errorf("workloads: at most %d", MaxWorkloadsPerNode)
 	}
+	if len(m.Volumes) > MaxVolumesPerNode {
+		return fmt.Errorf("volumes: at most %d", MaxVolumesPerNode)
+	}
+	volumes := make(map[string]*VolumeSpec, len(m.Volumes))
+	for i := range m.Volumes {
+		v := &m.Volumes[i]
+		if err := v.validate(); err != nil {
+			return fmt.Errorf("volumes[%d]: %w", i, err)
+		}
+		if volumes[v.ID] != nil {
+			return fmt.Errorf("volumes[%d]: duplicate volume %s", i, v.ID)
+		}
+		volumes[v.ID] = v
+	}
 	seen := map[string]bool{}
 	for i := range m.Workloads {
 		w := &m.Workloads[i]
 		if err := w.Validate(); err != nil {
 			return fmt.Errorf("workloads[%d]: %w", i, err)
 		}
-		if w.Kind != WorkloadService {
-			return fmt.Errorf("workloads[%d]: only service workloads are sent", i)
+		if w.Kind != WorkloadService && w.Kind != WorkloadRouteOnly {
+			return fmt.Errorf("workloads[%d]: only service and route workloads are sent", i)
 		}
 		if seen[w.ID] {
 			return fmt.Errorf("workloads[%d]: duplicate workload %s", i, w.ID)
 		}
 		seen[w.ID] = true
+		for _, mount := range w.Mounts {
+			v := volumes[mount.VolumeID]
+			if v == nil {
+				return fmt.Errorf("workloads[%d]: mount of unlisted volume %s", i, mount.VolumeID)
+			}
+			// SECURITY: the agent binds a volume only into its own service, so a
+			// wrong frame can't hand one project's data to another.
+			if v.ProjectID != *w.ProjectID || v.EnvironmentID != *w.EnvironmentID || v.ServiceID != *w.ServiceID {
+				return fmt.Errorf("workloads[%d]: volume %s belongs to another service", i, v.ID)
+			}
+		}
+		if m.Mesh == nil && (w.Kind == WorkloadRouteOnly || w.MeshIP != "" || (w.PrivateDNS != nil && *w.PrivateDNS)) {
+			return fmt.Errorf("workloads[%d]: route workloads, mesh_ip and private_dns need the mesh", i)
+		}
 	}
 	switch m.TLSMode {
-	case TLSACME, TLSInternal, TLSOff:
+	case TLSACME, TLSInternal, TLSOff, TLSManaged:
 	default:
 		return fmt.Errorf("tls_mode: invalid %q", m.TLSMode)
+	}
+	if m.TLSMode == TLSManaged && m.Ingress == nil {
+		return errors.New("ingress: required for managed TLS")
 	}
 	if m.AppsDomain != nil && !IsHostname(*m.AppsDomain) {
 		return fmt.Errorf("apps_domain: invalid %q", *m.AppsDomain)
@@ -96,6 +143,19 @@ func (m *DesiredState) Validate() error {
 		if err := m.Registry.validate(); err != nil {
 			return err
 		}
+	}
+	if m.Mesh != nil {
+		if err := m.Mesh.validate(); err != nil {
+			return err
+		}
+	}
+	if m.Ingress != nil {
+		if err := m.Ingress.validate(); err != nil {
+			return err
+		}
+	}
+	if err := validateCertificates(m.Certificates); err != nil {
+		return err
 	}
 	return validateShortLived(m)
 }
@@ -196,7 +256,27 @@ func (m *Hello) Validate() error {
 		}
 	}
 	if m.EncryptionKey != nil {
-		return m.EncryptionKey.validate()
+		if err := m.EncryptionKey.validate(); err != nil {
+			return err
+		}
+	}
+	if m.Mesh != nil {
+		if err := m.Mesh.validate(); err != nil {
+			return err
+		}
+	}
+	if m.VolumeQuota != "" && !m.VolumeQuota.valid() {
+		return fmt.Errorf("volume_quota: invalid %q", m.VolumeQuota)
+	}
+	if m.PinnedKIDs != nil {
+		if len(m.PinnedKIDs) == 0 || len(m.PinnedKIDs) > MaxPinnedSigningKeys {
+			return fmt.Errorf("pinned_kids: must have 1 to %d", MaxPinnedSigningKeys)
+		}
+		for _, k := range m.PinnedKIDs {
+			if !signingKeyIDRE.MatchString(k) {
+				return fmt.Errorf("pinned_kids: invalid %q", k)
+			}
+		}
 	}
 	return nil
 }
@@ -243,12 +323,22 @@ func (m *Logs) Validate() error {
 	s := m.Source
 	switch s.Type {
 	case LogSourceRuntime:
-		if !idRE.MatchString(s.WorkloadID) || !idRE.MatchString(s.DeploymentID) || s.BuildID != "" {
+		if !idRE.MatchString(s.WorkloadID) || !idRE.MatchString(s.DeploymentID) || s.BuildID != "" ||
+			s.RunID != "" || s.TaskID != "" {
 			return errors.New("source: runtime logs need workload_id and deployment_id")
 		}
 	case LogSourceBuild:
-		if !idRE.MatchString(s.BuildID) || s.WorkloadID != "" || s.DeploymentID != "" {
+		if !idRE.MatchString(s.BuildID) || s.WorkloadID != "" || s.DeploymentID != "" || s.RunID != "" || s.TaskID != "" {
 			return errors.New("source: build logs need build_id only")
+		}
+	case LogSourceJob:
+		if !idRE.MatchString(s.RunID) || !idRE.MatchString(s.WorkloadID) || s.DeploymentID != "" || s.BuildID != "" ||
+			s.TaskID != "" {
+			return errors.New("source: job logs need run_id and workload_id")
+		}
+	case LogSourceTask:
+		if !idRE.MatchString(s.TaskID) || s.WorkloadID != "" || s.DeploymentID != "" || s.BuildID != "" || s.RunID != "" {
+			return errors.New("source: task logs need task_id only")
 		}
 	default:
 		return fmt.Errorf("source.type: invalid %q", s.Type)

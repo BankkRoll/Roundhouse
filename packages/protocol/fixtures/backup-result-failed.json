@@ -1,0 +1,7 @@
+{
+  "type": "backup_result",
+  "backup_id": "bak_01JGGGGGGGGGGGGGGGGGGGGGGG",
+  "ok": false,
+  "error": "backup_too_large: the stream would exceed 10000 parts",
+  "duration_ms": 98000
+}

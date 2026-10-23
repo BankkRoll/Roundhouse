@@ -26,8 +26,15 @@ type BoxPurpose string
 
 // Box purposes, mirroring BOX_PURPOSES in TypeScript.
 const (
-	BoxPurposeWorkloadEnv  BoxPurpose = "workload-env"
-	BoxPurposeBuildSecrets BoxPurpose = "build-secrets"
+	BoxPurposeWorkloadEnv      BoxPurpose = "workload-env"
+	BoxPurposeBuildSecrets     BoxPurpose = "build-secrets"
+	BoxPurposeJobEnv           BoxPurpose = "job-env"
+	BoxPurposeMeshPSKs         BoxPurpose = "mesh-psks"
+	BoxPurposeRegistryUpstream BoxPurpose = "registry-upstream"
+	BoxPurposeBackupParts      BoxPurpose = "backup-parts"
+	BoxPurposeRestore          BoxPurpose = "restore"
+	BoxPurposeDBCredential     BoxPurpose = "db-credential"
+	BoxPurposeCertKey          BoxPurpose = "cert-key"
 )
 
 // ErrBoxWrongKey means a box was sealed to another encryption key than the

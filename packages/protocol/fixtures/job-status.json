@@ -1,0 +1,10 @@
+{
+  "type": "job_status",
+  "run_id": "crn_01JFFFFFFFFFFFFFFFFFFFFFFF",
+  "workload_id": "wl_01JFFFFFFFFFFFFFFFFFFFFFFF",
+  "state": "timed_out",
+  "exit_code": 137,
+  "started_at": 1700000000000,
+  "finished_at": 1700003610000,
+  "message": "killed after timeout_s 3600 and kill_grace_s 10"
+}

@@ -215,6 +215,226 @@
       },
       "canonical": "{\"healthcheck\":{\"interval_s\":30,\"port\":5000,\"retries\":3,\"start_period_s\":0,\"timeout_s\":5,\"type\":\"none\"},\"id\":\"sys_registry\",\"image\":\"registry:3\",\"kind\":\"system\",\"labels\":{},\"network\":\"roundhouse-system\",\"ports\":[{\"container_port\":5000,\"protocol\":\"tcp\"}],\"replica\":0,\"resources\":{\"cpu_millis\":1000,\"memory_mb\":256,\"pids\":256},\"restart\":{\"max_retries\":0,\"policy\":\"always\"}}",
       "spec_hash": "da575fbca2bb7543f980d8f9a26295506f8093a72102fe0b9234efd21a38645e"
+    },
+    {
+      "name": "volume-mesh",
+      "spec": {
+        "id": "wl_01JDDDDDDDDDDDDDDDDDDDDDDD",
+        "kind": "service",
+        "project_id": "prj_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "environment_id": "env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "service_id": "svc_01JDDDDDDDDDDDDDDDDDDDDDDD",
+        "deployment_id": "dep_01JDDDDDDDDDDDDDDDDDDDDDDD",
+        "replica": 0,
+        "image": "postgres@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "env_sealed": {
+          "v": 1,
+          "kid": "f35e5616160a30bf",
+          "epk": "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
+          "ct": "kamafOlNzJhAXACMfw87GuzKI1I+oa2tM19SitRjnOsAmZg6DQwY9b2yR7OXRA/ecWdI1lzXd2pJr1eip50y6SleiqdhSUKgkypn4/hEXjnRyb4QdCmUudqijFz5TylDmU2uLXZ1xP9RSYhD4iiIK8BiGYu7IBnJlVbkljHiED7JQZY="
+        },
+        "ports": [
+          {
+            "container_port": 5432,
+            "protocol": "tcp",
+            "publish": {
+              "host_port": 20001,
+              "host_ip": "0.0.0.0"
+            }
+          }
+        ],
+        "routes": [],
+        "healthcheck": {
+          "type": "exec",
+          "command": [
+            "sh",
+            "-c",
+            "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+          ],
+          "interval_s": 5,
+          "timeout_s": 5,
+          "retries": 6,
+          "start_period_s": 30
+        },
+        "resources": {
+          "cpu_millis": 1000,
+          "memory_mb": 1024,
+          "pids": 512
+        },
+        "restart": {
+          "policy": "always",
+          "max_retries": 0
+        },
+        "network": "roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "labels": {},
+        "drain_s": 0,
+        "spec_hash": "27b024ead3d3ebfdd57094db29d2772f3150f2299929ea6c77b5416a1ad4fe29",
+        "mounts": [
+          {
+            "volume_id": "vol_01JDDDDDDDDDDDDDDDDDDDDDDD",
+            "path": "/var/lib/postgresql",
+            "read_only": false
+          }
+        ],
+        "rollout": "stop_first",
+        "stop_grace_s": 60,
+        "publish_allowed_cidrs": [
+          "203.0.113.7/32",
+          "2001:db8::/48"
+        ],
+        "mesh_ip": "10.200.1.10",
+        "private_dns": true
+      },
+      "canonical": "{\"deployment_id\":\"dep_01JDDDDDDDDDDDDDDDDDDDDDDD\",\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"command\":[\"sh\",\"-c\",\"pg_isready -h 127.0.0.1 -U \\\"$POSTGRES_USER\\\" -d \\\"$POSTGRES_DB\\\"\"],\"interval_s\":5,\"retries\":6,\"start_period_s\":30,\"timeout_s\":5,\"type\":\"exec\"},\"id\":\"wl_01JDDDDDDDDDDDDDDDDDDDDDDD\",\"image\":\"postgres@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"kind\":\"service\",\"labels\":{},\"mounts\":[{\"path\":\"/var/lib/postgresql\",\"read_only\":false,\"volume_id\":\"vol_01JDDDDDDDDDDDDDDDDDDDDDDD\"}],\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[{\"container_port\":5432,\"protocol\":\"tcp\",\"publish\":{\"host_ip\":\"0.0.0.0\",\"host_port\":20001}}],\"private_dns\":true,\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":0,\"resources\":{\"cpu_millis\":1000,\"memory_mb\":1024,\"pids\":512},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JDDDDDDDDDDDDDDDDDDDDDDD\"}",
+      "spec_hash": "27b024ead3d3ebfdd57094db29d2772f3150f2299929ea6c77b5416a1ad4fe29"
+    },
+    {
+      "name": "route",
+      "spec": {
+        "id": "wl_01JEEEEEEEEEEEEEEEEEEEEEEE",
+        "kind": "route",
+        "project_id": "prj_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "environment_id": "env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "service_id": "svc_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "deployment_id": "dep_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "replica": 0,
+        "image": "127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab",
+        "env_sealed": null,
+        "ports": [
+          {
+            "container_port": 3000,
+            "protocol": "http"
+          }
+        ],
+        "routes": [
+          {
+            "hostname": "api-production-x7k2.127.0.0.1.nip.io",
+            "container_port": 3000
+          }
+        ],
+        "healthcheck": null,
+        "resources": {
+          "cpu_millis": 10,
+          "memory_mb": 16,
+          "pids": 16
+        },
+        "restart": {
+          "policy": "always",
+          "max_retries": 0
+        },
+        "network": "roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "labels": {},
+        "drain_s": 0,
+        "spec_hash": "ec79b01ca17a3956b70b6bb2e89f16a3707706cfbeb0e85128a0cb23a84dbac3",
+        "upstreams": [
+          {
+            "ip": "10.200.2.10",
+            "port": 3000
+          },
+          {
+            "ip": "10.200.2.11",
+            "port": 3000
+          }
+        ]
+      },
+      "canonical": "{\"deployment_id\":\"dep_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"id\":\"wl_01JEEEEEEEEEEEEEEEEEEEEEEE\",\"image\":\"127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab\",\"kind\":\"route\",\"labels\":{},\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[{\"container_port\":3000,\"protocol\":\"http\"}],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":0,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JAAAAAAAAAAAAAAAAAAAAAAA\"}",
+      "spec_hash": "ec79b01ca17a3956b70b6bb2e89f16a3707706cfbeb0e85128a0cb23a84dbac3"
+    },
+    {
+      "name": "job",
+      "spec": {
+        "id": "wl_01JFFFFFFFFFFFFFFFFFFFFFFF",
+        "kind": "job",
+        "project_id": "prj_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "environment_id": "env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "service_id": "svc_01JFFFFFFFFFFFFFFFFFFFFFFF",
+        "deployment_id": "dep_01JFFFFFFFFFFFFFFFFFFFFFFF",
+        "replica": 0,
+        "image": "busybox:1.37",
+        "command": [
+          "sh",
+          "-c",
+          "echo \"$GREETING\""
+        ],
+        "env_sealed": {
+          "v": 1,
+          "kid": "f35e5616160a30bf",
+          "epk": "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
+          "ct": "z0/sahSgFQUANd0MZ5oI8feq1Upk2+rGhv+rLH7Pjz/LoVWTB/QYEG3jsaDUkCgaZhBpjdyyP3XKV6cuHittW1s="
+        },
+        "ports": [],
+        "routes": [],
+        "healthcheck": null,
+        "resources": {
+          "cpu_millis": 250,
+          "memory_mb": 128,
+          "pids": 64
+        },
+        "restart": {
+          "policy": "never",
+          "max_retries": 0
+        },
+        "network": "roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "labels": {},
+        "drain_s": 0,
+        "spec_hash": "9532dce8d690069b760b1f64cdfbc920be6c3b68210ed32710e2d41ae4e3b107",
+        "mesh_ip": "10.200.1.11",
+        "private_dns": true
+      },
+      "canonical": "{\"command\":[\"sh\",\"-c\",\"echo \\\"$GREETING\\\"\"],\"deployment_id\":\"dep_01JFFFFFFFFFFFFFFFFFFFFFFF\",\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"id\":\"wl_01JFFFFFFFFFFFFFFFFFFFFFFF\",\"image\":\"busybox:1.37\",\"kind\":\"job\",\"labels\":{},\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"private_dns\":true,\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":0,\"resources\":{\"cpu_millis\":250,\"memory_mb\":128,\"pids\":64},\"restart\":{\"max_retries\":0,\"policy\":\"never\"},\"service_id\":\"svc_01JFFFFFFFFFFFFFFFFFFFFFFF\"}",
+      "spec_hash": "9532dce8d690069b760b1f64cdfbc920be6c3b68210ed32710e2d41ae4e3b107"
+    },
+    {
+      "name": "wildcard-hsts",
+      "spec": {
+        "id": "wl_01JKKKKKKKKKKKKKKKKKKKKKKK",
+        "kind": "service",
+        "project_id": "prj_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "environment_id": "env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "service_id": "svc_01JBBBBBBBBBBBBBBBBBBBBBBB",
+        "deployment_id": "dep_01JBBBBBBBBBBBBBBBBBBBBBBB",
+        "replica": 2,
+        "image": "nginx:1.27",
+        "env_sealed": {
+          "v": 1,
+          "kid": "f35e5616160a30bf",
+          "epk": "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
+          "ct": "kamafOlNzJgfIG25QiQMLJ2vDXwGamyoSvSqPBTv5yUef3ouPQ=="
+        },
+        "ports": [
+          {
+            "container_port": 8080,
+            "protocol": "http"
+          }
+        ],
+        "routes": [
+          {
+            "hostname": "*.apps.example.com",
+            "container_port": 8080,
+            "hsts": {
+              "max_age": 31536000,
+              "include_subdomains": true,
+              "preload": false
+            }
+          }
+        ],
+        "healthcheck": null,
+        "resources": {
+          "cpu_millis": 10,
+          "memory_mb": 16,
+          "pids": 16
+        },
+        "restart": {
+          "policy": "always",
+          "max_retries": 0
+        },
+        "network": "roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "labels": {},
+        "drain_s": 0,
+        "spec_hash": "f325989225da75ef9d63aaa4a88006dffdb3ea2ee7de39461761a48461a5f26e"
+      },
+      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"id\":\"wl_01JKKKKKKKKKKKKKKKKKKKKKKK\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{},\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[{\"container_port\":8080,\"protocol\":\"http\"}],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
+      "spec_hash": "f325989225da75ef9d63aaa4a88006dffdb3ea2ee7de39461761a48461a5f26e"
     }
   ]
 }

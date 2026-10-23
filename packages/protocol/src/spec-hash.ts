@@ -21,9 +21,13 @@ import type { WorkloadSpec } from "./workload";
 
 /**
  * Fields left out of the hash: they are applied without recreating the
- * container (routes via Caddy, drain on the next switch), or rotate often
- * (short-lived registry credentials, and `env_sealed`, which is re-sealed
- * for every frame; the environment it carries is fixed per workload ID).
+ * container (routes via Caddy, drain on the next switch, the rollout order
+ * and stop grace of the next replacement, nftables for
+ * `publish_allowed_cidrs` and `mesh_ip`, upstream DNS for `upstreams`), or
+ * rotate often (short-lived registry credentials, and `env_sealed`, which is
+ * re-sealed for every frame; the environment it carries is fixed per
+ * workload ID). `mounts`, `private_dns` and `ports[].publish` are hashed:
+ * they change the container.
  */
 export const SPEC_HASH_EXCLUDED_FIELDS = [
   "spec_hash",
@@ -31,6 +35,11 @@ export const SPEC_HASH_EXCLUDED_FIELDS = [
   "registry_auth",
   "drain_s",
   "env_sealed",
+  "rollout",
+  "stop_grace_s",
+  "publish_allowed_cidrs",
+  "mesh_ip",
+  "upstreams",
 ] as const;
 
 const encoder = new TextEncoder();

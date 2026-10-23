@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"job_cancel\",\"id\":\"msg_fixture_job_cancel\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":4102444800000,\"run_id\":\"crn_01JFFFFFFFFFFFFFFFFFFFFFFF\",\"reason\":\"replaced by crn_01JFFFFFFFFFFFFFFFFFFFFFFG\"}",
+    "sig": "Eeo0bYVro8hfFq3Er/nfpOcuDLtVBRDngLL6RxbncqxaDFhQW5GpY1+z3Din3saQpXFVlPm9H7hgypPoeRmsDg=="
+  }
+}

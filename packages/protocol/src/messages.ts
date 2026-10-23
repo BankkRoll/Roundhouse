@@ -2,19 +2,54 @@
  * Zod schemas for every frame on the agent WebSocket.
  *
  * - Agent → control: `hello`, `heartbeat`, `workload_status`, `logs`,
- *   `build_result`.
+ *   `build_result`; from protocol 5 `mesh_status`, `mesh_key`,
+ *   `volume_status`, `backup_parts_request`, `backup_progress`,
+ *   `backup_result`, `restore_result`, `db_query_result`; from protocol 6
+ *   `job_status`, `metrics`, `cert_ack`, `cert_request`, `cert_status`.
+ *   {@link AgentFrameSchema} is the complete union.
  * - Control → agent, always inside a signed envelope (./signing): `welcome`,
- *   `desired_state`, `build_job`, `build_cancel`.
+ *   `desired_state`, `build_job`, `build_cancel`; from protocol 5
+ *   `key_announce`, `volume_delete`, `backup_job`, `backup_parts`,
+ *   `restore_job`, `volume_copy_out`, `volume_copy_in`, `db_query`; from
+ *   protocol 6 `job_run`, `job_cancel`, `cert_sync`.
+ *
+ * Version constants live in ./versions; frames of one feature in ./data,
+ * ./mesh, ./jobs, ./metrics, ./certs and ./signing-keys.
  *
  * @module
  */
 import { z } from "zod";
 import { EncryptionPublicKeyString, SealedBoxSchema } from "./box";
 import {
+  CertAckSchema,
+  CertificateManifestSchema,
+  CertRequestSchema,
+  CertStatusSchema,
+  CertSyncSchema,
+  IngressSettingsSchema,
+} from "./certs";
+import { ControlHeader, isShortLived, SHORT_LIVED_ISSUE } from "./control";
+import {
+  BackupJobSchema,
+  BackupPartsRequestSchema,
+  BackupPartsSchema,
+  BackupProgressSchema,
+  BackupResultSchema,
+  DbQueryResultSchema,
+  DbQuerySchema,
+  RestoreJobSchema,
+  RestoreResultSchema,
+  VOLUME_QUOTA_MODES,
+  VolumeCopyInSchema,
+  VolumeCopyOutSchema,
+  VolumeDeleteSchema,
+  VolumeStatusSchema,
+} from "./data";
+import { JobCancelSchema, JobRunSchema, JobStatusSchema } from "./jobs";
+import {
   boundedString,
   CACHE_KEY_RE,
   COMMIT_SHA_RE,
-  CREDENTIAL_FRAME_TTL_MS,
   DIGEST_RE,
   ENV_KEY_RE,
   GitRefString,
@@ -27,77 +62,28 @@ import {
   MAX_LOG_LINE_BYTES,
   MAX_LOG_LINES_PER_FRAME,
   MAX_MESSAGE_BYTES,
+  MAX_PINNED_SIGNING_KEYS,
   MAX_STATUSES_PER_HELLO,
+  MAX_VOLUMES_PER_NODE,
   MAX_WORKLOADS_PER_NODE,
   NODE_ENCRYPTION_KEY_ID_RE,
   RelativePath,
+  SIGNING_KEY_ID_RE,
   UnixMillis,
   utf8ByteLength,
 } from "./limits";
+import { HelloMeshSchema, MeshConfigSchema, MeshKeySchema, MeshStatusSchema } from "./mesh";
+import { MAX_METRICS_INTERVAL_MS, MetricsSchema, MIN_METRICS_INTERVAL_MS } from "./metrics";
+import { KeyAnnounceSchema, SigningKeyAnnouncementsSchema } from "./signing-keys";
 import {
   buildCacheKey,
+  INGRESS_TLS_MODES,
   localImageRepository,
   REGISTRY_LISTEN,
   RegistryConfigSchema,
-  TLS_MODES,
+  VolumeSpecSchema,
   WorkloadSpecSchema,
 } from "./workload";
-
-/**
- * Current wire protocol version, sent by agents in `hello`.
- *
- * - Version 2 (Phase 1) is additive: every version 1 frame is still valid,
- *   and a version 1 agent still decodes version 2 `desired_state` (it reads
- *   only `id` and `image` of each workload and ignores unknown fields). It is
- *   bumped anyway because the control plane must know whether an agent
- *   understands `build_job`, runs workloads, and reports statuses and logs:
- *   it never sends `build_job` to, or places workloads on, an agent below
- *   version 2.
- * - Version 3 is additive too: `build_cancel`, `build_job.secret_build_args`
- *   and `build_result.cancelled`. A version 2 agent would drop the first and,
- *   worse, ignore the second and bake secret build args into the image, so
- *   the control plane sends neither below {@link BUILD_CANCEL_PROTOCOL_VERSION}
- *   and {@link SECRET_BUILD_ARGS_PROTOCOL_VERSION}.
- * - Version 4 (ADR 0014) replaces `WorkloadSpec.env` with `env_sealed`, adds
- *   `build_job.build_secrets_sealed`, `project_id` and `service_id`, and
- *   `hello.encryption_key`. An older agent can't decode a sealed workload, so
- *   the control plane places workloads and builds only on agents at
- *   {@link SEALED_ENV_PROTOCOL_VERSION} that have registered an encryption
- *   key.
- *
- * Version numbers follow ADR 0013: one per phase, each accepting N−1.
- */
-export const PROTOCOL_VERSION = 4;
-
-/**
- * Oldest `hello.protocol_version` the control plane accepts (N−1, ADR 0013).
- * An older agent's `hello` is answered with close code 4002
- * (`agent_outdated`).
- */
-export const MIN_PROTOCOL_VERSION = 3;
-
-/**
- * First protocol version whose agents run workloads and builds. Every
- * accepted agent is past it; {@link SEALED_ENV_PROTOCOL_VERSION} is the gate
- * that matters for placement now.
- */
-export const WORKLOADS_PROTOCOL_VERSION = 2;
-
-/** First protocol version whose agents understand `build_cancel`. */
-export const BUILD_CANCEL_PROTOCOL_VERSION = 3;
-
-/**
- * First protocol version whose agents honour `build_job.secret_build_args`.
- * A build with secret args is never sent to an older agent.
- */
-export const SECRET_BUILD_ARGS_PROTOCOL_VERSION = 3;
-/**
- * First protocol version whose agents open sealed boxes: `env_sealed`,
- * `build_job.build_secrets_sealed`, `hello.encryption_key` and the join
- * request's `encryption_public_key`. No workload or build goes to an older
- * agent.
- */
-export const SEALED_ENV_PROTOCOL_VERSION = 4;
 
 // -----------------------------------------------------------------------------
 // Shared shapes
@@ -125,6 +111,11 @@ export const CapabilitiesSchema = z.object({
   gvisor: z.boolean(),
   /** The node runs BuildKit and the local registry, and accepts `build_job`. */
   builder: z.boolean(),
+  /**
+   * The node runs Caddy for every route (ADR 0005). Absent means `true`.
+   * Sent from `MESH_PROTOCOL_VERSION`.
+   */
+  ingress: z.boolean().optional(),
 });
 
 /** Optional features a node can offer. */
@@ -240,11 +231,31 @@ export const HelloSchema = z.object({
   statuses: z.array(WorkloadStatusReportSchema).max(MAX_STATUSES_PER_HELLO).optional(),
   /**
    * The agent's X25519 encryption key, for nodes that joined before
-   * protocol 4 or lost theirs. Sent from {@link SEALED_ENV_PROTOCOL_VERSION}.
+   * protocol 4 or lost theirs. Sent from `SEALED_ENV_PROTOCOL_VERSION`.
    * The control plane stores it only when the node has none yet; replacing a
    * key needs a re-join.
    */
   encryption_key: NodeEncryptionKeySchema.optional(),
+  /**
+   * WireGuard public key and reachability, when the agent's mesh is enabled.
+   * Sent from `MESH_PROTOCOL_VERSION`.
+   */
+  mesh: HelloMeshSchema.optional(),
+  /**
+   * How this node enforces volume quotas, decided at agent start. The
+   * scheduler won't migrate a quota-enforced volume onto a `none` node.
+   * Sent from `VOLUMES_PROTOCOL_VERSION`.
+   */
+  volume_quota: z.enum(VOLUME_QUOTA_MODES).optional(),
+  /**
+   * Control-plane signing key IDs the agent accepts, current first. Sent
+   * from `KEY_ROLLOVER_PROTOCOL_VERSION`.
+   */
+  pinned_kids: z
+    .array(z.string().regex(SIGNING_KEY_ID_RE, "expected a signing key id"))
+    .min(1)
+    .max(MAX_PINNED_SIGNING_KEYS)
+    .optional(),
 });
 
 /** First frame on every connection. */
@@ -291,14 +302,45 @@ export const BuildLogSourceSchema = z.object({
   build_id: IdString,
 });
 
-/** What a `logs` frame belongs to. */
+/** Logs of a job run (ADR 0010), from `JOBS_PROTOCOL_VERSION`. */
+export const JobLogSourceSchema = z.object({
+  type: z.literal("job"),
+  run_id: IdString,
+  workload_id: IdString,
+});
+
+/**
+ * Output of a backup, restore or volume copy (ADR 0004), from
+ * `BACKUPS_PROTOCOL_VERSION`. `task_id` is the `bak_`, `rst_` or `mig_` ID.
+ */
+export const TaskLogSourceSchema = z.object({
+  type: z.literal("task"),
+  task_id: IdString,
+});
+
+/**
+ * Phase 1 log sources: a replica or a build. Kept as its own union because
+ * the node DO's log ingest narrows on exactly these two; see
+ * {@link AnyLogSourceSchema} for every source.
+ */
 export const LogSourceSchema = z.discriminatedUnion("type", [
   RuntimeLogSourceSchema,
   BuildLogSourceSchema,
 ]);
 
-/** What a `logs` frame belongs to. */
+/** A Phase 1 log source. */
 export type LogSource = z.infer<typeof LogSourceSchema>;
+
+/** Every log source: replica, build, job run, or task. */
+export const AnyLogSourceSchema = z.discriminatedUnion("type", [
+  RuntimeLogSourceSchema,
+  BuildLogSourceSchema,
+  JobLogSourceSchema,
+  TaskLogSourceSchema,
+]);
+
+/** Every log source. */
+export type AnyLogSource = z.infer<typeof AnyLogSourceSchema>;
 
 /** One log line. */
 export const LogLineSchema = z.object({
@@ -312,26 +354,38 @@ export const LogLineSchema = z.object({
 /** One log line. */
 export type LogLine = z.infer<typeof LogLineSchema>;
 
+const LogLines = z
+  .array(LogLineSchema)
+  .min(1)
+  .max(MAX_LOG_LINES_PER_FRAME)
+  .refine(
+    (lines) => lines.reduce((n, l) => n + utf8ByteLength(l.text), 0) <= MAX_LOG_FRAME_TEXT_BYTES,
+    { message: `at most ${MAX_LOG_FRAME_TEXT_BYTES} bytes of text per frame` },
+  );
+
 /**
- * A batch of log lines from one source, flushed at least every second. At
- * most {@link MAX_LOG_LINES_PER_FRAME} lines and
+ * A batch of log lines from one Phase 1 source, flushed at least every
+ * second. At most {@link MAX_LOG_LINES_PER_FRAME} lines and
  * {@link MAX_LOG_FRAME_TEXT_BYTES} of text per frame.
  */
 export const LogsSchema = z.object({
   type: z.literal("logs"),
   source: LogSourceSchema,
-  lines: z
-    .array(LogLineSchema)
-    .min(1)
-    .max(MAX_LOG_LINES_PER_FRAME)
-    .refine(
-      (lines) => lines.reduce((n, l) => n + utf8ByteLength(l.text), 0) <= MAX_LOG_FRAME_TEXT_BYTES,
-      { message: `at most ${MAX_LOG_FRAME_TEXT_BYTES} bytes of text per frame` },
-    ),
+  lines: LogLines,
 });
 
-/** A batch of log lines from one source. */
+/** A batch of log lines from one Phase 1 source. */
 export type Logs = z.infer<typeof LogsSchema>;
+
+/** A `logs` frame from any source; see {@link AnyLogSourceSchema}. */
+export const AnyLogsSchema = z.object({
+  type: z.literal("logs"),
+  source: AnyLogSourceSchema,
+  lines: LogLines,
+});
+
+/** A `logs` frame from any source. */
+export type AnyLogs = z.infer<typeof AnyLogsSchema>;
 
 /** An image pushed to the builder's local registry. */
 export const BuiltImageSchema = z.object({
@@ -371,7 +425,11 @@ export const BuildResultSchema = z
 /** Outcome of a `build_job`. */
 export type BuildResult = z.infer<typeof BuildResultSchema>;
 
-/** Any frame an agent may send. */
+/**
+ * The Phase 1 agent frames, which the node DO's dispatch handles today.
+ * {@link AgentFrameSchema} adds every Phase 2–3 frame; the DO moves to it
+ * with the frame-table split of ADR 0013.
+ */
 export const AgentMessageSchema = z.discriminatedUnion("type", [
   HelloSchema,
   HeartbeatSchema,
@@ -380,40 +438,64 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   BuildResultSchema,
 ]);
 
-/** Any frame an agent may send. */
+/** A Phase 1 agent frame. */
 export type AgentMessage = z.infer<typeof AgentMessageSchema>;
+
+/**
+ * Every frame an agent may send, each only at or above its gate: the
+ * Phase 1 frames (with `logs` from any source) plus mesh, volume, backup,
+ * query, job, metrics and certificate reports. `schema/agent-message.json`
+ * is generated from it.
+ */
+export const AgentFrameSchema = z.discriminatedUnion("type", [
+  HelloSchema,
+  HeartbeatSchema,
+  WorkloadStatusSchema,
+  AnyLogsSchema,
+  BuildResultSchema,
+  MeshStatusSchema,
+  MeshKeySchema,
+  VolumeStatusSchema,
+  BackupPartsRequestSchema,
+  BackupProgressSchema,
+  BackupResultSchema,
+  RestoreResultSchema,
+  DbQueryResultSchema,
+  JobStatusSchema,
+  MetricsSchema,
+  CertAckSchema,
+  CertRequestSchema,
+  CertStatusSchema,
+]);
+
+/** Every frame an agent may send. */
+export type AgentFrame = z.infer<typeof AgentFrameSchema>;
 
 // -----------------------------------------------------------------------------
 // Control → agent (always wrapped in a signed envelope, see ./signing)
 // -----------------------------------------------------------------------------
-
-/** Fields every signed control payload carries to prevent replay and misrouting. */
-const ControlHeader = {
-  /** Unique message ID. */
-  id: z.string(),
-  /** Target node; agents reject payloads addressed to another node. */
-  node_id: z.string(),
-  /** Issued-at, unix ms. */
-  iat: z.number().int().nonnegative(),
-  /**
-   * Expiry, unix ms. Agents reject expired payloads. At most
-   * {@link CREDENTIAL_FRAME_TTL_MS} after `iat` when the frame carries a
-   * credential; see {@link carriesCredentials}.
-   */
-  exp: z.number().int().nonnegative(),
-};
-
-const shortLived = (m: { iat: number; exp: number }) => m.exp - m.iat <= CREDENTIAL_FRAME_TTL_MS;
-const SHORT_LIVED_ISSUE = {
-  message: `frames carrying credentials must expire within ${CREDENTIAL_FRAME_TTL_MS} ms`,
-  path: ["exp"],
-};
 
 /** Acknowledges `hello` and tells the agent how to behave on this connection. */
 export const WelcomeSchema = z.object({
   type: z.literal("welcome"),
   ...ControlHeader,
   heartbeat_interval_ms: z.number().int().positive(),
+  /**
+   * Successor signing keys to pin next to the current one, signed by it.
+   * Sent from `KEY_ROLLOVER_PROTOCOL_VERSION`. Never names the envelope's
+   * own kid; see `announcesSigningKid`.
+   */
+  next_keys: SigningKeyAnnouncementsSchema.optional(),
+  /**
+   * Asks a metrics-capable agent to send `metrics` at this interval; absent
+   * means none. Sent from `METRICS_PROTOCOL_VERSION`.
+   */
+  metrics_interval_ms: z
+    .number()
+    .int()
+    .min(MIN_METRICS_INTERVAL_MS)
+    .max(MAX_METRICS_INTERVAL_MS)
+    .optional(),
 });
 
 /** Acknowledges `hello`. */
@@ -429,34 +511,65 @@ export const DesiredStateSchema = z
     ...ControlHeader,
     /** Monotonic; agents ignore anything older than what they've applied. */
     generation: z.number().int().nonnegative(),
-    /** Every `service` workload the node should run. System workloads are never listed. */
+    /**
+     * Every `service` and `route` workload the node should run. System
+     * workloads are never listed, nor are jobs (they arrive in `job_run`).
+     */
     workloads: z.array(WorkloadSpecSchema).max(MAX_WORKLOADS_PER_NODE),
-    tls_mode: z.enum(TLS_MODES),
+    /** `managed` only from `CERTS_PROTOCOL_VERSION`. */
+    tls_mode: z.enum(INGRESS_TLS_MODES),
     /** Domain generated hostnames live under; `null` until an operator sets one. */
     apps_domain: HostnameString.nullable(),
-    /** Registry the node must run; set only for builder nodes. */
+    /**
+     * Registry the node must run: builders always; from
+     * `MESH_PROTOCOL_VERSION`, meshed non-builders as `replica` or `proxy`.
+     */
     registry: RegistryConfigSchema.nullable(),
+    /**
+     * Every volume the node holds, including those of services scaled to
+     * zero. Sent from `VOLUMES_PROTOCOL_VERSION`; absent from older frames.
+     */
+    volumes: z.array(VolumeSpecSchema).max(MAX_VOLUMES_PER_NODE).optional(),
+    /**
+     * The mesh; `null` tears it down. Sent from `MESH_PROTOCOL_VERSION`;
+     * absent (as from an older control plane) behaves like `null`.
+     */
+    mesh: MeshConfigSchema.nullish(),
+    /** Node-level Caddy settings. Sent from `CERTS_PROTOCOL_VERSION`. */
+    ingress: IngressSettingsSchema.optional(),
+    /** Certificates the node must hold, bodies via `cert_sync`. From `CERTS_PROTOCOL_VERSION`. */
+    certificates: CertificateManifestSchema.optional(),
   })
   .superRefine((m, ctx) => {
+    const issue = (message: string, path: (string | number)[]) =>
+      ctx.addIssue({ code: "custom", message, path });
+    const volumes = new Map((m.volumes ?? []).map((v) => [v.id, v]));
+    if (volumes.size !== (m.volumes ?? []).length) issue("duplicate volume", ["volumes"]);
     const ids = new Set<string>();
     m.workloads.forEach((w, i) => {
-      if (w.kind !== "service") {
-        ctx.addIssue({
-          code: "custom",
-          message: "only service workloads are sent",
-          path: ["workloads", i, "kind"],
-        });
+      if (w.kind !== "service" && w.kind !== "route") {
+        issue("only service and route workloads are sent", ["workloads", i, "kind"]);
       }
-      if (ids.has(w.id)) {
-        ctx.addIssue({
-          code: "custom",
-          message: `duplicate workload ${w.id}`,
-          path: ["workloads", i, "id"],
-        });
-      }
+      if (ids.has(w.id)) issue(`duplicate workload ${w.id}`, ["workloads", i, "id"]);
       ids.add(w.id);
+      for (const mount of w.mounts ?? []) {
+        const v = volumes.get(mount.volume_id);
+        if (!v) {
+          issue(`mount of unlisted volume ${mount.volume_id}`, ["workloads", i, "mounts"]);
+        } else if (
+          v.project_id !== w.project_id ||
+          v.environment_id !== w.environment_id ||
+          v.service_id !== w.service_id
+        ) {
+          issue(`volume ${v.id} belongs to another service`, ["workloads", i, "mounts"]);
+        }
+      }
+      if (!m.mesh && (w.kind === "route" || w.mesh_ip !== undefined || w.private_dns)) {
+        issue("route workloads, mesh_ip and private_dns need the mesh", ["workloads", i]);
+      }
     });
-    if (carriesCredentials(m) && !shortLived(m))
+    if (m.tls_mode === "managed" && !m.ingress) issue("managed TLS needs ingress", ["ingress"]);
+    if (carriesCredentials(m) && !isShortLived(m))
       ctx.addIssue({ code: "custom", ...SHORT_LIVED_ISSUE });
   });
 
@@ -519,7 +632,7 @@ export const BuildJobSchema = z
      * Names of `build_args` whose values are secret. The builder passes them
      * as BuildKit secrets, never as build args (which end up in the image's
      * history), and redacts their values from build output. Sent from
-     * protocol version 3; see {@link SECRET_BUILD_ARGS_PROTOCOL_VERSION}.
+     * protocol version 3; see `SECRET_BUILD_ARGS_PROTOCOL_VERSION`.
      */
     secret_build_args: z
       .array(z.string().max(256).regex(ENV_KEY_RE, "expected a build arg name"))
@@ -566,7 +679,7 @@ export const BuildJobSchema = z
     message: "cache_key must be buildCacheKey(project_id, service_id)",
     path: ["cache_key"],
   })
-  .refine((j) => !carriesCredentials(j) || shortLived(j), SHORT_LIVED_ISSUE);
+  .refine((j) => !carriesCredentials(j) || isShortLived(j), SHORT_LIVED_ISSUE);
 
 /** Build an image and push it to the node's local registry. */
 export type BuildJob = z.infer<typeof BuildJobSchema>;
@@ -578,7 +691,7 @@ export type BuildJob = z.infer<typeof BuildJobSchema>;
  * cancel for a build that has not arrived yet is remembered briefly, so the
  * job is answered as cancelled without running; one for a build already
  * finished is ignored. Sent from protocol version 3; see
- * {@link BUILD_CANCEL_PROTOCOL_VERSION}.
+ * `BUILD_CANCEL_PROTOCOL_VERSION`.
  */
 export const BuildCancelSchema = z.object({
   type: z.literal("build_cancel"),
@@ -589,21 +702,49 @@ export const BuildCancelSchema = z.object({
 /** Stops a running build. */
 export type BuildCancel = z.infer<typeof BuildCancelSchema>;
 
-/** Any payload the control plane may sign and send. */
+/** Any payload the control plane may sign and send, each only at or above its gate. */
 export const ControlMessageSchema = z.discriminatedUnion("type", [
   WelcomeSchema,
   DesiredStateSchema,
   BuildJobSchema,
   BuildCancelSchema,
+  KeyAnnounceSchema,
+  VolumeDeleteSchema,
+  BackupJobSchema,
+  BackupPartsSchema,
+  RestoreJobSchema,
+  VolumeCopyOutSchema,
+  VolumeCopyInSchema,
+  DbQuerySchema,
+  JobRunSchema,
+  JobCancelSchema,
+  CertSyncSchema,
 ]);
 
 /** Any payload the control plane may sign and send. */
 export type ControlMessage = z.infer<typeof ControlMessageSchema>;
 
+/** Control frames that always carry a credential (a sealed box or presigned URLs). */
+export const CREDENTIAL_FRAME_TYPES = [
+  "backup_job",
+  "backup_parts",
+  "restore_job",
+  "volume_copy_out",
+  "volume_copy_in",
+  "db_query",
+  "job_run",
+] as const;
+
 /**
  * Whether a control payload carries a credential (a git token, a registry
- * password, object-storage keys, or a sealed box). Such frames must expire within
- * {@link CREDENTIAL_FRAME_TTL_MS} of `iat`; the schemas reject longer ones.
+ * password, object-storage keys, or a sealed box). Such frames must expire
+ * within `CREDENTIAL_FRAME_TTL_MS` of `iat`; the schemas reject longer ones.
+ *
+ * - `desired_state`: S3 registry storage, a proxy registry's upstream, a
+ *   workload's `registry_auth` or `env_sealed`, or the mesh's sealed PSKs.
+ * - `build_job`: a git token or sealed build secrets.
+ * - `cert_sync`: any upsert (sealed private keys).
+ * - Every type in {@link CREDENTIAL_FRAME_TYPES}.
  *
  * @param message - A control payload, before or after signing.
  * @returns `true` when the short expiry applies.
@@ -613,21 +754,27 @@ export function carriesCredentials(
     | {
         type: "desired_state";
         workloads: readonly { registry_auth?: unknown; env_sealed?: unknown }[];
-        registry: { storage: { type: string } } | null;
+        registry: { storage: { type: string }; upstream?: unknown } | null;
+        mesh?: { psks_sealed: unknown } | null;
       }
     | { type: "build_job"; source: { token?: string }; build_secrets_sealed?: unknown }
-    | { type: "welcome" }
-    | { type: "build_cancel" },
+    | { type: "cert_sync"; upserts: readonly unknown[] }
+    | { type: (typeof CREDENTIAL_FRAME_TYPES)[number] }
+    | { type: "welcome" | "build_cancel" | "key_announce" | "volume_delete" | "job_cancel" },
 ): boolean {
   switch (message.type) {
     case "desired_state":
       return (
         message.registry?.storage.type === "s3" ||
+        !!message.registry?.upstream ||
+        !!message.mesh?.psks_sealed ||
         message.workloads.some((w) => !!w.registry_auth || !!w.env_sealed)
       );
     case "build_job":
       return message.source.token !== undefined || !!message.build_secrets_sealed;
+    case "cert_sync":
+      return message.upserts.length > 0;
     default:
-      return false;
+      return (CREDENTIAL_FRAME_TYPES as readonly string[]).includes(message.type);
   }
 }

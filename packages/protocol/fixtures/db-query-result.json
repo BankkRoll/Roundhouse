@@ -1,0 +1,14 @@
+{
+  "type": "db_query_result",
+  "request_id": "q_01JIIIIIIIIIIIIIIIIIIIIIII",
+  "ok": true,
+  "columns": [
+    { "name": "id", "type": "int8" },
+    { "name": "name", "type": "text" },
+    { "name": "avatar", "type": "bytea" }
+  ],
+  "rows": [["1", "Ada", { "$b64": "iVBORw0KGgo=" }], ["9007199254740993", null, null]],
+  "row_count": 2,
+  "truncated": false,
+  "duration_ms": 12
+}

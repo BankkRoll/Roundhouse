@@ -111,6 +111,150 @@ export const MAX_LOG_LINE_BYTES = 16 * 1024;
 export const MAX_MESSAGE_BYTES = 4096;
 
 // -----------------------------------------------------------------------------
+// Signing keys (ADR 0014 §13)
+// -----------------------------------------------------------------------------
+
+/** Most successor signing keys `welcome.next_keys` and `key_announce` carry. */
+export const MAX_NEXT_SIGNING_KEYS = 2;
+
+/** Most control-plane key IDs an agent reports as pinned in `hello`. */
+export const MAX_PINNED_SIGNING_KEYS = 3;
+
+// -----------------------------------------------------------------------------
+// Volumes and data services (ADR 0004)
+// -----------------------------------------------------------------------------
+
+/** Most volumes one `desired_state` lists. */
+export const MAX_VOLUMES_PER_NODE = 128;
+
+/** Most mounts per workload. One in Phase 2; raising it is additive. */
+export const MAX_MOUNTS_PER_WORKLOAD = 1;
+
+/** Smallest volume quota, in MiB. */
+export const MIN_VOLUME_SIZE_MB = 256;
+
+/** Largest volume quota, in MiB (1 TiB). */
+export const MAX_VOLUME_SIZE_MB = 1_048_576;
+
+/** Longest container mount path, in bytes. */
+export const MAX_MOUNT_PATH_BYTES = 1024;
+
+/** Most source CIDRs a published (TCP proxy) port admits. */
+export const MAX_PUBLISH_CIDRS = 64;
+
+/** Most databases a dump backup may name. */
+export const MAX_BACKUP_DATABASES = 64;
+
+/** Most parts of one multipart backup object (R2 and S3 limit). */
+export const MAX_BACKUP_PARTS = 10_000;
+
+/** Most presigned part URLs in `backup_job`. */
+export const MAX_BACKUP_JOB_PARTS = 16;
+
+/** Most presigned part URLs in one `backup_parts` (and requested by one `backup_parts_request`). */
+export const MAX_BACKUP_PARTS_PER_FRAME = 32;
+
+/** Most uploaded parts one `backup_progress` reports. */
+export const MAX_BACKUP_PROGRESS_PARTS = 256;
+
+/** Smallest backup part, in bytes (R2's multipart minimum). */
+export const MIN_BACKUP_PART_BYTES = 5 * 1024 * 1024;
+
+/** Largest backup part, in bytes (R2's and S3's 5 GiB part maximum). */
+export const MAX_BACKUP_PART_BYTES = 5 * 1024 * 1024 * 1024;
+
+/** Backup parts are a whole number of these, so the control plane's sizing stays exact. */
+export const BACKUP_PART_ALIGN_BYTES = 1024 * 1024;
+
+/** Longest presigned object-storage URL, in bytes. */
+export const MAX_PRESIGNED_URL_BYTES = 4096;
+
+/** Longest backup or restore run, in seconds (12 h). */
+export const MAX_BACKUP_TIMEOUT_S = 43_200;
+
+/** Most rows a `db_query` may return. */
+export const MAX_DB_QUERY_ROWS = 1000;
+
+/** Largest encoded `db_query_result` rows payload, in bytes; fits an agent frame. */
+export const MAX_DB_QUERY_RESULT_BYTES = 458_752;
+
+/** Longest `db_query` run, in milliseconds. */
+export const MAX_DB_QUERY_TIMEOUT_MS = 30_000;
+
+/** Longest raw statement or command document, in bytes. */
+export const MAX_DB_STATEMENT_BYTES = 64 * 1024;
+
+/** Most positional parameters of a raw SQL statement, or arguments of a Redis command. */
+export const MAX_DB_PARAMS = 256;
+
+/** Most result columns of one `db_query_result`. */
+export const MAX_DB_COLUMNS = 1024;
+
+/** Longest database identifier (namespace, table, column, key pattern), in bytes. */
+export const MAX_DB_IDENTIFIER_BYTES = 256;
+
+// -----------------------------------------------------------------------------
+// Mesh (ADR 0005)
+// -----------------------------------------------------------------------------
+
+/** Most WireGuard peers of one node: every other node of the 254 the address plan allows. */
+export const MAX_MESH_PEERS = 253;
+
+/** Most mesh IPs one `desired_state.mesh.addresses` lists. */
+export const MAX_MESH_ADDRESSES = 4096;
+
+/** Most CIDR pairs one relay node forwards. */
+export const MAX_MESH_FORWARD_PAIRS = 4096;
+
+/** Most `allowed_ips` of one peer: its own /24 plus the pairs it relays. */
+export const MAX_MESH_ALLOWED_IPS = 256;
+
+/** Most remote upstreams of one route-only workload. */
+export const MAX_UPSTREAMS = 256;
+
+/** Most htpasswd users of a primary registry: one per other node. */
+export const MAX_REGISTRY_PULL_USERS = 254;
+
+// -----------------------------------------------------------------------------
+// Jobs, metrics, certificates (ADRs 0008, 0009, 0010)
+// -----------------------------------------------------------------------------
+
+/** Shortest `job_run.timeout_s`. */
+export const MIN_JOB_TIMEOUT_S = 10;
+/** Longest `job_run.timeout_s` (24 h). */
+export const MAX_JOB_TIMEOUT_S = 86_400;
+
+/** Most container samples in one `metrics` frame (the hello status cap, inside Analytics Engine's 250 points per invocation). */
+export const MAX_METRIC_SAMPLES = 160;
+
+/** Most certificates one `desired_state.certificates` manifest lists. */
+export const MAX_CERTIFICATES_PER_NODE = 4096;
+
+/** Most certificate bodies in one `cert_sync`. */
+export const MAX_CERT_UPSERTS_PER_FRAME = 32;
+
+/** Most certificate IDs one `cert_sync.removes` or `cert_ack` names. */
+export const MAX_CERT_IDS_PER_FRAME = 256;
+
+/** Most hostnames one certificate covers. */
+export const MAX_CERT_HOSTNAMES = 100;
+
+/** Longest certificate chain PEM, in bytes. */
+export const MAX_CERT_PEM_BYTES = 64 * 1024;
+
+/** Longest private key PEM, in bytes. */
+export const MAX_CERT_KEY_PEM_BYTES = 16 * 1024;
+
+/** Most hostnames `desired_state.ingress.managed_hosts` lists. */
+export const MAX_MANAGED_HOSTS = 4096;
+
+/** Most source CIDRs `desired_state.ingress.allowed_sources` lists. */
+export const MAX_INGRESS_SOURCES = 256;
+
+/** Longest HSTS `max-age`, in seconds (two years). */
+export const MAX_HSTS_MAX_AGE_S = 63_072_000;
+
+// -----------------------------------------------------------------------------
 // Formats
 // -----------------------------------------------------------------------------
 
@@ -189,6 +333,46 @@ export const IMAGE_REFERENCE_RE = new RegExp(
 
 /** Characters allowed in a repository-relative path; see {@link isSafeRelativePath}. */
 export const RELATIVE_PATH_RE = /^[A-Za-z0-9._\-/]{1,512}$/;
+
+/**
+ * Route hostname: a {@link HOSTNAME_RE} hostname, optionally with one leading
+ * `*.` wildcard label (ADR 0009). The total length is checked separately.
+ */
+export const WILDCARD_HOSTNAME_RE =
+  /^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** Control-plane signing key ID, as in `Envelope.kid` (`k<base36>` in production). */
+export const SIGNING_KEY_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Node ID inside mesh peer lists and addresses: the ID minted at join. */
+export const NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Correlation ID of a `db_query`. */
+export const REQUEST_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Database name a dump backup may select. */
+export const DB_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_$-]{0,63}$/;
+
+/** age X25519 recipient (bech32, lowercase). */
+export const AGE_RECIPIENT_RE = /^age1[02-9ac-hj-np-z]{58}$/;
+
+/** age X25519 identity (bech32, uppercase). Only ever inside a sealed box. */
+export const AGE_IDENTITY_RE = /^AGE-SECRET-KEY-1[02-9AC-HJ-NP-Z]{58}$/;
+
+/** bcrypt hash of an htpasswd user. */
+export const BCRYPT_RE = /^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$/;
+
+/** Registry user name. */
+export const REGISTRY_USER_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** S3 ETag as returned by `UploadPart`: printable ASCII, quotes included. */
+export const ETAG_RE = /^[\x21-\x7e]{1,256}$/;
+
+/** Presigned object-storage URL. Plain `http` is for the fake S3 in tests. */
+export const PRESIGNED_URL_RE = /^https?:\/\/[^\s/?#]+\/[^\s]*$/;
+
+/** Absolute container path a volume may be mounted at; see {@link isSafeMountPath}. */
+export const MOUNT_PATH_RE = /^\/[A-Za-z0-9._@%+=:,/-]*$/;
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -318,3 +502,185 @@ export const HostnameString = z
   .string()
   .max(MAX_HOSTNAME_LENGTH)
   .regex(HOSTNAME_RE, "expected a lowercase DNS hostname");
+
+/**
+ * Container paths a volume may never cover: the root, kernel filesystems, and
+ * the agent's `mount_as_file` secrets directory (ADR 0014).
+ */
+export const RESERVED_MOUNT_PATHS = ["/proc", "/sys", "/dev", "/run/secrets"] as const;
+
+/**
+ * Whether a container path is a safe volume mount target: absolute, at most
+ * {@link MAX_MOUNT_PATH_BYTES}, no `.`/`..`/empty segment, no trailing `/`,
+ * not `/`, and not inside {@link RESERVED_MOUNT_PATHS}. Mirrors Go's
+ * `IsSafeMountPath`.
+ *
+ * @param path - `mounts[].path` from a workload.
+ * @returns `true` when the agent may bind a volume there.
+ * @example
+ * isSafeMountPath("/var/lib/postgresql"); // true
+ * isSafeMountPath("/proc/self"); // false
+ */
+export function isSafeMountPath(path: string): boolean {
+  if (path.length > MAX_MOUNT_PATH_BYTES || !MOUNT_PATH_RE.test(path) || path === "/") return false;
+  const segments = path.slice(1).split("/");
+  if (segments.some((s) => s === "" || s === "." || s === "..")) return false;
+  return !RESERVED_MOUNT_PATHS.some((r) => path === r || path.startsWith(`${r}/`));
+}
+
+const IPV4_OCTET = "(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])";
+
+/** Dotted-quad IPv4 address without leading zeros. */
+export const IPV4_RE = new RegExp(`^${IPV4_OCTET}([.]${IPV4_OCTET}){3}$`);
+
+/**
+ * Whether a string is an IPv4 address in dotted-quad form, without leading
+ * zeros. Mirrors Go's `IsIPv4`.
+ *
+ * @param s - Candidate address.
+ * @returns `true` for e.g. `10.200.1.1`.
+ */
+export function isIPv4(s: string): boolean {
+  return IPV4_RE.test(s);
+}
+
+/**
+ * Whether a string is an IPv6 address in RFC 4291 text form: eight groups of
+ * 1–4 hex digits, at most one `::`, optionally ending in a dotted IPv4. No
+ * zone. Mirrors Go's `IsIPv6` (a hand-written parser on both sides, so they
+ * agree exactly).
+ *
+ * @param s - Candidate address.
+ * @returns `true` for e.g. `2606:4700::` or `::ffff:10.0.0.1`.
+ */
+export function isIPv6(s: string): boolean {
+  if (s.length < 2 || s.length > 45) return false;
+  const halves = s.split("::");
+  if (halves.length > 2) return false;
+  const groups = (part: string) => (part === "" ? [] : part.split(":"));
+  const head = groups(halves[0]!);
+  const tail = halves.length === 2 ? groups(halves[1]!) : [];
+  const all = [...head, ...tail];
+  let count = all.length;
+  const last = all[all.length - 1];
+  if (last?.includes(".")) {
+    if (!s.endsWith(last!) || !isIPv4(last!)) return false;
+    all.pop();
+    count += 1;
+  }
+  if (!all.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g))) return false;
+  return halves.length === 2 ? count <= 7 : count === 8;
+}
+
+/**
+ * Whether a string is an IPv4 or IPv6 CIDR block (`10.0.0.0/8`,
+ * `2606:4700::/32`). Host bits may be set; agents mask them. Mirrors Go's
+ * `IsCIDR`.
+ *
+ * @param s - Candidate block.
+ * @returns `true` when the address and prefix length are valid for the family.
+ */
+export function isCidr(s: string): boolean {
+  const slash = s.indexOf("/");
+  if (slash < 0) return false;
+  const addr = s.slice(0, slash);
+  const bits = s.slice(slash + 1);
+  if (!/^(0|[1-9][0-9]{0,2})$/.test(bits)) return false;
+  const n = Number(bits);
+  if (isIPv4(addr)) return n <= 32;
+  return isIPv6(addr) && n <= 128;
+}
+
+/**
+ * Whether a string is an IPv4 CIDR block. Mirrors Go's `IsIPv4CIDR`.
+ *
+ * @param s - Candidate block.
+ * @returns `true` for e.g. `10.200.0.0/16`.
+ */
+export function isIPv4Cidr(s: string): boolean {
+  return isCidr(s) && isIPv4(s.slice(0, s.indexOf("/")));
+}
+
+function ipv4ToInt(ip: string): number {
+  return ip.split(".").reduce((n, o) => n * 256 + Number(o), 0);
+}
+
+/**
+ * Whether an IPv4 address lies inside an IPv4 CIDR block. Mirrors Go's
+ * `IPv4InCIDR`.
+ *
+ * @param ip - Address, see {@link isIPv4}.
+ * @param cidr - Block, see {@link isIPv4Cidr}.
+ * @returns `false` when either is malformed.
+ * @example
+ * ipv4InCidr("10.200.3.1", "10.200.0.0/16"); // true
+ */
+export function ipv4InCidr(ip: string, cidr: string): boolean {
+  if (!isIPv4(ip) || !isIPv4Cidr(cidr)) return false;
+  const [base, bits] = cidr.split("/") as [string, string];
+  const size = 2 ** (32 - Number(bits));
+  return Math.floor(ipv4ToInt(ip) / size) === Math.floor(ipv4ToInt(base) / size);
+}
+
+/**
+ * Whether a string is `host:port`, where host is a hostname (one label
+ * allowed), an IPv4 address, or a bracketed IPv6 address, and port is
+ * 1–65535 without leading zeros. Mirrors Go's `IsHostPort`.
+ *
+ * @param s - Candidate endpoint, e.g. a WireGuard `endpoint`.
+ * @returns `true` for e.g. `203.0.113.7:51820` or `[2001:db8::1]:51820`.
+ */
+export function isHostPort(s: string): boolean {
+  const colon = s.lastIndexOf(":");
+  if (colon <= 0 || s.length > MAX_HOSTNAME_LENGTH + 6) return false;
+  const host = s.slice(0, colon);
+  const port = s.slice(colon + 1);
+  if (!/^[1-9][0-9]{0,4}$/.test(port) || Number(port) > 65535) return false;
+  if (host.startsWith("[") && host.endsWith("]")) return isIPv6(host.slice(1, -1));
+  return (
+    isIPv4(host) ||
+    /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/.test(host)
+  );
+}
+
+/**
+ * Whether a string is a route hostname: a lowercase DNS hostname, optionally
+ * with one leading `*.` label (ADR 0009). Mirrors Go's `IsRouteHostname`.
+ *
+ * @param s - `routes[].hostname`.
+ * @returns `true` for e.g. `*.apps.example.com`.
+ */
+export function isRouteHostname(s: string): boolean {
+  return s.length <= MAX_HOSTNAME_LENGTH && WILDCARD_HOSTNAME_RE.test(s);
+}
+
+/** Lowercase hex SHA-256. */
+export const Sha256Hex = z.string().regex(/^[a-f0-9]{64}$/, "expected a lowercase hex sha256");
+
+/** IPv4 address; see {@link isIPv4}. */
+export const Ipv4String = z.string().refine(isIPv4, { message: "expected an IPv4 address" });
+
+/** IPv4 or IPv6 CIDR block; see {@link isCidr}. */
+export const CidrString = z.string().refine(isCidr, { message: "expected a CIDR block" });
+
+/** IPv4 CIDR block; see {@link isIPv4Cidr}. */
+export const Ipv4CidrString = z
+  .string()
+  .refine(isIPv4Cidr, { message: "expected an IPv4 CIDR block" });
+
+/** `host:port`; see {@link isHostPort}. */
+export const HostPortString = z.string().refine(isHostPort, { message: "expected host:port" });
+
+/** Route hostname, wildcard allowed; see {@link isRouteHostname}. */
+export const RouteHostnameString = z
+  .string()
+  .refine(isRouteHostname, { message: "expected a lowercase DNS hostname or *.hostname" });
+
+/** Node ID; see {@link NODE_ID_RE}. */
+export const NodeIdString = z.string().regex(NODE_ID_RE, "expected a node id");
+
+/** Unix-second timestamp. */
+export const UnixSeconds = z.number().int().nonnegative();
+
+/** Non-negative integer counter or byte count. */
+export const Count = z.number().int().nonnegative();

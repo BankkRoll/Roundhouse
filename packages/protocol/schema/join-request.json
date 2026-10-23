@@ -97,6 +97,9 @@
         },
         "builder": {
           "type": "boolean"
+        },
+        "ingress": {
+          "type": "boolean"
         }
       },
       "required": [

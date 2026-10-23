@@ -1,0 +1,309 @@
+{
+  "cases": [
+    {
+      "fn": "isIPv4",
+      "input": "10.200.1.1",
+      "want": true
+    },
+    {
+      "fn": "isIPv4",
+      "input": "256.1.1.1",
+      "want": false
+    },
+    {
+      "fn": "isIPv4",
+      "input": "01.2.3.4",
+      "want": false
+    },
+    {
+      "fn": "isIPv4",
+      "input": "1.2.3",
+      "want": false
+    },
+    {
+      "fn": "isIPv4",
+      "input": "10a200b1c1",
+      "want": false
+    },
+    {
+      "fn": "isIPv4",
+      "input": "",
+      "want": false
+    },
+    {
+      "fn": "isIPv6",
+      "input": "::",
+      "want": true
+    },
+    {
+      "fn": "isIPv6",
+      "input": "2001:db8::1",
+      "want": true
+    },
+    {
+      "fn": "isIPv6",
+      "input": "::ffff:10.0.0.1",
+      "want": true
+    },
+    {
+      "fn": "isIPv6",
+      "input": "1:2:3:4:5:6:7:8",
+      "want": true
+    },
+    {
+      "fn": "isIPv6",
+      "input": "1:2:3:4:5:6:7::",
+      "want": true
+    },
+    {
+      "fn": "isIPv6",
+      "input": "1:2:3:4:5:6:7:8:9",
+      "want": false
+    },
+    {
+      "fn": "isIPv6",
+      "input": "::1:2:3:4:5:6:7:8",
+      "want": false
+    },
+    {
+      "fn": "isIPv6",
+      "input": "1::2::3",
+      "want": false
+    },
+    {
+      "fn": "isIPv6",
+      "input": "1.2.3.4::",
+      "want": false
+    },
+    {
+      "fn": "isIPv6",
+      "input": ":1",
+      "want": false
+    },
+    {
+      "fn": "isIPv6",
+      "input": "fe80::1%eth0",
+      "want": false
+    },
+    {
+      "fn": "isIPv6",
+      "input": "12345::",
+      "want": false
+    },
+    {
+      "fn": "isCidr",
+      "input": "10.0.0.0/8",
+      "want": true
+    },
+    {
+      "fn": "isCidr",
+      "input": "10.0.0.0/33",
+      "want": false
+    },
+    {
+      "fn": "isCidr",
+      "input": "10.0.0.0/08",
+      "want": false
+    },
+    {
+      "fn": "isCidr",
+      "input": "10.0.0.0",
+      "want": false
+    },
+    {
+      "fn": "isCidr",
+      "input": "2606:4700::/32",
+      "want": true
+    },
+    {
+      "fn": "isCidr",
+      "input": "::/0",
+      "want": true
+    },
+    {
+      "fn": "isCidr",
+      "input": "2606:4700::/129",
+      "want": false
+    },
+    {
+      "fn": "isIPv4Cidr",
+      "input": "10.200.0.0/16",
+      "want": true
+    },
+    {
+      "fn": "isIPv4Cidr",
+      "input": "2606:4700::/32",
+      "want": false
+    },
+    {
+      "fn": "ipv4InCidr",
+      "input": "10.200.3.1|10.200.0.0/16",
+      "want": true
+    },
+    {
+      "fn": "ipv4InCidr",
+      "input": "10.201.0.1|10.200.0.0/16",
+      "want": false
+    },
+    {
+      "fn": "ipv4InCidr",
+      "input": "10.0.0.1|0.0.0.0/0",
+      "want": true
+    },
+    {
+      "fn": "ipv4InCidr",
+      "input": "10.0.0.1|10.0.0.1/32",
+      "want": true
+    },
+    {
+      "fn": "ipv4InCidr",
+      "input": "10.0.0.2|10.0.0.1/32",
+      "want": false
+    },
+    {
+      "fn": "isHostPort",
+      "input": "203.0.113.7:51820",
+      "want": true
+    },
+    {
+      "fn": "isHostPort",
+      "input": "[2001:db8::1]:51820",
+      "want": true
+    },
+    {
+      "fn": "isHostPort",
+      "input": "node-a.example.com:51820",
+      "want": true
+    },
+    {
+      "fn": "isHostPort",
+      "input": "localhost:1",
+      "want": true
+    },
+    {
+      "fn": "isHostPort",
+      "input": "host:0",
+      "want": false
+    },
+    {
+      "fn": "isHostPort",
+      "input": "host:65536",
+      "want": false
+    },
+    {
+      "fn": "isHostPort",
+      "input": "host:080",
+      "want": false
+    },
+    {
+      "fn": "isHostPort",
+      "input": "2001:db8::1:51820",
+      "want": false
+    },
+    {
+      "fn": "isHostPort",
+      "input": ":51820",
+      "want": false
+    },
+    {
+      "fn": "isHostPort",
+      "input": "Host.Example:1",
+      "want": false
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/var/lib/postgresql",
+      "want": true
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/",
+      "want": false
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/data/",
+      "want": false
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/a/../b",
+      "want": false
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/a/./b",
+      "want": false
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/a//b",
+      "want": false
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/proc",
+      "want": false
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/proc/self",
+      "want": false
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/process",
+      "want": true
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/run/secrets",
+      "want": false
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "/run/secrets2",
+      "want": true
+    },
+    {
+      "fn": "isSafeMountPath",
+      "input": "relative",
+      "want": false
+    },
+    {
+      "fn": "isRouteHostname",
+      "input": "*.apps.example.com",
+      "want": true
+    },
+    {
+      "fn": "isRouteHostname",
+      "input": "apps.example.com",
+      "want": true
+    },
+    {
+      "fn": "isRouteHostname",
+      "input": "*.com",
+      "want": false
+    },
+    {
+      "fn": "isRouteHostname",
+      "input": "a.*.example.com",
+      "want": false
+    },
+    {
+      "fn": "isRouteHostname",
+      "input": "*.*.example.com",
+      "want": false
+    },
+    {
+      "fn": "isRouteHostname",
+      "input": "*example.com",
+      "want": false
+    },
+    {
+      "fn": "isRouteHostname",
+      "input": "Example.com",
+      "want": false
+    }
+  ]
+}

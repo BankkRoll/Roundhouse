@@ -21,16 +21,24 @@
 import { z } from "zod";
 import { fromBase64, toBase64 } from "./encoding";
 import {
+  AGE_IDENTITY_RE,
   boundedString,
   ENV_KEY_RE,
+  MAX_BACKUP_PARTS,
+  MAX_BACKUP_PARTS_PER_FRAME,
   MAX_BUILD_SECRET_VALUE_BYTES,
   MAX_BUILD_SECRETS,
+  MAX_CERT_KEY_PEM_BYTES,
   MAX_ENV_KEY_BYTES,
   MAX_ENV_TOTAL_BYTES,
   MAX_ENV_VALUE_BYTES,
   MAX_ENV_VARS,
+  MAX_MESH_PEERS,
+  MAX_PRESIGNED_URL_BYTES,
   MAX_SEALED_BOX_CT_CHARS,
   NODE_ENCRYPTION_KEY_ID_RE,
+  NODE_ID_RE,
+  PRESIGNED_URL_RE,
   utf8ByteLength,
 } from "./limits";
 
@@ -39,8 +47,22 @@ const encoder = new TextEncoder();
 /** Box format version. */
 export const BOX_VERSION = 1;
 
-/** What a box is for; part of the key derivation, so a box opens for one purpose only. */
-export const BOX_PURPOSES = ["workload-env", "build-secrets"] as const;
+/**
+ * What a box is for; part of the key derivation, so a box opens for one
+ * purpose only. Every credential a Phase 2–3 frame carries has its own
+ * purpose (ADR 0014 §6, ADR 0015).
+ */
+export const BOX_PURPOSES = [
+  "workload-env",
+  "build-secrets",
+  "job-env",
+  "mesh-psks",
+  "registry-upstream",
+  "backup-parts",
+  "restore",
+  "db-credential",
+  "cert-key",
+] as const;
 
 /** A box purpose; see {@link BOX_PURPOSES}. */
 export type BoxPurpose = (typeof BOX_PURPOSES)[number];
@@ -76,6 +98,89 @@ export function workloadEnvAad(nodeId: string, workloadId: string, generation: n
  */
 export function buildSecretsAad(nodeId: string, buildId: string): string {
   return `${boxInfo("build-secrets")}:${nodeId}:${buildId}`;
+}
+
+/**
+ * AAD of a job run's sealed environment (`job_run.workload.env_sealed`).
+ *
+ * @param nodeId - Node the box is sealed to.
+ * @param runId - The run (`crn_…`).
+ * @param workloadId - The job container's workload ID (`wl_…`).
+ * @returns E.g. `roundhouse-box:v1:job-env:node_1:crn_1:wl_1`.
+ */
+export function jobEnvAad(nodeId: string, runId: string, workloadId: string): string {
+  return `${boxInfo("job-env")}:${nodeId}:${runId}:${workloadId}`;
+}
+
+/**
+ * AAD of a node's sealed WireGuard preshared keys (`desired_state.mesh.psks_sealed`).
+ *
+ * @param nodeId - Node the box is sealed to.
+ * @param generation - `desired_state.generation` of the frame carrying it.
+ * @returns E.g. `roundhouse-box:v1:mesh-psks:node_1:42`.
+ */
+export function meshPsksAad(nodeId: string, generation: number): string {
+  return `${boxInfo("mesh-psks")}:${nodeId}:${generation}`;
+}
+
+/**
+ * AAD of a proxy registry's sealed upstream password
+ * (`desired_state.registry.upstream.password_sealed`).
+ *
+ * @param nodeId - Node the box is sealed to.
+ * @param generation - `desired_state.generation` of the frame carrying it.
+ * @returns E.g. `roundhouse-box:v1:registry-upstream:node_1:42`.
+ */
+export function registryUpstreamAad(nodeId: string, generation: number): string {
+  return `${boxInfo("registry-upstream")}:${nodeId}:${generation}`;
+}
+
+/**
+ * AAD of presigned part URLs (`parts_sealed` of `backup_job`,
+ * `backup_parts` and `volume_copy_out`).
+ *
+ * @param nodeId - Node the box is sealed to.
+ * @param backupId - The backup the parts belong to (`bak_…`).
+ * @returns E.g. `roundhouse-box:v1:backup-parts:node_1:bak_1`.
+ */
+export function backupPartsAad(nodeId: string, backupId: string): string {
+  return `${boxInfo("backup-parts")}:${nodeId}:${backupId}`;
+}
+
+/**
+ * AAD of a restore's download URL and age identity (`secrets_sealed` of
+ * `restore_job` and `volume_copy_in`).
+ *
+ * @param nodeId - Node the box is sealed to.
+ * @param restoreId - `restore_job.restore_id`, or `volume_copy_in.migration_id`.
+ * @returns E.g. `roundhouse-box:v1:restore:node_1:rst_1`.
+ */
+export function restoreSecretsAad(nodeId: string, restoreId: string): string {
+  return `${boxInfo("restore")}:${nodeId}:${restoreId}`;
+}
+
+/**
+ * AAD of a query's database credential (`db_query.credential_sealed`).
+ *
+ * @param nodeId - Node the box is sealed to.
+ * @param requestId - `db_query.request_id`.
+ * @returns E.g. `roundhouse-box:v1:db-credential:node_1:q_1`.
+ */
+export function dbCredentialAad(nodeId: string, requestId: string): string {
+  return `${boxInfo("db-credential")}:${nodeId}:${requestId}`;
+}
+
+/**
+ * AAD of a certificate's private key (`cert_sync.upserts[].key_sealed`).
+ * Binding the chain's digest stops a key being paired with another chain.
+ *
+ * @param nodeId - Node the box is sealed to.
+ * @param certId - The certificate (`cer_…`).
+ * @param sha256 - `upserts[].sha256`, hex SHA-256 of `cert_pem`.
+ * @returns E.g. `roundhouse-box:v1:cert-key:node_1:cer_1:ab…`.
+ */
+export function certKeyAad(nodeId: string, certId: string, sha256: string): string {
+  return `${boxInfo("cert-key")}:${nodeId}:${certId}:${sha256}`;
 }
 
 const Base64Key32 = z.string().regex(/^[A-Za-z0-9+/]{43}=$/, "expected a base64 32-byte key");
@@ -155,6 +260,86 @@ export const SealedBuildSecretsSchema = z.object({
 
 /** Plaintext of `BuildJob.build_secrets_sealed`. */
 export type SealedBuildSecrets = z.infer<typeof SealedBuildSecretsSchema>;
+
+/** Plaintext of `desired_state.mesh.psks_sealed`: one 32-byte preshared key per peer node. */
+export const SealedMeshPsksSchema = z.object({
+  psks: z
+    .record(z.string().regex(NODE_ID_RE, "expected a node id"), Base64Key32)
+    .refine((m) => Object.keys(m).length <= MAX_MESH_PEERS, {
+      message: `at most ${MAX_MESH_PEERS} preshared keys`,
+    }),
+});
+
+/** Plaintext of `desired_state.mesh.psks_sealed`. */
+export type SealedMeshPsks = z.infer<typeof SealedMeshPsksSchema>;
+
+/** Plaintext of `desired_state.registry.upstream.password_sealed`. */
+export const SealedRegistryUpstreamSchema = z.object({ password: boundedString(4096, 1) });
+
+/** Plaintext of `desired_state.registry.upstream.password_sealed`. */
+export type SealedRegistryUpstream = z.infer<typeof SealedRegistryUpstreamSchema>;
+
+/** Presigned object-storage URL. Only ever inside a sealed box. */
+export const PresignedUrlString = z
+  .string()
+  .max(MAX_PRESIGNED_URL_BYTES)
+  .regex(PRESIGNED_URL_RE, "expected an http(s) URL");
+
+/** One presigned `UploadPart` URL. */
+export const BackupPartUrlSchema = z.object({
+  part_number: z.number().int().min(1).max(MAX_BACKUP_PARTS),
+  url: PresignedUrlString,
+});
+
+/** One presigned `UploadPart` URL. */
+export type BackupPartUrl = z.infer<typeof BackupPartUrlSchema>;
+
+/**
+ * Plaintext of `parts_sealed` (`backup_job`, `backup_parts`,
+ * `volume_copy_out`): consecutive presigned part URLs, ascending.
+ */
+export const SealedBackupPartsSchema = z.object({
+  parts: z
+    .array(BackupPartUrlSchema)
+    .min(1)
+    .max(MAX_BACKUP_PARTS_PER_FRAME)
+    .refine((ps) => ps.every((p, i) => i === 0 || p.part_number === ps[i - 1]!.part_number + 1), {
+      message: "part numbers must be consecutive and ascending",
+    }),
+});
+
+/** Plaintext of `parts_sealed`. */
+export type SealedBackupParts = z.infer<typeof SealedBackupPartsSchema>;
+
+/** Plaintext of `secrets_sealed` (`restore_job`, `volume_copy_in`). */
+export const SealedRestoreSecretsSchema = z.object({
+  /** Presigned `GET` of the encrypted backup object. */
+  download_url: PresignedUrlString,
+  /** The project's age identity that decrypts it. */
+  age_identity: z.string().regex(AGE_IDENTITY_RE, "expected an age identity"),
+});
+
+/** Plaintext of `secrets_sealed`. */
+export type SealedRestoreSecrets = z.infer<typeof SealedRestoreSecretsSchema>;
+
+/** Plaintext of `db_query.credential_sealed`: the principal the agent connects as. */
+export const SealedDbCredentialSchema = z.object({
+  username: boundedString(256, 1),
+  password: boundedString(4096, 1),
+});
+
+/** Plaintext of `db_query.credential_sealed`. */
+export type SealedDbCredential = z.infer<typeof SealedDbCredentialSchema>;
+
+/** Plaintext of `cert_sync.upserts[].key_sealed`: the PEM private key. */
+export const SealedCertKeySchema = z.object({
+  key_pem: boundedString(MAX_CERT_KEY_PEM_BYTES, 1).refine((k) => k.startsWith("-----BEGIN "), {
+    message: "expected a PEM private key",
+  }),
+});
+
+/** Plaintext of `cert_sync.upserts[].key_sealed`. */
+export type SealedCertKey = z.infer<typeof SealedCertKeySchema>;
 
 // -----------------------------------------------------------------------------
 // Keys

@@ -1,0 +1,20 @@
+{
+  "type": "volume_status",
+  "volumes": [
+    {
+      "volume_id": "vol_01JDDDDDDDDDDDDDDDDDDDDDDD",
+      "state": "ready",
+      "size_bytes": 5368709120,
+      "used_bytes": 734003200,
+      "quota": "loop"
+    },
+    {
+      "volume_id": "vol_01JDDDDDDDDDDDDDDDDDDDDDDE",
+      "state": "orphaned",
+      "size_bytes": 1073741824,
+      "used_bytes": 1048576,
+      "quota": "loop",
+      "message": "not in desired state since generation 19"
+    }
+  ]
+}

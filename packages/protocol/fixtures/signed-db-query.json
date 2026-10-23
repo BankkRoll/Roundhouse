@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"db_query\",\"id\":\"msg_fixture_db_query\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":1700000060000,\"request_id\":\"q_01JIIIIIIIIIIIIIIIIIIIIIII\",\"workload_id\":\"wl_01JDDDDDDDDDDDDDDDDDDDDDDD\",\"engine\":\"postgres\",\"credential_sealed\":{\"v\":1,\"kid\":\"f35e5616160a30bf\",\"epk\":\"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=\",\"ct\":\"5n3yEqw/hisWS+dycS9D95hvF5peycMC+SdsUqpeYcDO1Bly07ZF2UJhI5Wk2ys52vEs7KIBuvFZrif+ZXDuQlSgHoRraLRJM01OMqg=\"},\"mode\":\"read\",\"op\":{\"type\":\"raw\",\"statement\":\"SELECT id, name, avatar FROM users WHERE id = $1 OR name = $2\",\"params\":[\"1\",null]},\"max_rows\":100,\"max_bytes\":458752,\"timeout_ms\":30000}",
+    "sig": "zyBfrRyRGpx2bpiui3WMHqhgJKY7+QKWWVNbtT0cMfCFyK4h58DeXfBw+jolSL1u2PFsr+qvTMZITjHrVNZkDw=="
+  }
+}

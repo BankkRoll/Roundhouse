@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"backup_parts\",\"id\":\"msg_fixture_backup_parts\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":1700000060000,\"backup_id\":\"bak_01JGGGGGGGGGGGGGGGGGGGGGGG\",\"parts_sealed\":{\"v\":1,\"kid\":\"f35e5616160a30bf\",\"epk\":\"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=\",\"ct\":\"2rlRPSjgQDY7aVJxXCzRWoDE7BsaRcWxQZgoYSozAGWsG3mSrMlkxzMb5wNu+nnwSqUBPJN7TTBvpJuifPLzSKztIO66ekxPo7Yfe3yxwjTFEkW4bbSIgRm54gqQMKfL/qVOmXopL2h6XRLRcGYUBem7hsiQlJdE6uHaHCwqaPHtTWzwdTNBjRxzm50RKk0RHmRJyZbHaLAwUfTay3wONP1qDQovSquHWZj25AkzvH+elm1vXZP2Ist697eKjEpmOxqfbwXh1kyo/M+wrcC2sMQIzFTS14I9/qQHdHN9LTrVJDTdWDFx0NUQW+lVAgJaBuGVVeMckb4WPemv1+q5/FM1kA4v/w5bc16v7ixKUkFctFfFlxIj6zmpLgk6qhMVdfTobFpX8cHvQbMtwk9KxZDYEdn0NuJt3DMyX5oyv6sjGJOj5PxV2Zpc2Uyq6STjjwiRCiVsZSVjG7nJalVrakfyT5N69sZJ20yNM2GK+EENa2EIvps8TIN+X2ZoEkmzGhciMlyhuQOIPlaGOHiJr62rJxtRmjBVX0tBMQq8mqquGTHxkTnI8YTh2eUCWnF/R3EnfCRGlkL9E47iKz0K4WYx1XqIHwnMjH+VkNDvpqvfF9gQ/pQdBChAWVi/LZn3V+t8KupSDm5A/jCXDcVfjcT3RTxKxKnS0a8awTQwJoX0E+GRuLAmuEIrggWrdPg9xRRg2ssnI9Fi4KW2l/7M\"}}",
+    "sig": "evzGymKFhXbdHYrw63MGJ8PRuAjJ1O8goBWlY1qufpWJIA8WCLZS3rMhgrTXCc0m7SKKzaR8TfIbOoSjw0cYCA=="
+  }
+}

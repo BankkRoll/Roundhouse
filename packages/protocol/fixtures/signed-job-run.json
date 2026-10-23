@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"job_run\",\"id\":\"msg_fixture_job_run\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":1700000060000,\"run_id\":\"crn_01JFFFFFFFFFFFFFFFFFFFFFFF\",\"workload\":{\"id\":\"wl_01JFFFFFFFFFFFFFFFFFFFFFFF\",\"kind\":\"job\",\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"service_id\":\"svc_01JFFFFFFFFFFFFFFFFFFFFFFF\",\"deployment_id\":\"dep_01JFFFFFFFFFFFFFFFFFFFFFFF\",\"replica\":0,\"image\":\"busybox:1.37\",\"command\":[\"sh\",\"-c\",\"echo \\\"$GREETING\\\"\"],\"env_sealed\":{\"v\":1,\"kid\":\"f35e5616160a30bf\",\"epk\":\"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=\",\"ct\":\"z0/sahSgFQUANd0MZ5oI8feq1Upk2+rGhv+rLH7Pjz/LoVWTB/QYEG3jsaDUkCgaZhBpjdyyP3XKV6cuHittW1s=\"},\"ports\":[],\"routes\":[],\"healthcheck\":null,\"resources\":{\"cpu_millis\":250,\"memory_mb\":128,\"pids\":64},\"restart\":{\"policy\":\"never\",\"max_retries\":0},\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"labels\":{},\"drain_s\":0,\"spec_hash\":\"9532dce8d690069b760b1f64cdfbc920be6c3b68210ed32710e2d41ae4e3b107\",\"mesh_ip\":\"10.200.1.11\",\"private_dns\":true},\"timeout_s\":3600,\"kill_grace_s\":10}",
+    "sig": "QpgoBRu1kIipKXBdVTKsZLNNccLxkRQ3OtYuUaQe42ESd/qD2PSBU2KJhnR12rOuKECyHSYU84wpEdKMbUIcAQ=="
+  }
+}

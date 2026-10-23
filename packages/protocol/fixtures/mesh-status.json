@@ -1,0 +1,22 @@
+{
+  "type": "mesh_status",
+  "epoch": 3,
+  "peers": [
+    {
+      "node_id": "node_peer_a",
+      "last_handshake_ms": 1700000000000,
+      "endpoint": "203.0.113.20:51820",
+      "rx_bytes": 1048576,
+      "tx_bytes": 524288
+    },
+    {
+      "node_id": "node_peer_b",
+      "last_handshake_ms": null,
+      "endpoint": null,
+      "rx_bytes": 0,
+      "tx_bytes": 0
+    }
+  ],
+  "ready": false,
+  "error": "no handshake with node_peer_b for 120 s"
+}

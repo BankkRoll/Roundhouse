@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -74,6 +75,273 @@ const (
 	maxImageRepository    = 512
 	maxRegistryAuthServer = 260
 )
+
+// Phase 2–3 limits (ADR 0015), mirroring limits.ts.
+const (
+	// MaxNextSigningKeys is the most successor keys welcome.next_keys and
+	// key_announce carry.
+	MaxNextSigningKeys = 2
+	// MaxPinnedSigningKeys is the most kids hello.pinned_kids reports.
+	MaxPinnedSigningKeys = 3
+
+	// MaxVolumesPerNode is the most volumes one desired_state lists.
+	MaxVolumesPerNode = 128
+	// MaxMountsPerWorkload is the most mounts per workload (one in Phase 2).
+	MaxMountsPerWorkload = 1
+	// MinVolumeSizeMB is the smallest volume quota.
+	MinVolumeSizeMB = 256
+	// MaxVolumeSizeMB is the largest volume quota (1 TiB).
+	MaxVolumeSizeMB = 1_048_576
+	// MaxMountPathBytes is the longest container mount path.
+	MaxMountPathBytes = 1024
+	// MaxPublishCIDRs is the most sources a published port admits.
+	MaxPublishCIDRs = 64
+	// MaxBackupDatabases is the most databases a dump may name.
+	MaxBackupDatabases = 64
+	// MaxBackupParts is the most parts of one multipart object.
+	MaxBackupParts = 10_000
+	// MaxBackupJobParts is the most part URLs in backup_job.
+	MaxBackupJobParts = 16
+	// MaxBackupPartsPerFrame is the most part URLs in one backup_parts.
+	MaxBackupPartsPerFrame = 32
+	// MaxBackupProgressParts is the most parts one backup_progress reports.
+	MaxBackupProgressParts = 256
+	// MinBackupPartBytes is R2's multipart minimum.
+	MinBackupPartBytes = 5 * 1024 * 1024
+	// MaxBackupPartBytes is R2's and S3's 5 GiB part maximum.
+	MaxBackupPartBytes = 5 * 1024 * 1024 * 1024
+	// BackupPartAlignBytes divides every backup part size.
+	BackupPartAlignBytes = 1024 * 1024
+	// MaxPresignedURLBytes is the longest presigned URL.
+	MaxPresignedURLBytes = 4096
+	// MaxBackupTimeoutS is the longest backup or restore (12 h).
+	MaxBackupTimeoutS = 43_200
+	// MaxDBQueryRows is the most rows a db_query returns.
+	MaxDBQueryRows = 1000
+	// MaxDBQueryResultBytes bounds a db_query_result's encoded rows.
+	MaxDBQueryResultBytes = 458_752
+	// MaxDBQueryTimeoutMS is the longest db_query.
+	MaxDBQueryTimeoutMS = 30_000
+	// MaxDBStatementBytes is the longest raw statement or command document.
+	MaxDBStatementBytes = 64 * 1024
+	// MaxDBParams is the most SQL parameters or Redis arguments.
+	MaxDBParams = 256
+	// MaxDBColumns is the most result columns.
+	MaxDBColumns = 1024
+	// MaxDBIdentifierBytes is the longest database identifier.
+	MaxDBIdentifierBytes = 256
+
+	// MaxMeshPeers is the most WireGuard peers of one node.
+	MaxMeshPeers = 253
+	// MaxMeshAddresses is the most mesh IPs one desired_state.mesh lists.
+	MaxMeshAddresses = 4096
+	// MaxMeshForwardPairs is the most CIDR pairs one relay forwards.
+	MaxMeshForwardPairs = 4096
+	// MaxMeshAllowedIPs is the most allowed_ips of one peer.
+	MaxMeshAllowedIPs = 256
+	// MaxUpstreams is the most upstreams of one route workload.
+	MaxUpstreams = 256
+	// MaxRegistryPullUsers is the most htpasswd users of a primary registry.
+	MaxRegistryPullUsers = 254
+
+	// MinJobTimeoutS is the shortest job_run.timeout_s.
+	MinJobTimeoutS = 10
+	// MaxJobTimeoutS is the longest job_run.timeout_s (24 h).
+	MaxJobTimeoutS = 86_400
+	// MaxMetricSamples is the most container samples per metrics frame.
+	MaxMetricSamples = 160
+	// MinMetricsIntervalMS is the shortest sampling interval.
+	MinMetricsIntervalMS = 1000
+	// MaxMetricsIntervalMS is the longest sampling interval.
+	MaxMetricsIntervalMS = 300_000
+	// MaxCertificatesPerNode is the most certificates one manifest lists.
+	MaxCertificatesPerNode = 4096
+	// MaxCertUpsertsPerFrame is the most bodies in one cert_sync.
+	MaxCertUpsertsPerFrame = 32
+	// MaxCertIDsPerFrame is the most IDs in cert_sync.removes or cert_ack.
+	MaxCertIDsPerFrame = 256
+	// MaxCertHostnames is the most hostnames one certificate covers.
+	MaxCertHostnames = 100
+	// MaxCertPEMBytes is the longest certificate chain.
+	MaxCertPEMBytes = 64 * 1024
+	// MaxCertKeyPEMBytes is the longest private key.
+	MaxCertKeyPEMBytes = 16 * 1024
+	// MaxManagedHosts is the most ingress.managed_hosts.
+	MaxManagedHosts = 4096
+	// MaxIngressSources is the most ingress.allowed_sources.
+	MaxIngressSources = 256
+	// MaxHSTSMaxAgeS is the longest HSTS max-age (two years).
+	MaxHSTSMaxAgeS = 63_072_000
+)
+
+// Phase 2–3 formats, mirroring limits.ts.
+var (
+	wildcardHostnameRE = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	signingKeyIDRE     = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	nodeIDRE           = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	requestIDRE        = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	dbNameRE           = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_$-]{0,63}$`)
+	ageRecipientRE     = regexp.MustCompile(`^age1[02-9ac-hj-np-z]{58}$`)
+	ageIdentityRE      = regexp.MustCompile(`^AGE-SECRET-KEY-1[02-9AC-HJ-NP-Z]{58}$`)
+	bcryptRE           = regexp.MustCompile(`^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$`)
+	registryUserRE     = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+	etagRE             = regexp.MustCompile(`^[\x21-\x7e]{1,256}$`)
+	presignedURLRE     = regexp.MustCompile(`^https?://[^\s/?#]+/[^\s]*$`)
+	mountPathRE        = regexp.MustCompile(`^/[A-Za-z0-9._@%+=:,/-]*$`)
+	ipv4RE             = regexp.MustCompile(`^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$`)
+	hexGroupRE         = regexp.MustCompile(`^[0-9a-fA-F]{1,4}$`)
+	prefixLenRE        = regexp.MustCompile(`^(0|[1-9][0-9]{0,2})$`)
+	portTextRE         = regexp.MustCompile(`^[1-9][0-9]{0,4}$`)
+	hostLabelsRE       = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+	sha256HexRE        = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	uidGidRE           = regexp.MustCompile(`^(0|[1-9][0-9]{0,9}):(0|[1-9][0-9]{0,9})$`)
+	scanCursorRE       = regexp.MustCompile(`^[0-9]{1,20}$`)
+	registryURLRE      = regexp.MustCompile(`^https?://[^\s/?#]+/?$`)
+	httpsURLRE         = regexp.MustCompile(`^https://[^\s/?#]+(/[^\s?#]*)?$`)
+	ingressHostRE      = regexp.MustCompile(`^[a-z0-9.-]+$`)
+	meshListenRE       = regexp.MustCompile(`^[0-9.]+:5000$`)
+)
+
+// ReservedMountPaths are container paths a volume may never cover: kernel
+// filesystems and the agent's mount_as_file secrets directory.
+var ReservedMountPaths = []string{"/proc", "/sys", "/dev", "/run/secrets"}
+
+// IsSafeMountPath reports whether path is a safe volume mount target:
+// absolute, no ".", ".." or empty segment, no trailing "/", not "/", and not
+// inside [ReservedMountPaths]. Mirrors isSafeMountPath in TypeScript.
+func IsSafeMountPath(path string) bool {
+	if len(path) > MaxMountPathBytes || !mountPathRE.MatchString(path) || path == "/" {
+		return false
+	}
+	for _, s := range strings.Split(path[1:], "/") {
+		if s == "" || s == "." || s == ".." {
+			return false
+		}
+	}
+	for _, r := range ReservedMountPaths {
+		if path == r || strings.HasPrefix(path, r+"/") {
+			return false
+		}
+	}
+	return true
+}
+
+// IsIPv4 reports whether s is a dotted-quad IPv4 address without leading
+// zeros. Mirrors isIPv4 in TypeScript.
+func IsIPv4(s string) bool { return ipv4RE.MatchString(s) }
+
+// IsIPv6 reports whether s is an IPv6 address in RFC 4291 text form, without
+// a zone. It is hand-written rather than net/netip so it agrees exactly
+// with the TypeScript isIPv6; fixtures/formats.json pins both.
+func IsIPv6(s string) bool {
+	if len(s) < 2 || len(s) > 45 {
+		return false
+	}
+	halves := strings.Split(s, "::")
+	if len(halves) > 2 {
+		return false
+	}
+	groups := func(part string) []string {
+		if part == "" {
+			return nil
+		}
+		return strings.Split(part, ":")
+	}
+	all := groups(halves[0])
+	if len(halves) == 2 {
+		all = append(all, groups(halves[1])...)
+	}
+	count := len(all)
+	if count > 0 && strings.Contains(all[count-1], ".") {
+		last := all[count-1]
+		if !strings.HasSuffix(s, last) || !IsIPv4(last) {
+			return false
+		}
+		all = all[:count-1]
+		count++
+	}
+	for _, g := range all {
+		if !hexGroupRE.MatchString(g) {
+			return false
+		}
+	}
+	if len(halves) == 2 {
+		return count <= 7
+	}
+	return count == 8
+}
+
+// IsCIDR reports whether s is an IPv4 or IPv6 CIDR block. Host bits may be
+// set. Mirrors isCidr in TypeScript.
+func IsCIDR(s string) bool {
+	addr, bits, ok := strings.Cut(s, "/")
+	if !ok || !prefixLenRE.MatchString(bits) {
+		return false
+	}
+	n, _ := strconv.Atoi(bits)
+	if IsIPv4(addr) {
+		return n <= 32
+	}
+	return IsIPv6(addr) && n <= 128
+}
+
+// IsIPv4CIDR reports whether s is an IPv4 CIDR block. Mirrors isIPv4Cidr in
+// TypeScript.
+func IsIPv4CIDR(s string) bool {
+	addr, _, _ := strings.Cut(s, "/")
+	return IsCIDR(s) && IsIPv4(addr)
+}
+
+func ipv4ToUint(ip string) uint32 {
+	var n uint32
+	for _, o := range strings.Split(ip, ".") {
+		v, _ := strconv.Atoi(o)
+		n = n<<8 | uint32(v)
+	}
+	return n
+}
+
+// IPv4InCIDR reports whether ip lies inside the IPv4 block cidr; false when
+// either is malformed. Mirrors ipv4InCidr in TypeScript.
+func IPv4InCIDR(ip, cidr string) bool {
+	if !IsIPv4(ip) || !IsIPv4CIDR(cidr) {
+		return false
+	}
+	base, bits, _ := strings.Cut(cidr, "/")
+	n, _ := strconv.Atoi(bits)
+	if n == 0 {
+		return true
+	}
+	mask := ^uint32(0) << (32 - n)
+	return ipv4ToUint(ip)&mask == ipv4ToUint(base)&mask
+}
+
+// IsHostPort reports whether s is "host:port" with a lowercase hostname, an
+// IPv4 address or a bracketed IPv6 address, and a port 1–65535 without
+// leading zeros. Mirrors isHostPort in TypeScript.
+func IsHostPort(s string) bool {
+	colon := strings.LastIndex(s, ":")
+	if colon <= 0 || len(s) > MaxHostnameLength+6 {
+		return false
+	}
+	host, port := s[:colon], s[colon+1:]
+	if !portTextRE.MatchString(port) {
+		return false
+	}
+	if p, _ := strconv.Atoi(port); p > 65535 {
+		return false
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		return IsIPv6(host[1 : len(host)-1])
+	}
+	return IsIPv4(host) || hostLabelsRE.MatchString(host)
+}
+
+// IsRouteHostname reports whether s is a lowercase hostname, optionally with
+// one leading "*." label (ADR 0009). Mirrors isRouteHostname in TypeScript.
+func IsRouteHostname(s string) bool {
+	return len(s) <= MaxHostnameLength && wildcardHostnameRE.MatchString(s)
+}
 
 // String formats, mirroring the *_RE constants in limits.ts. All are RE2
 // compatible, so both sides use the same patterns.

@@ -1,0 +1,5 @@
+{
+  "type": "logs",
+  "source": { "type": "task", "task_id": "bak_01JGGGGGGGGGGGGGGGGGGGGGGG" },
+  "lines": [{ "ts": 1700000000200, "stream": "system", "text": "pg_dump app: 104857600 bytes" }]
+}

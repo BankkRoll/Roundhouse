@@ -1,0 +1,9 @@
+{
+  "type": "logs",
+  "source": {
+    "type": "job",
+    "run_id": "crn_01JFFFFFFFFFFFFFFFFFFFFFFF",
+    "workload_id": "wl_01JFFFFFFFFFFFFFFFFFFFFFFF"
+  },
+  "lines": [{ "ts": 1700000000100, "stream": "stdout", "text": "hello from cron" }]
+}

@@ -1,0 +1,24 @@
+{
+  "type": "hello",
+  "protocol_version": 6,
+  "node_id": "node_fixture",
+  "agent_version": "0.5.0",
+  "os": "ubuntu 24.04",
+  "arch": "arm64",
+  "kernel": "6.8.0-45-generic",
+  "docker_version": "29.1.0",
+  "hardware": { "cpu_cores": 8, "mem_bytes": 17179869184, "disk_bytes": 171798691840 },
+  "capabilities": { "docker": true, "gvisor": false, "builder": false, "ingress": true },
+  "observed_generation": 21,
+  "mesh": {
+    "public_key": "oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=",
+    "listen_port": 51820,
+    "mode": "kernel",
+    "nat": "public",
+    "endpoint_override": null,
+    "docker_firewall": "nftables",
+    "accept_fwmark": true
+  },
+  "volume_quota": "loop",
+  "pinned_kids": ["fixture", "k2"]
+}

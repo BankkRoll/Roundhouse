@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"cert_sync\",\"id\":\"msg_fixture_cert_sync\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":1700000060000,\"upserts\":[{\"id\":\"cer_01JJJJJJJJJJJJJJJJJJJJJJJJ\",\"hostnames\":[\"*.apps.example.com\",\"apps.example.com\"],\"cert_pem\":\"-----BEGIN CERTIFICATE-----\\nMIIBfixtureLEAF\\n-----END CERTIFICATE-----\\n-----BEGIN CERTIFICATE-----\\nMIIBfixtureINTERMEDIATE\\n-----END CERTIFICATE-----\\n\",\"sha256\":\"1438fd4397ae9f1c8b3ff12d857ff4f96fde94f148462c16eace7809e4033a6b\",\"key_sealed\":{\"v\":1,\"kid\":\"f35e5616160a30bf\",\"epk\":\"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=\",\"ct\":\"x56QjNpY9X4APPFnzLXlfJ1v2Qol5xDSdUMWwWFboAborjHy1uWi1NzLBDIFPiDOcCEeaBb1dfmEYLlZdW6CELEz1f5NolwXImm6VojzrrNazh1Zv2EfLyS7kZmBZrwkekXfZtpGxcg=\"},\"not_after\":1707776000000}],\"removes\":[\"cer_01JJJJJJJJJJJJJJJJJJJJJJJK\"]}",
+    "sig": "+/qakF/5Sw497Xwe1Qj0Ewu7k7Rm8gsIS3DPETH4PsTjqNQSI/jY/1Y3lS150S4Jv3g7G8tJr4d5r0TBiknuCA=="
+  }
+}

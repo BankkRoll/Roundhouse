@@ -93,6 +93,11 @@ describe("computeSpecHash", () => {
         epk: "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
         ct: "BBBB",
       },
+      rollout: "stop_first",
+      stop_grace_s: 60,
+      publish_allowed_cidrs: ["10.0.0.0/8"],
+      mesh_ip: "10.200.1.10",
+      upstreams: [{ ip: "10.200.2.10", port: 3000 }],
     }[field];
     expect(await computeSpecHash({ ...spec, [field]: changed })).toBe(await computeSpecHash(spec));
     expect(specHashInput(spec)).not.toContain(`"${field}"`);
@@ -107,6 +112,20 @@ describe("computeSpecHash", () => {
     ["restart", { restart: { policy: "never", max_retries: 0 } }],
     ["labels", { labels: { a: "b" } }],
     ["replica", { replica: 1 }],
+    ["mounts", { mounts: [{ volume_id: "vol_1", path: "/data", read_only: false }] }],
+    ["private_dns", { private_dns: true }],
+    [
+      "ports[].publish",
+      {
+        ports: [
+          {
+            container_port: 80,
+            protocol: "http",
+            publish: { host_port: 20000, host_ip: "0.0.0.0" },
+          },
+        ],
+      },
+    ],
   ])("changes when %s changes", async (_name, overrides) => {
     expect(await computeSpecHash({ ...spec, ...overrides })).not.toBe(await computeSpecHash(spec));
   });
