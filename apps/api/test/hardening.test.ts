@@ -312,9 +312,7 @@ describe("access: checks go through resolveAccess with the project in scope", ()
 
     // The default rules still let deployers deploy; this environment allows project admins only.
     const adminsOnly = { roles: [], userIds: [], teamIds: [] };
-    await env.DB.prepare(
-      "UPDATE environments SET protected = 1, protection_rules = ? WHERE id = ?",
-    )
+    await env.DB.prepare("UPDATE environments SET protected = 1, protection_rules = ? WHERE id = ?")
       .bind(
         JSON.stringify({ deploy: adminsOnly, config: adminsOnly, variables: adminsOnly }),
         s.envId,
