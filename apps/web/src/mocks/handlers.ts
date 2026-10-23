@@ -39,6 +39,7 @@ import { type DbAuditEntry, type DbInvite, type DbMembership, db, nextId } from 
 import { deployHandlers } from "./deploy-handlers";
 import { domainHandlers } from "./domains-mock";
 import { providerHandlers } from "./providers-handlers";
+import { securityHandlers } from "./security-handlers";
 import { templateHandlers } from "./templates-handlers";
 
 export { apiError } from "./common";
@@ -730,4 +731,5 @@ export const handlers = [
   ...providerHandlers,
   ...templateHandlers,
   ...changeHandlers,
+  ...securityHandlers,
 ];

@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { http } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { external } from "../../lib/external";
 import { db, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
 import { apiError } from "../../mocks/handlers";
 import { server } from "../../mocks/server";
@@ -106,9 +107,7 @@ describe("platform settings", () => {
   it("lets owners choose how long logs are kept, and says where changes are recorded", async () => {
     const { user } = renderApp(PLATFORM);
     const form = await screen.findByRole("form", { name: "Logs" });
-    expect(
-      screen.getByText(/recorded in the audit log of every workspace you own/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/recorded in the instance audit log/)).toBeInTheDocument();
     const days = within(form).getByLabelText("Keep logs for (days)");
     expect(days).toHaveValue(7);
     const save = within(form).getByRole("button", { name: "Save" });
@@ -128,14 +127,28 @@ describe("platform settings", () => {
     });
   });
 
-  it("shows the GitHub App, its installations and the install link", async () => {
-    renderApp(PLATFORM);
+  it("shows the GitHub App and its installations, and installs through a claim", async () => {
+    const assign = vi.spyOn(external, "assign").mockImplementation(() => {});
+    db.deploy.github.installations.push({
+      ...db.deploy.github.installations[0]!,
+      id: "ghi_legacy",
+      account_login: "legacy-org",
+      verified: false,
+    });
+    const { user } = renderApp(PLATFORM);
     const installations = await screen.findByRole("list", { name: "Installations" });
     expect(installations).toHaveTextContent("acme");
-    expect(screen.getByRole("link", { name: "Install on GitHub" })).toHaveAttribute(
-      "href",
-      db.deploy.github.app?.install_url,
+    const items = within(installations).getAllByRole("listitem");
+    expect(within(items[0]!).queryByText("Unverified")).not.toBeInTheDocument();
+    expect(within(items[1]!).getByText("Unverified")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Install on GitHub" }));
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    const url = new URL(assign.mock.calls[0]![0]);
+    expect(`${url.origin}${url.pathname}`).toBe(
+      `${db.deploy.github.app?.html_url}/installations/new`,
     );
+    const state = url.searchParams.get("state");
+    expect(db.deploy.github.states.map((row) => row.state)).toContain(state);
   });
 
   it("creates the GitHub App through the manifest flow", async () => {
@@ -167,7 +180,7 @@ describe("platform settings", () => {
     expect(
       await screen.findByRole("heading", { name: "Instance settings are for owners" }),
     ).toBeInTheDocument();
-    expect(await screen.findByRole("link", { name: "Install on GitHub" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Install on GitHub" })).toBeInTheDocument();
     expect(screen.queryByRole("form", { name: "Logs" })).not.toBeInTheDocument();
   });
 
@@ -196,6 +209,8 @@ describe("GitHub setup landing page", () => {
     ["error=authorization_failed", "Couldn't check your GitHub access"],
     ["error=installation_not_accessible", "That installation isn't yours to add"],
     ["error=link_used", "This install link was already used"],
+    ["error=link_expired", "This install link expired"],
+    ["error=not_account_admin", "You don't administer that GitHub account"],
     ["", "GitHub setup didn't finish"],
   ])("explains ?%s", async (query, title) => {
     renderApp(`/settings/github?${query}`);

@@ -2,7 +2,9 @@
  * The single HTTP client for the control-plane API, including the two Better Auth
  * endpoints the dashboard uses. Every request goes through {@link request}, which sends
  * the session cookie, encodes JSON, and turns non-2xx (or unparseable) responses into
- * {@link ApiError}s.
+ * {@link ApiError}s. A request refused because the session is no longer fresh
+ * (`reauth_required`, ADR 0014) is retried once after the handler registered with
+ * {@link setReauthHandler} confirms the user's password.
  *
  * @module
  */
@@ -78,6 +80,46 @@ export function isApiError(error: unknown, match?: number | string): error is Ap
 export function errorMessage(error: unknown, fallback = "Something went wrong."): string {
   if (error instanceof Error && error.message) return error.message;
   return fallback;
+}
+
+/**
+ * Asks the user to confirm their password, resolving `true` once
+ * `POST /v1/auth/reauth` succeeded and `false` when they cancelled.
+ */
+export type ReauthHandler = () => Promise<boolean>;
+
+let reauthHandler: ReauthHandler | null = null;
+let reauthInFlight: Promise<boolean> | null = null;
+
+/**
+ * Registers what {@link request} does when the API asks for a fresh session.
+ * Concurrent refusals share one prompt.
+ *
+ * @param handler - The prompt, or `null` to unregister.
+ * @returns Unregisters the handler.
+ */
+export function setReauthHandler(handler: ReauthHandler | null): () => void {
+  reauthHandler = handler;
+  return () => {
+    if (reauthHandler === handler) reauthHandler = null;
+  };
+}
+
+/** A refusal the user can fix by re-entering their password (never an API token's). */
+function needsReauth(error: ApiError): boolean {
+  return (
+    error.status === 403 &&
+    error.code === "reauth_required" &&
+    error.details[0]?.code === "session_stale"
+  );
+}
+
+async function promptReauth(): Promise<boolean> {
+  if (!reauthHandler) return false;
+  reauthInFlight ??= reauthHandler().finally(() => {
+    reauthInFlight = null;
+  });
+  return reauthInFlight;
 }
 
 /** Options for {@link request}. */
@@ -165,6 +207,20 @@ export async function request<T>(
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
   path: string,
   options: RequestOptions = {},
+): Promise<T> {
+  try {
+    return await send<T>(method, path, options);
+  } catch (error) {
+    if (!(error instanceof ApiError) || !needsReauth(error)) throw error;
+    if (!(await promptReauth())) throw error;
+    return send<T>(method, path, options);
+  }
+}
+
+async function send<T>(
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
+  path: string,
+  options: RequestOptions,
 ): Promise<T> {
   const headers: Record<string, string> = { accept: "application/json" };
   if (options.body !== undefined) headers["content-type"] = "application/json";

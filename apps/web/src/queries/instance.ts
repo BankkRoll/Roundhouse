@@ -1,6 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { deployApi } from "../lib/api/deploy-client";
 import type { GithubManifestBody, InstanceSettingsPatch } from "../lib/api/deploy-types";
+import { securityApi } from "../lib/api/security-client";
+import type { InstanceAuditQuery } from "../lib/api/security-types";
 import { queryKeys } from "./keys";
 
 /**
@@ -70,5 +72,57 @@ export function useGithubRepositories(workspaceId: string, enabled = true) {
 export function useCreateGithubManifest() {
   return useMutation({
     mutationFn: (body: GithubManifestBody) => deployApi.createGithubManifest(body),
+  });
+}
+
+/** Rows fetched per instance audit log page. */
+export const INSTANCE_AUDIT_PAGE_SIZE = 50;
+
+/** Filters of the instance audit log the page offers. */
+export type InstanceAuditFilters = Pick<InstanceAuditQuery, "action" | "actor_id">;
+
+/**
+ * Reads the instance audit log with cursor pagination. Instance admins only.
+ *
+ * @param filters - Action and actor to narrow to.
+ * @param enabled - Skip for callers without `instance:manage`.
+ * @returns An infinite query; call `fetchNextPage` to load older entries.
+ */
+export function useInstanceAuditLog(filters: InstanceAuditFilters, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.instanceAudit, filters],
+    queryFn: ({ pageParam, signal }) =>
+      securityApi.listInstanceAuditLogs(
+        { ...filters, cursor: pageParam ?? undefined, limit: INSTANCE_AUDIT_PAGE_SIZE },
+        signal,
+      ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor,
+    enabled,
+  });
+}
+
+/**
+ * Verifies the audit chain on demand.
+ *
+ * @returns A mutation resolving to the verification report.
+ */
+export function useVerifyAuditChain() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => securityApi.verifyAuditChain(),
+    // Verifying seals pending entries first, so listed hashes may have changed.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.instanceAudit }),
+  });
+}
+
+/**
+ * Starts claiming a GitHub installation for a workspace.
+ *
+ * @returns A mutation taking the workspace id and resolving to the install URL.
+ */
+export function useStartGithubClaim() {
+  return useMutation({
+    mutationFn: (workspaceId: string) => securityApi.startGithubClaim(workspaceId),
   });
 }
