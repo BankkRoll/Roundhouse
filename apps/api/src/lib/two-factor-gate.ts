@@ -88,7 +88,7 @@ export const twoFactorGate = createMiddleware<AppEnv>(async (c, next) => {
     return c.json(
       errorBody(
         "two_factor_required",
-        "Set up two-factor authentication under Preferences → Security before making changes",
+        "Set up two-factor authentication under Settings → Security before making changes",
       ),
       403,
     );

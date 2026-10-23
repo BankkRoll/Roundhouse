@@ -39,6 +39,7 @@ import { type DbAuditEntry, type DbInvite, type DbMembership, db, nextId } from 
 import { deployHandlers } from "./deploy-handlers";
 import { domainHandlers } from "./domains-mock";
 import { providerHandlers } from "./providers-handlers";
+import { securityHandlers } from "./security-handlers";
 import { templateHandlers } from "./templates-handlers";
 
 export { apiError } from "./common";
@@ -238,7 +239,7 @@ const phase0Handlers = [
       targetType: "workspace",
       targetId: workspace.id,
     });
-    db.setup = { needs_setup: false, master_key_configured: true };
+    db.setup = { needs_setup: false, master_key_configured: true, public_origin_configured: true };
     db.sessionUserId = userId;
     return HttpResponse.json({ user_id: userId, workspace_id: workspace.id }, { status: 201 });
   }),
@@ -250,12 +251,27 @@ const phase0Handlers = [
     if (!db.setup.master_key_configured) return masterKeyMissing();
     const body = await readJson(request);
     const email = typeof body.email === "string" ? body.email.toLowerCase() : "";
+    const lockedUntil = db.security.locked[email] ?? 0;
+    if (lockedUntil > Date.now()) {
+      const seconds = Math.ceil((lockedUntil - Date.now()) / 1000);
+      return HttpResponse.json(
+        {
+          code: "account_locked",
+          message: `Too many failed attempts. Try again in ${seconds} seconds.`,
+        },
+        { status: 429, headers: { "retry-after": String(seconds) } },
+      );
+    }
     const user = db.users.find((candidate) => candidate.email.toLowerCase() === email);
     if (!user || user.password !== body.password) {
       return HttpResponse.json(
         { code: "INVALID_EMAIL_OR_PASSWORD", message: "Invalid email or password" },
         { status: 401 },
       );
+    }
+    if (db.security.twoFactor[user.id]) {
+      db.security.challengeUserId = user.id;
+      return HttpResponse.json({ twoFactorRedirect: true, twoFactorMethods: ["totp"] });
     }
     db.sessionUserId = user.id;
     const { password: _password, ...publicUser } = user;
@@ -730,4 +746,5 @@ export const handlers = [
   ...providerHandlers,
   ...templateHandlers,
   ...changeHandlers,
+  ...securityHandlers,
 ];

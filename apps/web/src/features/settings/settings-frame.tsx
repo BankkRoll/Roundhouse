@@ -13,6 +13,7 @@ type SettingsPath =
   | "/w/$workspaceId/tokens"
   | "/w/$workspaceId/platform"
   | "/w/$workspaceId/mcp-clients"
+  | "/w/$workspaceId/security"
   | "/w/$workspaceId/preferences"
   | "/w/$workspaceId/preferences/shortcuts"
   | "/w/$workspaceId/preferences/accessibility";
@@ -67,6 +68,7 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
         </SettingsNavGroup>
       ) : null}
       <SettingsNavGroup label="Account">
+        <Item workspaceId={workspaceId} to="/w/$workspaceId/security" label="Security" />
         <Item workspaceId={workspaceId} to="/w/$workspaceId/mcp-clients" label="MCP clients" />
       </SettingsNavGroup>
       <SettingsNavGroup label="Preferences">

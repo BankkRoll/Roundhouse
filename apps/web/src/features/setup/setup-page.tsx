@@ -10,9 +10,11 @@ import { useSetupStatus } from "../../queries/setup";
 import { AddServerFlow } from "../servers/add-server-flow";
 import { AccountStep } from "./account-step";
 import { MasterKeyStep } from "./master-key-step";
+import { PublicOriginStep } from "./public-origin-step";
 import { StepIndicator } from "./step-indicator";
+import { TwoFactorStep } from "./two-factor-step";
 
-const STEPS = ["Master key", "Admin", "First server"] as const;
+const STEPS = ["Master key", "Admin", "Two-factor", "First server"] as const;
 
 /** Props for {@link SetupPage}. */
 export interface SetupPageProps {
@@ -21,7 +23,8 @@ export interface SetupPageProps {
 }
 
 /**
- * First-run wizard: configure MASTER_KEY, create the admin and workspace, add a server.
+ * First-run wizard: configure MASTER_KEY (and PUBLIC_ORIGIN), create the admin and
+ * workspace, turn on two-factor authentication, add a server.
  *
  * SECURITY: The suggested master key lives only in component state. It is never written
  * to storage, the URL, or logs.
@@ -37,7 +40,9 @@ export function SetupPage({ pollIntervalMs }: SetupPageProps = {}) {
   // on arrival rather than a later refetch.
   const [keyMissingOnArrival] = useState(() => status.data?.master_key_configured === false);
   const [checks, setChecks] = useState(0);
+  const [originChecks, setOriginChecks] = useState(0);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [twoFactorDone, setTwoFactorDone] = useState(false);
 
   const goToDashboard = (id: string) =>
     void navigate({ to: "/w/$workspaceId", params: { workspaceId: id } });
@@ -57,7 +62,7 @@ export function SetupPage({ pollIntervalMs }: SetupPageProps = {}) {
     );
   }
 
-  const step = workspaceId ? 3 : status.data.master_key_configured ? 2 : 1;
+  const step = workspaceId ? (twoFactorDone ? 4 : 3) : status.data.master_key_configured ? 2 : 1;
   const sawKeyStep = keyMissingOnArrival || checks > 0;
 
   if (step === 3 && workspaceId) {
@@ -65,6 +70,24 @@ export function SetupPage({ pollIntervalMs }: SetupPageProps = {}) {
       <AuthLayout
         width={560}
         above={<StepIndicator steps={STEPS} current={3} />}
+        title="Turn on two-factor authentication"
+        description="Admins need a second factor before they can change anything."
+      >
+        <TwoFactorStep onDone={() => setTwoFactorDone(true)} />
+        <div className="mt-4 flex justify-start border-t border-border pt-4">
+          <Button variant="ghost" size="sm" onClick={() => goToDashboard(workspaceId)}>
+            Skip for now
+          </Button>
+        </div>
+      </AuthLayout>
+    );
+  }
+
+  if (step === 4 && workspaceId) {
+    return (
+      <AuthLayout
+        width={560}
+        above={<StepIndicator steps={STEPS} current={4} />}
         title="Add your first server"
         description="Connect a machine for your apps to run on. You can also do this later from Servers."
       >
@@ -97,6 +120,26 @@ export function SetupPage({ pollIntervalMs }: SetupPageProps = {}) {
           stillMissing={checks > 0 && !status.isFetching}
           onCheckAgain={() => {
             setChecks((count) => count + 1);
+            void status.refetch();
+          }}
+        />
+      </AuthLayout>
+    );
+  }
+
+  if (status.data.public_origin_configured === false) {
+    return (
+      <AuthLayout
+        width={560}
+        above={<StepIndicator steps={STEPS} current={1} />}
+        title="Set the public URL"
+        description={`${PRODUCT_NAME} needs to know the address it is served from.`}
+      >
+        <PublicOriginStep
+          checking={status.isFetching}
+          stillMissing={originChecks > 0 && !status.isFetching}
+          onCheckAgain={() => {
+            setOriginChecks((count) => count + 1);
             void status.refetch();
           }}
         />

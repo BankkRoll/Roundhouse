@@ -34,6 +34,7 @@ import {
   INVITE_TOKEN,
   MASTER_KEY,
   makeNode,
+  PASSWORD,
   resetDb,
   seedFreshInstall,
   signInAs,
@@ -43,6 +44,7 @@ import {
 import { SEED } from "./deploy-db";
 import { realtimeSubscriptions, sentRealtimeMessages } from "./deploy-handlers";
 import { handlers } from "./handlers";
+import { MOCK_BACKUP_CODES, MOCK_TOTP_CODE } from "./security-db";
 
 // -----------------------------------------------------------------------------
 // API route definitions, read from the API source
@@ -82,6 +84,7 @@ const ROUTE_MODULES = [
   "providers",
   "templates",
   "changes",
+  "auth-security",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -130,7 +133,15 @@ function routeKey(method: string, path: string): string {
 }
 
 /** Better Auth's endpoints are not part of the OpenAPI document; see the sign-in test. */
-const BETTER_AUTH_PATHS = new Set(["/api/auth/sign-in/email", "/api/auth/sign-out"]);
+const BETTER_AUTH_PATHS = new Set([
+  "/api/auth/sign-in/email",
+  "/api/auth/sign-out",
+  "/api/auth/two-factor/enable",
+  "/api/auth/two-factor/verify-totp",
+  "/api/auth/two-factor/verify-backup-code",
+  "/api/auth/two-factor/disable",
+  "/api/auth/two-factor/generate-backup-codes",
+]);
 
 let apiRoutes: ApiRoute[] = [];
 /** `Location` of the last response `call` received, for redirects. */
@@ -546,6 +557,129 @@ describe("MSW mocks match the API contract", () => {
         status: 200,
         body: { success: true },
       });
+    });
+  });
+
+  it("account security: status, enrollment, second-factor sign-in, sessions, admin tools", async () => {
+    await fresh(async () => {
+      as(null);
+      expect((await call("GET", "/v1/auth/security")).status).toBe(401);
+      expect((await call("POST", "/v1/auth/reauth", {})).status).toBe(400);
+      as("owner");
+      expect(await call("GET", "/v1/auth/security")).toMatchObject({
+        status: 200,
+        body: {
+          two_factor_enabled: false,
+          two_factor_required: true,
+          backup_codes_remaining: null,
+        },
+      });
+      expect((await call("POST", "/api/auth/two-factor/enable", { password: "x" })).status).toBe(
+        400,
+      );
+      const enrollment = await call("POST", "/api/auth/two-factor/enable", { password: PASSWORD });
+      expect((enrollment.body as { backupCodes: string[] }).backupCodes).toHaveLength(10);
+      expect(
+        (await call("POST", "/api/auth/two-factor/verify-totp", { code: "000000" })).status,
+      ).toBe(401);
+      expect(
+        (await call("POST", "/api/auth/two-factor/verify-totp", { code: MOCK_TOTP_CODE })).status,
+      ).toBe(200);
+      expect(await call("GET", "/v1/auth/security")).toMatchObject({
+        body: { two_factor_enabled: true, backup_codes_remaining: 10 },
+      });
+
+      expect((await call("POST", "/v1/auth/reauth", { password: PASSWORD })).status).toBe(400);
+      expect(
+        (await call("POST", "/v1/auth/reauth", { password: "nope", code: MOCK_TOTP_CODE })).status,
+      ).toBe(401);
+      expect(
+        (await call("POST", "/v1/auth/reauth", { password: PASSWORD, code: MOCK_TOTP_CODE }))
+          .status,
+      ).toBe(200);
+
+      expect(await call("POST", "/api/auth/sign-out", {})).toMatchObject({ status: 200 });
+      const challenge = await call("POST", "/api/auth/sign-in/email", {
+        email: USERS.owner.email,
+        password: PASSWORD,
+      });
+      expect(challenge).toEqual({
+        status: 200,
+        body: { twoFactorRedirect: true, twoFactorMethods: ["totp"] },
+      });
+      expect(
+        (await call("POST", "/api/auth/two-factor/verify-backup-code", { code: "wrong" })).status,
+      ).toBe(401);
+      expect(
+        (
+          await call("POST", "/api/auth/two-factor/verify-backup-code", {
+            code: MOCK_BACKUP_CODES[0],
+          })
+        ).status,
+      ).toBe(200);
+
+      const sessions = await call("GET", "/v1/auth/sessions");
+      const list = (sessions.body as { sessions: { id: string; current: boolean }[] }).sessions;
+      expect(list.filter((s) => s.current)).toHaveLength(1);
+      expect((await call("DELETE", "/v1/auth/sessions/ses_nope")).status).toBe(404);
+      expect((await call("DELETE", "/v1/auth/sessions/ses_laptop")).status).toBe(204);
+      expect(await call("DELETE", "/v1/auth/sessions")).toEqual({
+        status: 200,
+        body: { revoked: 0 },
+      });
+
+      expect(
+        (await call("POST", "/api/auth/two-factor/generate-backup-codes", { password: PASSWORD }))
+          .status,
+      ).toBe(400);
+      const regenerated = await call("POST", "/api/auth/two-factor/generate-backup-codes", {
+        password: PASSWORD,
+        code: MOCK_TOTP_CODE,
+      });
+      expect((regenerated.body as { backupCodes: string[] }).backupCodes).toHaveLength(10);
+
+      expect(
+        (await call("POST", "/v1/instance/sign-in-lockouts/clear", { email: "x" })).status,
+      ).toBe(400);
+      db.security.locked["cara@example.com"] = Date.now() + 60_000;
+      expect(
+        await call("POST", "/v1/instance/sign-in-lockouts/clear", { email: "Cara@example.com" }),
+      ).toEqual({ status: 200, body: { cleared: true } });
+      expect((await call("DELETE", `/v1/instance/users/${USERS.owner.id}/two-factor`)).status).toBe(
+        403,
+      );
+      expect((await call("DELETE", "/v1/instance/users/usr_nobody/two-factor")).status).toBe(404);
+      expect((await call("DELETE", `/v1/instance/users/${USERS.admin.id}/two-factor`)).status).toBe(
+        204,
+      );
+
+      expect(
+        (await call("POST", "/api/auth/two-factor/disable", { password: PASSWORD })).status,
+      ).toBe(400);
+      expect(
+        (
+          await call("POST", "/api/auth/two-factor/disable", {
+            password: PASSWORD,
+            code: MOCK_TOTP_CODE,
+          })
+        ).status,
+      ).toBe(200);
+
+      as("member");
+      expect(
+        (await call("POST", "/v1/instance/sign-in-lockouts/clear", { email: "a@example.com" }))
+          .status,
+      ).toBe(403);
+      expect((await call("DELETE", `/v1/instance/users/${USERS.admin.id}/two-factor`)).status).toBe(
+        403,
+      );
+      db.security.locked["dan@example.com"] = Date.now() + 60_000;
+      as(null);
+      const locked = await call("POST", "/api/auth/sign-in/email", {
+        email: USERS.viewer.email,
+        password: PASSWORD,
+      });
+      expect(locked).toMatchObject({ status: 429, body: { code: "account_locked" } });
     });
   });
 

@@ -26,6 +26,7 @@ import { Route as AppWWorkspaceIdLogsRouteImport } from './routes/_app/w/$worksp
 import { Route as AppWWorkspaceIdMcpClientsRouteImport } from './routes/_app/w/$workspaceId/mcp-clients'
 import { Route as AppWWorkspaceIdMembersRouteImport } from './routes/_app/w/$workspaceId/members'
 import { Route as AppWWorkspaceIdPlatformRouteImport } from './routes/_app/w/$workspaceId/platform'
+import { Route as AppWWorkspaceIdSecurityRouteImport } from './routes/_app/w/$workspaceId/security'
 import { Route as AppWWorkspaceIdSettingsRouteImport } from './routes/_app/w/$workspaceId/settings'
 import { Route as AppWWorkspaceIdTokensRouteImport } from './routes/_app/w/$workspaceId/tokens'
 import { Route as AppWWorkspaceIdUsageRouteImport } from './routes/_app/w/$workspaceId/usage'
@@ -132,6 +133,11 @@ const AppWWorkspaceIdMembersRoute = AppWWorkspaceIdMembersRouteImport.update({
 const AppWWorkspaceIdPlatformRoute = AppWWorkspaceIdPlatformRouteImport.update({
   id: '/platform',
   path: '/platform',
+  getParentRoute: () => AppWWorkspaceIdRouteRoute,
+} as any)
+const AppWWorkspaceIdSecurityRoute = AppWWorkspaceIdSecurityRouteImport.update({
+  id: '/security',
+  path: '/security',
   getParentRoute: () => AppWWorkspaceIdRouteRoute,
 } as any)
 const AppWWorkspaceIdSettingsRoute = AppWWorkspaceIdSettingsRouteImport.update({
@@ -274,6 +280,7 @@ export interface FileRoutesByFullPath {
   '/w/$workspaceId/mcp-clients': typeof AppWWorkspaceIdMcpClientsRoute
   '/w/$workspaceId/members': typeof AppWWorkspaceIdMembersRoute
   '/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
+  '/w/$workspaceId/security': typeof AppWWorkspaceIdSecurityRoute
   '/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
   '/w/$workspaceId/tokens': typeof AppWWorkspaceIdTokensRoute
   '/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
@@ -312,6 +319,7 @@ export interface FileRoutesByTo {
   '/w/$workspaceId/mcp-clients': typeof AppWWorkspaceIdMcpClientsRoute
   '/w/$workspaceId/members': typeof AppWWorkspaceIdMembersRoute
   '/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
+  '/w/$workspaceId/security': typeof AppWWorkspaceIdSecurityRoute
   '/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
   '/w/$workspaceId/tokens': typeof AppWWorkspaceIdTokensRoute
   '/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
@@ -351,6 +359,7 @@ export interface FileRoutesById {
   '/_app/w/$workspaceId/mcp-clients': typeof AppWWorkspaceIdMcpClientsRoute
   '/_app/w/$workspaceId/members': typeof AppWWorkspaceIdMembersRoute
   '/_app/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
+  '/_app/w/$workspaceId/security': typeof AppWWorkspaceIdSecurityRoute
   '/_app/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
   '/_app/w/$workspaceId/tokens': typeof AppWWorkspaceIdTokensRoute
   '/_app/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
@@ -392,6 +401,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/mcp-clients'
     | '/w/$workspaceId/members'
     | '/w/$workspaceId/platform'
+    | '/w/$workspaceId/security'
     | '/w/$workspaceId/settings'
     | '/w/$workspaceId/tokens'
     | '/w/$workspaceId/usage'
@@ -430,6 +440,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/mcp-clients'
     | '/w/$workspaceId/members'
     | '/w/$workspaceId/platform'
+    | '/w/$workspaceId/security'
     | '/w/$workspaceId/settings'
     | '/w/$workspaceId/tokens'
     | '/w/$workspaceId/usage'
@@ -468,6 +479,7 @@ export interface FileRouteTypes {
     | '/_app/w/$workspaceId/mcp-clients'
     | '/_app/w/$workspaceId/members'
     | '/_app/w/$workspaceId/platform'
+    | '/_app/w/$workspaceId/security'
     | '/_app/w/$workspaceId/settings'
     | '/_app/w/$workspaceId/tokens'
     | '/_app/w/$workspaceId/usage'
@@ -619,6 +631,13 @@ declare module '@tanstack/react-router' {
       path: '/platform'
       fullPath: '/w/$workspaceId/platform'
       preLoaderRoute: typeof AppWWorkspaceIdPlatformRouteImport
+      parentRoute: typeof AppWWorkspaceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/security': {
+      id: '/_app/w/$workspaceId/security'
+      path: '/security'
+      fullPath: '/w/$workspaceId/security'
+      preLoaderRoute: typeof AppWWorkspaceIdSecurityRouteImport
       parentRoute: typeof AppWWorkspaceIdRouteRoute
     }
     '/_app/w/$workspaceId/settings': {
@@ -831,6 +850,7 @@ interface AppWWorkspaceIdRouteRouteChildren {
   AppWWorkspaceIdMcpClientsRoute: typeof AppWWorkspaceIdMcpClientsRoute
   AppWWorkspaceIdMembersRoute: typeof AppWWorkspaceIdMembersRoute
   AppWWorkspaceIdPlatformRoute: typeof AppWWorkspaceIdPlatformRoute
+  AppWWorkspaceIdSecurityRoute: typeof AppWWorkspaceIdSecurityRoute
   AppWWorkspaceIdSettingsRoute: typeof AppWWorkspaceIdSettingsRoute
   AppWWorkspaceIdTokensRoute: typeof AppWWorkspaceIdTokensRoute
   AppWWorkspaceIdUsageRoute: typeof AppWWorkspaceIdUsageRoute
@@ -852,6 +872,7 @@ const AppWWorkspaceIdRouteRouteChildren: AppWWorkspaceIdRouteRouteChildren = {
   AppWWorkspaceIdMcpClientsRoute: AppWWorkspaceIdMcpClientsRoute,
   AppWWorkspaceIdMembersRoute: AppWWorkspaceIdMembersRoute,
   AppWWorkspaceIdPlatformRoute: AppWWorkspaceIdPlatformRoute,
+  AppWWorkspaceIdSecurityRoute: AppWWorkspaceIdSecurityRoute,
   AppWWorkspaceIdSettingsRoute: AppWWorkspaceIdSettingsRoute,
   AppWWorkspaceIdTokensRoute: AppWWorkspaceIdTokensRoute,
   AppWWorkspaceIdUsageRoute: AppWWorkspaceIdUsageRoute,

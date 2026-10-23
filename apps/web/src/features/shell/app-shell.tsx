@@ -25,6 +25,7 @@ import { useTheme } from "../../lib/use-theme";
 import { useDeploy } from "../../queries/deployments";
 import { useMe, useSignOut } from "../../queries/me";
 import { pickEnvironment, projectQueryOptions, useProjects } from "../../queries/projects";
+import { TwoFactorBanner } from "../account/two-factor-banner";
 import { InviteMemberDialog } from "../members/invite-member-dialog";
 import { AddServerDialog } from "../servers/add-server-dialog";
 import { SERVICE_SHORTCUTS, SERVICE_TAB_PATHS, type ServiceTab } from "../services/tabs";
@@ -212,6 +213,7 @@ export function AppShell({ workspaceId }: { workspaceId: string }) {
             tabIndex={-1}
             className="mx-auto w-full max-w-[1248px] flex-1 px-4 pt-6 pb-16 outline-none sm:px-6 lg:px-8 lg:pt-8"
           >
+            <TwoFactorBanner workspaceId={workspaceId} />
             <Outlet />
           </main>
         </div>

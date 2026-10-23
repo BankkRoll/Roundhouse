@@ -1,0 +1,186 @@
+[
+  {
+    "text": "hello",
+    "ecc": "M",
+    "mask": 0,
+    "version": 1,
+    "forced": true,
+    "sha256": "99ccedcf0d82e92a63894c8b42e405a3ac50eafa33ee2ce68fa895813fdcb386"
+  },
+  {
+    "text": "otpauth://totp/Roundhouse:ada%40example.com?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU&issuer=Roundhouse&digits=6&period=30",
+    "ecc": "M",
+    "mask": 0,
+    "version": 8,
+    "forced": true,
+    "sha256": "6023a04af49dcb127d2161d0cbbbb1e9d7ca0997cb620a946102ab756f0f68a4"
+  },
+  {
+    "text": "hello",
+    "ecc": "M",
+    "mask": 1,
+    "version": 1,
+    "forced": true,
+    "sha256": "3a65a05e6cf988d628a155a076a843e7c3ca7fef24ed5a51615f5e837ec01308"
+  },
+  {
+    "text": "otpauth://totp/Roundhouse:ada%40example.com?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU&issuer=Roundhouse&digits=6&period=30",
+    "ecc": "M",
+    "mask": 1,
+    "version": 8,
+    "forced": true,
+    "sha256": "edc655f6edadc28499f407abd2f3eba479057456f52f94307334a656ce2f9743"
+  },
+  {
+    "text": "hello",
+    "ecc": "M",
+    "mask": 2,
+    "version": 1,
+    "forced": true,
+    "sha256": "338c689e0fc5d63d4141c0bc4ca13017a9e3974f725d62a44c46f7de3cb4b170"
+  },
+  {
+    "text": "otpauth://totp/Roundhouse:ada%40example.com?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU&issuer=Roundhouse&digits=6&period=30",
+    "ecc": "M",
+    "mask": 2,
+    "version": 8,
+    "forced": true,
+    "sha256": "3fab8fe5bc2e70b3328b0ade4cb0c217c32b1899342864a430533240a23be768"
+  },
+  {
+    "text": "hello",
+    "ecc": "M",
+    "mask": 3,
+    "version": 1,
+    "forced": true,
+    "sha256": "dfe75c4cc7ff735bed162390e7b29f91e0fd54be1949e70b531716db80d3f52b"
+  },
+  {
+    "text": "otpauth://totp/Roundhouse:ada%40example.com?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU&issuer=Roundhouse&digits=6&period=30",
+    "ecc": "M",
+    "mask": 3,
+    "version": 8,
+    "forced": true,
+    "sha256": "d86ca4fbc0b1891af9bed8c48577179fd63f43531b28f3836fc6655c7d304c00"
+  },
+  {
+    "text": "hello",
+    "ecc": "M",
+    "mask": 4,
+    "version": 1,
+    "forced": true,
+    "sha256": "0fcaf6c571b275a0f81fff331195d7c18fbde16b12c0df0a6fdd5cd0c51e2b8b"
+  },
+  {
+    "text": "otpauth://totp/Roundhouse:ada%40example.com?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU&issuer=Roundhouse&digits=6&period=30",
+    "ecc": "M",
+    "mask": 4,
+    "version": 8,
+    "forced": true,
+    "sha256": "893a765387c407ca8a22e4ea3274ffa92fb16578a598d69c44be03e7d4de2467"
+  },
+  {
+    "text": "hello",
+    "ecc": "M",
+    "mask": 5,
+    "version": 1,
+    "forced": true,
+    "sha256": "c06481974a364e0a1ad564d148d0278325efc47cf9b83c79ef0cbfab5da9c56d"
+  },
+  {
+    "text": "otpauth://totp/Roundhouse:ada%40example.com?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU&issuer=Roundhouse&digits=6&period=30",
+    "ecc": "M",
+    "mask": 5,
+    "version": 8,
+    "forced": true,
+    "sha256": "2e750e1a277b6d27b25c736f7590ef4947b243c7d04018acc4bfea2801e0f6ba"
+  },
+  {
+    "text": "hello",
+    "ecc": "M",
+    "mask": 6,
+    "version": 1,
+    "forced": true,
+    "sha256": "a1e177ca570facb32fe2727b853b4904897425062994440ef276fe92aed36112"
+  },
+  {
+    "text": "otpauth://totp/Roundhouse:ada%40example.com?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU&issuer=Roundhouse&digits=6&period=30",
+    "ecc": "M",
+    "mask": 6,
+    "version": 8,
+    "forced": true,
+    "sha256": "439cdc56b675d2ec7ab56c6aedfa9d0472701b758b0dace8aee2085142bbe6e7"
+  },
+  {
+    "text": "hello",
+    "ecc": "M",
+    "mask": 7,
+    "version": 1,
+    "forced": true,
+    "sha256": "1193a98e9acd91c1a850105b67ec324d33ff4bfef4feb63262394e1ebfb46068"
+  },
+  {
+    "text": "otpauth://totp/Roundhouse:ada%40example.com?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU&issuer=Roundhouse&digits=6&period=30",
+    "ecc": "M",
+    "mask": 7,
+    "version": 8,
+    "forced": true,
+    "sha256": "116c09a1794e430f4d7d1040c1e8322ae8b3be328b66657f612b8f4afcf5bbdd"
+  },
+  {
+    "text": "hello",
+    "ecc": "M",
+    "mask": 7,
+    "version": 1,
+    "forced": false,
+    "sha256": "1193a98e9acd91c1a850105b67ec324d33ff4bfef4feb63262394e1ebfb46068"
+  },
+  {
+    "text": "otpauth://totp/Roundhouse:ada%40example.com?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU&issuer=Roundhouse&digits=6&period=30",
+    "ecc": "M",
+    "mask": 4,
+    "version": 8,
+    "forced": false,
+    "sha256": "893a765387c407ca8a22e4ea3274ffa92fb16578a598d69c44be03e7d4de2467"
+  },
+  {
+    "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "ecc": "L",
+    "mask": 3,
+    "version": 9,
+    "forced": true,
+    "sha256": "69be927e22918f6f1a93a0fde15c941964593983251fb478ff6133b655826064"
+  },
+  {
+    "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "ecc": "L",
+    "mask": 0,
+    "version": 9,
+    "forced": false,
+    "sha256": "cfe4fcc3cbfb75bae459f5b5755931f4e90efa22627918ac07302a383974300e"
+  },
+  {
+    "text": "h\u00e9llo \u2713 caf\u00e9",
+    "ecc": "H",
+    "mask": 5,
+    "version": 3,
+    "forced": true,
+    "sha256": "4493d7a571df8ecdf67e42fb36921b32fd478df897a12aaf54e1fea56a8b206f"
+  },
+  {
+    "text": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "ecc": "Q",
+    "mask": 6,
+    "version": 31,
+    "forced": true,
+    "sha256": "30612b629cb715d4d45848864ade4b1278a37c5578798bda88b58735a6425f97"
+  },
+  {
+    "text": "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789",
+    "ecc": "M",
+    "mask": 2,
+    "version": 15,
+    "forced": false,
+    "sha256": "e5edf4160d75a9be67d1fde1e56ba3f60f4e4b217e147ee06f986f596e3c7638"
+  }
+]

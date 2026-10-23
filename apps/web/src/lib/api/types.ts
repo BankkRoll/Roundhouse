@@ -29,6 +29,8 @@ export interface ApiErrorDetail {
 export interface SetupStatus {
   needs_setup: boolean;
   master_key_configured: boolean;
+  /** `PUBLIC_ORIGIN` is set (or the control plane runs in development). */
+  public_origin_configured: boolean;
 }
 
 /**
@@ -65,9 +67,14 @@ export interface SignInRequest {
   password: string;
 }
 
-/** `POST /api/auth/sign-in/email` response (Better Auth). Only the fields the dashboard reads. */
+/**
+ * `POST /api/auth/sign-in/email` response (Better Auth). Only the fields the dashboard
+ * reads. With two-factor on, the password step answers `twoFactorRedirect: true` and no
+ * user: the session only exists once a code checks out.
+ */
 export interface SignInResponse {
-  user: User;
+  user?: User;
+  twoFactorRedirect?: boolean;
 }
 
 /** A workspace as listed in `/v1/me`, with the caller's role in it. */

@@ -19,6 +19,7 @@ import type {
 import { type ChangesDb, emptyChanges } from "./changes-db";
 import { type DeployDb, emptyDeploy, seedDeploy } from "./deploy-db";
 import { emptyProviders, type ProvidersDb } from "./providers-db";
+import { type SecurityDb, seedSecurity } from "./security-db";
 
 /** A stored user, including the password the sign-in handler checks. */
 export interface DbUser extends User {
@@ -64,6 +65,8 @@ export interface MockDb {
   providers: ProvidersDb;
   /** Staged change sets and canvas layouts. */
   changes: ChangesDb;
+  /** Two-factor, sessions and lockouts. */
+  security: SecurityDb;
   counter: number;
 }
 
@@ -200,7 +203,7 @@ function seed(): MockDb {
     actor_name: USERS.owner.name,
   } as const;
   return {
-    setup: { needs_setup: false, master_key_configured: true },
+    setup: { needs_setup: false, master_key_configured: true, public_origin_configured: true },
     masterKey: MASTER_KEY,
     sessionUserId: USERS.owner.id,
     users,
@@ -255,6 +258,7 @@ function seed(): MockDb {
     deploy: seedDeploy(WORKSPACE_ID, now),
     providers: emptyProviders(),
     changes: emptyChanges(),
+    security: seedSecurity(USERS.owner.id, now),
     counter: 0,
   };
 }
@@ -275,7 +279,11 @@ export function resetDb(): void {
 export function seedFreshInstall(masterKeyConfigured = true): void {
   db = {
     ...seed(),
-    setup: { needs_setup: true, master_key_configured: masterKeyConfigured },
+    setup: {
+      needs_setup: true,
+      master_key_configured: masterKeyConfigured,
+      public_origin_configured: true,
+    },
     sessionUserId: null,
     users: [],
     workspaces: [],

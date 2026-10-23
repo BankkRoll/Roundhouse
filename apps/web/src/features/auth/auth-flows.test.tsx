@@ -12,6 +12,7 @@ import {
   WORKSPACE_ID,
 } from "../../mocks/db";
 import { apiError } from "../../mocks/handlers";
+import { MOCK_BACKUP_CODES, MOCK_TOTP_CODE } from "../../mocks/security-db";
 import { server } from "../../mocks/server";
 import { expectPath, findPageHeading, renderApp } from "../../test/render";
 import { signInErrorMessage } from "./login-page";
@@ -387,5 +388,73 @@ describe("invite", () => {
     renderApp("/invite#token=inv_nope");
     expect(await screen.findByRole("heading", { name: "Invite unavailable" })).toBeInTheDocument();
     await waitFor(() => expect(sessionStorage.length).toBe(0));
+  });
+});
+
+describe("signing in with two-factor authentication", () => {
+  async function passwordStep(user: ReturnType<typeof renderApp>["user"]) {
+    await user.type(await screen.findByLabelText("Email"), USERS.owner.email);
+    await user.type(screen.getByLabelText("Password"), PASSWORD);
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByRole("heading", { name: "Two-factor authentication" });
+  }
+
+  beforeEach(() => {
+    signInAs(null);
+    db.security.twoFactor[USERS.owner.id] = { backupCodes: [...MOCK_BACKUP_CODES] };
+  });
+
+  it("asks for the authenticator code after the password", async () => {
+    const { router, user } = renderApp("/login");
+    await passwordStep(user);
+    expect(db.sessionUserId).toBeNull();
+    await user.type(screen.getByLabelText("Authentication code"), "111111");
+    await user.click(screen.getByRole("button", { name: "Verify" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("That code didn't work");
+    await user.type(screen.getByLabelText("Authentication code"), MOCK_TOTP_CODE);
+    await user.click(screen.getByRole("button", { name: "Verify" }));
+    await expectPath(router, `/w/${WORKSPACE_ID}`);
+    expect(db.sessionUserId).toBe(USERS.owner.id);
+  });
+
+  it("takes a backup code instead", async () => {
+    const { router, user } = renderApp("/login");
+    await passwordStep(user);
+    await user.click(screen.getByRole("button", { name: "Use a backup code" }));
+    await user.type(screen.getByLabelText("Backup code"), MOCK_BACKUP_CODES[4]!.replace("-", ""));
+    await user.click(screen.getByRole("button", { name: "Verify" }));
+    await expectPath(router, `/w/${WORKSPACE_ID}`);
+    expect(db.security.twoFactor[USERS.owner.id]?.backupCodes).toHaveLength(9);
+  });
+
+  it("starts over when the challenge expired", async () => {
+    const { user } = renderApp("/login");
+    await passwordStep(user);
+    db.security.challengeUserId = null;
+    await user.type(screen.getByLabelText("Authentication code"), MOCK_TOTP_CODE);
+    await user.click(screen.getByRole("button", { name: "Verify" }));
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("This sign-in expired");
+  });
+
+  it("explains a locked account without saying whether it exists", async () => {
+    db.security.locked[USERS.owner.email] = Date.now() + 90_000;
+    const { user } = renderApp("/login");
+    await user.type(await screen.findByLabelText("Email"), USERS.owner.email);
+    await user.type(screen.getByLabelText("Password"), PASSWORD);
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/Too many failed attempts\. Try again in \d+ seconds\./);
+    expect(alert).toHaveTextContent("an instance admin can lift it sooner");
+  });
+});
+
+describe("signInErrorMessage for a missing public origin", () => {
+  it("passes PUBLIC_ORIGIN guidance through", () => {
+    expect(
+      signInErrorMessage(
+        new ApiError(503, "public_origin_missing", "PUBLIC_ORIGIN is not configured."),
+      ),
+    ).toBe("PUBLIC_ORIGIN is not configured.");
   });
 });

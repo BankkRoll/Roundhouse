@@ -298,7 +298,7 @@ export const authSecurityRoutes = createRouter()
       throw new ApiError(
         403,
         "forbidden",
-        "Turn off your own two-factor authentication under Preferences → Security",
+        "Turn off your own two-factor authentication under Settings → Security",
       );
     }
     const db = c.get("db");

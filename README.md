@@ -48,7 +48,7 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 - **Two-factor authentication** (an authenticator app, plus ten single-use
   backup codes) is required for instance admins and workspace owners and
   admins: until they turn it on, they can look around but not change
-  anything. Anyone can turn it on under **Preferences → Security**, which
+  anything. Anyone can turn it on under **Settings → Security**, which
   also lists your sessions and signs other devices out. An instance admin
   can reset the second factor of someone who lost their device.
 - **Sign-in lockout**: after 5 failed attempts in 24 hours an account is

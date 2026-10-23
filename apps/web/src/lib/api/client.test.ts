@@ -182,7 +182,7 @@ describe("api endpoints", () => {
       }
     });
     const { user } = await api.signIn({ email: USERS.admin.email, password: PASSWORD });
-    expect(user.id).toBe(USERS.admin.id);
+    expect(user?.id).toBe(USERS.admin.id);
     expect(db.sessionUserId).toBe(USERS.admin.id);
     await api.signOut();
     expect(db.sessionUserId).toBeNull();

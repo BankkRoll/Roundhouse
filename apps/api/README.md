@@ -30,12 +30,12 @@ npx wrangler secret put MASTER_KEY
 npx wrangler secret put PUBLIC_ORIGIN   # https://cp.example.com, no path
 ```
 
-| Variable               | What                                                                                     |
-| ---------------------- | ---------------------------------------------------------------------------------------- |
-| `MASTER_KEY`           | Root secret; every other key is derived from it                                          |
-| `MASTER_KEYS_PREVIOUS` | Earlier master keys during a rotation, comma-separated, newest first                     |
+| Variable               | What                                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `MASTER_KEY`           | Root secret; every other key is derived from it                                                    |
+| `MASTER_KEYS_PREVIOUS` | Earlier master keys during a rotation, comma-separated, newest first                               |
 | `PUBLIC_ORIGIN`        | The only source of absolute URLs and the same-origin check; 503 `public_origin_missing` without it |
-| `ROUNDHOUSE_DEV`       | `1` in local development only: falls back to the request origin, allows `ws://` agents   |
+| `ROUNDHOUSE_DEV`       | `1` in local development only: falls back to the request origin, allows `ws://` agents             |
 
 The first deploy creates the D1 database, so `wrangler.jsonc` has no
 `database_id`. Migrations run after the deploy for that reason.

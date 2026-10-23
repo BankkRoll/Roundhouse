@@ -3,6 +3,7 @@ import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
 import { db, MASTER_KEY, makeNode, seedFreshInstall } from "../../mocks/db";
 import { apiError } from "../../mocks/handlers";
+import { MOCK_BACKUP_CODES, MOCK_TOTP_CODE } from "../../mocks/security-db";
 import { server } from "../../mocks/server";
 import { expectPath, findPageHeading, renderApp } from "../../test/render";
 
@@ -23,6 +24,25 @@ async function fillAccountForm(
   await user.type(screen.getByLabelText("Password"), values.password);
   await user.type(screen.getByLabelText("Confirm password"), values.confirm);
   await user.type(screen.getByLabelText("Workspace name"), values.workspace);
+}
+
+/** Turns on two-factor through the wizard's step 3 dialog. */
+async function enrollTwoFactor(user: ReturnType<typeof renderApp>["user"]) {
+  await screen.findByRole("heading", { name: "Turn on two-factor authentication" });
+  await user.click(screen.getByRole("button", { name: "Set up two-factor" }));
+  const dialog = await screen.findByRole("dialog");
+  await user.type(within(dialog).getByLabelText("Password"), ADMIN.password);
+  await user.click(within(dialog).getByRole("button", { name: "Continue" }));
+  expect(
+    await within(dialog).findByRole("img", { name: "QR code for your authenticator app" }),
+  ).toBeInTheDocument();
+  await user.type(within(dialog).getByLabelText("Code from the app"), MOCK_TOTP_CODE);
+  await user.click(within(dialog).getByRole("button", { name: "Turn on" }));
+  expect(await within(dialog).findByText(MOCK_BACKUP_CODES[0]!)).toBeInTheDocument();
+  const done = within(dialog).getByRole("button", { name: "Done" });
+  expect(done).toBeDisabled();
+  await user.click(within(dialog).getByLabelText("I've saved these codes somewhere safe"));
+  await user.click(done);
 }
 
 function currentStep() {
@@ -61,6 +81,11 @@ describe("setup wizard", () => {
 
     await fillAccountForm(user);
     await user.click(screen.getByRole("button", { name: "Create admin account" }));
+
+    await screen.findByRole("heading", { name: "Turn on two-factor authentication" });
+    expect(currentStep()).toContain("Two-factor");
+    await enrollTwoFactor(user);
+    expect(db.security.twoFactor[db.users[0]!.id]).toBeDefined();
 
     expect(
       await screen.findByRole("heading", { name: "Add your first server" }),
@@ -181,12 +206,15 @@ describe("setup wizard", () => {
     await user.type(screen.getByLabelText("Master key"), MASTER_KEY);
     await fillAccountForm(user);
     await user.click(screen.getByRole("button", { name: "Create admin account" }));
+    await enrollTwoFactor(user);
     await screen.findByRole("heading", { name: "Add your first server" });
     const cache = router.options.context.queryClient.getMutationCache();
     await waitFor(() => {
       const state = JSON.stringify(cache.getAll().map((mutation) => mutation.state));
       expect(state).not.toContain(MASTER_KEY);
       expect(state).not.toContain(ADMIN.password);
+      expect(state).not.toContain(MOCK_BACKUP_CODES[0]);
+      expect(state).not.toContain("otpauth://");
     });
   });
 
@@ -201,6 +229,35 @@ describe("setup wizard", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("D1 is unavailable");
   });
 
+  it("lets the admin skip two-factor for now and land on the dashboard", async () => {
+    seedFreshInstall(true);
+    const { router, user } = renderApp("/setup");
+    await screen.findByRole("heading", { name: "Create the admin account" });
+    await user.type(screen.getByLabelText("Master key"), MASTER_KEY);
+    await fillAccountForm(user);
+    await user.click(screen.getByRole("button", { name: "Create admin account" }));
+    await screen.findByRole("heading", { name: "Turn on two-factor authentication" });
+    await user.click(screen.getByRole("button", { name: "Skip for now" }));
+    const workspaceId = db.workspaces[0]?.id ?? "";
+    await expectPath(router, `/w/${workspaceId}`);
+    expect(await screen.findByRole("link", { name: "Set up two-factor" })).toBeInTheDocument();
+  });
+
+  it("asks for PUBLIC_ORIGIN before the account when it is missing", async () => {
+    seedFreshInstall(true);
+    db.setup.public_origin_configured = false;
+    const { user } = renderApp("/setup");
+    expect(await screen.findByRole("heading", { name: "Set the public URL" })).toBeInTheDocument();
+    expect(screen.getByText("npx wrangler secret put PUBLIC_ORIGIN")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Still no PUBLIC_ORIGIN");
+    db.setup.public_origin_configured = true;
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    expect(
+      await screen.findByRole("heading", { name: "Create the admin account" }),
+    ).toBeInTheDocument();
+  });
+
   it("finishes when the first server connects", async () => {
     seedFreshInstall(true);
     const { router, user } = renderApp("/setup");
@@ -208,6 +265,7 @@ describe("setup wizard", () => {
     await user.type(screen.getByLabelText("Master key"), MASTER_KEY);
     await fillAccountForm(user);
     await user.click(screen.getByRole("button", { name: "Create admin account" }));
+    await enrollTwoFactor(user);
     await screen.findByText(/curl -fsSL/);
     await screen.findByText("Waiting for the server to connect…");
 
