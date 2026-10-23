@@ -279,7 +279,9 @@ describe("service variables", () => {
     expect(await values(admin)).toEqual({ PLAIN: "visible", SECRET: null });
     const write = { method: "PUT", json: { set: [{ key: "X", value: "1" }] } };
     expect((await viewer.json(s.path, write)).status).toBe(403);
-    expect((await member.json(s.path, write)).status).toBe(200);
+    // Production starts protected: variables there are for project admins.
+    expect((await member.json(s.path, write)).status).toBe(403);
+    expect((await admin.json(s.path, write)).status).toBe(200);
   });
 });
 

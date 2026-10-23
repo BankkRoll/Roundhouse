@@ -23,6 +23,7 @@ import {
   type AuditActorType,
   type InstanceAction,
   isInstanceAction,
+  type ProjectAction,
   type ProjectRole,
   type Role,
   resolveAccess,
@@ -32,11 +33,13 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { type AuthOptions, createAuth } from "./auth";
+import { POLICY_KEY, type RoutePolicy } from "./contracts/policy";
 import type { Env } from "./env";
-import { loadAccessContext } from "./lib/access";
+import { loadAccessContext, loadWorkspaceAccess } from "./lib/access";
 import { bearerSecret, resolveApiToken } from "./lib/api-tokens";
 import { isValidMasterKey } from "./lib/crypto";
 import { ApiError, errorBody } from "./lib/errors";
+import { requireFreshSession } from "./lib/fresh-session";
 import { publicOrigin } from "./lib/origin";
 
 /** The signed-in user as exposed to handlers. */
@@ -103,12 +106,26 @@ export interface AppEnv {
 export type AppContext = Context<AppEnv>;
 
 /**
- * Creates a router whose request-validation failures use the API's error shape.
+ * Refuses a stale session before the handler of a `reauth: true` route runs.
+ *
+ * SECURITY: This runs ahead of the handler's own access check on purpose.
+ * The answer doesn't depend on the resource named, so it reveals nothing,
+ * and no handler can forget it.
+ */
+const freshSessionGuard = createMiddleware<AppEnv>(async (c, next) => {
+  await requireFreshSession(c);
+  await next();
+});
+
+/**
+ * Creates a router whose request-validation failures use the API's error
+ * shape, and which enforces each contract route's `reauth` policy (ADR
+ * 0014 "Fresh sessions") in front of its handler.
  *
  * @returns A new OpenAPI-aware router.
  */
 export function createRouter() {
-  return new OpenAPIHono<AppEnv>({
+  const router = new OpenAPIHono<AppEnv>({
     defaultHook: (result, c) => {
       if (!result.success) {
         const issue = result.error.issues[0];
@@ -117,6 +134,15 @@ export function createRouter() {
       }
     },
   });
+  const register = router.openapi;
+  router.openapi = ((route, handler, hook) => {
+    const policy = (route as { [POLICY_KEY]?: RoutePolicy })[POLICY_KEY];
+    if (!policy?.reauth) return register(route, handler, hook);
+    const own = route.middleware;
+    const middleware = [freshSessionGuard, ...(own ? (Array.isArray(own) ? own : [own]) : [])];
+    return register({ ...route, middleware }, handler, hook);
+  }) as typeof router.openapi;
+  return router;
 }
 
 /** Attaches a Drizzle client to every request. */
@@ -341,7 +367,9 @@ function denied(role: Role, action: Action, reason: AccessDenial | null): ApiErr
         `This environment is protected; your project role cannot perform ${action} here`,
       );
     case "no_project_access":
-      return new ApiError(403, "forbidden", `You have no access to this project (${action})`);
+      // ADR 0014: a project the caller has no role on doesn't exist for them;
+      // scope helpers reword this per resource.
+      return new ApiError(404, "not_found", WORKSPACE_NOT_FOUND);
     case "unknown_environment":
     case "environment_mismatch":
       return new ApiError(404, "not_found", "Environment not found");
@@ -448,6 +476,46 @@ export async function requireWorkspace(
 }
 
 /**
+ * For workspace-wide lists of projects: checks that the caller is a member
+ * (and that a token carries `action`), then returns the live projects where
+ * they hold `action`. ADR 0014: a project the caller has no role on is left
+ * out of lists, as it is a 404 everywhere else.
+ *
+ * @param c - Request context.
+ * @param workspaceId - Workspace from the route.
+ * @param action - The list route's project action, e.g. `projects:read`.
+ * @returns IDs of the projects to show.
+ * @throws {ApiError} 404 for non-members (and tokens of other workspaces);
+ *   403 for a token without the scope.
+ */
+export async function visibleProjects(
+  c: AppContext,
+  workspaceId: string,
+  action: ProjectAction,
+): Promise<Set<string>> {
+  const principal = await requirePrincipal(c);
+  if (principal.token && principal.token.workspaceId !== workspaceId) {
+    throw new ApiError(404, "not_found", WORKSPACE_NOT_FOUND);
+  }
+  const loaded = await loadWorkspaceAccess(c.get("db"), workspaceId, principal.user.id);
+  if (loaded.role === null) throw new ApiError(404, "not_found", WORKSPACE_NOT_FOUND);
+  if (principal.token && !principal.token.scopes.includes(action)) {
+    throw denied(loaded.role, action, "token_scope");
+  }
+  const access = resolveAccess(
+    {
+      userId: principal.user.id,
+      workspaceRole: loaded.role,
+      instanceAdmin: false,
+      teamIds: loaded.teamIds,
+      tokenScopes: principal.token?.scopes ?? null,
+    },
+    loaded.context,
+  );
+  return new Set(loaded.projectIds.filter((projectId) => access.can(action, { projectId })));
+}
+
+/**
  * Best-effort client IP for audit records and rate-limit keys.
  *
  * @param c - Request context.
@@ -462,7 +530,8 @@ export function clientIp(c: AppContext): string | null {
  * flag (ADR 0014, F3: owning a workspace no longer grants it). API tokens
  * never pass: they are workspace-scoped and never carry instance actions.
  *
- * TODO(api-authz-rbac-github): also enforce the policy's `reauth`.
+ * A route's `reauth` policy is enforced by its router (see
+ * {@link createRouter}), not here.
  *
  * @param c - Request context.
  * @param action - An instance action, e.g. `instance:manage`.

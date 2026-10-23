@@ -4,9 +4,18 @@
  * @module
  */
 import { createRoute, z } from "@hono/zod-openapi";
-import { type Db, users, workspaceMembers, workspaces } from "@roundhouse/db";
+import {
+  type Db,
+  projectAccessGrants,
+  projects,
+  teamMembers,
+  teams,
+  users,
+  workspaceMembers,
+  workspaces,
+} from "@roundhouse/db";
 import { isApiTokenScope, type Role } from "@roundhouse/shared";
-import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, notExists, sql } from "drizzle-orm";
 import {
   actorOf,
   clientIp,
@@ -17,6 +26,7 @@ import {
 } from "../context";
 import { recordAudit } from "../lib/audit";
 import { ApiError, notFound } from "../lib/errors";
+import { revalidateWorkspace } from "../lib/realtime";
 import { createWorkspace } from "../lib/workspaces";
 import {
   ApiTokenScopeSchema,
@@ -335,6 +345,7 @@ export const workspaceRoutes = createRouter()
       metadata: { from: target.role, to: role, user_id: target.user_id },
       ip: clientIp(c),
     });
+    await revalidateWorkspace(db, c.env, workspaceId, { userIds: [target.user_id] });
     const { createdAt, ...rest } = target;
     return c.json({ ...rest, role, created_at: +createdAt }, 200);
   })
@@ -352,17 +363,60 @@ export const workspaceRoutes = createRouter()
     if (target.role === "owner" && !isSelf && m.role !== "owner") {
       throw new ApiError(403, "forbidden", "Only owners can remove an owner");
     }
-    const [removed] = await db
-      .delete(workspaceMembers)
-      .where(
-        and(
-          eq(workspaceMembers.id, memberId),
-          eq(workspaceMembers.workspaceId, workspaceId),
-          keepsAnOwner(workspaceId),
-          m.role === "owner" || isSelf ? undefined : notAnOwner(),
+    // The user's teams and direct grants in this workspace go in the same
+    // batch, but only once the guarded delete above them actually removed
+    // the membership.
+    const gone = notExists(
+      db
+        .select({ id: workspaceMembers.id })
+        .from(workspaceMembers)
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, workspaceId),
+            eq(workspaceMembers.userId, target.user_id),
+          ),
         ),
-      )
-      .returning({ id: workspaceMembers.id });
+    );
+    const [[removed]] = await db.batch([
+      db
+        .delete(workspaceMembers)
+        .where(
+          and(
+            eq(workspaceMembers.id, memberId),
+            eq(workspaceMembers.workspaceId, workspaceId),
+            keepsAnOwner(workspaceId),
+            m.role === "owner" || isSelf ? undefined : notAnOwner(),
+          ),
+        )
+        .returning({ id: workspaceMembers.id }),
+      db
+        .delete(teamMembers)
+        .where(
+          and(
+            eq(teamMembers.userId, target.user_id),
+            inArray(
+              teamMembers.teamId,
+              db.select({ id: teams.id }).from(teams).where(eq(teams.workspaceId, workspaceId)),
+            ),
+            gone,
+          ),
+        ),
+      db
+        .delete(projectAccessGrants)
+        .where(
+          and(
+            eq(projectAccessGrants.userId, target.user_id),
+            inArray(
+              projectAccessGrants.projectId,
+              db
+                .select({ id: projects.id })
+                .from(projects)
+                .where(eq(projects.workspaceId, workspaceId)),
+            ),
+            gone,
+          ),
+        ),
+    ]);
     if (!removed) throw m.role === "owner" || isSelf ? lastOwner() : ownerChanged();
     await recordAudit(db, {
       workspaceId,
@@ -373,5 +427,6 @@ export const workspaceRoutes = createRouter()
       metadata: { user_id: target.user_id, email: target.email },
       ip: clientIp(c),
     });
+    await revalidateWorkspace(db, c.env, workspaceId, { userIds: [target.user_id] });
     return c.body(null, 204);
   });

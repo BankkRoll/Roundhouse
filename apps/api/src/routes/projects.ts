@@ -18,10 +18,17 @@ import {
   DEFAULT_ENVIRONMENT,
   defaultServiceConfig,
   newId,
+  type ProjectAction,
   type ServiceConfigSpec,
 } from "@roundhouse/shared";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
-import { clientIp, createRouter, requireMasterKey, requireWorkspace } from "../context";
+import {
+  clientIp,
+  createRouter,
+  requireMasterKey,
+  requireWorkspace,
+  visibleProjects,
+} from "../context";
 import {
   createEnvironment,
   createProject,
@@ -46,6 +53,7 @@ import {
   syncGeneratedDomain,
   tearDownServices,
 } from "../lib/projects";
+import { revalidateProjects } from "../lib/realtime";
 import { environmentOf, projectScope } from "../lib/scope";
 import { toApiEnvironment, toApiProject, toApiService } from "../lib/serialize";
 import { getIngressSettings } from "../lib/settings";
@@ -59,7 +67,11 @@ export const projectRoutes = createRouter()
   .openapi(listProjects, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { slug } = c.req.valid("query");
-    await requireWorkspace(c, workspaceId, policyOf(listProjects).action!);
+    const visible = await visibleProjects(
+      c,
+      workspaceId,
+      policyOf(listProjects).action as ProjectAction,
+    );
     const rows = await c
       .get("db")
       .select()
@@ -72,17 +84,19 @@ export const projectRoutes = createRouter()
         ),
       )
       .orderBy(asc(projects.name), asc(projects.id));
-    return c.json({ projects: rows.map(toApiProject) }, 200);
+    return c.json({ projects: rows.filter((p) => visible.has(p.id)).map(toApiProject) }, 200);
   })
   .openapi(listProjectSummaries, async (c) => {
     const { workspaceId } = c.req.valid("param");
-    await requireWorkspace(c, workspaceId, policyOf(listProjectSummaries).action!);
+    const visible = await visibleProjects(
+      c,
+      workspaceId,
+      policyOf(listProjectSummaries).action as ProjectAction,
+    );
     const db = c.get("db");
     const { tlsMode } = await getIngressSettings(db);
-    return c.json(
-      { projects: await projectSummaries(db, { kind: "workspace", workspaceId }, tlsMode) },
-      200,
-    );
+    const all = await projectSummaries(db, { kind: "workspace", workspaceId }, tlsMode);
+    return c.json({ projects: all.filter((p) => visible.has(p.id)) }, 200);
   })
   .openapi(getProjectSummary, async (c) => {
     const { projectId } = c.req.valid("param");
@@ -141,6 +155,8 @@ export const projectRoutes = createRouter()
             name: DEFAULT_ENVIRONMENT.name,
             slug: DEFAULT_ENVIRONMENT.slug,
             kind: "production",
+            // ADR 0014: production starts protected (DEFAULT_PROTECTION_RULES).
+            protected: true,
           }),
           db.insert(projectKeys).values(keyRow),
         ]),
@@ -247,6 +263,7 @@ export const projectRoutes = createRouter()
       metadata: { name: project.name, slug: project.slug },
       ip: clientIp(c),
     });
+    await revalidateProjects(c.env, [projectId]);
     return c.body(null, 204);
   })
   .openapi(listEnvironments, async (c) => {

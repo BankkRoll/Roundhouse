@@ -480,6 +480,9 @@ describe("staged changes", () => {
     const project = await createProject(owner, workspaceId);
     const svc = await createService(owner, project.id);
     const envId = project.environments[0]!.id;
+    // Production starts protected, where an agent's change set waits for a
+    // person; this test is about staging, so it uses an open environment.
+    await env.DB.prepare("UPDATE environments SET protected = 0 WHERE id = ?").bind(envId).run();
     const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.deploy));
     const target = { service_id: svc.service.id, environment_id: envId };
 

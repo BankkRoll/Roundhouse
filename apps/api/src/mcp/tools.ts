@@ -30,6 +30,7 @@ import {
   type Action,
   type ApiTokenScope,
   CANCELLABLE_DEPLOYMENT_STATUSES,
+  type ProjectAction,
   ROLLBACK_SOURCE_STATUSES,
 } from "@roundhouse/shared";
 import { and, asc, desc, eq, isNull, lt } from "drizzle-orm";
@@ -41,6 +42,7 @@ import {
   requireMasterKey,
   requireWorkspace,
   type TokenIdentity,
+  visibleProjects,
 } from "../context";
 import {
   cancelDeployment as cancelDeploymentRoute,
@@ -308,10 +310,15 @@ const listProjectsTool = defineTool({
   annotations: READ,
   async run({ c, token }, input) {
     const workspaceId = input.workspace_id ?? token.workspaceId;
-    await requireWorkspace(c, workspaceId, policyOf(listProjectSummaries).action!);
+    const visible = await visibleProjects(
+      c,
+      workspaceId,
+      scopeOf(listProjectSummaries) as ProjectAction,
+    );
     const db = c.get("db");
     const { tlsMode } = await getIngressSettings(db);
-    return { projects: await projectSummaries(db, { kind: "workspace", workspaceId }, tlsMode) };
+    const all = await projectSummaries(db, { kind: "workspace", workspaceId }, tlsMode);
+    return { projects: all.filter((p) => visible.has(p.id)) };
   },
 });
 
