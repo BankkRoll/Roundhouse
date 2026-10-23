@@ -71,7 +71,10 @@ type Environment struct {
 	Kind         string  `json:"kind"`
 	PRNumber     *int    `json:"pr_number"`
 	SourceBranch *string `json:"source_branch"`
-	CreatedAt    int64   `json:"created_at"`
+	// Protected is true when protection rules narrow deploys, config and
+	// variable changes here; production starts protected.
+	Protected bool  `json:"protected"`
+	CreatedAt int64 `json:"created_at"`
 }
 
 // Service is a service of a project. Its config lives per environment.

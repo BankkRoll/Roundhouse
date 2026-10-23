@@ -84,6 +84,8 @@ const ROUTE_MODULES = [
   "providers",
   "templates",
   "changes",
+  "signing-keys",
+  "instance-admin",
   "auth-security",
 ] as const;
 
@@ -592,7 +594,7 @@ describe("MSW mocks match the API contract", () => {
       expect((await call("POST", "/v1/auth/reauth", { password: PASSWORD })).status).toBe(400);
       expect(
         (await call("POST", "/v1/auth/reauth", { password: "nope", code: MOCK_TOTP_CODE })).status,
-      ).toBe(401);
+      ).toBe(400);
       expect(
         (await call("POST", "/v1/auth/reauth", { password: PASSWORD, code: MOCK_TOTP_CODE }))
           .status,
@@ -1241,6 +1243,40 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
+  it("signing keys: schedule, cancel, complete; instance admins only", async () => {
+    await fresh(async () => {
+      const KEYS = "/v1/instance/signing-keys";
+      expect(await call("GET", KEYS)).toMatchObject({ status: 200, body: { next: null } });
+      expect((await call("POST", `${KEYS}/rotate`, { delay_hours: 0 })).status).toBe(400);
+      expect((await call("DELETE", `${KEYS}/next`)).status).toBe(404);
+      expect((await call("POST", `${KEYS}/complete`, {})).status).toBe(404);
+      expect(await call("POST", `${KEYS}/rotate`, {})).toMatchObject({
+        status: 200,
+        body: { next: { due: false } },
+      });
+      expect((await call("POST", `${KEYS}/rotate`, {})).status).toBe(409);
+      expect((await call("POST", `${KEYS}/complete`, {})).status).toBe(409);
+      expect(await call("DELETE", `${KEYS}/next`)).toMatchObject({
+        status: 200,
+        body: { next: null },
+      });
+      await call("POST", `${KEYS}/rotate`, { delay_hours: 1 });
+      const next = db.signingKeys.next;
+      if (next) next.not_before = Date.now() - 1;
+      expect((await call("DELETE", `${KEYS}/next`)).status).toBe(409);
+      expect((await call("POST", `${KEYS}/complete`, {})).status).toBe(409);
+      expect(await call("POST", `${KEYS}/complete`, { force: true })).toMatchObject({
+        status: 200,
+        body: { next: null, current: { kid: next?.kid } },
+      });
+      as("admin");
+      expect((await call("GET", KEYS)).status).toBe(403);
+      expect((await call("POST", `${KEYS}/rotate`, {})).status).toBe(403);
+      as(null);
+      expect((await call("GET", KEYS)).status).toBe(401);
+    });
+  });
+
   it("GitHub App: status, manifest, callback, repositories", async () => {
     await fresh(async () => {
       const status = `/v1/github/status?workspace_id=${WORKSPACE_ID}`;
@@ -1357,6 +1393,110 @@ describe("MSW mocks match the API contract", () => {
       expect(
         (await call("GET", `/v1/github/repositories?workspace_id=${WORKSPACE_ID}`)).status,
       ).toBe(401);
+    });
+  });
+
+  it("ADR 0014: GitHub claims and releases, instance admins and audit, re-authentication", async () => {
+    await fresh(async () => {
+      const claim = await call("POST", "/v1/github/claims", { workspace_id: WORKSPACE_ID });
+      expect(claim).toMatchObject({
+        status: 200,
+        body: { install_url: expect.stringContaining("/installations/new?state=ghc_") },
+      });
+      const state = new URL((claim.body as { install_url: string }).install_url).searchParams.get(
+        "state",
+      );
+      await call("GET", `/v1/github/callback?state=${state}&installation_id=91&code=not-admin`);
+      expect(lastLocation).toBe("/settings/github?error=not_account_admin");
+
+      const release = `/v1/github/installations/${SEED.installation}?workspace_id=${WORKSPACE_ID}`;
+      db.sessionStale = true;
+      expect(await call("DELETE", release)).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required", details: [{ code: "session_stale" }] } },
+      });
+      expect((await call("PATCH", "/v1/instance/settings", { tls_mode: "internal" })).status).toBe(
+        403,
+      );
+      expect((await call("POST", "/v1/auth/reauth", { password: "nope" })).status).toBe(400);
+      expect((await call("POST", "/v1/auth/reauth", {})).status).toBe(400);
+      expect(await call("POST", "/v1/auth/reauth", { password: PASSWORD })).toMatchObject({
+        status: 200,
+        body: { fresh_until: expect.any(Number) },
+      });
+      expect((await call("DELETE", release)).status).toBe(204);
+      expect((await call("DELETE", release)).status).toBe(404);
+
+      expect(await call("GET", "/v1/instance/admins")).toMatchObject({
+        status: 200,
+        body: { admins: [{ user_id: USERS.owner.id }] },
+      });
+      expect(
+        (await call("PUT", `/v1/instance/admins/${USERS.owner.id}`, { instance_admin: false }))
+          .status,
+      ).toBe(409);
+      expect(
+        (await call("PUT", "/v1/instance/admins/usr_nobody", { instance_admin: true })).status,
+      ).toBe(404);
+      expect((await call("PUT", `/v1/instance/admins/${USERS.admin.id}`, {})).status).toBe(400);
+      expect(
+        await call("PUT", `/v1/instance/admins/${USERS.admin.id}`, { instance_admin: true }),
+      ).toMatchObject({ status: 200, body: { user_id: USERS.admin.id } });
+
+      const page = await call("GET", "/v1/instance/audit-logs?limit=2");
+      expect(page.status).toBe(200);
+      const { entries, next_cursor } = page.body as {
+        entries: { workspace_id: string | null; action: string }[];
+        next_cursor: string | null;
+      };
+      expect(entries.map((e) => e.action)).toEqual([
+        "instance.admin_granted",
+        "auth.reauthenticated",
+      ]);
+      expect(entries.every((e) => e.workspace_id === null)).toBe(true);
+      expect(
+        (await call("GET", `/v1/instance/audit-logs?limit=2&cursor=${next_cursor}`)).status,
+      ).toBe(200);
+      expect(
+        await call("GET", "/v1/instance/audit-logs?action=auth.reauthenticated"),
+      ).toMatchObject({ body: { entries: [{ action: "auth.reauthenticated" }] } });
+      expect((await call("GET", "/v1/instance/audit-logs?action=nope")).status).toBe(400);
+      expect(await call("GET", "/v1/instance/audit-logs/verify")).toMatchObject({
+        status: 200,
+        body: { ok: true, broken_at_seq: null },
+      });
+
+      db.deploy.github.app = null;
+      expect((await call("POST", "/v1/github/claims", { workspace_id: WORKSPACE_ID })).status).toBe(
+        409,
+      );
+      expect((await call("POST", "/v1/github/claims", {})).status).toBe(400);
+      as("member");
+      expect((await call("POST", "/v1/github/claims", { workspace_id: WORKSPACE_ID })).status).toBe(
+        403,
+      );
+      expect((await call("DELETE", release)).status).toBe(403);
+      as("viewer");
+      expect((await call("GET", "/v1/instance/admins")).status).toBe(403);
+      expect(
+        (await call("PUT", `/v1/instance/admins/${USERS.viewer.id}`, { instance_admin: true }))
+          .status,
+      ).toBe(403);
+      expect((await call("GET", "/v1/instance/audit-logs")).status).toBe(403);
+      expect((await call("GET", "/v1/instance/audit-logs/verify")).status).toBe(403);
+      as(null);
+      expect((await call("POST", "/v1/github/claims", { workspace_id: WORKSPACE_ID })).status).toBe(
+        401,
+      );
+      expect((await call("DELETE", release)).status).toBe(401);
+      expect((await call("GET", "/v1/instance/admins")).status).toBe(401);
+      expect(
+        (await call("PUT", `/v1/instance/admins/${USERS.admin.id}`, { instance_admin: true }))
+          .status,
+      ).toBe(401);
+      expect((await call("GET", "/v1/instance/audit-logs")).status).toBe(401);
+      expect((await call("GET", "/v1/instance/audit-logs/verify")).status).toBe(401);
+      expect((await call("POST", "/v1/auth/reauth", { password: PASSWORD })).status).toBe(401);
     });
   });
 

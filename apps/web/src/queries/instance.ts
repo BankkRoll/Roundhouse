@@ -1,6 +1,13 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { deployApi } from "../lib/api/deploy-client";
-import type { GithubManifestBody, InstanceSettingsPatch } from "../lib/api/deploy-types";
+import type {
+  CompleteSigningKeyRolloverBody,
+  GithubManifestBody,
+  InstanceSettingsPatch,
+  ScheduleSigningKeyRolloverBody,
+} from "../lib/api/deploy-types";
+import { securityApi } from "../lib/api/security-client";
+import type { InstanceAuditQuery } from "../lib/api/security-types";
 import { queryKeys } from "./keys";
 
 /**
@@ -70,5 +77,97 @@ export function useGithubRepositories(workspaceId: string, enabled = true) {
 export function useCreateGithubManifest() {
   return useMutation({
     mutationFn: (body: GithubManifestBody) => deployApi.createGithubManifest(body),
+  });
+}
+
+/**
+ * Reads the control-plane signing keys and rollover status. Instance admins only.
+ *
+ * @param enabled - Skip for callers without `instance:manage`.
+ * @returns The status query.
+ */
+export function useSigningKeys(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.signingKeys,
+    queryFn: ({ signal }) => deployApi.getSigningKeys(signal),
+    enabled,
+    // NOTE: servers pick up an announced key as they reconnect, so the list moves on its own.
+    refetchInterval: 30_000,
+  });
+}
+
+/** Rows fetched per instance audit log page. */
+export const INSTANCE_AUDIT_PAGE_SIZE = 50;
+
+/** Filters of the instance audit log the page offers. */
+export type InstanceAuditFilters = Pick<InstanceAuditQuery, "action" | "actor_id">;
+
+/**
+ * Reads the instance audit log with cursor pagination. Instance admins only.
+ *
+ * @param filters - Action and actor to narrow to.
+ * @param enabled - Skip for callers without `instance:manage`.
+ * @returns An infinite query; call `fetchNextPage` to load older entries.
+ */
+export function useInstanceAuditLog(filters: InstanceAuditFilters, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.instanceAudit, filters],
+    queryFn: ({ pageParam, signal }) =>
+      securityApi.listInstanceAuditLogs(
+        { ...filters, cursor: pageParam ?? undefined, limit: INSTANCE_AUDIT_PAGE_SIZE },
+        signal,
+      ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor,
+    enabled,
+  });
+}
+
+/**
+ * Schedules, completes or cancels a signing-key rollover and caches the resulting status.
+ *
+ * @returns One mutation per action.
+ */
+export function useSigningKeyRollover() {
+  const queryClient = useQueryClient();
+  const onSuccess = (status: Awaited<ReturnType<typeof deployApi.getSigningKeys>>) =>
+    queryClient.setQueryData(queryKeys.signingKeys, status);
+  return {
+    schedule: useMutation({
+      mutationFn: (body: ScheduleSigningKeyRolloverBody) =>
+        deployApi.scheduleSigningKeyRollover(body),
+      onSuccess,
+    }),
+    complete: useMutation({
+      mutationFn: (body: CompleteSigningKeyRolloverBody) =>
+        deployApi.completeSigningKeyRollover(body),
+      onSuccess,
+    }),
+    cancel: useMutation({ mutationFn: () => deployApi.cancelSigningKeyRollover(), onSuccess }),
+  };
+}
+
+/**
+ * Verifies the audit chain on demand.
+ *
+ * @returns A mutation resolving to the verification report.
+ */
+export function useVerifyAuditChain() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => securityApi.verifyAuditChain(),
+    // Verifying seals pending entries first, so listed hashes may have changed.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.instanceAudit }),
+  });
+}
+
+/**
+ * Starts claiming a GitHub installation for a workspace.
+ *
+ * @returns A mutation taking the workspace id and resolving to the install URL.
+ */
+export function useStartGithubClaim() {
+  return useMutation({
+    mutationFn: (workspaceId: string) => securityApi.startGithubClaim(workspaceId),
   });
 }

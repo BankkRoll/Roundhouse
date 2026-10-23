@@ -6,7 +6,7 @@
  *   the row for the next run instead of an orphaned object.
  * - GitHub delivery IDs past the redelivery window.
  * - Expired node join tokens, sessions, invites, Better Auth verifications,
- *   and redeemed single-use nonces.
+ *   GitHub installation claims, and redeemed single-use nonces.
  * - Sign-in failure counters past their window and no longer locked.
  *
  * Every deletion runs in bounded batches with a per-run cap, so one run
@@ -19,6 +19,7 @@ import {
   consumedNonces,
   createDb,
   type Db,
+  githubClaimStates,
   githubDeliveries,
   invites,
   logChunks,
@@ -82,6 +83,7 @@ export interface RetentionReport {
   verifications: number;
   nonces: number;
   loginAttempts: number;
+  githubClaims: number;
 }
 
 function chunks<T>(items: readonly T[], size: number): T[][] {
@@ -189,6 +191,11 @@ export async function runRetention(
         lt(loginAttempts.lastFailureAt, at(LOGIN_FAILURE_WINDOW_MS)),
         or(isNull(loginAttempts.lockedUntil), lt(loginAttempts.lockedUntil, at(0))),
       )!,
+    ),
+    githubClaims: await prune(
+      githubClaimStates,
+      githubClaimStates.id,
+      lt(githubClaimStates.expiresAt, at(0)),
     ),
   };
 }

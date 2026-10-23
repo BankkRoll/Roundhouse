@@ -480,6 +480,9 @@ describe("staged changes", () => {
     const project = await createProject(owner, workspaceId);
     const svc = await createService(owner, project.id);
     const envId = project.environments[0]!.id;
+    // Production starts protected, where an agent's change set waits for a
+    // person; this test is about staging, so it uses an open environment.
+    await env.DB.prepare("UPDATE environments SET protected = 0 WHERE id = ?").bind(envId).run();
     const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.deploy));
     const target = { service_id: svc.service.id, environment_id: envId };
 
@@ -753,6 +756,26 @@ describe("cancel_deployment", () => {
       "SELECT metadata FROM audit_logs WHERE action = 'deployment.cancelled'",
     ).first<{ metadata: string }>();
     expect(JSON.parse(audit!.metadata)).toMatchObject({ via: "mcp", tool: "cancel_deployment" });
+    await client.close();
+  });
+});
+
+describe("two-factor requirement", () => {
+  it("refuses tools that change something while the token's admin hasn't enrolled", async () => {
+    const { owner, workspaceId, userId } = await install();
+    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.deploy));
+    await env.DB.prepare("UPDATE users SET two_factor_enabled = 0 WHERE id = ?").bind(userId).run();
+
+    const deploy = await tool<{ error: { status: number; code: string } }>(
+      client,
+      "deploy_service",
+      { service_id: "svc_x", environment_id: "env_x" },
+    );
+    expect(deploy.isError).toBe(true);
+    expect(deploy.body.error).toMatchObject({ status: 403, code: "two_factor_required" });
+
+    const read = await tool(client, "list_workspaces");
+    expect(read.isError).toBe(false);
     await client.close();
   });
 });

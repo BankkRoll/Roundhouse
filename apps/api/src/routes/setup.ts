@@ -13,13 +13,8 @@ import { forwardCookies } from "../lib/cookies";
 import { constantTimeEqual, isValidMasterKey } from "../lib/crypto";
 import { ApiError } from "../lib/errors";
 import { hasPublicOrigin, publicOrigin } from "../lib/origin";
-import {
-  claimSetupLock,
-  createSigningKey,
-  isSetupComplete,
-  releaseSetupLock,
-  SettingKey,
-} from "../lib/settings";
+import { claimSetupLock, isSetupComplete, releaseSetupLock, SettingKey } from "../lib/settings";
+import { createSigningKey } from "../lib/signing-keys";
 import { createWorkspace } from "../lib/workspaces";
 import { body, errors, json } from "../schemas";
 
@@ -105,7 +100,8 @@ export const setupRoutes = createRouter()
       createdWorkspaceId = workspace.id;
       await createSigningKey(db, c.env);
       await recordAudit(db, {
-        workspaceId: workspace.id,
+        // Instance-level (ADR 0014): only instance admins see it.
+        workspaceId: null,
         actorType: "user",
         actorId: userId,
         action: "instance.setup_completed",

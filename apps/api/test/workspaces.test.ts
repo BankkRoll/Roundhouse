@@ -412,7 +412,8 @@ describe("audit log", () => {
     const second = await owner.json<Page>(
       `/v1/workspaces/${workspaceId}/audit-logs?limit=4&cursor=${first.body.next_cursor}`,
     );
-    expect(second.body.items).toHaveLength(2);
+    // Five renames; setup is recorded at instance level, not in the workspace.
+    expect(second.body.items).toHaveLength(1);
     expect(second.body.next_cursor).toBeNull();
     const all = [...first.body.items, ...second.body.items].map((i) => i.id);
     expect([...all].sort().reverse()).toEqual(all);

@@ -18,6 +18,9 @@
  * - tools then run with the token's scopes as `authInfo.scopes`, so a missing
  *   scope is a 403 `insufficient_scope` challenge, and every handler checks
  *   the creator's current access through `requireWorkspace`.
+ * - a tool that changes something is refused (`two_factor_required`) while
+ *   the token's creator must have two-factor authentication and hasn't
+ *   enrolled, as `/v1` mutations are by the two-factor gate.
  *
  * Both 2026-07-28 (per-request `_meta` envelope) and 2025-era clients are
  * served; the latter through the SDK's stateless fallback, since most
@@ -37,6 +40,7 @@ import {
 } from "../context";
 import { bearerSecret } from "../lib/api-tokens";
 import { ApiError, errorBody } from "../lib/errors";
+import { requireEnrolledIfRequired } from "../lib/two-factor-gate";
 import { requireMcpEnabled } from "./enabled";
 import {
   bearerChallenge,
@@ -187,6 +191,10 @@ function register(server: McpServer, c: AppContext, token: TokenIdentity, tool: 
       let body: Record<string, unknown>;
       let isError = false;
       try {
+        if (!tool.annotations.readOnlyHint) {
+          const principal = await currentPrincipal(c);
+          if (principal) await requireEnrolledIfRequired(c, principal.user.id);
+        }
         body = await tool.run({ c, token, tool: tool.name }, input);
       } catch (err) {
         isError = true;

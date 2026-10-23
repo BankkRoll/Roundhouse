@@ -33,12 +33,17 @@ export const GITHUB_API = "https://api.github.com";
 /** GitHub web origin. */
 export const GITHUB_WEB = "https://github.com";
 
-/** The App's permissions: read code, report commit statuses, comment on PRs (previews). */
+/**
+ * The App's permissions: read code, report commit statuses, comment on PRs
+ * (previews), and read organization membership, which claiming an
+ * installation needs to see that the installing user is an org admin.
+ */
 export const GITHUB_APP_PERMISSIONS = {
   contents: "read",
   metadata: "read",
   statuses: "write",
   pull_requests: "write",
+  members: "read",
 } as const;
 
 /**
@@ -374,7 +379,7 @@ export function buildManifest(origin: string, name: string): Record<string, unkn
 /** An installation as GitHub describes it. */
 export interface GithubInstallationInfo {
   id: number;
-  account: { login: string; type: string } | null;
+  account: { id?: number; login: string; type: string } | null;
 }
 
 /**
@@ -458,6 +463,57 @@ export async function userCanAccessInstallation(
     if (res.installations.length < 100 || page * 100 >= res.total_count) return false;
   }
   return false;
+}
+
+/** The GitHub user behind a user-to-server token. */
+export interface GithubUser {
+  id: number;
+  login: string;
+}
+
+/**
+ * Who a user-to-server token belongs to.
+ *
+ * @param userToken - Token from {@link exchangeUserCode}.
+ * @returns The user's numeric ID and login.
+ */
+export function getAuthenticatedUser(userToken: string): Promise<GithubUser> {
+  return githubRequest<GithubUser>("/user", { auth: userToken });
+}
+
+/**
+ * Whether a GitHub user administers the account an installation is on:
+ * the account is the user themselves, or an organization in which GitHub
+ * reports them an active admin (ADR 0014 "Claims"). Accounts are compared
+ * by numeric ID, since logins can be renamed and reused.
+ *
+ * @param userToken - The user's token from {@link exchangeUserCode}.
+ * @param user - From {@link getAuthenticatedUser}.
+ * @param account - The installation's account, as the App sees it.
+ * @returns `true` only for the account's owner or an org admin.
+ */
+export async function userAdministersAccount(
+  userToken: string,
+  user: GithubUser,
+  account: { id?: number; login: string; type: string },
+): Promise<boolean> {
+  if (account.type !== "Organization") return account.id !== undefined && account.id === user.id;
+  try {
+    const membership = await githubRequest<{
+      state?: string;
+      role?: string;
+      organization?: { id?: number };
+    }>(`/user/memberships/orgs/${encodeURIComponent(account.login)}`, { auth: userToken });
+    return (
+      membership.state === "active" &&
+      membership.role === "admin" &&
+      (account.id === undefined || membership.organization?.id === account.id)
+    );
+  } catch (err) {
+    // 403/404: not a member, or the token may not read the membership.
+    if (err instanceof GithubApiError && (err.status === 403 || err.status === 404)) return false;
+    throw err;
+  }
 }
 
 /**

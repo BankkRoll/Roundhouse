@@ -295,6 +295,19 @@ jobs:
             exit 1
           fi
 
+  install-cli-script:
+    name: install-cli.sh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install from a fake signed release
+        run: bash install/test/install-cli-test.sh
+
   install-script:
     name: install.sh (${{ matrix.image }})
     runs-on: ubuntu-24.04

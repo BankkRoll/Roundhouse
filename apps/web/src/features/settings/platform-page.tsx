@@ -26,17 +26,20 @@ import { GithubIcon } from "../../components/github-mark";
 import { SettingsField } from "../../components/settings-field";
 import { errorMessage, isApiError } from "../../lib/api/client";
 import type { GithubStatus, InstanceSettings } from "../../lib/api/deploy-types";
+import { external } from "../../lib/external";
 import { formatRelativeTime } from "../../lib/format";
 import { canManageInstance, usePermissions } from "../../lib/permissions";
 import {
   useCreateGithubManifest,
   useGithubStatus,
   useInstanceSettings,
+  useStartGithubClaim,
   useUpdateInstanceSettings,
 } from "../../queries/instance";
 import { useMe } from "../../queries/me";
 import { submitGithubManifest } from "./github-manifest";
 import { SettingsFrame } from "./settings-frame";
+import { SigningKeysSection } from "./signing-keys-section";
 
 /** The MCP section of the API README: endpoint, tools, scopes and client setup. */
 export const MCP_DOCS_URL =
@@ -337,6 +340,35 @@ function CreateAppForm({ workspaceId }: { workspaceId: string }) {
   );
 }
 
+/**
+ * Starts a claim (ADR 0014) and sends the browser to GitHub to install the App. The
+ * installation joins this workspace only if GitHub shows the installer administers the
+ * account it is installed on.
+ */
+function InstallButton({ workspaceId }: { workspaceId: string }) {
+  const claim = useStartGithubClaim();
+  return (
+    <Button
+      variant="secondary"
+      loading={claim.isPending}
+      onClick={() =>
+        claim.mutate(workspaceId, {
+          onSuccess: ({ install_url }) => external.assign(install_url),
+          onError: (cause) =>
+            toast({
+              title: "Could not start the installation",
+              description: errorMessage(cause),
+              tone: "error",
+            }),
+        })
+      }
+    >
+      <ExternalLinkIcon />
+      Install on GitHub
+    </Button>
+  );
+}
+
 function GithubSection({
   workspaceId,
   status,
@@ -386,12 +418,7 @@ function GithubSection({
             }
           >
             <div className="md:flex md:justify-end">
-              <Button asChild variant="secondary">
-                <a href={status.app.install_url} rel="noreferrer noopener">
-                  <ExternalLinkIcon />
-                  Install on GitHub
-                </a>
-              </Button>
+              <InstallButton workspaceId={workspaceId} />
             </div>
           </SettingsRow>
           <SettingsRow
@@ -410,8 +437,18 @@ function GithubSection({
                     key={installation.id}
                     className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
                   >
-                    <span className="font-mono text-sm text-foreground">
-                      {installation.account_login}
+                    <span className="flex items-center gap-2">
+                      <span className="font-mono text-sm text-foreground">
+                        {installation.account_login}
+                      </span>
+                      {installation.verified ? null : (
+                        <Badge
+                          tone="warning"
+                          title="Claimed before ownership was checked. Install it again from this page to verify."
+                        >
+                          Unverified
+                        </Badge>
+                      )}
                     </span>
                     <span className="text-xs text-muted-foreground">
                       {installation.account_type.toLowerCase()} · added{" "}
@@ -430,7 +467,8 @@ function GithubSection({
 
 /**
  * Install-wide settings: the apps domain and TLS mode for generated domains, how long
- * logs are kept, and whether the MCP endpoint is on (instance admins), and the GitHub App with its installations. Owners can
+ * logs are kept, whether the MCP endpoint is on, and the control-plane signing key and its
+ * rollover (instance admins), and the GitHub App with its installations. Owners can
  * create the App through GitHub's manifest flow; anyone who manages projects can install
  * it.
  *
@@ -450,7 +488,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
       title="Platform"
       description={
         owner
-          ? "Shared by every workspace on this instance. Each change is recorded in the audit log of every workspace you own."
+          ? "Shared by every workspace on this instance. Each change is recorded in the instance audit log."
           : "Shared by every workspace on this instance."
       }
     >
@@ -468,6 +506,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
               <IngressForm settings={settings.data} />
               <LogRetentionForm settings={settings.data} />
               <McpSection settings={settings.data} />
+              <SigningKeysSection />
             </>
           )
         ) : (

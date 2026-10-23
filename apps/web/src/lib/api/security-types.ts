@@ -1,39 +1,41 @@
 /**
- * Wire types of account security: the caller's two-factor and freshness state, their
- * sessions, and Better Auth's two-factor endpoints. Mirrors
- * `apps/api/src/schemas/auth.ts` and Better Auth's `twoFactor` plugin.
+ * Wire types for the ADR 0014 routes the dashboard calls (GitHub installation claims,
+ * the instance audit log and its chain verification, re-authentication, two-factor and
+ * sessions), derived from the API's route definitions so the dashboard cannot drift
+ * from them. Better Auth's two-factor responses are typed by hand.
+ *
+ * Type-only: nothing from the API source reaches the bundle.
  *
  * @module
  */
+import type {
+  getSecurityStatus,
+  listInstanceAuditLogs,
+  listSessions,
+  QueryOf,
+  ResponseOf,
+  reauthenticate,
+  startGithubClaim,
+  verifyAuditChain,
+} from "../../../../api/src/contracts";
 
-/** `GET /v1/auth/security`. */
-export interface SecurityStatus {
-  two_factor_enabled: boolean;
-  /** Instance admins and workspace owners/admins must enroll before changing anything. */
-  two_factor_required: boolean;
-  /** Unused backup codes left; `null` while two-factor is off. */
-  backup_codes_remaining: number | null;
-  instance_admin: boolean;
-  /** Until when dangerous actions need no re-authentication (Unix ms); `null` when now. */
-  fresh_until: number | null;
-}
+/** `POST /v1/github/claims` response: where to send the browser to install the App. */
+export type GithubClaimStarted = ResponseOf<typeof startGithubClaim, 200>;
+/** A page of the instance audit log, newest first. */
+export type InstanceAuditPage = ResponseOf<typeof listInstanceAuditLogs, 200>;
+/** One instance-level audit entry with its chain fields. */
+export type InstanceAuditEntry = InstanceAuditPage["entries"][number];
+/** Filters and paging of the instance audit log. */
+export type InstanceAuditQuery = QueryOf<typeof listInstanceAuditLogs>;
+/** Result of verifying the audit chain. */
+export type AuditChainVerification = ResponseOf<typeof verifyAuditChain, 200>;
+/** `POST /v1/auth/reauth` response. */
+export type ReauthResult = ResponseOf<typeof reauthenticate, 200>;
 
+/** `GET /v1/auth/security`: two-factor state and session freshness. */
+export type SecurityStatus = ResponseOf<typeof getSecurityStatus, 200>;
 /** One of the caller's sessions (`GET /v1/auth/sessions`). Never carries its token. */
-export interface AccountSession {
-  id: string;
-  /** The session this browser is using. */
-  current: boolean;
-  ip_address: string | null;
-  user_agent: string | null;
-  created_at: number;
-  expires_at: number;
-}
-
-/** `POST /v1/auth/reauth` body. `code` is required while two-factor is on. */
-export interface ReauthRequest {
-  password: string;
-  code?: string;
-}
+export type AccountSession = ResponseOf<typeof listSessions, 200>["sessions"][number];
 
 /** `POST /api/auth/two-factor/enable` response: shown once, never stored by the dashboard. */
 export interface TwoFactorEnrollment {

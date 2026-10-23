@@ -5,9 +5,10 @@
 //     forever with capped, jittered exponential backoff;
 //   - send hello on every connection, then heartbeats on the interval the
 //     control plane's welcome sets, from a single writer goroutine;
-//   - verify every inbound signed envelope against the pinned control-plane
-//     key, act on welcome, and dispatch desired_state (in generation order),
-//     build_job and build_cancel to a [Handler];
+//   - verify every inbound signed envelope against the trusted control-plane
+//     keys ([KeyStore]), follow signing-key rollovers announced in welcome
+//     and key_announce, act on welcome, and dispatch desired_state (in
+//     generation order), build_job and build_cancel to a [Handler];
 //   - carry workload_status, logs and build_result frames from the rest of
 //     the agent through that same writer ([Client.Send]), within the
 //     protocol's frame size limit.
@@ -113,13 +114,17 @@ type Client struct {
 	Credential string
 	// NodeID is this node's ID; payloads addressed elsewhere are dropped.
 	NodeID string
-	// ControlKey is the pinned control-plane signing key.
+	// ControlKey is the control-plane signing key the node joined with.
 	ControlKey ed25519.PublicKey
-	// ControlKeyID is the pinned kid of ControlKey. When set, envelopes with
-	// any other kid are dropped. When empty, the client pins the kid of the
-	// first verified welcome, sets this field and calls OnControlKeyID.
+	// ControlKeyID is the kid of ControlKey, empty until the first verified
+	// welcome pins it. Envelopes under any other kid are dropped unless
+	// Keys trusts it.
 	ControlKeyID string
-	// OnControlKeyID persists a newly pinned kid; nil skips persistence.
+	// Keys holds the trusted signing keys and follows rollovers. Nil starts
+	// an in-memory store from ControlKey and ControlKeyID.
+	Keys *KeyStore
+	// OnControlKeyID is called once, when the first welcome pins the join
+	// key's kid, to record it in the config; nil skips that.
 	OnControlKeyID func(kid string) error
 	// Hello builds the hello frame for each new connection; the client
 	// passes the observed generation.
@@ -167,6 +172,9 @@ func (c *Client) ObservedGeneration() int64 {
 func (c *Client) Run(ctx context.Context) error {
 	if c.Logger == nil {
 		c.Logger = slog.New(slog.DiscardHandler)
+	}
+	if c.Keys == nil {
+		c.Keys = NewKeyStore(c.ControlKey, c.ControlKeyID)
 	}
 	if c.State != nil {
 		st, err := c.State.Load()
@@ -356,7 +364,11 @@ func (s *session) writeLoop(ctx context.Context) error {
 		s.cur.CompareAndSwap(s, nil)
 		close(s.done)
 	}()
-	hello := fitHello(s.Hello(ctx, s.observed.Load()))
+	h := s.Hello(ctx, s.observed.Load())
+	if h.ProtocolVersion >= protocol.KeyRolloverProtocolVersion {
+		h.PinnedKIDs = s.Keys.PinnedKIDs()
+	}
+	hello := fitHello(h)
 	if err := s.write(ctx, &hello); err != nil {
 		return fmt.Errorf("send hello: %w", err)
 	}
@@ -448,20 +460,65 @@ func (s *session) handle(data []byte) {
 		s.drop(env, err)
 		return
 	}
-	// TODO(phase-1): key rollover message. Until the control plane can
-	// announce a signed successor key, a kid change means re-joining.
-	if s.ControlKeyID != "" && env.KID != s.ControlKeyID {
-		s.Logger.Warn("dropping control frame", "reason", "unknown_kid", "kid", env.KID, "pinned_kid", s.ControlKeyID)
+	key, ok := s.Keys.KeyFor(env.KID, s.controlNow())
+	if !ok {
+		s.Logger.Warn("dropping control frame", "reason", "unknown_kid", "kid", env.KID, "pinned_kids", s.Keys.PinnedKIDs())
 		return
 	}
 	// NOTE: VerifyEnvelope compares exp strictly; skew correction and the
 	// grace window are applied here by shifting the time it is given.
-	msg, err := protocol.VerifyEnvelope(env, s.ControlKey, s.NodeID, s.verifyTime())
+	msg, err := protocol.VerifyEnvelope(env, key, s.NodeID, s.verifyTime())
 	if err != nil {
 		s.drop(env, err)
 		return
 	}
+	s.trust(env.KID, msg)
 	s.apply(env.KID, msg)
+}
+
+// trust records a verified frame's kid with the key store: the first welcome
+// pins the join key's kid, and the first frame from an announced successor
+// makes it current and retires the previous key.
+func (s *session) trust(kid string, msg protocol.ControlMessage) {
+	_, welcome := msg.(*protocol.Welcome)
+	previous := s.Keys.CurrentKID()
+	changed, err := s.Keys.Verified(kid, welcome)
+	if !changed {
+		return
+	}
+	if err != nil {
+		s.Logger.Error("persist control plane keys", "kid", kid, "err", err)
+	}
+	if previous != "" {
+		s.Logger.Info("control plane signing key rolled over", "kid", kid, "previous_kid", previous)
+		return
+	}
+	s.Logger.Info("pinned control plane key id", "kid", kid)
+	if s.OnControlKeyID != nil {
+		if err := s.OnControlKeyID(kid); err != nil {
+			s.Logger.Error("persist control plane key id", "kid", kid, "err", err)
+		}
+	}
+}
+
+// announce records the successor keys that a welcome or key_announce signed
+// under kid lists. A rejected announcement is logged and changes nothing.
+func (s *session) announce(kid string, keys []protocol.SigningKeyAnnouncement) {
+	changed, err := s.Keys.SetNext(kid, keys)
+	if !changed {
+		if err != nil {
+			s.Logger.Warn("ignoring signing key announcement", "kid", kid, "err", err)
+		}
+		return
+	}
+	if err != nil {
+		s.Logger.Error("persist control plane keys", "err", err)
+	}
+	kids := make([]string, len(keys))
+	for i, k := range keys {
+		kids[i] = k.KID
+	}
+	s.Logger.Info("control plane announced successor signing keys", "kid", kid, "next_kids", kids)
 }
 
 func (s *session) drop(env protocol.Envelope, err error) {
@@ -470,6 +527,12 @@ func (s *session) drop(env protocol.Envelope, err error) {
 		reason = string(r)
 	}
 	s.Logger.Warn("dropping control frame", "reason", reason, "kid", env.KID, "err", err)
+}
+
+// controlNow is the control plane's current time, as of the latest skew
+// measurement.
+func (c *Client) controlNow() time.Time {
+	return time.Now().Add(time.Duration(c.clockOffset.Load()))
 }
 
 // verifyTime is the instant expiry is checked against: control-plane time,
@@ -491,30 +554,19 @@ func (c *Client) setClockOffset(offset time.Duration) {
 	}
 }
 
-func (s *session) pinKeyID(kid string) {
-	if s.ControlKeyID != "" {
-		return
-	}
-	s.ControlKeyID = kid
-	s.Logger.Info("pinned control plane key id", "kid", kid)
-	if s.OnControlKeyID != nil {
-		if err := s.OnControlKeyID(kid); err != nil {
-			s.Logger.Error("persist control plane key id", "kid", kid, "err", err)
-		}
-	}
-}
-
 func (s *session) apply(kid string, msg protocol.ControlMessage) {
 	switch m := msg.(type) {
 	case *protocol.Welcome:
 		d := clampHeartbeatInterval(m.HeartbeatIntervalMS)
-		s.pinKeyID(kid)
+		s.announce(kid, m.NextKeys)
 		select {
 		case <-s.interval:
 		default:
 		}
 		s.interval <- d
 		s.Logger.Info("welcomed by control plane", "msg_id", m.ID, "heartbeat_interval", d)
+	case *protocol.KeyAnnounce:
+		s.announce(kid, m.Keys)
 	case *protocol.DesiredState:
 		s.applyDesiredState(m)
 	case *protocol.BuildJob:

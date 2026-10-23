@@ -12,8 +12,13 @@
  *   `presence` to every socket, and `log.lines` only to subscribers;
  * - lists only browser sessions in `presence`: CLI sockets and API tokens
  *   watch without being shown;
- * - re-checks every socket's session or token, membership and project once
- *   a minute (an alarm), closing it with 4401, 4403 or 4404 when one lapses;
+ * - re-checks every socket's session or token, the project, membership and
+ *   project access (`resolveAccess`, grants and teams included) once a
+ *   minute (an alarm) and on every `subscribe`, closing it with 4401, 4404
+ *   or 4403 when one lapses;
+ * - re-checks at once when a writer calls {@link ProjectRoom.revalidate}
+ *   after changing who may see the project (ADR 0014 "Realtime"), telling a
+ *   socket that lost access why (`access.revoked`) before closing it with 4403;
  * - buffers outgoing messages per socket with a byte bound, dropping the
  *   oldest log lines first, so a slow browser can't pin memory.
  *
@@ -23,18 +28,17 @@
  * @module
  */
 import { DurableObject } from "cloudflare:workers";
-import {
-  apiTokens,
-  createDb,
-  projects,
-  sessions,
-  workspaceMembers,
-  workspaces,
-} from "@roundhouse/db";
+import { apiTokens, createDb, projects, sessions, workspaces } from "@roundhouse/db";
 import type { LogLine, LogSource } from "@roundhouse/protocol";
-import { REALTIME_CLOSE_CODES, REALTIME_RECHECK_INTERVAL_MS } from "@roundhouse/shared";
+import {
+  type Action,
+  REALTIME_CLOSE_CODES,
+  REALTIME_RECHECK_INTERVAL_MS,
+  resolveAccess,
+} from "@roundhouse/shared";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Env } from "../env";
+import { loadWorkspaceAccess } from "../lib/access";
 import {
   type RealtimeClientMessage,
   RealtimeClientMessageSchema,
@@ -95,8 +99,23 @@ export interface RoomViewer {
   presence: boolean;
 }
 
-/** Why a re-check closes a socket, as a close code and reason. */
-type Lapse = { code: number; reason: string } | null;
+/** What a socket needs to stay open: the realtime route's policy action. */
+const REALTIME_ACTION: Action = "projects:read";
+
+/** Why access was lost, as `access.revoked` reports it. */
+type RevokedReason = Extract<RealtimeServerMessage, { type: "access.revoked" }>["reason"];
+
+/**
+ * Why a re-check closes a socket, as a close code and reason. `revoked` is
+ * set for a 4403 and is sent as `access.revoked` first.
+ */
+type Lapse = { code: number; reason: string; revoked?: RevokedReason } | null;
+
+/** Which sockets {@link ProjectRoom.revalidate} re-checks; every socket when empty. */
+export interface RevalidateFilter {
+  userIds?: readonly string[];
+  tokenIds?: readonly string[];
+}
 
 interface Attachment {
   viewer: RoomViewer;
@@ -173,27 +192,7 @@ export class ProjectRoom extends DurableObject<Env> {
   override async alarm(): Promise<void> {
     const sockets = this.ctx.getWebSockets();
     if (!sockets.length) return;
-    const verdicts = new Map<string, Promise<Lapse>>();
-    let closed = 0;
-    for (const ws of sockets) {
-      const { viewer } = ws.deserializeAttachment() as Attachment;
-      const key = JSON.stringify([viewer.session_id, viewer.token_id, viewer.user_id]);
-      let verdict = verdicts.get(key);
-      if (!verdict) {
-        verdict = this.recheck(viewer);
-        verdicts.set(key, verdict);
-      }
-      const lapse = await verdict;
-      if (!lapse) continue;
-      closed++;
-      this.queues.delete(ws);
-      try {
-        ws.close(lapse.code, lapse.reason);
-      } catch {
-        // Already closed.
-      }
-    }
-    if (closed) this.sendPresence();
+    const closed = await this.recheckSockets(sockets);
     // Sockets closed above still count in getWebSockets() until their close completes.
     if (sockets.length > closed) {
       await this.ctx.storage.setAlarm(Date.now() + REALTIME_RECHECK_INTERVAL_MS);
@@ -220,11 +219,14 @@ export class ProjectRoom extends DurableObject<Env> {
       ws.serializeAttachment(attachment);
       return;
     }
-    // SECURITY: A socket outlives the membership checked at upgrade. Each
-    // subscription re-checks it, so a removed member stops getting logs at
-    // once rather than at the next alarm.
-    if (!(await this.stillMember(attachment.viewer))) {
-      return ws.close(RoomCloseCode.forbidden, "no longer a member");
+    // SECURITY: A socket outlives the access checked at upgrade. Each
+    // subscription re-checks all of it, so someone who lost access stops
+    // getting logs at once rather than at the next alarm.
+    const lapse = await this.recheck(attachment.viewer);
+    if (lapse) {
+      this.closeLapsed(ws, lapse);
+      this.sendPresence(ws);
+      return;
     }
     if (attachment.topics.includes(key)) return;
     if (attachment.topics.length >= MAX_SUBSCRIPTIONS) {
@@ -307,6 +309,29 @@ export class ProjectRoom extends DurableObject<Env> {
   }
 
   /**
+   * Re-checks the sockets of the given users or tokens (every socket without
+   * a filter) now, closing those that lost access. Writers call it after
+   * committing a change to membership, roles, teams, grants, workspace
+   * access settings or tokens, so revocation doesn't wait for the alarm.
+   *
+   * @param filter - Users and/or tokens whose sockets to re-check.
+   * @returns How many sockets were closed.
+   */
+  async revalidate(filter: RevalidateFilter = {}): Promise<number> {
+    const users = filter.userIds ? new Set(filter.userIds) : null;
+    const tokens = filter.tokenIds ? new Set(filter.tokenIds) : null;
+    const sockets = this.ctx.getWebSockets().filter((ws) => {
+      if (!users && !tokens) return true;
+      const { viewer } = ws.deserializeAttachment() as Attachment;
+      return (
+        (users?.has(viewer.user_id) ?? false) ||
+        (viewer.token_id !== null && (tokens?.has(viewer.token_id) ?? false))
+      );
+    });
+    return this.recheckSockets(sockets);
+  }
+
+  /**
    * Number of open sockets, for tests and diagnostics.
    *
    * @returns Open socket count.
@@ -338,9 +363,52 @@ export class ProjectRoom extends DurableObject<Env> {
     }
   }
 
-  /** Checks a viewer's credential, membership and project, in that order. */
+  /** Re-checks sockets (one lookup per distinct viewer) and closes the lapsed ones. */
+  private async recheckSockets(sockets: WebSocket[]): Promise<number> {
+    const verdicts = new Map<string, Promise<Lapse>>();
+    let closed = 0;
+    for (const ws of sockets) {
+      const { viewer } = ws.deserializeAttachment() as Attachment;
+      const key = JSON.stringify([viewer.session_id, viewer.token_id, viewer.user_id]);
+      let verdict = verdicts.get(key);
+      if (!verdict) {
+        verdict = this.recheck(viewer);
+        verdicts.set(key, verdict);
+      }
+      const lapse = await verdict;
+      if (!lapse) continue;
+      closed++;
+      this.closeLapsed(ws, lapse);
+    }
+    if (closed) this.sendPresence();
+    return closed;
+  }
+
+  /** Drops what was queued for a socket, says why when access was revoked, and closes it. */
+  private closeLapsed(ws: WebSocket, lapse: NonNullable<Lapse>): void {
+    this.queues.delete(ws);
+    try {
+      if (lapse.revoked) {
+        ws.send(
+          JSON.stringify({
+            type: "access.revoked",
+            reason: lapse.revoked,
+          } satisfies RealtimeServerMessage),
+        );
+      }
+      ws.close(lapse.code, lapse.reason);
+    } catch {
+      // Already closed.
+    }
+  }
+
+  /**
+   * Checks a viewer's credential, the project, their membership and their
+   * access to the project, in that order.
+   */
   private async recheck(viewer: RoomViewer, now = Date.now()): Promise<Lapse> {
     const db = createDb(this.env.DB);
+    let tokenScopes: Action[] | null = null;
     if (viewer.session_id) {
       const [session] = await db
         .select({ expiresAt: sessions.expiresAt })
@@ -352,18 +420,20 @@ export class ProjectRoom extends DurableObject<Env> {
       }
     } else if (viewer.token_id) {
       const [token] = await db
-        .select({ revokedAt: apiTokens.revokedAt, expiresAt: apiTokens.expiresAt })
+        .select({
+          revokedAt: apiTokens.revokedAt,
+          expiresAt: apiTokens.expiresAt,
+          scopes: apiTokens.scopes,
+        })
         .from(apiTokens)
         .where(eq(apiTokens.id, viewer.token_id))
         .limit(1);
       if (!token || token.revokedAt || (token.expiresAt && +token.expiresAt <= now)) {
         return { code: RoomCloseCode.unauthorized, reason: "token revoked or expired" };
       }
+      tokenScopes = token.scopes as Action[];
     } else {
       return { code: RoomCloseCode.unauthorized, reason: "no credential" };
-    }
-    if (!(await this.stillMember(viewer))) {
-      return { code: RoomCloseCode.forbidden, reason: "no longer a member" };
     }
     const [project] = await db
       .select({ id: projects.id })
@@ -378,21 +448,33 @@ export class ProjectRoom extends DurableObject<Env> {
       )
       .limit(1);
     if (!project) return { code: RoomCloseCode.notFound, reason: "project deleted" };
+    const loaded = await loadWorkspaceAccess(
+      db,
+      viewer.workspace_id,
+      viewer.user_id,
+      viewer.project_id,
+    );
+    if (loaded.role === null) {
+      return { code: RoomCloseCode.forbidden, reason: "no longer a member", revoked: "membership" };
+    }
+    const decision = resolveAccess(
+      {
+        userId: viewer.user_id,
+        workspaceRole: loaded.role,
+        instanceAdmin: false,
+        teamIds: loaded.teamIds,
+        tokenScopes,
+      },
+      loaded.context,
+    ).check(REALTIME_ACTION, { projectId: viewer.project_id });
+    if (!decision.allowed) {
+      return {
+        code: RoomCloseCode.forbidden,
+        reason: "no access to this project",
+        revoked: "project_access",
+      };
+    }
     return null;
-  }
-
-  private async stillMember(viewer: RoomViewer): Promise<boolean> {
-    const row = await createDb(this.env.DB)
-      .select({ id: workspaceMembers.id })
-      .from(workspaceMembers)
-      .where(
-        and(
-          eq(workspaceMembers.workspaceId, viewer.workspace_id),
-          eq(workspaceMembers.userId, viewer.user_id),
-        ),
-      )
-      .limit(1);
-    return row.length > 0;
   }
 
   private sendPresence(except?: WebSocket): void {

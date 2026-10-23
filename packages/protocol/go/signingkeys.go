@@ -86,3 +86,7 @@ func AnnouncesSigningKID(envelopeKID string, msg ControlMessage) bool {
 	}
 	return false
 }
+
+// ValidSigningKeyID reports whether kid is a well-formed control-plane
+// signing key ID (SIGNING_KEY_ID_RE in TypeScript).
+func ValidSigningKeyID(kid string) bool { return signingKeyIDRE.MatchString(kid) }

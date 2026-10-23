@@ -70,6 +70,7 @@ const environment = {
   kind: "production" as const,
   pr_number: null,
   source_branch: null,
+  protected: true,
   created_at: 1,
 };
 

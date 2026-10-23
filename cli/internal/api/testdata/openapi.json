@@ -211,6 +211,52 @@
         ],
         "type": "object"
       },
+      "AuditChainVerification": {
+        "properties": {
+          "broken_at_seq": {
+            "exclusiveMinimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "checked": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "checkpoints": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "head_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_seq": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "unsealed": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "checked",
+          "head_seq",
+          "head_hash",
+          "broken_at_seq",
+          "unsealed",
+          "checkpoints"
+        ],
+        "type": "object"
+      },
       "AuditLog": {
         "properties": {
           "action": {
@@ -295,7 +341,10 @@
               "template.deployed",
               "change_set.created",
               "change_set.applied",
-              "change_set.discarded"
+              "change_set.discarded",
+              "key.rollover_scheduled",
+              "key.rollover_completed",
+              "key.rollover_cancelled"
             ],
             "type": "string"
           },
@@ -693,6 +742,191 @@
         },
         "type": "object"
       },
+      "ChainedAuditLog": {
+        "properties": {
+          "action": {
+            "enum": [
+              "instance.setup_completed",
+              "workspace.created",
+              "workspace.renamed",
+              "member.role_changed",
+              "member.removed",
+              "member.left",
+              "invite.created",
+              "invite.revoked",
+              "invite.accepted",
+              "node.join_token_created",
+              "node.joined",
+              "node.removed",
+              "node.went_offline",
+              "project.created",
+              "project.updated",
+              "project.deleted",
+              "service.created",
+              "service.updated",
+              "service.deleted",
+              "variables.updated",
+              "variables.revealed",
+              "variables.resolved",
+              "deployment.created",
+              "deployment.rolled_back",
+              "deployment.cancelled",
+              "deployment.succeeded",
+              "deployment.failed",
+              "github.app_created",
+              "github.installation_added",
+              "github.installation_rejected",
+              "github.installation_released",
+              "instance.settings_updated",
+              "instance.admin_granted",
+              "instance.admin_revoked",
+              "instance.key_rotation_started",
+              "instance.key_rotation_completed",
+              "instance.key_rotation_failed",
+              "token.created",
+              "token.revoked",
+              "workspace.access_settings_updated",
+              "team.created",
+              "team.updated",
+              "team.deleted",
+              "team.member_added",
+              "team.member_removed",
+              "access.granted",
+              "access.changed",
+              "access.revoked",
+              "environment.protection_updated",
+              "node.encryption_key_registered",
+              "auth.sign_in_succeeded",
+              "auth.sign_in_failed",
+              "auth.account_locked",
+              "auth.reauthenticated",
+              "auth.two_factor_enabled",
+              "auth.two_factor_disabled",
+              "auth.backup_codes_regenerated",
+              "auth.two_factor_failed",
+              "auth.backup_code_used",
+              "auth.two_factor_reset",
+              "auth.account_unlocked",
+              "auth.signed_out",
+              "auth.session_revoked",
+              "provider.connected",
+              "provider.disconnected",
+              "node.provision_requested",
+              "node.provisioned",
+              "node.provision_failed",
+              "node.deprovisioned",
+              "node.provision_cancelled",
+              "invite.rejected_token",
+              "domain.added",
+              "domain.verified",
+              "domain.failed",
+              "domain.removed",
+              "mcp_client.authorized",
+              "mcp_client.revoked",
+              "template.deployed",
+              "change_set.created",
+              "change_set.applied",
+              "change_set.discarded",
+              "key.rollover_scheduled",
+              "key.rollover_completed",
+              "key.rollover_cancelled"
+            ],
+            "type": "string"
+          },
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor_type": {
+            "enum": [
+              "user",
+              "token",
+              "node",
+              "system"
+            ],
+            "type": "string"
+          },
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "additionalProperties": {},
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "prev_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "target_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "seq",
+          "workspace_id",
+          "actor_type",
+          "actor_id",
+          "actor_name",
+          "action",
+          "target_type",
+          "target_id",
+          "metadata",
+          "ip",
+          "created_at",
+          "prev_hash",
+          "hash"
+        ],
+        "type": "object"
+      },
       "ChangeSet": {
         "allOf": [
           {
@@ -923,6 +1157,14 @@
         "required": [
           "cleared"
         ],
+        "type": "object"
+      },
+      "CompleteSigningKeyRollover": {
+        "properties": {
+          "force": {
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "ConnectProvider": {
@@ -1391,6 +1633,36 @@
         "required": [
           "name",
           "source"
+        ],
+        "type": "object"
+      },
+      "CreateTeam": {
+        "properties": {
+          "description": {
+            "maxLength": 500,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "slug": {
+            "maxLength": 40,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "user_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -1960,6 +2232,182 @@
         ],
         "type": "object"
       },
+      "EffectiveAccess": {
+        "properties": {
+          "actions": {
+            "items": {
+              "enum": [
+                "workspace:read",
+                "workspace:update",
+                "workspace:delete",
+                "members:read",
+                "members:manage",
+                "tokens:manage",
+                "nodes:read",
+                "nodes:manage",
+                "audit:read",
+                "projects:create",
+                "github:manage",
+                "projects:read",
+                "projects:manage",
+                "access:manage",
+                "services:read",
+                "services:manage",
+                "deployments:create",
+                "variables:read",
+                "variables:read_plain",
+                "variables:manage",
+                "instance:manage",
+                "workspaces:create"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "instance_admin": {
+            "type": "boolean"
+          },
+          "projects": {
+            "items": {
+              "properties": {
+                "actions": {
+                  "items": {
+                    "enum": [
+                      "workspace:read",
+                      "workspace:update",
+                      "workspace:delete",
+                      "members:read",
+                      "members:manage",
+                      "tokens:manage",
+                      "nodes:read",
+                      "nodes:manage",
+                      "audit:read",
+                      "projects:create",
+                      "github:manage",
+                      "projects:read",
+                      "projects:manage",
+                      "access:manage",
+                      "services:read",
+                      "services:manage",
+                      "deployments:create",
+                      "variables:read",
+                      "variables:read_plain",
+                      "variables:manage",
+                      "instance:manage",
+                      "workspaces:create"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "environments": {
+                  "items": {
+                    "properties": {
+                      "denied": {
+                        "items": {
+                          "properties": {
+                            "action": {
+                              "enum": [
+                                "workspace:read",
+                                "workspace:update",
+                                "workspace:delete",
+                                "members:read",
+                                "members:manage",
+                                "tokens:manage",
+                                "nodes:read",
+                                "nodes:manage",
+                                "audit:read",
+                                "projects:create",
+                                "github:manage",
+                                "projects:read",
+                                "projects:manage",
+                                "access:manage",
+                                "services:read",
+                                "services:manage",
+                                "deployments:create",
+                                "variables:read",
+                                "variables:read_plain",
+                                "variables:manage",
+                                "instance:manage",
+                                "workspaces:create"
+                              ],
+                              "type": "string"
+                            },
+                            "reason": {
+                              "enum": [
+                                "instance_admin_required",
+                                "token_scope",
+                                "not_a_member",
+                                "workspace_role",
+                                "scope_required",
+                                "unknown_environment",
+                                "environment_mismatch",
+                                "no_project_access",
+                                "project_role",
+                                "environment_protected"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "reason"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "environment_id": {
+                        "type": "string"
+                      },
+                      "protected": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "environment_id",
+                      "protected",
+                      "denied"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "project_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "$ref": "#/components/schemas/ProjectRole"
+                }
+              },
+              "required": [
+                "project_id",
+                "role",
+                "actions",
+                "environments"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "workspace_role": {
+            "enum": [
+              "owner",
+              "admin",
+              "member",
+              "viewer"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_role",
+          "instance_admin",
+          "actions",
+          "projects"
+        ],
+        "type": "object"
+      },
       "Environment": {
         "properties": {
           "created_at": {
@@ -1990,6 +2438,9 @@
           "project_id": {
             "type": "string"
           },
+          "protected": {
+            "type": "boolean"
+          },
           "slug": {
             "type": "string"
           },
@@ -2008,12 +2459,48 @@
           "kind",
           "pr_number",
           "source_branch",
+          "protected",
           "created_at"
         ],
         "type": [
           "object",
           "null"
         ]
+      },
+      "EnvironmentProtection": {
+        "properties": {
+          "environment_id": {
+            "type": "string"
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "rules": {
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/ProtectionRule"
+              },
+              "deploy": {
+                "$ref": "#/components/schemas/ProtectionRule"
+              },
+              "variables": {
+                "$ref": "#/components/schemas/ProtectionRule"
+              }
+            },
+            "required": [
+              "deploy",
+              "config",
+              "variables"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "environment_id",
+          "protected",
+          "rules"
+        ],
+        "type": "object"
       },
       "Error": {
         "properties": {
@@ -2066,6 +2553,17 @@
         ],
         "type": "object"
       },
+      "GithubClaimStarted": {
+        "properties": {
+          "install_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "install_url"
+        ],
+        "type": "object"
+      },
       "GithubInstallation": {
         "properties": {
           "account_login": {
@@ -2078,6 +2576,14 @@
             ],
             "type": "string"
           },
+          "claimed_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "created_at": {
             "description": "Unix time in milliseconds",
             "example": 1767225600000,
@@ -2088,6 +2594,9 @@
           },
           "installation_id": {
             "type": "integer"
+          },
+          "verified": {
+            "type": "boolean"
           },
           "workspace_id": {
             "type": [
@@ -2102,6 +2611,8 @@
           "account_login",
           "account_type",
           "workspace_id",
+          "verified",
+          "claimed_at",
           "created_at"
         ],
         "type": "object"
@@ -2221,6 +2732,46 @@
         ],
         "type": "object"
       },
+      "GrantPrincipal": {
+        "oneOf": [
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "user"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "team"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "HealthcheckConfig": {
         "properties": {
           "interval_s": {
@@ -2273,6 +2824,55 @@
           "object",
           "null"
         ]
+      },
+      "InstanceAdmin": {
+        "properties": {
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "two_factor_enabled": {
+            "type": "boolean"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "name",
+          "email",
+          "two_factor_enabled",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "InstanceAuditPage": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ChainedAuditLog"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entries",
+          "next_cursor"
+        ],
+        "type": "object"
       },
       "InstanceSettings": {
         "properties": {
@@ -3318,6 +3918,90 @@
         ],
         "type": "object"
       },
+      "ProjectAccess": {
+        "properties": {
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectAccessGrant"
+            },
+            "type": "array"
+          },
+          "implied": {
+            "properties": {
+              "member": {
+                "enum": [
+                  "none",
+                  "viewer",
+                  "deployer",
+                  "developer"
+                ],
+                "type": "string"
+              },
+              "viewer": {
+                "enum": [
+                  "none",
+                  "viewer"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "member",
+              "viewer"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "grants",
+          "implied"
+        ],
+        "type": "object"
+      },
+      "ProjectAccessGrant": {
+        "properties": {
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/GrantPrincipal"
+          },
+          "principal_name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ProjectRole"
+          },
+          "updated_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "principal",
+          "principal_name",
+          "role",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "ProjectDetail": {
         "allOf": [
           {
@@ -3345,6 +4029,15 @@
             "type": "object"
           }
         ]
+      },
+      "ProjectRole": {
+        "enum": [
+          "project_admin",
+          "developer",
+          "deployer",
+          "viewer"
+        ],
+        "type": "string"
       },
       "ProjectSummary": {
         "allOf": [
@@ -3377,6 +4070,41 @@
             "type": "object"
           }
         ]
+      },
+      "ProtectionRule": {
+        "properties": {
+          "roles": {
+            "items": {
+              "enum": [
+                "developer",
+                "deployer"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "type": "array"
+          },
+          "team_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "type": "array"
+          },
+          "user_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "type": "array"
+          }
+        },
+        "required": [
+          "roles",
+          "user_ids",
+          "team_ids"
+        ],
+        "type": "object"
       },
       "ProviderId": {
         "enum": [
@@ -3614,6 +4342,72 @@
         ],
         "type": "object"
       },
+      "PutEnvironmentProtection": {
+        "properties": {
+          "protected": {
+            "type": "boolean"
+          },
+          "rules": {
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/ProtectionRule"
+              },
+              "deploy": {
+                "$ref": "#/components/schemas/ProtectionRule"
+              },
+              "variables": {
+                "$ref": "#/components/schemas/ProtectionRule"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "protected"
+        ],
+        "type": "object"
+      },
+      "PutInstanceAdmin": {
+        "properties": {
+          "instance_admin": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "instance_admin"
+        ],
+        "type": "object"
+      },
+      "PutProjectGrant": {
+        "properties": {
+          "principal": {
+            "$ref": "#/components/schemas/GrantPrincipal"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ProjectRole"
+          }
+        },
+        "required": [
+          "principal",
+          "role"
+        ],
+        "type": "object"
+      },
+      "PutTeamMembers": {
+        "properties": {
+          "user_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "type": "array"
+          }
+        },
+        "required": [
+          "user_ids"
+        ],
+        "type": "object"
+      },
       "Reauth": {
         "properties": {
           "code": {
@@ -3712,6 +4506,16 @@
           "viewer"
         ],
         "type": "string"
+      },
+      "ScheduleSigningKeyRollover": {
+        "properties": {
+          "delay_hours": {
+            "maximum": 720,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
       },
       "SecurityStatus": {
         "properties": {
@@ -4149,6 +4953,138 @@
         },
         "required": [
           "revoked"
+        ],
+        "type": "object"
+      },
+      "SigningKeyStatus": {
+        "properties": {
+          "current": {
+            "properties": {
+              "kid": {
+                "type": "string"
+              },
+              "public_key": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kid",
+              "public_key"
+            ],
+            "type": "object"
+          },
+          "next": {
+            "properties": {
+              "due": {
+                "type": "boolean"
+              },
+              "kid": {
+                "type": "string"
+              },
+              "not_before": {
+                "description": "Unix time in milliseconds",
+                "type": "integer"
+              },
+              "public_key": {
+                "type": "string"
+              },
+              "scheduled_at": {
+                "description": "Unix time in milliseconds",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kid",
+              "public_key",
+              "not_before",
+              "scheduled_at",
+              "due"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "nodes": {
+            "items": {
+              "properties": {
+                "connected": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "pinned_kids": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "protocol_version": {
+                  "type": "integer"
+                },
+                "state": {
+                  "enum": [
+                    "ready",
+                    "pending",
+                    "upgrade_required",
+                    "rejoin_required",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "workspace_id",
+                "protocol_version",
+                "connected",
+                "pinned_kids",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "retired": {
+            "properties": {
+              "kid": {
+                "type": "string"
+              },
+              "retired_at": {
+                "description": "Unix time in milliseconds",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kid",
+              "retired_at"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "signing_kid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "current",
+          "signing_kid",
+          "next",
+          "retired",
+          "nodes"
         ],
         "type": "object"
       },
@@ -4984,6 +5920,124 @@
           }
         ]
       },
+      "StartGithubClaim": {
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id"
+        ],
+        "type": "object"
+      },
+      "Team": {
+        "properties": {
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "member_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workspace_id",
+          "name",
+          "slug",
+          "description",
+          "member_count",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "TeamDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Team"
+          },
+          {
+            "properties": {
+              "members": {
+                "items": {
+                  "$ref": "#/components/schemas/TeamMember"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "members"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TeamMember": {
+        "properties": {
+          "added_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "email": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "workspace_role": {
+            "enum": [
+              "owner",
+              "admin",
+              "member",
+              "viewer"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "name",
+          "email",
+          "image",
+          "workspace_role",
+          "added_at"
+        ],
+        "type": "object"
+      },
       "TemplateDeployment": {
         "properties": {
           "deploy_errors": {
@@ -5492,6 +6546,28 @@
           }
         ]
       },
+      "UpdateTeam": {
+        "properties": {
+          "description": {
+            "maxLength": 500,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "slug": {
+            "maxLength": 40,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "UpdatedService": {
         "properties": {
           "config": {
@@ -5741,6 +6817,52 @@
           "role",
           "created_at"
         ],
+        "type": "object"
+      },
+      "WorkspaceAccessSettings": {
+        "properties": {
+          "member_default_project_role": {
+            "enum": [
+              "none",
+              "viewer",
+              "deployer",
+              "developer"
+            ],
+            "type": "string"
+          },
+          "viewer_default_project_role": {
+            "enum": [
+              "none",
+              "viewer"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "member_default_project_role",
+          "viewer_default_project_role"
+        ],
+        "type": "object"
+      },
+      "WorkspaceAccessSettingsPatch": {
+        "properties": {
+          "member_default_project_role": {
+            "enum": [
+              "none",
+              "viewer",
+              "deployer",
+              "developer"
+            ],
+            "type": "string"
+          },
+          "viewer_default_project_role": {
+            "enum": [
+              "none",
+              "viewer"
+            ],
+            "type": "string"
+          }
+        },
         "type": "object"
       }
     },
@@ -7847,6 +8969,173 @@
         }
       }
     },
+    "/v1/environments/{environmentId}/protection": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProtection"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get environment protection",
+        "tags": [
+          "access"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutEnvironmentProtection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProtection"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Set environment protection",
+        "tags": [
+          "access"
+        ],
+        "x-roundhouse-policy": {
+          "action": "access:manage",
+          "audit": [
+            "environment.protection_updated"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
     "/v1/github/callback": {
       "get": {
         "parameters": [
@@ -7945,6 +9234,176 @@
             "github.installation_rejected"
           ],
           "auth": "session_only"
+        }
+      }
+    },
+    "/v1/github/claims": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartGithubClaim"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubClaimStarted"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Start installing the GitHub App for a workspace",
+        "tags": [
+          "github"
+        ],
+        "x-roundhouse-policy": {
+          "action": "github:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/github/installations/{installationId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "installationId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Released"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Release a GitHub installation",
+        "tags": [
+          "github"
+        ],
+        "x-roundhouse-policy": {
+          "action": "github:manage",
+          "audit": [
+            "github.installation_released"
+          ],
+          "auth": "session",
+          "reauth": true
         }
       }
     },
@@ -8217,6 +9676,444 @@
         ],
         "x-roundhouse-policy": {
           "action": "workspace:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/instance/admins": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "admins": {
+                      "items": {
+                        "$ref": "#/components/schemas/InstanceAdmin"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "admins"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List instance admins",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/instance/admins/{userId}": {
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutInstanceAdmin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceAdmin"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Grant or revoke instance admin",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "instance.admin_granted",
+            "instance.admin_revoked"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/instance/audit-logs": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "enum": [
+                "instance.setup_completed",
+                "workspace.created",
+                "workspace.renamed",
+                "member.role_changed",
+                "member.removed",
+                "member.left",
+                "invite.created",
+                "invite.revoked",
+                "invite.accepted",
+                "node.join_token_created",
+                "node.joined",
+                "node.removed",
+                "node.went_offline",
+                "project.created",
+                "project.updated",
+                "project.deleted",
+                "service.created",
+                "service.updated",
+                "service.deleted",
+                "variables.updated",
+                "variables.revealed",
+                "variables.resolved",
+                "deployment.created",
+                "deployment.rolled_back",
+                "deployment.cancelled",
+                "deployment.succeeded",
+                "deployment.failed",
+                "github.app_created",
+                "github.installation_added",
+                "github.installation_rejected",
+                "github.installation_released",
+                "instance.settings_updated",
+                "instance.admin_granted",
+                "instance.admin_revoked",
+                "instance.key_rotation_started",
+                "instance.key_rotation_completed",
+                "instance.key_rotation_failed",
+                "token.created",
+                "token.revoked",
+                "workspace.access_settings_updated",
+                "team.created",
+                "team.updated",
+                "team.deleted",
+                "team.member_added",
+                "team.member_removed",
+                "access.granted",
+                "access.changed",
+                "access.revoked",
+                "environment.protection_updated",
+                "node.encryption_key_registered",
+                "auth.sign_in_succeeded",
+                "auth.sign_in_failed",
+                "auth.account_locked",
+                "auth.reauthenticated",
+                "auth.two_factor_enabled",
+                "auth.two_factor_disabled",
+                "auth.backup_codes_regenerated",
+                "auth.two_factor_failed",
+                "auth.backup_code_used",
+                "auth.two_factor_reset",
+                "auth.account_unlocked",
+                "auth.signed_out",
+                "auth.session_revoked",
+                "provider.connected",
+                "provider.disconnected",
+                "node.provision_requested",
+                "node.provisioned",
+                "node.provision_failed",
+                "node.deprovisioned",
+                "node.provision_cancelled",
+                "invite.rejected_token",
+                "domain.added",
+                "domain.verified",
+                "domain.failed",
+                "domain.removed",
+                "mcp_client.authorized",
+                "mcp_client.revoked",
+                "template.deployed",
+                "change_set.created",
+                "change_set.applied",
+                "change_set.discarded",
+                "key.rollover_scheduled",
+                "key.rollover_completed",
+                "key.rollover_cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor_id",
+            "required": false,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceAuditPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List instance audit logs",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/instance/audit-logs/verify": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditChainVerification"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Verify the audit chain",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
           "audit": [],
           "auth": "session"
         }
@@ -8531,6 +10428,317 @@
             "auth.account_unlocked"
           ],
           "auth": "session_only"
+        }
+      }
+    },
+    "/v1/instance/signing-keys": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeyStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get signing key status",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/instance/signing-keys/complete": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteSigningKeyRollover"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeyStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Complete a signing key rollover",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "key.rollover_completed"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/instance/signing-keys/next": {
+      "delete": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeyStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Cancel a signing key rollover",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "key.rollover_cancelled"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/instance/signing-keys/rotate": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleSigningKeyRollover"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeyStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Schedule a signing key rollover",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "key.rollover_scheduled"
+          ],
+          "auth": "session",
+          "reauth": true
         }
       }
     },
@@ -9703,6 +11911,251 @@
             "project.updated"
           ],
           "auth": "session"
+        }
+      }
+    },
+    "/v1/projects/{projectId}/access": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectAccess"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a project's access",
+        "tags": [
+          "access"
+        ],
+        "x-roundhouse-policy": {
+          "action": "access:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutProjectGrant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectAccessGrant"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Grant project access",
+        "tags": [
+          "access"
+        ],
+        "x-roundhouse-policy": {
+          "action": "access:manage",
+          "audit": [
+            "access.granted",
+            "access.changed"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/projects/{projectId}/access/{grantId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "grantId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Revoke project access",
+        "tags": [
+          "access"
+        ],
+        "x-roundhouse-policy": {
+          "action": "access:manage",
+          "audit": [
+            "access.revoked"
+          ],
+          "auth": "session",
+          "reauth": true
         }
       }
     },
@@ -11989,6 +14442,346 @@
         ]
       }
     },
+    "/v1/teams/{teamId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "teamId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Delete a team",
+        "tags": [
+          "teams"
+        ],
+        "x-roundhouse-policy": {
+          "action": "members:manage",
+          "audit": [
+            "team.deleted"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      },
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "teamId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamDetail"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a team",
+        "tags": [
+          "teams"
+        ],
+        "x-roundhouse-policy": {
+          "action": "members:read",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "patch": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "teamId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTeam"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Update a team",
+        "tags": [
+          "teams"
+        ],
+        "x-roundhouse-policy": {
+          "action": "members:manage",
+          "audit": [
+            "team.updated"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/teams/{teamId}/members": {
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "teamId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutTeamMembers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamDetail"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Set a team's members",
+        "tags": [
+          "teams"
+        ],
+        "x-roundhouse-policy": {
+          "action": "members:manage",
+          "audit": [
+            "team.member_added",
+            "team.member_removed"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
     "/v1/webhooks/github": {
       "post": {
         "parameters": [
@@ -12284,6 +15077,246 @@
         "tags": [
           "workspaces"
         ]
+      }
+    },
+    "/v1/workspaces/{workspaceId}/access-settings": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceAccessSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get default project access",
+        "tags": [
+          "access"
+        ],
+        "x-roundhouse-policy": {
+          "action": "members:read",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "patch": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceAccessSettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceAccessSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Change default project access",
+        "tags": [
+          "access"
+        ],
+        "x-roundhouse-policy": {
+          "action": "members:manage",
+          "audit": [
+            "workspace.access_settings_updated"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/access/me": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EffectiveAccess"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get my effective access",
+        "tags": [
+          "access"
+        ],
+        "x-roundhouse-policy": {
+          "action": "workspace:read",
+          "audit": [],
+          "auth": "session"
+        }
       }
     },
     "/v1/workspaces/{workspaceId}/audit-logs": {
@@ -14599,6 +17632,195 @@
           "action": "nodes:manage",
           "audit": [],
           "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/teams": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "teams": {
+                      "items": {
+                        "$ref": "#/components/schemas/Team"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "teams"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List teams",
+        "tags": [
+          "teams"
+        ],
+        "x-roundhouse-policy": {
+          "action": "members:read",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTeam"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamDetail"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Create a team",
+        "tags": [
+          "teams"
+        ],
+        "x-roundhouse-policy": {
+          "action": "members:manage",
+          "audit": [
+            "team.created",
+            "team.member_added"
+          ],
+          "auth": "session",
+          "reauth": true
         }
       }
     },

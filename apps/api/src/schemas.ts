@@ -333,6 +333,8 @@ export const EnvironmentSchema = z
     kind: z.enum(ENVIRONMENT_KINDS),
     pr_number: z.number().int().nullable(),
     source_branch: z.string().nullable(),
+    /** Whether protection rules narrow deploys, config and variable changes here (ADR 0014). */
+    protected: z.boolean(),
     created_at: Millis,
   })
   .openapi("Environment");
@@ -744,6 +746,12 @@ export const GithubInstallationSchema = z
     account_login: z.string(),
     account_type: z.enum(GITHUB_ACCOUNT_TYPES),
     workspace_id: z.string().nullable(),
+    /**
+     * Claimed by a user GitHub showed to administer the account (ADR 0014).
+     * `false` for claims made before that check, which stay valid.
+     */
+    verified: z.boolean(),
+    claimed_at: Millis.nullable(),
     created_at: Millis,
   })
   .openapi("GithubInstallation");
@@ -758,7 +766,11 @@ export const GithubStatusSchema = z
         slug: z.string(),
         name: z.string(),
         html_url: z.string(),
-        /** Where to send users to install the App on more accounts. */
+        /**
+         * The App's public install page. Installing from it claims nothing;
+         * to connect an installation to a workspace, start a claim with
+         * `POST /v1/github/claims` and follow its `install_url`.
+         */
         install_url: z.string(),
       })
       .nullable(),

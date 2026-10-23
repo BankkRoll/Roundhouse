@@ -707,6 +707,8 @@ export async function createProjectFromTemplate(
           name: DEFAULT_ENVIRONMENT.name,
           slug: DEFAULT_ENVIRONMENT.slug,
           kind: "production",
+          // ADR 0014: production starts protected (DEFAULT_PROTECTION_RULES).
+          protected: true,
         }),
         db.insert(projectKeys).values(keyRow),
         ...writeStatements(db, p, [envId], caller.user.id, rows),

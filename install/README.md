@@ -1,12 +1,15 @@
 # install
 
-| File                           | What                                                        |
-| ------------------------------ | ----------------------------------------------------------- |
-| `install.sh`                   | Installs Docker, Caddy and the agent, joins, starts systemd |
-| `roundhouse-agent.service`     | systemd unit (a copy is embedded in install.sh)             |
-| `roundhouse-buildkit.apparmor` | BuildKit's AppArmor profile (a copy is embedded, too)       |
-| `uninstall.sh`                 | Removes agent, config, and state. Leaves Docker and Caddy.  |
-| `test/container-test.sh`       | End-to-end installer test CI runs on each supported OS      |
+| File                           | What                                                         |
+| ------------------------------ | ------------------------------------------------------------ |
+| `install.sh`                   | Installs Docker, Caddy and the agent, joins, starts systemd  |
+| `roundhouse-agent.service`     | systemd unit (a copy is embedded in install.sh)              |
+| `roundhouse-buildkit.apparmor` | BuildKit's AppArmor profile (a copy is embedded, too)        |
+| `agent.example.yaml`           | Annotated `/etc/roundhouse/agent.yaml` (written by `join`)   |
+| `uninstall.sh`                 | Removes agent, config, and state. Leaves Docker and Caddy.   |
+| `install-cli.sh`               | Installs the `roundhouse` CLI from a signed GitHub release   |
+| `test/container-test.sh`       | End-to-end installer test CI runs on each supported OS       |
+| `test/install-cli-test.sh`     | CLI installer test against a fake release signed in the test |
 
 The control plane serves `install.sh` at `/install.sh` with its own URL
 substituted for `__CONTROL_PLANE_URL__`.
@@ -19,6 +22,11 @@ curl -fsSL https://<control-plane>/install.sh | sudo bash -s -- --token <token> 
 
 Options: `--url`, `--name`, `--version`, `--token-file`, `--rejoin`,
 `--builder`, `--binary <path>` (development only; skips signature checks).
+Every option and environment variable, and the agent's config file, are in
+[docs/configuration.md](../docs/configuration.md#node-installer).
+
+The CLI has its own installer, for Linux and macOS workstations; see
+[cli/README.md](../cli/README.md#install).
 
 ## What a node gets
 

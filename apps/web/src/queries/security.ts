@@ -1,6 +1,7 @@
 /**
  * Queries and mutations for account security: two-factor state, enrollment and
- * changes, re-authentication, and the signed-in user's sessions.
+ * changes, and the signed-in user's sessions. Re-authentication is the root
+ * `ReauthDialog`'s job.
  *
  * SECURITY: Mutations that carry a password, a code or backup codes use `gcTime: 0`, so
  * their variables and results leave the MutationCache as soon as the form unmounts.
@@ -108,20 +109,6 @@ export function useRegenerateBackupCodes() {
   return useMutation({
     mutationFn: ({ password, code }: { password: string; code: string }) =>
       securityApi.regenerateBackupCodes(password, code),
-    gcTime: 0,
-    onSuccess: () => invalidate(),
-  });
-}
-
-/**
- * Re-authenticates, making dangerous actions possible for a few minutes.
- *
- * @returns The mutation.
- */
-export function useReauthenticate() {
-  const invalidate = useInvalidateSecurity();
-  return useMutation({
-    mutationFn: securityApi.reauthenticate,
     gcTime: 0,
     onSuccess: () => invalidate(),
   });

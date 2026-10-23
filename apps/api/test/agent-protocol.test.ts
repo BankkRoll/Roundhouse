@@ -483,7 +483,9 @@ describe("frame limits", () => {
     }
     const closed = await s.agent.closed;
     expect(closed).toMatchObject({ code: CloseCode.policy, reason: "build_result rate exceeded" });
-  });
+    // Admitted frames do real work; when the whole suite loads the machine, getting
+    // MAX_DROPPED_FRAMES drops through the Durable Object takes longer than the default 5 s.
+  }, 30_000);
 
   it("closes on an invalid status frame", async () => {
     const s = await stage();

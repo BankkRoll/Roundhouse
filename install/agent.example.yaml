@@ -1,0 +1,57 @@
+# Example /etc/roundhouse/agent.yaml.
+#
+# You normally never write this file: `roundhouse-agent join` (run for you by
+# install.sh) creates it, mode 0600, and `roundhouse-agent run` reads it. It
+# is shown here so the keys can be read, reviewed and backed up. Unknown keys
+# are rejected, so a typo fails loudly instead of being ignored.
+#
+# The file holds no secrets. The node credential and private keys live in
+# separate 0600 files that the *_file keys point to; back those up only to
+# storage you would trust with root on this node.
+#
+# Reference: docs/configuration.md#node-agent
+
+# The control plane's https:// origin. Plain http:// is accepted only for a
+# loopback host, or with `insecure: true`.
+control_plane_url: https://roundhouse.example.com
+
+# Assigned by the control plane at join.
+node_id: node_01J9Z6EXAMPLE0000000000000
+
+# The wss:// URL of the agent's control socket. Must have the same host and
+# port as control_plane_url.
+connect_url: wss://roundhouse.example.com/v1/nodes/node_01J9Z6EXAMPLE0000000000000/connect
+
+# The control plane's Ed25519 public key (standard base64 of the raw 32
+# bytes), pinned at join. Every frame the control plane sends is verified
+# against it.
+control_public_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
+# Envelope key id of control_public_key, pinned from the first verified
+# welcome. Empty until then; written by the agent itself.
+control_key_id: ""
+
+# Bearer credential for connect_url (secret, 0600).
+credential_file: /var/lib/roundhouse/credential
+
+# The node's Ed25519 identity key, PEM PKCS#8 (secret, 0600).
+identity_key_file: /var/lib/roundhouse/identity.key
+
+# The node's X25519 key, which opens sealed environments and build secrets
+# (secret, 0600). Created on first start if missing.
+encryption_key_file: /var/lib/roundhouse/encryption.key
+
+# Desired-state generation and other state that must survive restarts.
+state_file: /var/lib/roundhouse/state.json
+
+# Log buffer, registry storage and other runtime data. Defaults to the
+# directory of state_file.
+data_dir: /var/lib/roundhouse
+
+# Run builds and the local image registry on this node. Set by
+# `join --builder` (install.sh --builder).
+builder: false
+
+# Allow plaintext http:// and ws:// to a non-loopback control plane. Set by
+# `join --insecure`, for testing only: never in production.
+insecure: false

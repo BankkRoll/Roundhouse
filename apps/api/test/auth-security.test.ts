@@ -91,7 +91,7 @@ describe("POST /v1/auth/reauth", () => {
       method: "POST",
       json: { password: PASSWORD, code: "000000" },
     });
-    expect(wrong.status).toBe(401);
+    expect(wrong.status).toBe(400);
     expect((await actions()).map((a) => a.action)).toContain("auth.two_factor_failed");
   });
 
@@ -102,7 +102,7 @@ describe("POST /v1/auth/reauth", () => {
         method: "POST",
         json: { password: "not my password" },
       });
-      expect(res.status).toBe(401);
+      expect(res.status).toBe(400);
     }
     const locked = await owner.request("/v1/auth/reauth", {
       method: "POST",

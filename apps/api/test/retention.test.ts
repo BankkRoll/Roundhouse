@@ -103,7 +103,7 @@ describe("log retention", () => {
 });
 
 describe("expired records", () => {
-  it("prunes delivery IDs, join tokens, sessions, invites, verifications, nonces and sign-in counters", async () => {
+  it("prunes delivery IDs, join tokens, sessions, invites, verifications, nonces, claims and sign-in counters", async () => {
     const { owner, workspaceId, userId } = await install();
     const ins = (sql: string, ...args: unknown[]) =>
       env.DB.prepare(sql)
@@ -152,6 +152,15 @@ describe("expired records", () => {
       at(1),
     );
     await ins(
+      "INSERT INTO github_claim_states (id, workspace_id, user_id, expires_at, created_at, updated_at) VALUES ('ghc_old', ?, ?, ?, 0, 0), ('ghc_live', ?, ?, ?, 0, 0)",
+      workspaceId,
+      userId,
+      at(-0.01),
+      workspaceId,
+      userId,
+      at(0.01),
+    );
+    await ins(
       "INSERT INTO login_attempts (id, failures, last_failure_at, locked_until, created_at, updated_at) VALUES ('stale', 2, ?, NULL, 0, 0), ('recent', 2, ?, NULL, 0, 0), ('still_locked', 9, ?, ?, 0, 0)",
       at(-2),
       at(-0.5),
@@ -169,6 +178,7 @@ describe("expired records", () => {
       verifications: 1,
       nonces: 1,
       loginAttempts: 1,
+      githubClaims: 1,
     });
     const ids = async (table: string) =>
       (
@@ -180,6 +190,7 @@ describe("expired records", () => {
     expect(await ids("verifications")).toEqual(["ver_live"]);
     expect(await ids("consumed_nonces")).toEqual(["github-install:live"]);
     expect(await ids("login_attempts")).toEqual(["recent", "still_locked"]);
+    expect(await ids("github_claim_states")).toEqual(["ghc_live"]);
     expect(await ids("sessions")).not.toContain("ses_old");
     expect(await count("sessions")).toBe(1);
     expect((await owner.json("/v1/me")).status).toBe(200);

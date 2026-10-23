@@ -12,6 +12,7 @@ type SettingsPath =
   | "/w/$workspaceId/audit"
   | "/w/$workspaceId/tokens"
   | "/w/$workspaceId/platform"
+  | "/w/$workspaceId/instance-audit"
   | "/w/$workspaceId/mcp-clients"
   | "/w/$workspaceId/security"
   | "/w/$workspaceId/preferences"
@@ -65,6 +66,13 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
       {platform ? (
         <SettingsNavGroup label="Instance">
           <Item workspaceId={workspaceId} to="/w/$workspaceId/platform" label="Platform" />
+          {canManageInstance(me) ? (
+            <Item
+              workspaceId={workspaceId}
+              to="/w/$workspaceId/instance-audit"
+              label="Instance audit log"
+            />
+          ) : null}
         </SettingsNavGroup>
       ) : null}
       <SettingsNavGroup label="Account">

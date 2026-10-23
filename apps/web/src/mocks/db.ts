@@ -44,7 +44,22 @@ export interface DbInvite extends Invite {
 }
 
 /** A stored audit row. `actor_name` is a fallback; handlers resolve names at read time. */
-export type DbAuditEntry = AuditLogEntry & { workspace_id: string };
+/** An audit entry; `workspace_id` is `null` for instance-level entries (ADR 0014). */
+export type DbAuditEntry = AuditLogEntry & { workspace_id: string | null };
+
+/**
+ * The control-plane signing keys (ADR 0014 §13). Times are unix ms; `pins` maps a node
+ * id to the kids its agent pins.
+ */
+export interface DbSigningKeys {
+  current: { kid: string; public_key: string };
+  next: { kid: string; public_key: string; not_before: number; scheduled_at: number } | null;
+  retired: { kid: string; retired_at: number } | null;
+  pins: Record<string, string[]>;
+}
+
+/** Kid of the seeded signing key. */
+export const SIGNING_KID = "kmock0001";
 
 /** The whole mock database. */
 export interface MockDb {
@@ -52,6 +67,11 @@ export interface MockDb {
   /** Value of the Worker's MASTER_KEY secret once configured. */
   masterKey: string;
   sessionUserId: string | null;
+  /**
+   * Whether the session is past the re-authentication window, so routes that need a
+   * fresh session answer 403 `reauth_required` until `POST /v1/auth/reauth`.
+   */
+  sessionStale: boolean;
   users: DbUser[];
   workspaces: Omit<Workspace, "role">[];
   memberships: DbMembership[];
@@ -67,6 +87,7 @@ export interface MockDb {
   changes: ChangesDb;
   /** Two-factor, sessions and lockouts. */
   security: SecurityDb;
+  signingKeys: DbSigningKeys;
   counter: number;
 }
 
@@ -206,6 +227,7 @@ function seed(): MockDb {
     setup: { needs_setup: false, master_key_configured: true, public_origin_configured: true },
     masterKey: MASTER_KEY,
     sessionUserId: USERS.owner.id,
+    sessionStale: false,
     users,
     workspaces: [
       { id: WORKSPACE_ID, name: "Acme", slug: "acme", created_at: now - 90 * 86_400_000 },
@@ -259,6 +281,12 @@ function seed(): MockDb {
     providers: emptyProviders(),
     changes: emptyChanges(),
     security: seedSecurity(USERS.owner.id, now),
+    signingKeys: {
+      current: { kid: SIGNING_KID, public_key: "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=" },
+      next: null,
+      retired: null,
+      pins: {},
+    },
     counter: 0,
   };
 }

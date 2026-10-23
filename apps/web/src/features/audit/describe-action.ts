@@ -108,6 +108,9 @@ const VERBS: Record<AuditAction, string> = {
   "change_set.created": "proposed changes",
   "change_set.applied": "applied staged changes",
   "change_set.discarded": "discarded staged changes",
+  "key.rollover_scheduled": "scheduled a signing key rollover",
+  "key.rollover_completed": "completed a signing key rollover",
+  "key.rollover_cancelled": "cancelled a signing key rollover",
 };
 
 /**

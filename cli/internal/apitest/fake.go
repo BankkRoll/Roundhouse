@@ -191,7 +191,7 @@ func (f *Fake) seed() {
 	f.user = api.User{ID: "usr_ada", Name: "Ada Lovelace", Email: Email}
 	f.workspaces = []api.Membership{{ID: WorkspaceID, Name: "Acme", Slug: "acme", Role: "owner", MemberID: "mem_ada"}}
 	envs := []api.Environment{
-		{ID: ProductionID, ProjectID: ProjectID, Name: "production", Slug: "production", Kind: "production", CreatedAt: Now - 86400000},
+		{ID: ProductionID, ProjectID: ProjectID, Name: "production", Slug: "production", Kind: "production", Protected: true, CreatedAt: Now - 86400000},
 		{ID: StagingID, ProjectID: ProjectID, Name: "staging", Slug: "staging", Kind: "staging", CreatedAt: Now - 86400000},
 	}
 	services := []api.Service{
@@ -891,7 +891,7 @@ func (f *Fake) createProject(w http.ResponseWriter, r *http.Request) {
 		return false
 	})
 	id := f.nextID("prj")
-	env := api.Environment{ID: f.nextID("env"), ProjectID: id, Name: "production", Slug: "production", Kind: "production", CreatedAt: Now}
+	env := api.Environment{ID: f.nextID("env"), ProjectID: id, Name: "production", Slug: "production", Kind: "production", Protected: true, CreatedAt: Now}
 	p := &api.ProjectDetail{
 		Project:      api.Project{ID: id, WorkspaceID: r.PathValue("workspaceId"), Name: in.Name, Slug: slug, CreatedAt: Now, UpdatedAt: Now},
 		Environments: []api.Environment{env}, Services: []api.Service{},

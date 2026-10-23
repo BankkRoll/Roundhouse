@@ -1,275 +1,244 @@
 /**
- * MSW handlers for account security (`apps/api/src/routes/auth-security.ts`) and Better
- * Auth's two-factor endpoints, against {@link db}.security. Better Auth answers in its
- * own flat `{ code, message }` shape; the `/v1` routes use the API's envelope.
+ * MSW handlers for the ADR 0014 routes the dashboard calls, against the in-memory
+ * {@link db}:
+ * - GitHub installation claims and releases (`apps/api/src/routes/github.ts`): a claim is
+ *   a single-use install state the existing callback mock redeems;
+ * - instance admins, the instance audit log (entries with no workspace) and chain
+ *   verification (`routes/instance-admin.ts`);
+ * - re-authentication (`routes/auth-security.ts`): the seeded password (and a code,
+ *   once the user has two-factor on) clears `db.sessionStale`.
+ *
+ * `contract.test.ts` validates every response against the API's schemas.
  *
  * @module
  */
-import { REAUTH_WINDOW_MS, TWO_FACTOR_REQUIRED_ROLES } from "@roundhouse/shared";
+import { AUDIT_ACTIONS, type AuditAction, REAUTH_WINDOW_MS } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
-import type { AccountSession, SecurityStatus } from "../lib/api/security-types";
-import { apiError, currentUser, invalid, notFound, unauthorized } from "./common";
-import { db, PASSWORD } from "./db";
+import { spendCode } from "./account-security-handlers";
 import {
-  CURRENT_SESSION_ID,
-  MOCK_BACKUP_CODES,
-  MOCK_TOTP_CODE,
-  MOCK_TOTP_URI,
-} from "./security-db";
+  apiError,
+  currentUser,
+  invalid,
+  notFound,
+  recordAudit,
+  requireFreshSession,
+  requireWorkspace,
+  unauthorized,
+} from "./common";
+import { db } from "./db";
 
-async function readJson(request: Request): Promise<Record<string, unknown>> {
+const CLAIM_TTL_MS = 10 * 60_000;
+
+function randomHex(bytes: number): string {
+  return [...crypto.getRandomValues(new Uint8Array(bytes))]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function requireInstanceAdmin(): Response | null {
+  const user = currentUser();
+  if (!user) return unauthorized();
+  return user.instance_admin
+    ? null
+    : apiError(403, "forbidden", "Only instance admins can perform instance:manage");
+}
+
+async function jsonBody(request: Request): Promise<Record<string, unknown> | null> {
   try {
     const body: unknown = await request.json();
-    return typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+    return typeof body === "object" && body !== null ? (body as Record<string, unknown>) : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
-const betterAuthError = (status: number, code: string, message: string) =>
-  HttpResponse.json({ code, message }, { status });
-
-const invalidPassword = () => betterAuthError(400, "INVALID_PASSWORD", "Invalid password");
-const invalidCode = () => betterAuthError(401, "INVALID_CODE", "Invalid code");
-
-function passwordOf(userId: string): string {
-  return db.users.find((user) => user.id === userId)?.password ?? PASSWORD;
+/** All entries in `seq` order (the mock's ids sort like the API's ULIDs). */
+function chained() {
+  return [...db.audit].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
-/** Checks a code the way the API's `verifySecondFactor` does: TOTP, else a backup code. */
-function spendCode(userId: string, code: unknown): boolean {
-  if (typeof code !== "string") return false;
-  const entered = code.trim();
-  if (entered === MOCK_TOTP_CODE) return true;
-  const enrolled = db.security.twoFactor[userId];
-  const normalized = /^[A-Za-z0-9]{10}$/.test(entered)
-    ? `${entered.slice(0, 5)}-${entered.slice(5)}`
-    : entered;
-  const index = enrolled?.backupCodes.indexOf(normalized) ?? -1;
-  if (!enrolled || index < 0) return false;
-  enrolled.backupCodes.splice(index, 1);
-  return true;
-}
-
-function sessionsOf(userId: string): AccountSession[] {
-  const now = Date.now();
-  const current: AccountSession = {
-    id: CURRENT_SESSION_ID,
-    current: true,
-    ip_address: "203.0.113.5",
-    user_agent: navigator.userAgent,
-    created_at: now - 3_600_000,
-    expires_at: now + 7 * 86_400_000,
-  };
-  const others = db.security.otherSessions
-    .filter((session) => session.user_id === userId)
-    .map(({ user_id: _user, ...session }) => session);
-  return [current, ...others].sort((a, b) => b.created_at - a.created_at);
-}
-
-/** Account security and two-factor handlers. */
+/** Security route handlers. */
 export const securityHandlers = [
-  // ---------------------------------------------------------------------------
-  // /v1/auth (routes/auth-security.ts)
-  // ---------------------------------------------------------------------------
-  http.get("*/v1/auth/security", () => {
-    const user = currentUser();
-    if (!user) return unauthorized();
-    const roles = db.memberships.filter((row) => row.user_id === user.id).map((row) => row.role);
-    const enrolled = db.security.twoFactor[user.id];
-    const status: SecurityStatus = {
-      two_factor_enabled: Boolean(enrolled),
-      two_factor_required:
-        Boolean(user.instance_admin) ||
-        roles.some((role) => (TWO_FACTOR_REQUIRED_ROLES as readonly string[]).includes(role)),
-      backup_codes_remaining: enrolled ? enrolled.backupCodes.length : null,
-      instance_admin: Boolean(user.instance_admin),
-      fresh_until: Date.now() + REAUTH_WINDOW_MS / 2,
-    };
-    return HttpResponse.json(status);
+  http.post("*/v1/github/claims", async ({ request }) => {
+    const body = await jsonBody(request);
+    if (typeof body?.workspace_id !== "string") return invalid("workspace_id: Required");
+    const access = requireWorkspace(body.workspace_id, "github:manage");
+    if (!access.ok) return access.response;
+    const app = db.deploy.github.app;
+    if (!app) return apiError(409, "conflict", "No GitHub App is configured for this instance");
+    const state = `ghc_${randomHex(16)}`;
+    db.deploy.github.states.push({
+      state,
+      workspace_id: body.workspace_id,
+      expires_at: Date.now() + CLAIM_TTL_MS,
+    });
+    return HttpResponse.json({ install_url: `${app.html_url}/installations/new?state=${state}` });
+  }),
+
+  http.delete("*/v1/github/installations/:installationId", ({ params, request }) => {
+    const workspaceId = new URL(request.url).searchParams.get("workspace_id");
+    if (!workspaceId) return invalid("workspace_id: Required");
+    const fresh = currentUser() ? requireFreshSession() : null;
+    if (fresh) return fresh;
+    const access = requireWorkspace(workspaceId, "github:manage");
+    if (!access.ok) return access.response;
+    const row = db.deploy.github.installations.find(
+      (candidate) =>
+        candidate.id === params.installationId && candidate.workspace_id === workspaceId,
+    );
+    if (!row) return notFound("Installation");
+    row.workspace_id = null;
+    row.verified = false;
+    row.claimed_at = null;
+    recordAudit({
+      workspaceId,
+      actorType: "user",
+      actorId: access.user.id,
+      action: "github.installation_released",
+      targetType: "github_installation",
+      targetId: row.id,
+      metadata: { installation_id: row.installation_id, account: row.account_login },
+    });
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.get("*/v1/instance/admins", () => {
+    const denied = requireInstanceAdmin();
+    if (denied) return denied;
+    return HttpResponse.json({
+      admins: db.users
+        .filter((user) => user.instance_admin)
+        .map((user) => ({
+          user_id: user.id,
+          name: user.name,
+          email: user.email,
+          two_factor_enabled: false,
+          created_at: 0,
+        })),
+    });
+  }),
+
+  http.put("*/v1/instance/admins/:userId", async ({ params, request }) => {
+    const body = await jsonBody(request);
+    if (typeof body?.instance_admin !== "boolean") return invalid("instance_admin: Required");
+    const denied = requireInstanceAdmin() ?? requireFreshSession();
+    if (denied) return denied;
+    const target = db.users.find((user) => user.id === params.userId);
+    if (!target) return notFound("User");
+    if (!body.instance_admin && target.instance_admin) {
+      if (db.users.filter((user) => user.instance_admin).length <= 1) {
+        return apiError(409, "last_owner", "The instance must keep at least one instance admin");
+      }
+    }
+    if (target.instance_admin !== body.instance_admin) {
+      target.instance_admin = body.instance_admin;
+      recordAudit({
+        workspaceId: null,
+        actorType: "user",
+        actorId: currentUser()?.id ?? null,
+        action: body.instance_admin ? "instance.admin_granted" : "instance.admin_revoked",
+        targetType: "user",
+        targetId: target.id,
+        metadata: { email: target.email },
+      });
+    }
+    return HttpResponse.json({
+      user_id: target.id,
+      name: target.name,
+      email: target.email,
+      two_factor_enabled: false,
+      created_at: 0,
+    });
+  }),
+
+  http.get("*/v1/instance/audit-logs", ({ request }) => {
+    const url = new URL(request.url);
+    const rawLimit = url.searchParams.get("limit");
+    const limit = rawLimit === null ? 50 : Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      return invalid("limit: Too big: expected number to be <=100");
+    }
+    const action = url.searchParams.get("action");
+    if (action !== null && !(AUDIT_ACTIONS as readonly string[]).includes(action)) {
+      return invalid("action: Invalid option");
+    }
+    const denied = requireInstanceAdmin();
+    if (denied) return denied;
+    const cursor = url.searchParams.get("cursor");
+    const actor = url.searchParams.get("actor_id");
+    const all = chained();
+    const rows = all
+      .map((row, index) => ({ row, seq: index + 1 }))
+      .filter(
+        ({ row }) =>
+          row.workspace_id === null &&
+          (!cursor || row.id < cursor) &&
+          (!action || row.action === (action as AuditAction)) &&
+          (!actor || row.actor_id === actor),
+      )
+      .reverse()
+      .slice(0, limit + 1);
+    const entries = rows.slice(0, limit).map(({ row, seq }) => ({
+      ...row,
+      seq,
+      action: row.action as AuditAction,
+      actor_type: row.actor_type as "user" | "token" | "node" | "system",
+      prev_hash: null,
+      hash: null,
+    }));
+    return HttpResponse.json({
+      entries,
+      next_cursor: rows.length > limit ? (entries.at(-1)?.id ?? null) : null,
+    });
+  }),
+
+  http.get("*/v1/instance/audit-logs/verify", () => {
+    const denied = requireInstanceAdmin();
+    if (denied) return denied;
+    // The mock doesn't hash; it reports every entry as checked and the chain intact.
+    const all = chained();
+    return HttpResponse.json({
+      ok: true,
+      checked: all.length,
+      head_seq: all.length,
+      head_hash: all.length ? "0".repeat(64) : null,
+      broken_at_seq: null,
+      unsealed: 0,
+      checkpoints: all.length ? 1 : 0,
+    });
   }),
 
   http.post("*/v1/auth/reauth", async ({ request }) => {
-    const body = await readJson(request);
-    if (typeof body.password !== "string" || !body.password) {
+    const body = await jsonBody(request);
+    if (typeof body?.password !== "string" || !body.password) {
       return invalid("password: Required");
     }
     const user = currentUser();
     if (!user) return unauthorized();
-    if (body.password !== passwordOf(user.id)) {
-      return apiError(401, "unauthorized", "Incorrect password");
+    if (body.password !== user.password) {
+      return apiError(400, "invalid_request", "Incorrect password");
     }
     if (db.security.twoFactor[user.id]) {
       if (typeof body.code !== "string" || !body.code) {
-        return invalid("Enter a code from your authenticator app or a backup code");
+        return apiError(400, "invalid_request", "Enter a code from your authenticator app", [
+          { field: "code", code: "required", message: "A TOTP or backup code is required" },
+        ]);
       }
-      if (!spendCode(user.id, body.code)) return apiError(401, "unauthorized", "Invalid code");
+      if (!spendCode(user.id, body.code)) {
+        return apiError(400, "invalid_request", "Incorrect code", [
+          { field: "code", code: "invalid", message: "The code is wrong or was already used" },
+        ]);
+      }
     }
-    return HttpResponse.json({ fresh_until: Date.now() + REAUTH_WINDOW_MS });
-  }),
-
-  http.get("*/v1/auth/sessions", () => {
-    const user = currentUser();
-    if (!user) return unauthorized();
-    return HttpResponse.json({ sessions: sessionsOf(user.id) });
-  }),
-
-  http.delete("*/v1/auth/sessions/:sessionId", ({ params }) => {
-    const user = currentUser();
-    if (!user) return unauthorized();
-    const id = String(params.sessionId);
-    if (id === CURRENT_SESSION_ID) {
-      db.sessionUserId = null;
-      return new HttpResponse(null, { status: 204 });
-    }
-    const index = db.security.otherSessions.findIndex(
-      (session) => session.id === id && session.user_id === user.id,
-    );
-    if (index < 0) return notFound("Session");
-    db.security.otherSessions.splice(index, 1);
-    return new HttpResponse(null, { status: 204 });
-  }),
-
-  http.delete("*/v1/auth/sessions", () => {
-    const user = currentUser();
-    if (!user) return unauthorized();
-    const before = db.security.otherSessions.length;
-    db.security.otherSessions = db.security.otherSessions.filter(
-      (session) => session.user_id !== user.id,
-    );
-    return HttpResponse.json({ revoked: before - db.security.otherSessions.length });
-  }),
-
-  http.post("*/v1/instance/sign-in-lockouts/clear", async ({ request }) => {
-    const body = await readJson(request);
-    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-    if (email.length < 3) return invalid("email: Too small");
-    const user = currentUser();
-    if (!user) return unauthorized();
-    if (!user.instance_admin) {
-      return apiError(403, "forbidden", "Only instance admins can perform instance:manage");
-    }
-    const cleared = email in db.security.locked;
-    delete db.security.locked[email];
-    return HttpResponse.json({ cleared });
-  }),
-
-  http.delete("*/v1/instance/users/:userId/two-factor", ({ params }) => {
-    const user = currentUser();
-    if (!user) return unauthorized();
-    if (!user.instance_admin) {
-      return apiError(403, "forbidden", "Only instance admins can perform instance:manage");
-    }
-    const target = String(params.userId);
-    if (target === user.id) {
-      return apiError(
-        403,
-        "forbidden",
-        "Turn off your own two-factor authentication under Settings → Security",
-      );
-    }
-    if (!db.users.some((candidate) => candidate.id === target)) return notFound("User");
-    delete db.security.twoFactor[target];
-    db.security.otherSessions = db.security.otherSessions.filter(
-      (session) => session.user_id !== target,
-    );
-    return new HttpResponse(null, { status: 204 });
-  }),
-
-  // ---------------------------------------------------------------------------
-  // Better Auth's two-factor plugin
-  // ---------------------------------------------------------------------------
-  http.post("*/api/auth/two-factor/enable", async ({ request }) => {
-    const user = currentUser();
-    if (!user) return betterAuthError(401, "UNAUTHORIZED", "Unauthorized");
-    const body = await readJson(request);
-    if (body.password !== passwordOf(user.id)) return invalidPassword();
-    if (db.security.twoFactor[user.id]) {
-      return betterAuthError(400, "TOTP_ALREADY_ENABLED", "TOTP already enabled");
-    }
-    db.security.pending[user.id] = { backupCodes: [...MOCK_BACKUP_CODES] };
-    return HttpResponse.json({
-      method: "totp",
-      totpURI: MOCK_TOTP_URI,
-      backupCodes: [...MOCK_BACKUP_CODES],
+    db.sessionStale = false;
+    recordAudit({
+      workspaceId: null,
+      actorType: "user",
+      actorId: user.id,
+      action: "auth.reauthenticated",
+      targetType: "session",
+      targetId: "session",
     });
-  }),
-
-  http.post("*/api/auth/two-factor/verify-totp", async ({ request }) => {
-    const body = await readJson(request);
-    const user = currentUser();
-    if (user) {
-      const pending = db.security.pending[user.id];
-      if (!pending && !db.security.twoFactor[user.id]) {
-        return betterAuthError(400, "TOTP_NOT_ENABLED", "TOTP not enabled");
-      }
-      if (body.code !== MOCK_TOTP_CODE) return invalidCode();
-      if (pending) {
-        db.security.twoFactor[user.id] = pending;
-        delete db.security.pending[user.id];
-      }
-      const { password: _password, ...publicUser } = user;
-      return HttpResponse.json({ token: "session-token", user: publicUser });
-    }
-    const challenged = db.users.find((candidate) => candidate.id === db.security.challengeUserId);
-    if (!challenged) {
-      return betterAuthError(401, "INVALID_TWO_FACTOR_COOKIE", "Invalid two factor cookie");
-    }
-    if (body.code !== MOCK_TOTP_CODE) return invalidCode();
-    db.security.challengeUserId = null;
-    db.sessionUserId = challenged.id;
-    const { password: _password, ...publicUser } = challenged;
-    return HttpResponse.json({ token: "session-token", user: publicUser });
-  }),
-
-  http.post("*/api/auth/two-factor/verify-backup-code", async ({ request }) => {
-    const body = await readJson(request);
-    const userId = currentUser()?.id ?? db.security.challengeUserId;
-    const user = db.users.find((candidate) => candidate.id === userId);
-    if (!user) {
-      return betterAuthError(401, "INVALID_TWO_FACTOR_COOKIE", "Invalid two factor cookie");
-    }
-    if (body.code === MOCK_TOTP_CODE || !spendCode(user.id, body.code)) {
-      return betterAuthError(401, "INVALID_BACKUP_CODE", "Invalid backup code");
-    }
-    db.security.challengeUserId = null;
-    db.sessionUserId = user.id;
-    const { password: _password, ...publicUser } = user;
-    return HttpResponse.json({ token: "session-token", user: publicUser });
-  }),
-
-  http.post("*/api/auth/two-factor/disable", async ({ request }) => {
-    const user = currentUser();
-    if (!user) return betterAuthError(401, "UNAUTHORIZED", "Unauthorized");
-    const body = await readJson(request);
-    if (typeof body.code !== "string" || !body.code) {
-      return betterAuthError(
-        400,
-        "CODE_REQUIRED",
-        "Enter a code from your authenticator app or a backup code",
-      );
-    }
-    if (!spendCode(user.id, body.code)) return invalidCode();
-    if (body.password !== passwordOf(user.id)) return invalidPassword();
-    delete db.security.twoFactor[user.id];
-    return HttpResponse.json({ status: true });
-  }),
-
-  http.post("*/api/auth/two-factor/generate-backup-codes", async ({ request }) => {
-    const user = currentUser();
-    if (!user) return betterAuthError(401, "UNAUTHORIZED", "Unauthorized");
-    const body = await readJson(request);
-    if (typeof body.code !== "string" || !body.code) {
-      return betterAuthError(
-        400,
-        "CODE_REQUIRED",
-        "Enter a code from your authenticator app or a backup code",
-      );
-    }
-    if (!spendCode(user.id, body.code)) return invalidCode();
-    if (body.password !== passwordOf(user.id)) return invalidPassword();
-    const fresh = MOCK_BACKUP_CODES.map((code) => code.split("").reverse().join(""));
-    db.security.twoFactor[user.id] = { backupCodes: [...fresh] };
-    return HttpResponse.json({ status: true, backupCodes: fresh });
+    return HttpResponse.json({ fresh_until: Date.now() + REAUTH_WINDOW_MS });
   }),
 ];

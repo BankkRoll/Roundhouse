@@ -78,7 +78,8 @@ the signed envelope in an ADR.
 
 ## Releases
 
-Maintainers cut agent releases by pushing an `agent-vX.Y.Z` tag; see
+Maintainers cut agent releases by pushing an `agent-vX.Y.Z` tag and CLI
+releases with a `cli-vX.Y.Z` tag; see
 [`infra/release-signing.md`](infra/release-signing.md).
 
 ## Licensing

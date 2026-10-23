@@ -13,7 +13,6 @@ import { type AppContext, clientIp, createRouter, requireInstanceAction } from "
 import { getKeyStatus, policyOf, rotateKeys } from "../contracts";
 import { recordAudit } from "../lib/audit";
 import { ApiError, conflict } from "../lib/errors";
-import { requireFreshSession } from "../lib/fresh-session";
 import { keyringOf } from "../lib/keyring";
 import { getSetting } from "../lib/settings";
 import { KEY_ROTATION_SETTING, type KeyRotationState, keyStatus } from "../workflows/key-rotation";
@@ -52,7 +51,6 @@ export const keyRoutes = createRouter()
   })
   .openapi(rotateKeys, async (c) => {
     const user = await requireInstanceAction(c, policyOf(rotateKeys).action as InstanceAction);
-    await requireFreshSession(c);
     const ring = await requireKeyring(c);
     const db = c.get("db");
     const prior = await getSetting<KeyRotationState>(db, KEY_ROTATION_SETTING);

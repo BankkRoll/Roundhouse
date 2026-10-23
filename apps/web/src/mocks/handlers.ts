@@ -25,6 +25,7 @@ import {
 } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
 import type { AuditLogPage, Invite, Me, Member, Node, Workspace } from "../lib/api/types";
+import { accountSecurityHandlers } from "./account-security-handlers";
 import { changeHandlers } from "./changes-handlers";
 import {
   apiError,
@@ -40,6 +41,7 @@ import { deployHandlers } from "./deploy-handlers";
 import { domainHandlers } from "./domains-mock";
 import { providerHandlers } from "./providers-handlers";
 import { securityHandlers } from "./security-handlers";
+import { signingKeyHandlers } from "./signing-keys-mock";
 import { templateHandlers } from "./templates-handlers";
 
 export { apiError } from "./common";
@@ -738,7 +740,7 @@ const phase0Handlers = [
   }),
 ];
 
-/** Every route the dashboard calls: Phase 0 first, then the deploy pipeline, cloud providers and templates. */
+/** Every route the dashboard calls: Phase 0 first, then the deploy pipeline, cloud providers, templates, change sets and signing keys. */
 export const handlers = [
   ...phase0Handlers,
   ...deployHandlers,
@@ -746,5 +748,7 @@ export const handlers = [
   ...providerHandlers,
   ...templateHandlers,
   ...changeHandlers,
+  ...signingKeyHandlers,
   ...securityHandlers,
+  ...accountSecurityHandlers,
 ];

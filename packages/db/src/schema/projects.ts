@@ -95,8 +95,8 @@ export const environments = sqliteTable(
     sourceBranch: text("source_branch"),
     /**
      * Whether {@link environments.protectionRules} apply. New `production`
-     * environments start protected; the migration leaves existing ones as
-     * they were (unprotected) so upgrading changes nobody's access.
+     * environments start protected, and migration 0013 protected existing
+     * ones named `production` or `prod` whose protection nobody had set.
      */
     protected: integer("protected", { mode: "boolean" }).notNull().default(false),
     /** `NULL` means `DEFAULT_PROTECTION_RULES`. */

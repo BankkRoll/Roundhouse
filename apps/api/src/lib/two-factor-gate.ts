@@ -6,7 +6,8 @@
  * `/api/auth/two-factor/*`, which the gate never sees.
  *
  * The requirement applies to the person, so an API token acting for such a
- * user is refused too. There is no grace period: promoting someone to admin
+ * user is refused too, and so are MCP tools that change something
+ * ({@link requireEnrolledIfRequired}, called by `mcp/route.ts`). There is no grace period: promoting someone to admin
  * succeeds, and they enroll before their next change.
  *
  * Owned by the api-auth stream.
@@ -17,8 +18,8 @@ import { type Db, users, workspaceMembers, workspaces } from "@roundhouse/db";
 import { isTwoFactorRequired } from "@roundhouse/shared";
 import { and, eq, isNull } from "drizzle-orm";
 import { createMiddleware } from "hono/factory";
-import { type AppEnv, currentPrincipal } from "../context";
-import { errorBody } from "./errors";
+import { type AppContext, type AppEnv, currentPrincipal } from "../context";
+import { ApiError, errorBody } from "./errors";
 
 /**
  * Mutations allowed before enrolling: setup and invite acceptance create
@@ -74,6 +75,23 @@ export async function twoFactorRequirement(db: Db, userId: string): Promise<TwoF
   };
 }
 
+const TWO_FACTOR_REQUIRED_MESSAGE =
+  "Set up two-factor authentication under Settings → Security before making changes";
+
+/**
+ * Refuses a change by a user who must have two-factor authentication but
+ * hasn't enrolled; for mutations outside `/v1` (MCP tool calls).
+ *
+ * @param c - Request context.
+ * @param userId - The person acting (a token's creator for API tokens).
+ * @throws {ApiError} 403 `two_factor_required`.
+ */
+export async function requireEnrolledIfRequired(c: AppContext, userId: string): Promise<void> {
+  const { required, enabled } = await twoFactorRequirement(c.get("db"), userId);
+  if (required && !enabled)
+    throw new ApiError(403, "two_factor_required", TWO_FACTOR_REQUIRED_MESSAGE);
+}
+
 /** Rejects mutations by users who must enroll a second factor first. */
 export const twoFactorGate = createMiddleware<AppEnv>(async (c, next) => {
   if (SAFE_METHODS.has(c.req.method) || TWO_FACTOR_EXEMPT_PATHS.some((r) => r.test(c.req.path))) {
@@ -85,13 +103,7 @@ export const twoFactorGate = createMiddleware<AppEnv>(async (c, next) => {
   if (!principal) return next();
   const { required, enabled } = await twoFactorRequirement(c.get("db"), principal.user.id);
   if (required && !enabled) {
-    return c.json(
-      errorBody(
-        "two_factor_required",
-        "Set up two-factor authentication under Settings → Security before making changes",
-      ),
-      403,
-    );
+    return c.json(errorBody("two_factor_required", TWO_FACTOR_REQUIRED_MESSAGE), 403);
   }
   return next();
 });

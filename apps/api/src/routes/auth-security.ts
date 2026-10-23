@@ -3,6 +3,14 @@
  * security status, re-authentication, the caller's sessions, and the
  * instance admin's lockout and two-factor recovery tools.
  *
+ * `POST /v1/auth/reauth` re-checks the password and, when the account has
+ * two-factor on, a TOTP or backup code (`verifySecondFactor`), and stamps
+ * `sessions.reauthenticated_at`, which makes the session fresh for
+ * `REAUTH_WINDOW_MS` (`lib/fresh-session.ts`; routes with `reauth: true`
+ * are guarded by their router). Failures count toward the sign-in lockout.
+ * Wrong credentials answer 400, not 401, so the dashboard doesn't take them
+ * for an ended session; a missing or wrong code names the `code` field.
+ *
  * Owned by the api-auth stream; mounted in `index.ts` already, so adding handlers
  * here needs no change there.
  *
@@ -31,7 +39,7 @@ import {
 } from "../contracts/auth";
 import { auditInsert, recordAudit } from "../lib/audit";
 import { ApiError, notFound } from "../lib/errors";
-import { freshUntil, requireFreshSession } from "../lib/fresh-session";
+import { freshUntil } from "../lib/fresh-session";
 import {
   accountLocked,
   clearLoginFailures,
@@ -131,7 +139,7 @@ export const authSecurityRoutes = createRouter()
         ip: clientIp(c),
       });
       await countReauthFailure(c, user.id, user.email);
-      throw new ApiError(401, "unauthorized", "Incorrect password");
+      throw new ApiError(400, "invalid_request", "Incorrect password");
     }
 
     const [account] = await db
@@ -141,11 +149,9 @@ export const authSecurityRoutes = createRouter()
       .limit(1);
     if (account?.twoFactorEnabled) {
       if (!code) {
-        throw new ApiError(
-          400,
-          "invalid_request",
-          "Enter a code from your authenticator app or a backup code",
-        );
+        throw new ApiError(400, "invalid_request", "Enter a code from your authenticator app", [
+          { field: "code", code: "required", message: "A TOTP or backup code is required" },
+        ]);
       }
       const factor = await verifySecondFactor(db, c.env, user.id, code);
       if (!factor) {
@@ -160,7 +166,9 @@ export const authSecurityRoutes = createRouter()
           ip: clientIp(c),
         });
         await countReauthFailure(c, user.id, user.email);
-        throw new ApiError(401, "unauthorized", "Invalid code");
+        throw new ApiError(400, "invalid_request", "Incorrect code", [
+          { field: "code", code: "invalid", message: "The code is wrong or was already used" },
+        ]);
       }
       if (factor.method === "backup_code") {
         await recordAudit(db, {
@@ -292,7 +300,6 @@ export const authSecurityRoutes = createRouter()
   })
   .openapi(resetUserTwoFactor, async (c) => {
     const admin = await requireInstanceAction(c, "instance:manage");
-    await requireFreshSession(c);
     const { userId } = c.req.valid("param");
     if (userId === admin.id) {
       throw new ApiError(

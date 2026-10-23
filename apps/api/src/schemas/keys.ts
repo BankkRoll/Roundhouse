@@ -45,3 +45,82 @@ export const KeyStatusSchema = z
 export const KeyRotationStartedSchema = z
   .object({ rotation_id: z.string() })
   .openapi("KeyRotationStarted");
+
+// -----------------------------------------------------------------------------
+// Control-plane signing key rollover (ADR 0014 §13)
+// -----------------------------------------------------------------------------
+
+/**
+ * Where a node stands in the signing-key rollover:
+ * - `ready`: it pins the key it will be signed with (the successor while one
+ *   is scheduled, else the current key);
+ * - `pending`: a successor is scheduled and the agent can follow it, but
+ *   hasn't been told yet (it learns it at its next connection);
+ * - `upgrade_required`: a successor is scheduled and the agent predates
+ *   rollover; it must be upgraded before the rollover completes;
+ * - `rejoin_required`: it pins none of the keys still in use, so it can't
+ *   verify frames until it re-joins;
+ * - `unknown`: the node hasn't reported its keys yet.
+ */
+export const NODE_KEY_STATES = [
+  "ready",
+  "pending",
+  "upgrade_required",
+  "rejoin_required",
+  "unknown",
+] as const;
+
+/** One node's signing keys. */
+export const NodeSigningKeysSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  workspace_id: z.string(),
+  protocol_version: z.number().int(),
+  connected: z.boolean(),
+  /** Kids it pins, as last reported or announced; `null` when never known. */
+  pinned_kids: z.array(z.string()).nullable(),
+  state: z.enum(NODE_KEY_STATES),
+});
+
+/** Signing keys and rollover status. Never includes private key material. */
+export const SigningKeyStatusSchema = z
+  .object({
+    /** The stored current key, which signs until a successor is due. */
+    current: z.object({ kid: z.string(), public_key: z.string() }),
+    /** Kid frames are signed with by default now (and handed to joining nodes). */
+    signing_kid: z.string(),
+    /** The scheduled successor, if any. */
+    next: z
+      .object({
+        kid: z.string(),
+        public_key: z.string(),
+        not_before: Millis,
+        scheduled_at: Millis,
+        /** `not_before` has passed: agents pinning it are signed with it. */
+        due: z.boolean(),
+      })
+      .nullable(),
+    /** The key the latest completed rollover retired. */
+    retired: z.object({ kid: z.string(), retired_at: Millis }).nullable(),
+    nodes: z.array(NodeSigningKeysSchema),
+  })
+  .openapi("SigningKeyStatus");
+
+/** Body of `POST /v1/instance/signing-keys/rotate`. */
+export const ScheduleSigningKeyRolloverSchema = z
+  .object({
+    /** Hours until agents are signed with the new key. Defaults to 24. */
+    delay_hours: z.number().int().min(1).max(720).optional(),
+  })
+  .openapi("ScheduleSigningKeyRollover");
+
+/** Body of `POST /v1/instance/signing-keys/complete`. */
+export const CompleteSigningKeyRolloverSchema = z
+  .object({
+    /**
+     * Complete even though some nodes don't pin the new key yet. They will
+     * need a re-join.
+     */
+    force: z.boolean().optional(),
+  })
+  .openapi("CompleteSigningKeyRollover");

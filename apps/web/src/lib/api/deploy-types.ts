@@ -10,6 +10,7 @@ import type {
   ApiToken,
   BodyOf,
   cancelDeployment,
+  completeSigningKeyRollover,
   createApiToken,
   createDeployment,
   createGithubManifest,
@@ -17,6 +18,7 @@ import type {
   createService,
   DeploymentDetail,
   getGithubStatus,
+  getSigningKeyStatus,
   LogPage,
   listDeployments,
   listGithubRepositories,
@@ -28,6 +30,7 @@ import type {
   ResponseOf,
   resolveServiceVariables,
   ServiceConfig,
+  scheduleSigningKeyRollover,
   updateInstanceSettings,
   updateProject,
   updateService,
@@ -74,6 +77,14 @@ export type CreateDeploymentBody = BodyOf<typeof createDeployment>;
 export type DeploymentPage = ResponseOf<typeof listDeployments, 200>;
 /** `PATCH /v1/instance/settings` body. */
 export type InstanceSettingsPatch = BodyOf<typeof updateInstanceSettings>;
+/** Control-plane signing keys, the scheduled rollover and each server's pinned kids. */
+export type SigningKeyStatus = ResponseOf<typeof getSigningKeyStatus, 200>;
+/** Where one server stands in a signing-key rollover. */
+export type NodeSigningKeys = SigningKeyStatus["nodes"][number];
+/** `POST /v1/instance/signing-keys/rotate` body. */
+export type ScheduleSigningKeyRolloverBody = BodyOf<typeof scheduleSigningKeyRollover>;
+/** `POST /v1/instance/signing-keys/complete` body. */
+export type CompleteSigningKeyRolloverBody = BodyOf<typeof completeSigningKeyRollover>;
 /** `POST /v1/github/manifest` body. */
 export type GithubManifestBody = BodyOf<typeof createGithubManifest>;
 /** What the dashboard needs to start the GitHub App manifest flow. */
