@@ -116,7 +116,7 @@ function Wordmark() {
       {/* The mark's artwork spans 96–416 of its 512 grid; scale that span to the letter height. */}
       <g
         transform={`translate(0 ${-ink.ascent}) scale(${size / 320}) translate(-96 -96)`}
-        className="fill-accent-text stroke-accent-text"
+        className="fill-background stroke-background"
         data-testid="wordmark-mark"
       >
         <path d="M160 160 352 352M352 160 160 352" fill="none" strokeWidth="44" />
@@ -132,7 +132,7 @@ function Wordmark() {
         y="0"
         textLength="1000"
         lengthAdjust="spacingAndGlyphs"
-        className="fill-foreground font-sans font-bold"
+        className="fill-background font-sans font-bold"
         style={{ fontSize: WORDMARK_FONT_SIZE, letterSpacing: "-0.04em" }}
       >
         {PRODUCT_NAME}
@@ -231,7 +231,7 @@ export function SiteFooter() {
           />
         </ExternalLink>
         <div
-          className="col-span-2 pt-[clamp(32px,6vw,96px)] pb-[clamp(24px,4vw,64px)] lg:col-span-12"
+          className="col-span-2 rounded-lg bg-foreground px-[5%] py-[clamp(24px,4.5vw,72px)] lg:col-span-12"
           data-testid="wordmark-panel"
         >
           <Wordmark />
