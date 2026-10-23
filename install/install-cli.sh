@@ -36,11 +36,10 @@ REPO="BankkRoll/Roundhouse"
 # IMPORTANT: CLI release-signing public keys, one PEM block each, verbatim as
 # `openssl pkey -pubout` prints them. SHA256SUMS is accepted if any of them
 # verifies it, which lets a rotation ship the next key before it is used (see
-# infra/release-signing.md). The block below is a PLACEHOLDER whose private
-# half was discarded; replace it before the first CLI release. While it is
-# present, signed installs are refused.
+# infra/release-signing.md). PLACEHOLDER_KEY_DER_B64 is the discarded
+# placeholder key; signed installs are refused while it is pinned.
 RELEASE_PUBLIC_KEYS_PEM='-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAZvzye3OODLHiefWH/qsfIHqNyVR7gw8jC3iEzqqEfxI=
+MCowBQYDK2VwAyEArVXpI6Oru5nB+xvOz0gGwGkhJKMnZR+P68qAYk4h6ZU=
 -----END PUBLIC KEY-----'
 PLACEHOLDER_KEY_DER_B64="MCowBQYDK2VwAyEAZvzye3OODLHiefWH/qsfIHqNyVR7gw8jC3iEzqqEfxI="
 

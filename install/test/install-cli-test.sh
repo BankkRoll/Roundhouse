@@ -30,11 +30,15 @@ openssl genpkey -algorithm ed25519 -out "$WORK/release.key" 2>/dev/null
 openssl pkey -in "$WORK/release.key" -pubout -out "$WORK/release.pub"
 openssl genpkey -algorithm ed25519 -out "$WORK/other.key" 2>/dev/null
 
-# The script under test, with the test key pinned in place of the placeholder.
-placeholder_line="$(sed -n '/^RELEASE_PUBLIC_KEYS_PEM=/{n;p;}' "$SCRIPT")"
+# The script under test, with the test key pinned in place of the shipped key,
+# and a copy pinned to the discarded placeholder key.
+pinned_line="$(sed -n '/^RELEASE_PUBLIC_KEYS_PEM=/{n;p;}' "$SCRIPT")"
 test_line="$(sed -n '2p' "$WORK/release.pub")"
-sed "s|^${placeholder_line}\$|${test_line}|" "$SCRIPT" >"$WORK/install-cli.sh"
+sed "s|^${pinned_line}\$|${test_line}|" "$SCRIPT" >"$WORK/install-cli.sh"
 grep -q "^${test_line}\$" "$WORK/install-cli.sh" || fail "could not pin the test key"
+placeholder_b64="$(sed -n 's/^PLACEHOLDER_KEY_DER_B64="\(.*\)"$/\1/p' "$SCRIPT")"
+sed "s|^${pinned_line}\$|${placeholder_b64}|" "$SCRIPT" >"$WORK/placeholder-cli.sh"
+grep -q "^${placeholder_b64}\$" "$WORK/placeholder-cli.sh" || fail "could not pin the placeholder key"
 
 platform="$(ROUNDHOUSE_INSTALL_SOURCE_ONLY=1 sh -c '. "$1" && detect_platform && echo "$OS-$ARCH"' sh "$SCRIPT")"
 
@@ -147,7 +151,7 @@ expect_refused "tampered archive" "checksum mismatch" \
 
 make_release 0.1.0
 expect_refused "placeholder key" "no release signing key yet" \
-	"$SCRIPT" "$WORK/bin-x" --version 0.1.0
+	"$WORK/placeholder-cli.sh" "$WORK/bin-x" --version 0.1.0
 expect_refused "malformed version" "must look like" \
 	"$WORK/install-cli.sh" "$WORK/bin-x" --version '../0.1.0'
 
