@@ -96,6 +96,7 @@ const MESSAGE_TYPES = new Set([
   "log.lines",
   "service.updated",
   "presence",
+  "cron_run.updated",
 ]);
 
 /**
@@ -105,9 +106,14 @@ const MESSAGE_TYPES = new Set([
  * @returns E.g. `deployment_logs:dep_1`.
  */
 export function topicKey(topic: RealtimeTopic): string {
-  return topic.kind === "deployment_logs"
-    ? `deployment_logs:${topic.deployment_id}`
-    : `build_logs:${topic.build_id}`;
+  switch (topic.kind) {
+    case "deployment_logs":
+      return `deployment_logs:${topic.deployment_id}`;
+    case "build_logs":
+      return `build_logs:${topic.build_id}`;
+    case "cron_run_logs":
+      return `cron_run_logs:${topic.run_id}`;
+  }
 }
 
 /**
@@ -117,9 +123,14 @@ export function topicKey(topic: RealtimeTopic): string {
  * @returns The key of the subscription it answers.
  */
 export function logMessageTopicKey(message: RealtimeLogLines): string {
-  return message.source.type === "runtime"
-    ? `deployment_logs:${message.source.deployment_id}`
-    : `build_logs:${message.source.build_id}`;
+  switch (message.source.type) {
+    case "runtime":
+      return `deployment_logs:${message.source.deployment_id}`;
+    case "build":
+      return `build_logs:${message.source.build_id}`;
+    case "job":
+      return `cron_run_logs:${message.source.run_id}`;
+  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -159,6 +170,10 @@ export function parseServerMessage(data: unknown): RealtimeServerMessage | null 
         : null;
     case "presence":
       return Array.isArray(value.users) ? (value as RealtimeServerMessage) : null;
+    case "cron_run.updated":
+      return isObject(value.run) && typeof value.run.service_id === "string"
+        ? (value as RealtimeServerMessage)
+        : null;
     default:
       return isObject(value.source) && Array.isArray(value.lines)
         ? (value as RealtimeServerMessage)

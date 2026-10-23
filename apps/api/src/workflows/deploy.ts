@@ -33,6 +33,11 @@
  *    (`removed`, or `rolled_back` when this is a rollback) and push desired
  *    state again so agents drain the old replicas.
  *
+ * A `cron` service (ADR 0010) skips steps 4–6: `arm` checks its config
+ * has a schedule and marks it `deploying` without placing replicas, then
+ * `finalize` makes it the _armed_ deployment every run uses and
+ * `arm-schedule` sets the service's next slot. Deploying never runs it.
+ *
  * Any failure marks the deployment `failed` with a reason, stops its build
  * on the builder (`build_cancel`) and pulls its replicas; the previous
  * deployment keeps serving because it is only touched in `finalize`. A
@@ -61,7 +66,6 @@ import {
   buildCacheKey,
   buildSecretsAad,
   localImageRepository,
-  MAX_WORKLOADS_PER_NODE,
   REGISTRY_LISTEN,
   SEALED_ENV_PROTOCOL_VERSION,
   type SealedBox,
@@ -75,17 +79,17 @@ import {
   type BuildConfig,
   canTransition,
   type DeploymentStatus,
-  LIVE_VOLUME_STATUSES,
   newId,
   ROLLOUT_TIMEOUT_MS,
-  type SchedulerNode,
+  type ServiceKind,
   schedule,
   secretBuildArgsValid,
   secretDerivedVariables,
 } from "@roundhouse/shared";
-import { and, desc, eq, inArray, isNotNull, isNull, ne, sum } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
+import { armCronState } from "../lib/cron/schedule";
 import type { KeyEnv, Sealed } from "../lib/crypto";
 import {
   addDeploymentEvent,
@@ -99,7 +103,6 @@ import {
 import {
   type DeploymentBuildInputs,
   type DeploymentRef,
-  LIVE_DEPLOYMENT_STATUSES,
   openDeploymentBuild,
   refreshNodes,
   restartSpec,
@@ -118,6 +121,7 @@ import {
 } from "../lib/github";
 import { effectiveStatus } from "../lib/nodes";
 import { resolveServiceEnvironment } from "../lib/resolve-env";
+import { schedulerSnapshot } from "../lib/scheduling";
 import { loadEnvironmentVariables, projectKey } from "../lib/variables";
 import { ensureVolume, type VolumeRow } from "../lib/volumes";
 
@@ -136,8 +140,8 @@ export interface DeployOutput {
   reason?: string;
 }
 
-/** Memory kept back on every node for the OS, Docker, the agent and Caddy. */
-export const SYSTEM_RESERVED_MB = 256;
+/** Memory kept back on every node; see {@link schedulerSnapshot}. */
+export { SYSTEM_RESERVED_MB } from "../lib/scheduling";
 
 /** Shortest rollout timeout `ROLLOUT_TIMEOUT_S` may set; below it a cold image pull fails. */
 const MIN_ROLLOUT_TIMEOUT_S = 10;
@@ -228,6 +232,8 @@ interface Plan {
   serviceId: string;
   serviceSlug: string;
   serviceName: string;
+  /** `cron` services are armed instead of rolled out. */
+  serviceKind: ServiceKind;
   environmentId: string;
   environmentSlug: string;
   configVersion: number;
@@ -310,6 +316,20 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       }
       image = built.image;
       registryNodeId = created.nodeId;
+    }
+
+    if (plan.serviceKind === "cron") {
+      const armed = await step.do("arm", DB_STEP, () => this.arm(plan, image!));
+      if (armed.kind !== "ok") return armed;
+      const finalized = await step.do("finalize", DB_STEP, () => this.finalize(plan));
+      if (finalized.kind !== "ok") return finalized;
+      await step.do("arm-schedule", DB_STEP, () => this.armSchedule(plan));
+      if (plan.git) {
+        await step.do("commit-status-success", NETWORK_STEP, () =>
+          this.commitStatus(params, plan, "success", "Deployed"),
+        );
+      }
+      return { kind: "stop", status: "active" };
     }
 
     const scheduled = await step.do("schedule", DB_STEP, () =>
@@ -416,6 +436,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       serviceId: service.id,
       serviceSlug: service.slug,
       serviceName: service.name,
+      serviceKind: service.kind,
       environmentId: environment.id,
       environmentSlug: environment.slug,
       configVersion: d.configVersion,
@@ -946,64 +967,10 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       return fail("A service with a volume runs at most one replica");
     }
 
-    const workspaceNodes = (
-      await db
-        .select()
-        .from(nodes)
-        .where(and(eq(nodes.workspaceId, plan.workspaceId), isNull(nodes.deletedAt)))
-    ).filter(runsSealedWorkloads);
-    const allocations = await db
-      .select({
-        nodeId: placements.nodeId,
-        serviceId: deployments.serviceId,
-        resources: serviceConfigs.resources,
-      })
-      .from(placements)
-      .innerJoin(deployments, eq(deployments.id, placements.deploymentId))
-      .innerJoin(
-        serviceConfigs,
-        and(
-          eq(serviceConfigs.serviceId, deployments.serviceId),
-          eq(serviceConfigs.environmentId, deployments.environmentId),
-          eq(serviceConfigs.version, deployments.configVersion),
-        ),
-      )
-      .where(
-        and(
-          inArray(deployments.status, [...LIVE_DEPLOYMENT_STATUSES]),
-          ne(deployments.id, plan.deploymentId),
-        ),
-      );
-    const volumeQuotas = await db
-      .select({ nodeId: volumes.nodeId, total: sum(volumes.sizeMb) })
-      .from(volumes)
-      .where(and(isNotNull(volumes.nodeId), inArray(volumes.status, [...LIVE_VOLUME_STATUSES])))
-      .groupBy(volumes.nodeId);
-    const quotaOf = new Map(volumeQuotas.map((q) => [q.nodeId, Number(q.total ?? 0)]));
-    const schedulerNodes: SchedulerNode[] = workspaceNodes.map((n) => {
-      const mine = allocations.filter((a) => a.nodeId === n.id);
-      const serviceReplicas: Record<string, number> = {};
-      for (const a of mine) serviceReplicas[a.serviceId] = (serviceReplicas[a.serviceId] ?? 0) + 1;
-      const full = mine.length >= MAX_WORKLOADS_PER_NODE;
-      return {
-        id: n.id,
-        status: effectiveStatus(n),
-        docker: n.capabilities?.docker ?? false,
-        labels: n.labels,
-        cpuMillis: (n.cpuTotal ?? 0) * 1000,
-        // A node at the protocol's workload cap is treated as full.
-        memoryMb: full
-          ? 0
-          : Math.max(0, Math.floor((n.memTotal ?? 0) / 2 ** 20) - SYSTEM_RESERVED_MB),
-        allocatedCpuMillis: mine.reduce((sum, a) => sum + a.resources.cpu_millis, 0),
-        allocatedMemoryMb: mine.reduce((sum, a) => sum + a.resources.memory_mb, 0),
-        serviceReplicas,
-        // Until the Phase 2 mesh, only the builder itself can pull from its registry.
-        reachesRegistry: registryNodeId !== null && n.id === registryNodeId,
-        protocolVersion: n.protocolVersion,
-        ...(n.diskTotal ? { diskMb: Math.floor(n.diskTotal / 2 ** 20) } : {}),
-        allocatedDiskMb: quotaOf.get(n.id) ?? 0,
-      };
+    const { nodes: schedulerNodes } = await schedulerSnapshot(db, {
+      workspaceId: plan.workspaceId,
+      excludeDeploymentId: plan.deploymentId,
+      registryNodeId,
     });
     const result = schedule(
       {
@@ -1076,6 +1043,71 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     return { kind: "ok", nodeIds };
   }
 
+  /**
+   * A cron deployment's stand-in for `schedule`: no replicas, just a check
+   * that the config version has a schedule (ADR 0010, 422
+   * `cron_schedule_required` at the API) and the move to `deploying`.
+   */
+  private async arm(plan: Plan, image: string): Promise<Verdict<object>> {
+    const ctx = this.lifecycle();
+    const { db } = ctx;
+    const stopped = await this.stopped(db, plan, ["queued", "building", "deploying"]);
+    if (stopped) return stopped;
+    const [config] = await db
+      .select({ cron: serviceConfigs.cron })
+      .from(serviceConfigs)
+      .where(
+        and(
+          eq(serviceConfigs.serviceId, plan.serviceId),
+          eq(serviceConfigs.environmentId, plan.environmentId),
+          eq(serviceConfigs.version, plan.configVersion),
+        ),
+      )
+      .limit(1);
+    if (!config?.cron) {
+      return fail("cron_schedule_required: a cron service needs a schedule (config cron.schedule)");
+    }
+    if (plan.image === null) {
+      await db.update(deployments).set({ image }).where(eq(deployments.id, plan.deploymentId));
+    }
+    const current = await db.query.deployments.findFirst({
+      where: eq(deployments.id, plan.deploymentId),
+      columns: { status: true },
+    });
+    if (current?.status !== "deploying") {
+      try {
+        await transitionDeployment(ctx, plan.projectId, plan.deploymentId, "deploying");
+      } catch (err) {
+        if (err instanceof IllegalTransitionError) return { kind: "stop", status: err.from };
+        throw err;
+      }
+    }
+    return { kind: "ok" };
+  }
+
+  /** Sets the next slot of a cron deployment that just became the armed one. */
+  private async armSchedule(plan: Plan): Promise<number | null> {
+    const { db } = this.lifecycle();
+    const [config] = await db
+      .select({ cron: serviceConfigs.cron })
+      .from(serviceConfigs)
+      .where(
+        and(
+          eq(serviceConfigs.serviceId, plan.serviceId),
+          eq(serviceConfigs.environmentId, plan.environmentId),
+          eq(serviceConfigs.version, plan.configVersion),
+        ),
+      )
+      .limit(1);
+    if (!config?.cron) return null;
+    return armCronState(db, {
+      serviceId: plan.serviceId,
+      environmentId: plan.environmentId,
+      cron: config.cron,
+      now: Date.now(),
+    });
+  }
+
   private async rollout(plan: Plan, nodeIds: string[]): Promise<Verdict<object>> {
     const { db } = this.lifecycle();
     const stopped = await this.stopped(db, plan, ["deploying"]);
@@ -1144,7 +1176,9 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         plan.projectId,
         plan.deploymentId,
         "rollout_finished",
-        "Every replica is healthy",
+        plan.serviceKind === "cron"
+          ? "Armed: runs use this deployment from its next slot"
+          : "Every replica is healthy",
         { superseded: previous.map((p) => p.id) },
       );
     }

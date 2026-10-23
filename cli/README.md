@@ -194,8 +194,7 @@ sets one under Settings → Backups) backup commands exit 6 with
 
 `restore` asks for the database's slug (`--confirm` in scripts); `in_place`
 takes a safety backup first unless `--skip-safety-backup` is given.
-Restoring and decrypting need a recent sign-in: on `reauth_required` (exit
-4) run `roundhouse login` again. API tokens never qualify.
+Restoring and decrypting need a recent sign-in: on `reauth_required` (exit 4) run `roundhouse login` again. API tokens never qualify.
 
 `download` fetches the encrypted object straight from object storage,
 without the control plane's credential, verifies its SHA-256, and writes it
@@ -205,6 +204,24 @@ decrypts with [age](https://age-encryption.org) as it downloads; the key is
 never printed or saved. The result is a zstd-compressed RHBK1 archive
 (`packages/protocol/rhbk.md`). `-o -` writes to stdout; an existing file is
 replaced only with `--force`.
+
+## Cron services
+
+```sh
+roundhouse cron status                      # schedule, paused or not, next runs
+roundhouse cron runs --status failed
+roundhouse cron run --wait                  # run now and stream its output
+roundhouse cron logs crn_01J9Z6Y4M0V8 -f
+roundhouse cron cancel crn_01J9Z6Y4M0V8
+roundhouse cron pause                       # and `cron resume`
+roundhouse cron preview "*/15 9-17 * * MON-FRI" --timezone Europe/Berlin
+```
+
+Commands act on `--service`, else the linked service when it is a cron
+service, else the project's only one. `cron run` exits 6 with
+`run_in_progress` while a run is in progress; `--force` cancels that run
+first. With `--wait` it exits 1 unless the run succeeds. `cron preview`
+exits 7 for an invalid schedule or zone and underlines the offending part.
 
 ## Variables
 
@@ -307,6 +324,8 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `db create\|list\|info\|query\|tables`              | Database services and read-only queries                  |
 | `db volume [resize\|delete\|undelete]`              | A database's volume                                      |
 | `db backups list\|run\|policy\|restore\|download`   | Backups, schedules, restores, decrypted downloads        |
+| `cron status\|runs\|run\|cancel\|logs`              | Cron services: schedule, run history, run now, output    |
+| `cron pause\|resume`, `cron preview <schedule>`     | Pause or resume scheduling; a schedule's next slots      |
 | `tokens list\|create\|revoke`                       | Workspace API tokens for CI and scripts                  |
 | `version`, `completion`                             | Build info, shell completion                             |
 | `up`, `shell`, `db connect`                         | Not available on the control plane yet (exit 10)         |

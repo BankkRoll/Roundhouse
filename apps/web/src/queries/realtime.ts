@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { RealtimeServerMessage } from "../lib/api/deploy-types";
 import { applyChangeRealtime } from "./changes";
+import { applyCronRunUpdate } from "./cron";
 import { appendDeploymentEvent, upsertDeployment } from "./deployments";
 import { queryKeys } from "./keys";
 import { invalidateProjectSummaries } from "./projects";
@@ -55,6 +56,9 @@ export function applyRealtimeMessage(
         exact: true,
       });
       invalidateProjectSummaries(queryClient, message.service.project_id);
+      return;
+    case "cron_run.updated":
+      applyCronRunUpdate(queryClient, message.run);
       return;
     default:
       if (projectId) applyChangeRealtime(queryClient, message, projectId);

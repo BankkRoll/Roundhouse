@@ -61,6 +61,29 @@ type Config struct {
 	Builder bool `yaml:"builder,omitempty"`
 	// Volumes configures where and how the node keeps volumes.
 	Volumes VolumesConfig `yaml:"volumes,omitempty"`
+	// Jobs configures cron and pre-deploy job runs.
+	Jobs JobsConfig `yaml:"jobs,omitempty"`
+}
+
+// Bounds of jobs.max_concurrent.
+const (
+	DefaultJobsMaxConcurrent = 8
+	MaxJobsMaxConcurrent     = 256
+)
+
+// JobsConfig is the jobs section of the config (ADR 0010, "Protocol").
+type JobsConfig struct {
+	// MaxConcurrent is how many job runs the node runs at once; more are
+	// refused with node_busy. Zero means [DefaultJobsMaxConcurrent].
+	MaxConcurrent int `yaml:"max_concurrent,omitempty"`
+}
+
+// JobsMaxConcurrent returns jobs.max_concurrent, or its default when unset.
+func (c Config) JobsMaxConcurrent() int {
+	if c.Jobs.MaxConcurrent == 0 {
+		return DefaultJobsMaxConcurrent
+	}
+	return c.Jobs.MaxConcurrent
 }
 
 // VolumesConfig is the volumes section of the config (ADR 0004, "Volumes").
@@ -168,6 +191,10 @@ func (c Config) Validate() error {
 		if _, err := protocol.ParsePublicKey(c.ControlPublicKey); err != nil {
 			errs = append(errs, errors.New("control_public_key must be a base64 raw Ed25519 public key"))
 		}
+	}
+	if n := c.Jobs.MaxConcurrent; n < 0 || n > MaxJobsMaxConcurrent {
+		errs = append(errs, fmt.Errorf("jobs.max_concurrent must be 1 to %d (0 or absent means %d)",
+			MaxJobsMaxConcurrent, DefaultJobsMaxConcurrent))
 	}
 	return errors.Join(errs...)
 }

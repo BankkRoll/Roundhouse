@@ -23,6 +23,7 @@ import {
   type ApiTokenScope,
   type BuiltinVariable,
   CANCELLABLE_DEPLOYMENT_STATUSES,
+  DEFAULT_CRON_CONFIG,
   type DeploymentStatus,
   defaultServiceConfig,
   freeSlug,
@@ -32,6 +33,7 @@ import {
   RESERVED_SERVICE_SLUGS,
   ROLLBACK_SOURCE_STATUSES,
   resolveVariables,
+  scheduleError,
   scopesBeyondRole,
   secretBuildArgsValid,
   secretDerivedVariables,
@@ -48,6 +50,7 @@ import type {
   ProjectDetail,
   ProjectSummary,
   RealtimeServerMessage,
+  RealtimeTopic,
   Service,
   ServiceConfig,
   Variable,
@@ -63,6 +66,7 @@ import {
   requireWorkspace,
   unauthorized,
 } from "./common";
+import { logMessageTopicKey, topicKey } from "../lib/realtime/client";
 import { db, nextId } from "./db";
 import type { DbApiToken, DbDeployment, DbVariable } from "./deploy-db";
 import { generatedDomainState } from "./domains-db";
@@ -507,9 +511,7 @@ function send(state: SocketState, message: RealtimeServerMessage) {
 export function broadcastRealtime(projectId: string, message: RealtimeServerMessage): void {
   const topic =
     message.type === "log.lines"
-      ? message.source.type === "runtime"
-        ? `deployment_logs:${message.source.deployment_id}`
-        : `build_logs:${message.source.build_id}`
+      ? logMessageTopicKey(message)
       : null;
   for (const state of sockets.values()) {
     if (state.projectId !== projectId) continue;
@@ -607,10 +609,7 @@ const realtimeHandler = realtimeLink.addEventListener("connection", ({ client })
     };
     const topic = parsed.topic;
     if (!topic) return;
-    const key =
-      topic.kind === "deployment_logs"
-        ? `deployment_logs:${topic.deployment_id}`
-        : `build_logs:${topic.build_id}`;
+    const key = topicKey(topic as RealtimeTopic);
     if (parsed.type === "subscribe") state.topics.add(key);
     if (parsed.type === "unsubscribe") state.topics.delete(key);
   });
@@ -642,13 +641,15 @@ export function createConfigs(
     .filter((environment) => environment.project_id === service.project_id)
     .map((environment) => {
       const base = defaultServiceConfig(source);
-      const merged = { ...base } as Record<string, unknown>;
+      const merged = { ...base, cron: null } as Record<string, unknown>;
       for (const [part, value] of Object.entries(overrides)) {
         if (value === undefined) continue;
         merged[part] =
           part === "healthcheck" || value === null
             ? value
-            : { ...(base[part as keyof typeof base] as object), ...value };
+            : part === "cron"
+              ? { ...DEFAULT_CRON_CONFIG, ...value }
+              : { ...(base[part as keyof typeof base] as object), ...value };
       }
       return {
         id: nextId("cfg"),
@@ -1143,6 +1144,7 @@ export const deployHandlers = [
       "healthcheck",
       "networking",
       "placement",
+      "cron",
     ] as const;
     const changes = parts.filter((part) => body[part] !== undefined);
     if (changes.length > 0) {
@@ -1161,7 +1163,17 @@ export const deployHandlers = [
         next[part] =
           part === "source" || part === "healthcheck" || value === null
             ? value
-            : { ...(latest[part] as object), ...(value as object) };
+            : part === "cron"
+              ? { ...DEFAULT_CRON_CONFIG, ...latest.cron, ...(value as object) }
+              : { ...(latest[part] as object), ...(value as object) };
+      }
+      const cron = next.cron as ServiceConfig["cron"];
+      const problem = cron ? scheduleError(cron.schedule, cron.timezone) : null;
+      if (problem) {
+        const field = problem.code === "invalid_timezone" ? "cron.timezone" : "cron.schedule";
+        return apiError(422, "invalid_schedule", `${field}: ${problem.message}`, [
+          { field, code: problem.code, message: problem.message, start: problem.start, end: problem.end },
+        ]);
       }
       // Mirrors the API's mergeConfig: cross-field rules are checked after the merge.
       if (!secretBuildArgsValid(next.build as ServiceConfig["build"])) {
@@ -1445,7 +1457,14 @@ export const deployHandlers = [
     if (!environment) return notFound("Environment");
     const config = latestConfig(found.row.id, environment.id);
     if (!config) return conflict("This environment has no config for the service");
-    if (config.deploy.replicas === 0)
+    if (found.row.kind === "cron" && !config.cron) {
+      return apiError(
+        422,
+        "cron_schedule_required",
+        "A cron service needs a schedule: set cron.schedule in its config before deploying",
+      );
+    }
+    if (found.row.kind !== "cron" && config.deploy.replicas === 0)
       return conflict("The service has 0 replicas; scale it up to deploy");
     const row = startDeployment(
       found.row,

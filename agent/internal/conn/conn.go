@@ -8,13 +8,14 @@
 //   - verify every inbound signed envelope against the trusted control-plane
 //     keys ([KeyStore]), follow signing-key rollovers announced in welcome
 //     and key_announce, act on welcome, and dispatch desired_state (in
-//     generation order), build_job and build_cancel to a [Handler], and the
-//     volume, backup, restore, copy and query frames to a [DataHandler];
+//     generation order), build_job and build_cancel to a [Handler], the
+//     volume, backup, restore, copy and query frames to a [DataHandler], and
+//     job_run and job_cancel to a [JobHandler];
 //   - infer the control plane's protocol version from what it sends
 //     ([Client.PeerProtocolVersion]), so frames it can't parse are never sent;
-//   - carry workload_status, logs and build_result frames from the rest of
-//     the agent through that same writer ([Client.Send]), within the
-//     protocol's frame size limit.
+//   - carry workload_status, logs, build_result and job_status frames from
+//     the rest of the agent through that same writer ([Client.Send]),
+//     within the protocol's frame size limit.
 package conn
 
 import (
@@ -124,6 +125,15 @@ type DataHandler interface {
 	RunQuery(m *protocol.DBQuery)
 }
 
+// JobHandler receives job_run and job_cancel (ADR 0010). job_run is
+// credential-bearing, and reaches it only after [protocol.VerifyEnvelope]
+// has checked its 60 s lifetime. Its methods are called from the
+// connection's read loop and must return quickly.
+type JobHandler interface {
+	RunJob(m *protocol.JobRun)
+	CancelJob(m *protocol.JobCancel)
+}
+
 // Client is a long-lived connection to the control plane. Configure the
 // exported fields, then call [Client.Run].
 type Client struct {
@@ -158,6 +168,8 @@ type Client struct {
 	Handler Handler
 	// Data receives the data-plane frames; nil drops them.
 	Data DataHandler
+	// Jobs receives job_run and job_cancel; nil drops them.
+	Jobs JobHandler
 	// OnPeerProtocol is called with the control plane's protocol version
 	// each time [Client.PeerProtocolVersion] rises. It must not block.
 	OnPeerProtocol func(version int)
@@ -639,6 +651,22 @@ func (s *session) apply(kid string, msg protocol.ControlMessage) {
 		s.data(protocol.BackupsProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.StartCopyIn(m) })
 	case *protocol.DBQuery:
 		s.data(protocol.DBQueryProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.RunQuery(m) })
+	case *protocol.JobRun:
+		s.raisePeer(protocol.JobsProtocolVersion)
+		if s.Jobs == nil {
+			s.Logger.Warn("dropping control frame", "reason", "no_handler", "type", m.Type, "msg_id", m.ID, "run_id", m.RunID)
+			return
+		}
+		s.Logger.Info("received job run", "msg_id", m.ID, "run_id", m.RunID, "workload_id", m.Workload.ID)
+		s.Jobs.RunJob(m)
+	case *protocol.JobCancel:
+		s.raisePeer(protocol.JobsProtocolVersion)
+		if s.Jobs == nil {
+			s.Logger.Warn("dropping control frame", "reason", "no_handler", "type", m.Type, "msg_id", m.ID, "run_id", m.RunID)
+			return
+		}
+		s.Logger.Info("received job cancel", "msg_id", m.ID, "run_id", m.RunID)
+		s.Jobs.CancelJob(m)
 	}
 }
 

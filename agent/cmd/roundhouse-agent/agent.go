@@ -22,6 +22,7 @@ import (
 	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
 	"github.com/BankkRoll/Roundhouse/agent/internal/firewall"
 	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
+	"github.com/BankkRoll/Roundhouse/agent/internal/jobs"
 	"github.com/BankkRoll/Roundhouse/agent/internal/logship"
 	"github.com/BankkRoll/Roundhouse/agent/internal/metrics"
 	agentruntime "github.com/BankkRoll/Roundhouse/agent/internal/runtime"
@@ -48,9 +49,11 @@ type agent struct {
 	volumes *volumes.Manager
 	// data routes volume, backup, restore, copy and query frames.
 	data *dataplane.Handler
+	// jobs runs cron and pre-deploy job runs (ADR 0010).
+	jobs *jobs.Runner
 	// backups runs backup, restore and copy tasks.
 	backups *backup.Runner
-	// refusal is why workloads and builds are refused on this connection
+	// refusal is why workloads, builds and jobs are refused on this connection
 	// ([conn.PlaintextRefusal]), "" when they run.
 	refusal string
 	// builder records whether this node runs builds.
@@ -166,10 +169,29 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 		},
 		Logger: log.With("component", "builds"),
 	})
+	a.jobs = jobs.New(jobs.Options{
+		Docker: dc,
+		Send:   func(ctx context.Context, m *protocol.JobStatus) error { return client.Send(ctx, m) },
+		Logs:   a.logs.Submit,
+		OpenEnv: func(runID string, w *protocol.WorkloadSpec) error {
+			return protocol.OpenJobEnv(encryption, cfg.NodeID, runID, w)
+		},
+		Network: a.runtime.EnsureNetwork,
+		// SECURITY: two nodes can share one Docker engine; each removes
+		// only its own orphaned job containers.
+		Namespace:     cfg.NodeID,
+		StatePath:     filepath.Join(dataDir, "jobs.json"),
+		SecretsDir:    jobSecretsDir(dataDir),
+		MaxConcurrent: cfg.JobsMaxConcurrent(),
+		Refusal:       refusal,
+		Logger:        log.With("component", "jobs"),
+	})
+	client.Jobs = jobHandler{a.jobs}
 	client.Handler = handler{a}
 	client.OnConnect = func() {
 		a.logs.Connected()
 		a.builds.Connected()
+		a.jobs.Connected()
 	}
 	a.metrics = metrics.New(metrics.Options{
 		Send: func(ctx context.Context, m *protocol.Metrics) error {
@@ -313,6 +335,7 @@ func (a *agent) run(ctx context.Context) error {
 	goRun("ingress", a.ingress.Run)
 	goRun("logs", a.logs.Run)
 	goRun("builds", a.builds.Run)
+	goRun("jobs", a.jobs.Run)
 	goRun("metrics", a.metrics.Run)
 	if ln, err := ingress.ListenAsk(ingress.DefaultAskListen); err != nil {
 		// NOTE: only on-demand ACME certificates depend on this endpoint;
@@ -399,6 +422,26 @@ func secretsDir(dataDir string) string {
 	}
 	return filepath.Join(dataDir, "secrets")
 }
+
+// jobSecretsDir is where job runs' mount_as_file values go: beside the
+// runtime's directory on the host tmpfs, never inside it, since the runtime
+// removes subdirectories of workloads it doesn't run.
+func jobSecretsDir(dataDir string) string {
+	if goruntime.GOOS == "linux" {
+		return jobs.DefaultSecretsDir
+	}
+	return filepath.Join(dataDir, "job-secrets")
+}
+
+// jobHandler routes job_run and job_cancel to the job runner. On a
+// plaintext connection the runner answers every run with the refusal.
+type jobHandler struct{ r *jobs.Runner }
+
+// RunJob starts a job run.
+func (h jobHandler) RunJob(m *protocol.JobRun) { h.r.Start(m) }
+
+// CancelJob stops a job run.
+func (h jobHandler) CancelJob(m *protocol.JobCancel) { h.r.Cancel(m) }
 
 func (h handler) StartBuild(m *protocol.BuildJob) { h.a.builds.Start(m) }
 

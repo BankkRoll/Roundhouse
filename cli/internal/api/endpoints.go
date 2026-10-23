@@ -81,6 +81,8 @@ var Routes = []Route{
 	RouteDatabaseQuery, RouteDatabaseSchema,
 	RouteBackupPolicy, RoutePutBackupPolicy, RouteListBackups, RouteCreateBackup, RouteGetBackup,
 	RouteBackupDownload, RouteBackupKey, RouteRestoreBackup, RouteGetRestore,
+	RouteCronState, RouteListCronRuns, RouteTriggerCron, RouteGetCronRun, RouteCronRunLogs,
+	RouteCancelCronRun, RoutePauseCron, RouteResumeCron, RouteCronPreview,
 }
 
 // AuthRoutes lists the Better Auth routes the client calls.

@@ -335,6 +335,7 @@ describe("tools/list", () => {
       "list_databases",
       "list_backups",
       "get_metrics",
+      "list_cron_runs",
       "list_templates",
       "deploy_template",
     ]);

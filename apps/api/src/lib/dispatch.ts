@@ -14,6 +14,7 @@
  */
 import type { Env } from "../env";
 import { claimDueBackups } from "./backups/schedule";
+import { claimDueCronRuns } from "./cron/schedule";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
 import { claimVolumeDeletions } from "./volumes";
 
@@ -48,6 +49,7 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
   },
   { name: "volume_deletions", run: claimVolumeDeletions },
   { name: "backup_policies", run: claimDueBackups },
+  { name: "cron", run: claimDueCronRuns },
 ];
 
 /**

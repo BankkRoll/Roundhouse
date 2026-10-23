@@ -175,6 +175,14 @@ func TestWireTypesMatchSchemas(t *testing.T) {
 		"BackupDecryptionKey":       BackupDecryptionKey{},
 		"RestoreBackup":             RestoreBackupInput{},
 		"Restore":                   Restore{},
+		"CronConfig":                CronConfig{},
+		"CronState":                 CronState{},
+		"CronRun":                   CronRun{},
+		"CronRunPage":               CronRunPage{},
+		"CronPreview":               CronPreview{},
+		"ScheduleError":             ScheduleError{},
+		"TriggerCronRun":            TriggerCronRunInput{},
+		"CronEnvironment":           CronEnvironmentInput{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
@@ -269,7 +277,10 @@ func TestQueryParamsExist(t *testing.T) {
 		{RouteNodeMetrics, "from"}, {RouteNodeMetrics, "to"}, {RouteNodeMetrics, "metrics"},
 		{RouteServiceVolume, "environment_id"}, {RouteDatabaseSchema, "environment_id"},
 		{RouteBackupPolicy, "environment_id"}, {RouteListBackups, "environment_id"},
-		{RouteListBackups, "cursor"}, {RouteListBackups, "limit"}} {
+		{RouteListBackups, "cursor"}, {RouteListBackups, "limit"},
+		{RouteCronState, "environment_id"}, {RouteListCronRuns, "environment_id"}, {RouteListCronRuns, "cursor"},
+		{RouteListCronRuns, "limit"}, {RouteListCronRuns, "status"}, {RouteCronRunLogs, "cursor"}, {RouteCronRunLogs, "limit"},
+		{RouteCronPreview, "schedule"}, {RouteCronPreview, "timezone"}, {RouteCronPreview, "count"}} {
 		op := doc.Paths[c.route.Path][strings.ToLower(c.route.Method)]
 		if !slices.Contains(op.Parameters, param{In: "query", Name: c.param}) {
 			t.Errorf("%s: no query parameter %q", c.route, c.param)
@@ -404,6 +415,8 @@ func TestDataEnumsMatchAPI(t *testing.T) {
 		{"Volume", "status", VolumeStatuses},
 		{"Backup", "status", BackupStatuses},
 		{"RestoreBackup", "mode", RestoreModes},
+		{"CronRun", "status", CronRunStatuses},
+		{"CronRun", "trigger", CronRunTriggers},
 	} {
 		s := doc.Components.Schemas[c.schema]
 		if s == nil || s.Properties[c.prop] == nil {

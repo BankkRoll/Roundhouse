@@ -118,6 +118,9 @@ type Fake struct {
 	// data holds databases, volumes and backups; see [Fake.dataState].
 	data *dataState
 
+	// cron holds cron schedule states and runs; see [Fake.cronState].
+	cron *cronState
+
 	// templateDeployErrors maps a template service ref to the message its
 	// first deployment fails to start with; see [Fake.FailTemplateDeploy].
 	templateDeployErrors map[string]string
@@ -559,6 +562,9 @@ func (f *Fake) workspaceOf(r *http.Request) string {
 	if id := f.dataServiceOf(r); id != "" {
 		serviceID = id
 	}
+	if id := f.cronServiceOf(r); id != "" {
+		serviceID = id
+	}
 	for _, d := range f.deployments {
 		if d.ID == r.PathValue("deploymentId") || d.BuildID != nil && *d.BuildID == r.PathValue("buildId") {
 			serviceID = d.ServiceID
@@ -694,6 +700,7 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteNodeMetrics:    {"nodes:read", f.nodeMetricsHandler},
 	}
 	f.dataRoutes(mux, handlers)
+	f.cronRoutes(handlers)
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
 	}
@@ -1519,12 +1526,16 @@ func (f *Fake) cancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d.Deployment)
 }
 
-// getLogs pages backwards: no cursor is the newest page; the cursor is the
-// index of the oldest line already returned.
+// getLogs serves deployment, build and cron run logs. It pages backwards:
+// no cursor is the newest page; the cursor is the index of the oldest line
+// already returned.
 func (f *Fake) getLogs(w http.ResponseWriter, r *http.Request) {
 	source := "dep:" + r.PathValue("deploymentId")
 	if id := r.PathValue("buildId"); id != "" {
 		source = "bld:" + id
+	}
+	if id := r.PathValue("runId"); id != "" {
+		source = "crn:" + id
 	}
 	lines := f.logs[source]
 	end := len(lines)

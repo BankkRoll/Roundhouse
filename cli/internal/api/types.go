@@ -125,6 +125,8 @@ type ServiceConfig struct {
 	Healthcheck   json.RawMessage  `json:"healthcheck"`
 	Networking    NetworkingConfig `json:"networking"`
 	Placement     json.RawMessage  `json:"placement"`
+	// Cron is set for a cron service; nil for any other.
+	Cron *CronConfig `json:"cron"`
 }
 
 // CreatedService is the response of POST /v1/projects/{projectId}/services.

@@ -12,7 +12,8 @@
  *   (`AuditChain`), and the deploy and key rotation workflows
  *   (`DeployWorkflow`, `KeyRotationWorkflow`), and one-click server
  *   provisioning (`ProvisionWorkflow`), and backups and restores
- *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), exported for their bindings
+ *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), and cron runs
+ *   (`CronRunWorkflow`, ADR 0010), exported for their bindings
  * - `Cache-Control: no-store` on every API and auth response, and the
  *   two-factor gate in front of `/v1/*` mutations (ADR 0014)
  * - Service, project and node metrics (`routes/metrics.ts`, ADR 0008)
@@ -47,6 +48,7 @@ import { auditRoutes } from "./routes/audit";
 import { authSecurityRoutes } from "./routes/auth-security";
 import { backupRoutes } from "./routes/backups";
 import { changeRoutes } from "./routes/changes";
+import { cronRoutes } from "./routes/cron";
 import { dataBrowserRoutes } from "./routes/data-browser";
 import { databaseRoutes } from "./routes/databases";
 import { deploymentRoutes } from "./routes/deployments";
@@ -74,6 +76,7 @@ export { AuditChain } from "./durable/audit-chain";
 export { NodeConnection } from "./durable/node-connection";
 export { ProjectRoom } from "./durable/project-room";
 export { BackupWorkflow } from "./workflows/backup";
+export { CronRunWorkflow } from "./workflows/cron-run";
 export { DeployWorkflow } from "./workflows/deploy";
 export { KeyRotationWorkflow } from "./workflows/key-rotation";
 export { ProvisionWorkflow } from "./workflows/provision";
@@ -135,6 +138,7 @@ app
   .route("/", providerRoutes)
   .route("/", templateRoutes)
   .route("/", backupRoutes)
+  .route("/", cronRoutes)
   .route("/", mcpRoutes)
   .route("/", oauthRoutes)
   .route("/", oauthConsentRoutes);

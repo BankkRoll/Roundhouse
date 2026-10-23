@@ -88,6 +88,7 @@ import { getIngressSettings } from "../lib/settings";
 import { projectSummaries } from "../lib/summaries";
 import { listVariables, projectKey, type VariableTarget } from "../lib/variables";
 import { CHANGE_TOOLS } from "./change-tools";
+import { CRON_TOOLS } from "./cron-tools";
 import { DATA_TOOLS } from "./data-tools";
 import { deployTemplateTool, listTemplatesTool } from "./template-tools";
 
@@ -775,6 +776,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   ...CHANGE_TOOLS,
   listNodesTool,
   ...DATA_TOOLS,
+  ...CRON_TOOLS,
   listTemplatesTool,
   deployTemplateTool,
 ] as readonly McpTool[];
