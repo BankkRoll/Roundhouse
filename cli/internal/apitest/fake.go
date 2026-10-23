@@ -54,6 +54,13 @@ const (
 	NodeID        = "node_0001"
 	JoinToken     = "njt_secret_join_token"
 	InstallScript = "curl -fsSL http://127.0.0.1/install.sh | sudo bash -s -- --token njt_secret_join_token"
+	// TOTPCode is the authenticator code the fake accepts once two-factor is on.
+	TOTPCode = "123456"
+	// BackupCode is the fake's one backup code; it works once.
+	BackupCode = "abcde-12345"
+	// ChallengeCookie names the two-factor challenge cookie, as Better Auth does over HTTP.
+	ChallengeCookie = "better-auth.two_factor"
+	challengeValue  = "2fa-challenge.SIGNATURE"
 )
 
 // Request is one request the fake received.
@@ -106,6 +113,13 @@ type Fake struct {
 	// templateDeployErrors maps a template service ref to the message its
 	// first deployment fails to start with; see [Fake.FailTemplateDeploy].
 	templateDeployErrors map[string]string
+
+	// twoFactor makes sign-in answer with a challenge; backupUsed records
+	// that the one backup code was spent; lockedFor, when set, answers
+	// sign-in with 429 account_locked.
+	twoFactor  bool
+	backupUsed bool
+	lockedFor  int
 
 	// refresh, when set, is the session cookie the next authenticated /v1
 	// response sets; endSession, when set, ends the session on the next /v1
@@ -611,6 +625,8 @@ type guarded struct {
 func (f *Fake) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/sign-in/email", f.signIn)
 	mux.HandleFunc("POST /api/auth/sign-out", f.signOut)
+	mux.HandleFunc("POST /api/auth/two-factor/verify-totp", f.verifySecondFactor)
+	mux.HandleFunc("POST /api/auth/two-factor/verify-backup-code", f.verifySecondFactor)
 	handlers := map[api.Route]guarded{
 		api.RouteMe:              {"", f.me},
 		api.RouteListProjects:    {"projects:read", f.listProjects},
@@ -692,16 +708,79 @@ func (f *Fake) signIn(w http.ResponseWriter, r *http.Request) {
 	if !f.betterAuthOrigin(w, r) {
 		return
 	}
+	f.mu.Lock()
+	locked, twoFactor := f.lockedFor, f.twoFactor
+	f.mu.Unlock()
+	if locked > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(locked))
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"code": "account_locked", "message": fmt.Sprintf("Too many failed attempts. Try again in %d seconds.", locked)})
+		return
+	}
 	var body struct{ Email, Password string }
 	if decode(r, &body) != nil || body.Email != Email || body.Password != Password {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "INVALID_EMAIL_OR_PASSWORD", "message": "Invalid email or password"})
 		return
 	}
+	if twoFactor {
+		// Better Auth clears the session cookie it had set and sets the challenge.
+		http.SetCookie(w, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{Name: ChallengeCookie, Value: challengeValue, Path: "/", MaxAge: 600, HttpOnly: true})
+		writeJSON(w, http.StatusOK, map[string]any{"twoFactorRedirect": true, "twoFactorMethods": []string{"totp"}})
+		return
+	}
+	f.startSession(w)
+}
+
+func (f *Fake) startSession(w http.ResponseWriter) {
 	f.mu.Lock()
 	f.sessions[SessionToken] = true
 	f.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: SessionToken, Path: "/", MaxAge: 604800, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	writeJSON(w, http.StatusOK, map[string]any{"redirect": false, "token": "sess_0123456789abcdef", "user": f.user})
+}
+
+// verifySecondFactor answers both two-factor endpoints like Better Auth: the
+// challenge cookie names the sign-in, the code finishes it.
+func (f *Fake) verifySecondFactor(w http.ResponseWriter, r *http.Request) {
+	if !f.betterAuthOrigin(w, r) {
+		return
+	}
+	if ck, err := r.Cookie(ChallengeCookie); err != nil || ck.Value != challengeValue {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "INVALID_TWO_FACTOR_COOKIE", "message": "Invalid two factor cookie"})
+		return
+	}
+	var body struct{ Code string }
+	_ = decode(r, &body)
+	f.mu.Lock()
+	ok := false
+	if strings.HasSuffix(r.URL.Path, "/verify-totp") {
+		ok = body.Code == TOTPCode
+	} else if body.Code == BackupCode && !f.backupUsed {
+		f.backupUsed = true
+		ok = true
+	}
+	f.mu.Unlock()
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "INVALID_CODE", "message": "Invalid code"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: ChallengeCookie, Value: "", Path: "/", MaxAge: -1})
+	f.startSession(w)
+}
+
+// EnableTwoFactor makes sign-in ask for a second factor ([TOTPCode] or
+// [BackupCode]).
+func (f *Fake) EnableTwoFactor() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.twoFactor = true
+}
+
+// LockAccount makes sign-in answer 429 account_locked for this many seconds.
+func (f *Fake) LockAccount(seconds int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lockedFor = seconds
 }
 
 func (f *Fake) signOut(w http.ResponseWriter, r *http.Request) {

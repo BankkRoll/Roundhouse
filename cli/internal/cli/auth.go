@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,7 +22,7 @@ type loginResult struct {
 }
 
 func (a *App) loginCmd() *cobra.Command {
-	var urlFlag, email string
+	var urlFlag, email, code string
 	var passwordStdin bool
 	cmd := &cobra.Command{
 		Use:   "login",
@@ -32,23 +33,32 @@ directory. Use --profile to keep sessions for several control planes.
 
 The password is read without echo. In scripts, pipe it in with
 --password-stdin; for CI prefer ROUNDHOUSE_URL and an API token in
-ROUNDHOUSE_TOKEN (see "roundhouse tokens create").`,
+ROUNDHOUSE_TOKEN (see "roundhouse tokens create").
+
+With two-factor authentication on, login then asks for the 6-digit code
+from your authenticator app, or one of your backup codes (each works once).
+Pass it with --code when there is no terminal to prompt on.
+
+After 5 failed attempts an account is locked for a while (30 seconds,
+doubling up to an hour); wrong codes count like wrong passwords.`,
 		Example: `  roundhouse login --url https://roundhouse.example.com
   roundhouse login --url https://staging.example.com --profile staging
   printf '%s' "$PASSWORD" | roundhouse login --url https://cp.example.com --email me@example.com --password-stdin
-  roundhouse login --url http://127.0.0.1:8787 --insecure   # local development`,
+  roundhouse login --url http://127.0.0.1:8787 --insecure   # local development
+  printf '%s' "$PASSWORD" | roundhouse login --url https://cp.example.com --email me@example.com --password-stdin --code 123456`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.runLogin(cmd.Context(), urlFlag, email, passwordStdin)
+			return a.runLogin(cmd.Context(), urlFlag, email, code, passwordStdin)
 		},
 	}
 	cmd.Flags().StringVar(&urlFlag, "url", "", "control plane URL, e.g. https://roundhouse.example.com")
 	cmd.Flags().StringVar(&email, "email", "", "account email (prompted when omitted)")
 	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the password from stdin")
+	cmd.Flags().StringVar(&code, "code", "", "two-factor code or backup code (prompted when needed)")
 	return cmd
 }
 
-func (a *App) runLogin(ctx context.Context, rawURL, email string, passwordStdin bool) error {
+func (a *App) runLogin(ctx context.Context, rawURL, email, code string, passwordStdin bool) error {
 	creds, err := a.loadCreds()
 	if err != nil {
 		return err
@@ -102,10 +112,39 @@ func (a *App) runLogin(ctx context.Context, rawURL, email string, passwordStdin 
 	res, err := client.SignIn(ctx, email, password)
 	spin.Stop()
 	if err != nil {
+		if locked := accountLocked(err); locked != nil {
+			return locked
+		}
 		if api.IsStatus(err, http.StatusUnauthorized) {
 			return exitcode.New(exitcode.Unauthenticated, "invalid email or password")
 		}
 		return err
+	}
+	if res.TwoFactor != nil {
+		if code == "" {
+			if code, err = a.IO.Prompt("Two-factor code (or a backup code):", "", "pass --code"); err != nil {
+				return err
+			}
+		}
+		if strings.TrimSpace(code) == "" {
+			return exitcode.New(exitcode.Usage, "empty two-factor code")
+		}
+		spin = a.IO.StartSpinner("Checking the code")
+		res, err = client.VerifySecondFactor(ctx, res.TwoFactor, code)
+		spin.Stop()
+		if err != nil {
+			if locked := accountLocked(err); locked != nil {
+				return locked
+			}
+			var apiErr *api.Error
+			if errors.As(err, &apiErr) && (apiErr.Code == "invalid_two_factor_cookie" || apiErr.Code == "too_many_attempts_request_new_code") {
+				return exitcode.New(exitcode.Unauthenticated, "the sign-in expired; run roundhouse login again")
+			}
+			if api.IsStatus(err, http.StatusUnauthorized) {
+				return exitcode.New(exitcode.Unauthenticated, "invalid two-factor code")
+			}
+			return err
+		}
 	}
 
 	creds.Profiles[name] = &config.Profile{
@@ -128,6 +167,16 @@ func (a *App) runLogin(ctx context.Context, rawURL, email string, passwordStdin 
 	fmt.Fprintf(a.IO.Out, "%s Logged in to %s as %s <%s> (profile %s)\n",
 		c.Green("✓"), c.Bold(base.String()), res.User.Name, res.User.Email, name)
 	return nil
+}
+
+// accountLocked turns the API's 429 account_locked into a clear error; nil
+// for any other error.
+func accountLocked(err error) error {
+	var apiErr *api.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "account_locked" {
+		return nil
+	}
+	return exitcode.New(exitcode.Unauthenticated, "%s (an instance admin can lift the lock sooner)", apiErr.Message)
 }
 
 // logoutResult is the --json output of logout.

@@ -273,6 +273,11 @@
               "auth.two_factor_disabled",
               "auth.backup_codes_regenerated",
               "auth.two_factor_failed",
+              "auth.backup_code_used",
+              "auth.two_factor_reset",
+              "auth.account_unlocked",
+              "auth.signed_out",
+              "auth.session_revoked",
               "provider.connected",
               "provider.disconnected",
               "node.provision_requested",
@@ -895,6 +900,30 @@
           "object",
           "null"
         ]
+      },
+      "ClearSignInLockout": {
+        "properties": {
+          "email": {
+            "maxLength": 254,
+            "minLength": 3,
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "ClearSignInLockoutResult": {
+        "properties": {
+          "cleared": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cleared"
+        ],
+        "type": "object"
       },
       "ConnectProvider": {
         "properties": {
@@ -3585,6 +3614,36 @@
         ],
         "type": "object"
       },
+      "Reauth": {
+        "properties": {
+          "code": {
+            "maxLength": 32,
+            "minLength": 6,
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "type": "object"
+      },
+      "ReauthResult": {
+        "properties": {
+          "fresh_until": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fresh_until"
+        ],
+        "type": "object"
+      },
       "ResolveOp": {
         "properties": {
           "expected_revision": {
@@ -3653,6 +3712,41 @@
           "viewer"
         ],
         "type": "string"
+      },
+      "SecurityStatus": {
+        "properties": {
+          "backup_codes_remaining": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fresh_until": {
+            "description": "Unix time in milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "instance_admin": {
+            "type": "boolean"
+          },
+          "two_factor_enabled": {
+            "type": "boolean"
+          },
+          "two_factor_required": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "two_factor_enabled",
+          "two_factor_required",
+          "backup_codes_remaining",
+          "instance_admin",
+          "fresh_until"
+        ],
+        "type": "object"
       },
       "Service": {
         "properties": {
@@ -3990,6 +4084,71 @@
           "source",
           "domain",
           "latest_deployment"
+        ],
+        "type": "object"
+      },
+      "Session": {
+        "properties": {
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "description": "Unix time in milliseconds",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "ip_address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "current",
+          "ip_address",
+          "user_agent",
+          "created_at",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "SessionList": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "type": "object"
+      },
+      "SessionsRevoked": {
+        "properties": {
+          "revoked": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revoked"
         ],
         "type": "object"
       },
@@ -5605,6 +5764,324 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/auth/reauth": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Reauth"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReauthResult"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Re-authenticate",
+        "tags": [
+          "auth"
+        ],
+        "x-roundhouse-policy": {
+          "action": null,
+          "audit": [
+            "auth.reauthenticated",
+            "auth.sign_in_failed",
+            "auth.two_factor_failed",
+            "auth.account_locked",
+            "auth.backup_code_used"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/auth/security": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get my security status",
+        "tags": [
+          "auth"
+        ],
+        "x-roundhouse-policy": {
+          "action": null,
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/auth/sessions": {
+      "delete": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionsRevoked"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Revoke my other sessions",
+        "tags": [
+          "auth"
+        ],
+        "x-roundhouse-policy": {
+          "action": null,
+          "audit": [
+            "auth.session_revoked"
+          ],
+          "auth": "session"
+        }
+      },
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List my sessions",
+        "tags": [
+          "auth"
+        ],
+        "x-roundhouse-policy": {
+          "action": null,
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/auth/sessions/{sessionId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Revoke one of my sessions",
+        "tags": [
+          "auth"
+        ],
+        "x-roundhouse-policy": {
+          "action": null,
+          "audit": [
+            "auth.session_revoked"
+          ],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/builds/{buildId}/logs": {
       "get": {
         "parameters": [
@@ -7979,6 +8456,146 @@
           "action": "instance:manage",
           "audit": [
             "instance.settings_updated"
+          ],
+          "auth": "session_only",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/instance/sign-in-lockouts/clear": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClearSignInLockout"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearSignInLockoutResult"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Clear a sign-in lockout",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "auth.account_unlocked"
+          ],
+          "auth": "session_only"
+        }
+      }
+    },
+    "/v1/instance/users/{userId}/two-factor": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Reset"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Reset a user's two-factor authentication",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "auth.two_factor_reset"
           ],
           "auth": "session_only",
           "reauth": true
@@ -11225,11 +11842,15 @@
                     },
                     "needs_setup": {
                       "type": "boolean"
+                    },
+                    "public_origin_configured": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
                     "needs_setup",
-                    "master_key_configured"
+                    "master_key_configured",
+                    "public_origin_configured"
                   ],
                   "type": "object"
                 }

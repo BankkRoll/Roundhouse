@@ -79,6 +79,67 @@ func TestLoginInteractive(t *testing.T) {
 	notContains(t, r.stderr+r.stdout, apitest.Password)
 }
 
+func TestLoginTwoFactor(t *testing.T) {
+	h := newHarness(t)
+	h.fake.EnableTwoFactor()
+	login := []string{"login", "--url", h.fake.URL, "--insecure", "--email", apitest.Email}
+
+	r := h.interactive(apitest.Password+"\n"+apitest.TOTPCode+"\n", login...)
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	contains(t, r.stderr, "Two-factor code (or a backup code):")
+	contains(t, r.stdout, "Logged in to "+h.fake.URL+" as Ada Lovelace")
+	if !h.fake.SessionValid() {
+		t.Fatal("no session after the second factor")
+	}
+	for _, req := range h.fake.Requests() {
+		if req.Pattern == "POST /api/auth/two-factor/verify-totp" {
+			if req.Header.Get("Origin") != h.fake.URL {
+				t.Errorf("verify sent Origin %q, want the control plane's", req.Header.Get("Origin"))
+			}
+			if !strings.Contains(req.Header.Get("Cookie"), apitest.ChallengeCookie+"=") {
+				t.Errorf("verify sent no challenge cookie: %q", req.Header.Get("Cookie"))
+			}
+		}
+	}
+
+	r = h.expect(exitcode.Unauthenticated, apitest.Password+"\n", append(login, "--password-stdin", "--code", "654321")...)
+	contains(t, r.stderr, "invalid two-factor code")
+
+	h.ok(apitest.Password+"\n", append(login, "--password-stdin", "--code", "123 456")...)
+	h.ok(apitest.Password+"\n", append(login, "--password-stdin", "--code", apitest.BackupCode)...)
+	r = h.expect(exitcode.Unauthenticated, apitest.Password+"\n", append(login, "--password-stdin", "--code", apitest.BackupCode)...)
+	contains(t, r.stderr, "invalid two-factor code")
+
+	r = h.expect(exitcode.InputRequired, apitest.Password+"\n", append(login, "--password-stdin")...)
+	contains(t, r.stderr, "--code")
+	notContains(t, r.stdout+r.stderr, apitest.Password)
+}
+
+func TestLoginLocked(t *testing.T) {
+	h := newHarness(t)
+	h.fake.LockAccount(90)
+	r := h.expect(exitcode.Unauthenticated, apitest.Password+"\n", "login", "--url", h.fake.URL, "--insecure", "--email", apitest.Email, "--password-stdin")
+	contains(t, r.stderr, "Too many failed attempts. Try again in 90 seconds.")
+	contains(t, r.stderr, "an instance admin can lift the lock sooner")
+}
+
+func TestIsTOTPCode(t *testing.T) {
+	for code, want := range map[string]bool{
+		"123456":      true,
+		" 123 456 ":   true,
+		"12345":       false,
+		"1234567":     false,
+		"abcde-12345": false,
+		"12345a":      false,
+	} {
+		if got := api.IsTOTPCode(code); got != want {
+			t.Errorf("IsTOTPCode(%q) = %v, want %v", code, got, want)
+		}
+	}
+}
+
 func TestLogoutRevokesSession(t *testing.T) {
 	h := newHarness(t)
 	h.login()

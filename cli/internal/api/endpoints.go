@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // REST routes the client calls. Each must exist in the API's OpenAPI
@@ -54,8 +55,10 @@ var (
 // Better Auth routes. They are served by Better Auth's own router, outside
 // the OpenAPI document.
 var (
-	RouteSignIn  = Route{http.MethodPost, "/api/auth/sign-in/email"}
-	RouteSignOut = Route{http.MethodPost, "/api/auth/sign-out"}
+	RouteSignIn           = Route{http.MethodPost, "/api/auth/sign-in/email"}
+	RouteSignOut          = Route{http.MethodPost, "/api/auth/sign-out"}
+	RouteVerifyTOTP       = Route{http.MethodPost, "/api/auth/two-factor/verify-totp"}
+	RouteVerifyBackupCode = Route{http.MethodPost, "/api/auth/two-factor/verify-backup-code"}
 )
 
 // Routes lists every REST route in the OpenAPI document that the client calls.
@@ -76,7 +79,7 @@ var Routes = []Route{
 }
 
 // AuthRoutes lists the Better Auth routes the client calls.
-var AuthRoutes = []Route{RouteSignIn, RouteSignOut}
+var AuthRoutes = []Route{RouteSignIn, RouteSignOut, RouteVerifyTOTP, RouteVerifyBackupCode}
 
 func envQuery(environmentID string) url.Values {
 	return url.Values{"environment_id": {environmentID}}
@@ -86,18 +89,30 @@ func envQuery(environmentID string) url.Values {
 // Auth
 // -----------------------------------------------------------------------------
 
-// SignInResult is the outcome of a successful sign-in.
+// SignInResult is the outcome of a successful sign-in: a session, or, for an
+// account with two-factor authentication, a challenge to answer with
+// [Client.VerifySecondFactor].
 type SignInResult struct {
-	// Session is the session cookie to send on later requests.
+	// Session is the session cookie to send on later requests; nil while
+	// TwoFactor is set.
 	Session *http.Cookie
 	User    User
+	// TwoFactor is set when the password was right and a code is needed.
+	TwoFactor *TwoFactorChallenge
+}
+
+// TwoFactorChallenge is a sign-in waiting for its second factor: the
+// short-lived challenge cookie the control plane set after the password.
+type TwoFactorChallenge struct {
+	cookies []*http.Cookie
 }
 
 // SignIn signs in with email and password. It sends no Origin header and no
 // cookie, which Better Auth's CSRF check accepts for a first login.
 func (c *Client) SignIn(ctx context.Context, email, password string) (*SignInResult, error) {
 	var out struct {
-		User User `json:"user"`
+		User              User `json:"user"`
+		TwoFactorRedirect bool `json:"twoFactorRedirect"`
 	}
 	body := map[string]any{"email": email, "password": password, "rememberMe": true}
 	var cookies []*http.Cookie
@@ -105,17 +120,74 @@ func (c *Client) SignIn(ctx context.Context, email, password string) (*SignInRes
 	if err := c.do(ctx, req, &out); err != nil {
 		return nil, err
 	}
+	if out.TwoFactorRedirect {
+		var challenge []*http.Cookie
+		for _, ck := range cookies {
+			if ck.Value != "" && strings.HasSuffix(ck.Name, ".two_factor") {
+				challenge = append(challenge, ck)
+			}
+		}
+		if len(challenge) == 0 {
+			return nil, &Error{Status: http.StatusBadGateway, Code: "no_challenge",
+				Message: "the control plane asked for a two-factor code but set no challenge cookie"}
+		}
+		return &SignInResult{TwoFactor: &TwoFactorChallenge{cookies: challenge}}, nil
+	}
+	return sessionResult(cookies, out.User)
+}
+
+// IsTOTPCode reports whether a code looks like an authenticator code (six
+// digits, spaces ignored) rather than a backup code.
+func IsTOTPCode(code string) bool {
+	digits := strings.ReplaceAll(strings.TrimSpace(code), " ", "")
+	if len(digits) != 6 {
+		return false
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// VerifySecondFactor answers a two-factor challenge with an authenticator
+// code or a backup code (told apart by [IsTOTPCode]) and returns the session.
+// The challenge cookie makes this a cookie-bearing request, so it sends the
+// control plane's Origin like [Client.SignOut].
+func (c *Client) VerifySecondFactor(ctx context.Context, ch *TwoFactorChallenge, code string) (*SignInResult, error) {
+	route := RouteVerifyBackupCode
+	code = strings.TrimSpace(code)
+	if IsTOTPCode(code) {
+		route = RouteVerifyTOTP
+		code = strings.ReplaceAll(code, " ", "")
+	}
+	var out struct {
+		User User `json:"user"`
+	}
+	var cookies []*http.Cookie
+	req := request{
+		method: route.Method, path: route.Path, body: map[string]any{"code": code},
+		origin: true, sendCookies: ch.cookies, cookies: &cookies,
+	}
+	if err := c.do(ctx, req, &out); err != nil {
+		return nil, err
+	}
+	return sessionResult(cookies, out.User)
+}
+
+func sessionResult(cookies []*http.Cookie, user User) (*SignInResult, error) {
 	var session *http.Cookie
 	for _, ck := range cookies {
-		if IsSessionCookie(ck.Name) {
+		if IsSessionCookie(ck.Name) && ck.Value != "" {
 			session = ck
 		}
 	}
-	if session == nil || session.Value == "" {
+	if session == nil {
 		return nil, &Error{Status: http.StatusBadGateway, Code: "no_session",
 			Message: "sign-in succeeded but the control plane set no session cookie"}
 	}
-	return &SignInResult{Session: session, User: out.User}, nil
+	return &SignInResult{Session: session, User: user}, nil
 }
 
 // SignOut revokes the current session.

@@ -38,6 +38,12 @@ others. Keep several control planes apart with `--profile staging`.
 On Git Bash (mintty) stdin is not a console, so pipe the password with
 `--password-stdin` or run `winpty roundhouse login`.
 
+With two-factor authentication on, `login` then asks for the 6-digit code
+from your authenticator app, or one of your backup codes; pass it with
+`--code` when there is no terminal to prompt on. After 5 failed attempts the
+account is locked for a while (30 seconds, doubling up to an hour), and
+`login` says how long.
+
 When the control plane refreshes your session, the CLI saves the new cookie
 to `credentials.json`; when it ends the session, the CLI forgets it and asks
 you to log in again.

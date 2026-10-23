@@ -188,6 +188,8 @@ type request struct {
 	origin bool
 	// cookies, when set, receives the response's cookies.
 	cookies *[]*http.Cookie
+	// sendCookies are attached to the request, e.g. a two-factor challenge.
+	sendCookies []*http.Cookie
 }
 
 // Do sends a request and decodes a JSON response into out (unless nil or the
@@ -230,6 +232,9 @@ func (c *Client) do(ctx context.Context, r request, out any) error {
 	}
 	if c.cred != nil {
 		c.cred.Apply(req.Header)
+	}
+	for _, ck := range r.sendCookies {
+		req.AddCookie(ck)
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
