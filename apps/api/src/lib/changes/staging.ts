@@ -7,6 +7,10 @@
  * Each mutation bumps the set's revision first, guarded on the revision the
  * caller loaded, so two people editing one set never lose an edit silently.
  *
+ * Volume and domain ops are checked with the same rules as their direct
+ * routes when staged (grow-only volumes, one replica, hostname rules and
+ * uniqueness), and again when applied.
+ *
  * SECURITY: A `variable.set` value is checked with the same classifier rules
  * as a direct write, sealed at once under the project DEK with an AAD bound
  * to the staged change ({@link stagedValueAad}), and from then on appears
@@ -19,6 +23,7 @@ import type { z } from "@hono/zod-openapi";
 import {
   changeSets,
   type Db,
+  domains,
   type StagedBase,
   type StagedConflict,
   serviceConfigs,
@@ -47,15 +52,17 @@ import {
   type VariableTier,
 } from "@roundhouse/shared";
 import { and, eq, inArray, isNull } from "drizzle-orm";
+import type { AppContext } from "../../context";
 import type { StagedOpInputSchema } from "../../contracts/changes";
 import { auditInsert } from "../audit";
 import type { KeyEnv, Sealed } from "../crypto";
 import { databaseCreateOp } from "../databases";
+import { assertHostnameFree, checkCustomHostname } from "../domains/manage";
 import { ApiError, type ErrorCode, notFound } from "../errors";
 import { mergeConfig, slugFor, specOf } from "../projects";
 import type { Caller } from "../scope";
 import { assertValidReferences, openVariable, projectKey, type VariableTarget } from "../variables";
-import { assertSingleReplica, singleReplicaError } from "../volumes";
+import { assertSingleReplica, singleReplicaError, type VolumeRow, volumeOf } from "../volumes";
 import { fingerprintOf, sealStagedValue } from "./secrets";
 import {
   bumpRevision,
@@ -74,6 +81,8 @@ export type StagedOpRequest = z.output<typeof StagedOpInputSchema>;
 
 /** What staging needs to know about where and who. */
 export interface StagingContext {
+  /** For checks that depend on the request, such as the install's own hostnames. */
+  c: AppContext;
   db: Db;
   keys: KeyEnv;
   project: ProjectRow;
@@ -494,6 +503,108 @@ async function prepare(
       };
     }
 
+    case "volume.set": {
+      const svc = await liveService(db, project.id, input.service);
+      const current = await currentVolume(db, svc.id, environment.id);
+      if (current?.status === "pending_deletion") throw volumeScheduledForDeletion();
+      if (current) {
+        if (input.mount_path !== undefined && input.mount_path !== current.mountPath) {
+          throw new ApiError(
+            400,
+            "invalid_request",
+            `A volume's mount path can't change; it is mounted at ${current.mountPath}`,
+          );
+        }
+        if (input.size_mb < current.sizeMb) {
+          throw new ApiError(
+            422,
+            "volume_shrink_unsupported",
+            `Volumes only grow; it is ${current.sizeMb} MiB`,
+          );
+        }
+        if (input.size_mb === current.sizeMb) {
+          throw new ApiError(400, "invalid_request", `The volume already is ${current.sizeMb} MiB`);
+        }
+      } else {
+        if (!input.mount_path) {
+          throw new ApiError(400, "invalid_request", "mount_path: Required for a new volume");
+        }
+        const latest = await configAt(db, svc.id, environment.id);
+        if (latest && specOf(latest).deploy.replicas > 1) throw singleReplicaError();
+      }
+      const mountPath = current?.mountPath ?? input.mount_path!;
+      return {
+        op: {
+          type: "volume.set",
+          service: svc.id,
+          size_mb: input.size_mb,
+          ...(current ? {} : { mount_path: mountPath }),
+        },
+        base: { volume: volumeBase(current) },
+        diff: volumeDiff(current, { mount_path: mountPath, size_mb: input.size_mb }),
+      };
+    }
+
+    case "volume.delete": {
+      const svc = await liveService(db, project.id, input.service);
+      const op: StagedOp = { type: "volume.delete", service: svc.id };
+      const key = targetKeyOf(op);
+      const current = await currentVolume(db, svc.id, environment.id);
+      if (!current || current.status === "pending_deletion") {
+        // Deleting a volume that is only staged takes the staged one out.
+        if (rowOf(key)?.op.type === "volume.set") return { op, base: {}, diff: [], unstage: key };
+        if (current) throw volumeScheduledForDeletion();
+        throw notFound("Volume");
+      }
+      return { op, base: { volume: volumeBase(current) }, diff: volumeDiff(current, null) };
+    }
+
+    case "domain.add": {
+      const svc = await liveService(db, project.id, input.service);
+      const hostname = await checkCustomHostname(ctx.c, db, input.hostname);
+      const op: StagedOp = { type: "domain.add", service: svc.id, hostname };
+      const prior = rowOf(targetKeyOf(op));
+      if (prior?.op.type === "domain.remove" && prior.op.service === svc.id) {
+        // Adding back a domain staged for removal just keeps it.
+        return { op, base: {}, diff: [], unstage: prior.targetKey };
+      }
+      await assertHostnameFree(db, hostname, Date.now());
+      return {
+        op,
+        base: {},
+        diff: [{ path: `/domains/${hostname}`, before: null, after: { hostname } }],
+      };
+    }
+
+    case "domain.remove": {
+      const domain = await db.query.domains.findFirst({ where: eq(domains.id, input.domain_id) });
+      if (!domain || domain.environmentId !== environment.id) throw notFound("Domain");
+      const svc = await liveService(db, project.id, domain.serviceId);
+      if (domain.type !== "custom") {
+        throw new ApiError(
+          409,
+          "conflict",
+          "Turn off the generated domain under Networking instead",
+        );
+      }
+      return {
+        op: {
+          type: "domain.remove",
+          domain_id: domain.id,
+          hostname: domain.hostname,
+          service: svc.id,
+        },
+        base: {},
+        diff: [
+          {
+            path: `/domains/${domain.hostname}`,
+            before: { hostname: domain.hostname, status: domain.status },
+            after: null,
+          },
+        ],
+      };
+    }
+
     case "variable.delete": {
       if (input.scope === "service" && !isNewServiceRef(input.service!)) {
         await liveService(db, project.id, input.service!);
@@ -525,6 +636,58 @@ async function prepare(
     }
   }
 }
+
+/**
+ * The base a volume op records: the volume as it is, or `null`.
+ *
+ * @param volume - The service's volume in the environment.
+ * @returns The `StagedBase.volume` value.
+ */
+export function volumeBase(volume: VolumeRow | undefined): StagedBase["volume"] {
+  return volume ? { id: volume.id, size_mb: volume.sizeMb } : null;
+}
+
+/**
+ * The volume a volume op acts on: live or soft-deleted, but not gone.
+ *
+ * @param db - Database client.
+ * @param serviceId - The service.
+ * @param environmentId - The environment.
+ * @returns The row, or `undefined`.
+ */
+export function currentVolume(db: Db, serviceId: string, environmentId: string) {
+  return volumeOf(db, serviceId, environmentId);
+}
+
+/**
+ * The value-free review entry of a volume op.
+ *
+ * @param current - The volume as it is.
+ * @param after - What the op leaves, or `null` for a deletion.
+ * @returns Diff entries.
+ */
+export function volumeDiff(
+  current: VolumeRow | undefined,
+  after: { mount_path: string; size_mb: number } | null,
+): DiffEntry[] {
+  if (current && after) {
+    return [{ path: "/volume/size_mb", before: current.sizeMb, after: after.size_mb }];
+  }
+  return [
+    {
+      path: "/volume",
+      before: current ? { mount_path: current.mountPath, size_mb: current.sizeMb } : null,
+      after,
+    },
+  ];
+}
+
+const volumeScheduledForDeletion = () =>
+  new ApiError(
+    409,
+    "conflict",
+    "The service's volume is scheduled for deletion; undelete it before changing it",
+  );
 
 function stripUndefined<T extends object>(value: T): Partial<T> {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as Partial<T>;
@@ -801,6 +964,16 @@ export async function rebaseRow(
         diff.push({ path: `/${field}`, before: svc[field], after: op[field] });
       }
       return { base: { service }, diff };
+    }
+    case "volume.set": {
+      const current = await currentVolume(db, op.service, environment.id);
+      return {
+        base: { volume: volumeBase(current) },
+        diff: volumeDiff(current, {
+          mount_path: current?.mountPath ?? op.mount_path ?? "",
+          size_mb: op.size_mb,
+        }),
+      };
     }
     default:
       return { base: row.base, diff: row.diff };

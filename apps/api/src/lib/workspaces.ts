@@ -62,7 +62,8 @@ export async function createWorkspace(db: Db, name: string, ownerId: string) {
   for (let attempt = 0; ; attempt++) {
     try {
       const [[workspace]] = await db.batch([
-        db.insert(workspaces).values({ id, name, slug }).returning(),
+        // ADR 0006 "Rollout": new workspaces stage dashboard edits from the start.
+        db.insert(workspaces).values({ id, name, slug, stagedChanges: true }).returning(),
         db
           .insert(workspaceMembers)
           .values({ id: newId("member"), workspaceId: id, userId: ownerId, role: "owner" }),

@@ -428,6 +428,9 @@ function prepare(
         ],
       };
     }
+    default:
+      // NOTE: volume and domain ops are exercised against the real API, not this mock.
+      return apiError(400, "invalid_request", `${input.type} isn't mocked`);
   }
 }
 
@@ -878,6 +881,9 @@ function canvasOf(environment: Environment) {
     icon: s.icon,
     staged: null as "create" | "update" | "delete" | null,
     staged_ops: 0,
+    database: null,
+    volume: null,
+    domains: [],
   }));
   for (const c of pending) {
     const op = c.op as StagedOp;
@@ -890,6 +896,9 @@ function canvasOf(environment: Environment) {
         icon: op.icon ?? null,
         staged: "create",
         staged_ops: 0,
+        database: null,
+        volume: null,
+        domains: [],
       });
     }
   }
@@ -961,6 +970,8 @@ function canvasOf(environment: Environment) {
     project_id: projectId,
     environment_id: environment.id,
     environment_protected: false,
+    environment_requires_approval: false,
+    staging: true,
     nodes,
     edges: [...edges].map(([id, e]) => {
       const variables = [...e.variables].sort();
@@ -1142,6 +1153,7 @@ export const changeHandlers = [
       rebases,
       conflicts,
       deploys: plannedDeploys(scope.set, scope.environment),
+      approval: { required: false, approved: false, authors: [] },
     });
   }),
 

@@ -120,7 +120,7 @@ function parseRole(body: Record<string, unknown>): Role | Response {
 
 function toWorkspace(workspaceId: string, role: Role): Workspace | undefined {
   const row = db.workspaces.find((workspace) => workspace.id === workspaceId);
-  return row ? { ...row, role } : undefined;
+  return row ? { ...row, staged_changes: row.staged_changes ?? true, role } : undefined;
 }
 
 function toMember(row: DbMembership): Member {

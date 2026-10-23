@@ -136,6 +136,11 @@ describe("projectRoleCan", () => {
     ["backups:manage", { project_admin: true, developer: true, deployer: false, viewer: false }],
     ["data:write", { project_admin: true, developer: false, deployer: false, viewer: false }],
     ["backups:restore", { project_admin: true, developer: false, deployer: false, viewer: false }],
+    ["changes:approve", { project_admin: true, developer: false, deployer: false, viewer: false }],
+    [
+      "changes:auto_apply",
+      { project_admin: true, developer: true, deployer: false, viewer: false },
+    ],
   ])("grants %s as expected", (action, expected) => {
     for (const role of PROJECT_ROLES) {
       expect(projectRoleCan(role, action), role).toBe(expected[role]);

@@ -124,7 +124,7 @@ export type ServiceSource = ServiceConfig["source"];
 /** Health probe settings. */
 export type HealthcheckConfig = NonNullable<ServiceConfig["healthcheck"]>;
 /** A log stream a browser can subscribe to. */
-export type RealtimeTopic = RealtimeClientMessage["topic"];
+export type RealtimeTopic = Extract<RealtimeClientMessage, { type: "subscribe" }>["topic"];
 /** Someone looking at a project right now. */
 export type PresenceUser = Extract<RealtimeServerMessage, { type: "presence" }>["users"][number];
 /** Log lines pushed over the realtime socket. */

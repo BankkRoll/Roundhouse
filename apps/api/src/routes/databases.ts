@@ -92,7 +92,7 @@ export const databaseRoutes = createRouter()
     }
     const { project, caller } = await projectScope(c, projectId, "projects:read");
     const environment = await environmentOf(c, project.id, input.environment_id);
-    const ctx: StagingContext = { db, keys: requireKeys(c), project, environment, caller };
+    const ctx: StagingContext = { c, db, keys: requireKeys(c), project, environment, caller };
 
     let set = await openChangeSet(db, {
       projectId: project.id,
@@ -138,6 +138,7 @@ export const databaseRoutes = createRouter()
     const applied = await applySet({ c, db, env: c.env, project, environment }, set, {
       expectedRevision: set.revision,
       deploy: input.deploy ? "affected" : "none",
+      direct: true,
     });
     const [op] = await db.query.stagedChanges.findMany({
       where: (t, { eq: e }) => e(t.changeSetId, set.id),

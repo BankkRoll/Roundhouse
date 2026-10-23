@@ -39,6 +39,7 @@ const REASONS = {
   variables: "variables changed",
   created: "new service",
   references: "references a changed variable",
+  volume: "new volume",
 } as const;
 
 function ApplyError({ error }: { error: unknown }) {

@@ -7,10 +7,14 @@
  *   open set for the environment, opening one when needed, and return
  *   `{ change_set_id, revision, summary, review_url }`.
  * - `list_changes` shows open sets with their value-free diffs.
- * - `apply_changes` applies only a set the same token created, on an
- *   unprotected environment, at the reviewed revision; otherwise it answers
- *   `awaiting_confirmation` with the review link. Applying re-checks every
- *   op with the token's scopes and its creator's role, like the REST route.
+ * - `submit_changes` asks a person to review a set.
+ * - `apply_changes` applies a set at the reviewed revision when a person
+ *   approved it, or, without an approval, only a set the same token created,
+ *   on an unprotected environment, with a token that carries
+ *   `changes:auto_apply`. Otherwise it submits the token's own set for review
+ *   and answers `awaiting_confirmation` with the review link. Applying
+ *   re-checks every op with the token's scopes and its creator's role, like
+ *   the REST route.
  *
  * SECURITY: Staged values are sealed on arrival and every result carries
  * keys, tiers and fingerprints only. An elicitation answer is never treated
@@ -20,7 +24,12 @@
  */
 import type { ToolAnnotations } from "@modelcontextprotocol/server";
 import { changeSets, environments } from "@roundhouse/db";
-import { type ApiTokenScope, describeOp, MAX_STAGED_OPS } from "@roundhouse/shared";
+import {
+  type ApiTokenScope,
+  describeOp,
+  MAX_REVIEW_NOTE_LENGTH,
+  MAX_STAGED_OPS,
+} from "@roundhouse/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { type AppContext, clientIp, originOf, requireKeys } from "../context";
@@ -28,11 +37,13 @@ import { putServiceVariables } from "../contracts";
 import { policyOf } from "../contracts/policy";
 import { recordAudit } from "../lib/audit";
 import { applySet } from "../lib/changes/apply";
+import { applyBlocker, submitSet } from "../lib/changes/review";
 import { type StagedOpRequest, type StagingContext, stageIntoSet } from "../lib/changes/staging";
 import {
   type ChangeSetRow,
   changeSetScope,
   type EnvironmentRow,
+  hasValidApproval,
   loadOps,
   openChangeSet,
   type ProjectRow,
@@ -145,7 +156,7 @@ async function stageAll(
 ) {
   const { c, tool } = ctx;
   const db = c.get("db");
-  const staging: StagingContext = { db, keys: requireKeys(c), ...scope };
+  const staging: StagingContext = { c, db, keys: requireKeys(c), ...scope };
   let { set, opened } = await tokenSet(
     ctx,
     scope.caller,
@@ -359,15 +370,70 @@ const listChangesTool = defineTool({
   },
 });
 
+const submitChangesTool = defineTool({
+  name: "submit_changes",
+  title: "Ask for a review",
+  description:
+    "Asks a person to review a change set: it shows up in the dashboard's review queue, where " +
+    "someone with changes:approve approves or rejects it. Submitting a set already waiting for " +
+    "review changes nothing. Returns the set's review status and the review link.",
+  input: z.object({
+    change_set_id: Id("Change set"),
+    expected_revision: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("The revision you staged; refused if the set changed since."),
+    note: z
+      .string()
+      .trim()
+      .min(1)
+      .max(MAX_REVIEW_NOTE_LENGTH)
+      .optional()
+      .describe("What the reviewer should know, shown as plain text."),
+  }),
+  scopes: ["projects:read"],
+  annotations: STAGE,
+  async run(ctx, input) {
+    const { c } = ctx;
+    const { set, project, environment, caller } = await changeSetScope(
+      c,
+      input.change_set_id,
+      "projects:read",
+    );
+    const db = c.get("db");
+    const submitted = await submitSet(db, {
+      set,
+      project,
+      caller,
+      ...(input.expected_revision !== undefined
+        ? { expectedRevision: input.expected_revision }
+        : {}),
+      ...(input.note !== undefined ? { note: input.note } : {}),
+      ip: clientIp(c),
+    });
+    await publishChangeSet(c.env, db, submitted);
+    return {
+      status: "submitted",
+      change_set_id: submitted.id,
+      revision: submitted.revision,
+      review_status: submitted.reviewStatus,
+      review_url: reviewUrl(c, project, environment, submitted.id),
+    };
+  },
+});
+
 const applyChangesTool = defineTool({
   name: "apply_changes",
   title: "Apply staged changes",
   description:
-    "Applies a change set this token staged, exactly at expected_revision, and deploys the " +
-    "services it affects (deploy: none skips deploying). It applies only the token's own sets " +
-    "on unprotected environments; anything else returns status awaiting_confirmation with a " +
-    "review_url for a human. Every change is re-checked against the token's scopes and its " +
-    "owner's role; conflicts with changes made since staging are refused.",
+    "Applies a change set exactly at expected_revision and deploys the services it affects " +
+    "(deploy: none skips deploying). Without a person's approval it applies only this token's " +
+    "own sets, on unprotected environments, and only when the token carries " +
+    "changes:auto_apply; otherwise it submits the token's set for review and returns status " +
+    "awaiting_confirmation with a review_url. Every change is re-checked against the token's " +
+    "scopes and its owner's role; conflicts with changes made since staging are refused.",
   input: z.object({
     change_set_id: Id("Change set"),
     expected_revision: z.number().int().positive().describe("The revision you staged or reviewed."),
@@ -382,31 +448,55 @@ const applyChangesTool = defineTool({
   },
   async run(ctx, input) {
     const { c, token, tool } = ctx;
-    const { set, project, environment } = await changeSetScope(
+    const { set, project, environment, caller } = await changeSetScope(
       c,
       input.change_set_id,
       "projects:read",
     );
+    const db = c.get("db");
     const review_url = reviewUrl(c, project, environment, set.id);
-    const waiting = (reason: string) => ({
-      status: "awaiting_confirmation",
-      change_set_id: set.id,
-      revision: set.revision,
-      reason,
-      review_url,
-    });
-    // SECURITY: an agent may only finish what it started, and never on a
-    // protected environment; everything else needs a human in the dashboard.
-    if (set.createdByToken !== token.id) {
-      return waiting("This change set was not staged by this token; a human must apply it.");
-    }
-    if (environment.protected) {
-      return waiting(`${environment.name} is protected; a human must apply this change set.`);
-    }
+    const own = set.createdByToken === token.id;
+    const waiting = async (reason: string, submit = own) => {
+      let review_status = set.reviewStatus;
+      if (submit && set.status === "open" && set.reviewStatus === "none") {
+        try {
+          const submitted = await submitSet(db, { set, project, caller, ip: clientIp(c) });
+          review_status = submitted.reviewStatus;
+          await publishChangeSet(c.env, db, submitted);
+        } catch {
+          // Submitting is a courtesy to the reviewer; the answer stays the same.
+        }
+      }
+      return {
+        status: "awaiting_confirmation",
+        change_set_id: set.id,
+        revision: set.revision,
+        review_status,
+        reason,
+        review_url,
+      };
+    };
     if (set.revision !== input.expected_revision) {
-      return waiting(`The change set is at revision ${set.revision}; review it again.`);
+      return waiting(`The change set is at revision ${set.revision}; review it again.`, false);
     }
-    const result = await applySet({ c, db: c.get("db"), env: c.env, project, environment }, set, {
+    // SECURITY: without a person's approval an agent may only finish what it
+    // started, never on a protected environment, and only when the token was
+    // explicitly given changes:auto_apply. An elicitation answer is never
+    // treated as that approval: the server can't tell who answered.
+    if (!hasValidApproval(set)) {
+      if (!own) {
+        return waiting("This change set was not staged by this token; a person must approve it.");
+      }
+      if (environment.protected) {
+        return waiting(`${environment.name} is protected; a person must approve this change set.`);
+      }
+      if (!caller.allows("changes:auto_apply")) {
+        return waiting("This token can't apply without approval (changes:auto_apply).");
+      }
+    }
+    const blocker = applyBlocker(set, environment, caller);
+    if (blocker) return waiting(blocker.message);
+    const result = await applySet({ c, db, env: c.env, project, environment }, set, {
       expectedRevision: input.expected_revision,
       deploy: input.deploy,
       auditMetadata: { via: "mcp", tool },
@@ -426,5 +516,6 @@ export const CHANGE_TOOLS: readonly McpTool[] = [
   setVariablesTool,
   stageConfigChangeTool,
   listChangesTool,
+  submitChangesTool,
   applyChangesTool,
 ] as readonly McpTool[];

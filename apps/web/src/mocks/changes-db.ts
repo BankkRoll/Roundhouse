@@ -21,9 +21,21 @@ export interface DbStagedChange extends StagedChange {
 }
 
 /** A change set row. */
-export type DbChangeSet = Omit<ChangeSetSummary, "op_count" | "conflicted_count"> & {
-  changes: DbStagedChange[];
-};
+/** Review fields a stored set may leave out; {@link toSummary} fills them in. */
+type ReviewFields =
+  | "review_status"
+  | "submitted_by"
+  | "submitted_at"
+  | "approved_by"
+  | "approved_at"
+  | "rejected_by"
+  | "rejected_at"
+  | "review_note";
+
+export type DbChangeSet = Omit<ChangeSetSummary, "op_count" | "conflicted_count" | ReviewFields> &
+  Partial<Pick<ChangeSetSummary, ReviewFields>> & {
+    changes: DbStagedChange[];
+  };
 
 /** Change set tables. */
 export interface ChangesDb {
@@ -68,6 +80,14 @@ export function toSummary(set: DbChangeSet): ChangeSetSummary {
   const live = changes.filter((c) => c.status !== "applied");
   return {
     ...rest,
+    review_status: rest.review_status ?? "none",
+    submitted_by: rest.submitted_by ?? null,
+    submitted_at: rest.submitted_at ?? null,
+    approved_by: rest.approved_by ?? null,
+    approved_at: rest.approved_at ?? null,
+    rejected_by: rest.rejected_by ?? null,
+    rejected_at: rest.rejected_at ?? null,
+    review_note: rest.review_note ?? null,
     op_count: set.status === "applied" ? changes.length : live.length,
     conflicted_count: live.filter((c) => c.status === "conflicted").length,
   };

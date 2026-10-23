@@ -5,6 +5,7 @@
  * caps, and the periodic session, token and membership re-check.
  */
 import { env, introspectWorkflow, runDurableObjectAlarm, SELF } from "cloudflare:test";
+import { PRESENCE_UPDATES_PER_SECOND, presenceColor } from "@roundhouse/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MAX_SOCKETS_PER_USER, RoomCloseCode } from "../src/durable/project-room";
 import { addMember, type Client, eventually, install, ORIGIN } from "./helpers";
@@ -162,6 +163,113 @@ describe("realtime messages", () => {
         a.messages.indexOf(m) > a.messages.indexOf(both),
     );
     a.ws.close();
+  });
+
+  it("relays what each person selects and edits, with a stable colour, IDs only", async () => {
+    const { owner, workspaceId, userId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const envId = p.environments[0]!.id;
+    const viewer = await addMember(owner, workspaceId, "v@example.com", "viewer");
+    const a = await open(p.id, owner);
+    const b = await open(p.id, viewer);
+    await b.waitFor((m) => m.type === "presence" && (m.users as unknown[]).length === 2);
+    a.ws.send(
+      JSON.stringify({
+        type: "presence.update",
+        environment_id: envId,
+        selection: ["svc_api", "svc_api", "new:1"],
+        editing: { service_id: "svc_api", part: "variables" },
+      }),
+    );
+    const seen = await b.waitFor(
+      (m) =>
+        m.type === "presence" &&
+        (m.users as { user_id: string; selection: string[] }[]).some(
+          (u) => u.user_id === userId && u.selection.length > 0,
+        ),
+    );
+    const me = (seen.users as Record<string, unknown>[]).find((u) => u.user_id === userId);
+    expect(me).toEqual({
+      user_id: userId,
+      name: "Mara Okafor",
+      image: null,
+      color: presenceColor(userId),
+      environment_id: envId,
+      selection: ["svc_api", "new:1"],
+      editing: { service_id: "svc_api", part: "variables" },
+    });
+    a.ws.close();
+    b.ws.close();
+  });
+
+  it("drops presence frames past the per-second budget and closes on malformed ones", async () => {
+    const { owner, workspaceId, userId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const a = await open(p.id, owner);
+    await a.waitFor((m) => m.type === "presence");
+    for (let i = 1; i <= PRESENCE_UPDATES_PER_SECOND + 5; i++) {
+      a.ws.send(
+        JSON.stringify({
+          type: "presence.update",
+          environment_id: null,
+          selection: [`svc_${i}`],
+          editing: null,
+        }),
+      );
+    }
+    const last = `svc_${PRESENCE_UPDATES_PER_SECOND}`;
+    await a.waitFor((m) =>
+      (m.users as { user_id: string; selection: string[] }[] | undefined)?.some(
+        (u) => u.user_id === userId && u.selection[0] === last,
+      ) ?? false,
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    const latest = a.messages.filter((m) => m.type === "presence").at(-1)!;
+    expect((latest.users as { selection: string[] }[])[0]!.selection).toEqual([last]);
+
+    a.ws.send(
+      JSON.stringify({
+        type: "presence.update",
+        environment_id: null,
+        selection: ["<img src=x onerror=alert(1)>"],
+        editing: null,
+      }),
+    );
+    expect((await a.closed).code).toBe(RoomCloseCode.policy);
+  });
+
+  it("ignores presence from API tokens and drops people who lose access", async () => {
+    const { owner, workspaceId, userId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const viewer = await addMember(owner, workspaceId, "v@example.com", "viewer");
+    const token = await createToken(owner, workspaceId, ["projects:read"]);
+    const watcher = await open(p.id, token);
+    watcher.ws.send(
+      JSON.stringify({ type: "presence.update", environment_id: null, selection: ["svc_x"], editing: null }),
+    );
+    const a = await open(p.id, owner);
+    const b = await open(p.id, viewer);
+    await a.waitFor((m) => m.type === "presence" && (m.users as unknown[]).length === 2);
+    const before = a.messages.length;
+    const { body } = await owner.json<{ members: { id: string; email: string }[] }>(
+      `/v1/workspaces/${workspaceId}/members`,
+    );
+    const member = body.members.find((m) => m.email === "v@example.com")!;
+    await owner.request(`/v1/workspaces/${workspaceId}/members/${member.id}`, {
+      method: "DELETE",
+    });
+    await b.closed;
+    const after = await a.waitFor(
+      (m) =>
+        m.type === "presence" &&
+        a.messages.indexOf(m) >= before &&
+        (m.users as unknown[]).length === 1,
+    );
+    expect((after.users as { user_id: string; selection: string[] }[])).toEqual([
+      expect.objectContaining({ user_id: userId, selection: [] }),
+    ]);
+    a.ws.close();
+    watcher.ws.close();
   });
 
   it("fans deployment updates and events out to every socket", async () => {

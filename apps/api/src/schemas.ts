@@ -70,9 +70,13 @@ import {
   type TlsMode,
 } from "@roundhouse/shared";
 import {
+  CanvasEdgesUpdatedMessageSchema,
   CanvasLayoutUpdatedMessageSchema,
   ChangeSetAppliedMessageSchema,
   ChangeSetUpdatedMessageSchema,
+  PresenceColorSchema,
+  PresenceEditingSchema,
+  PresenceUpdateMessageSchema,
 } from "./schemas/changes";
 import { CostEstimateSchema } from "./schemas/providers";
 import { VariableKeyField } from "./schemas/variables";
@@ -123,6 +127,11 @@ export const WorkspaceSchema = z
     name: z.string(),
     slug: z.string(),
     role: RoleSchema,
+    /**
+     * Whether canvas edits stage into the environment's draft for review
+     * (ADR 0006); off, the dashboard applies each edit as it is saved.
+     */
+    staged_changes: z.boolean(),
     created_at: Millis,
   })
   .openapi("Workspace");
@@ -801,11 +810,23 @@ export const GithubRepositorySchema = z
 // Phase 1: realtime
 // -----------------------------------------------------------------------------
 
-/** Someone looking at the project right now. */
+/**
+ * Someone looking at the project right now, with what they last told the
+ * room they are looking at (ADR 0006). The room lists only browser sessions
+ * that passed the project's access check, so nobody without access to the
+ * project ever appears here.
+ */
 export const PresenceUserSchema = z.object({
   user_id: z.string(),
   name: z.string(),
   image: z.string().nullable(),
+  /** Stable per user; see `presenceColor`. */
+  color: PresenceColorSchema,
+  /** Environment the user's canvas shows; `null` before their first update. */
+  environment_id: z.string().nullable(),
+  /** Service IDs (or `new:<n>`) selected on their canvas. */
+  selection: z.array(z.string()),
+  editing: PresenceEditingSchema.nullable(),
 });
 
 /** Where streamed log lines come from. */
@@ -834,6 +855,7 @@ export const RealtimeServerMessageSchema = z
     ChangeSetUpdatedMessageSchema,
     ChangeSetAppliedMessageSchema,
     CanvasLayoutUpdatedMessageSchema,
+    CanvasEdgesUpdatedMessageSchema,
     /**
      * Sent right before the server closes the socket with
      * {@link REALTIME_ACCESS_REVOKED_CLOSE} because the caller lost access
@@ -866,6 +888,7 @@ export const RealtimeClientMessageSchema = z
   .discriminatedUnion("type", [
     z.object({ type: z.literal("subscribe"), topic: RealtimeTopicSchema }),
     z.object({ type: z.literal("unsubscribe"), topic: RealtimeTopicSchema }),
+    PresenceUpdateMessageSchema,
   ])
   .openapi("RealtimeClientMessage");
 

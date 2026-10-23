@@ -30,6 +30,12 @@ export const workspaces = sqliteTable("workspaces", {
     .$type<ViewerDefaultProjectRole>()
     .notNull()
     .default("viewer"),
+  /**
+   * Whether dashboard edits on the canvas stage into the environment's draft
+   * (ADR 0006 "Rollout"). New workspaces start with it on; the migration
+   * leaves existing ones off until someone turns it on in Settings.
+   */
+  stagedChanges: integer("staged_changes", { mode: "boolean" }).notNull().default(false),
   ...timestamps,
   deletedAt: timestamp("deleted_at"),
 });

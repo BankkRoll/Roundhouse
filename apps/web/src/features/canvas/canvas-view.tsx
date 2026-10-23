@@ -96,6 +96,9 @@ export function CanvasView({
           icon: service.icon,
           staged: null,
           staged_ops: 0,
+          database: null,
+          volume: null,
+          domains: [],
         });
       }
     }

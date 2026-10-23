@@ -1,10 +1,12 @@
 /**
- * Staged changes and the project canvas (ADR 0006): change sets, the ops
- * staged in them, and each project's canvas layout.
+ * Staged changes and the project canvas (ADR 0006): change sets with their
+ * review state, the ops staged in them, each project's canvas layout, and the
+ * explicit "connects to" edges between its services.
  *
  * @module
  */
 import type {
+  ChangeSetReviewStatus,
   ChangeSetSource,
   ChangeSetStatus,
   DiffEntry,
@@ -12,10 +14,10 @@ import type {
   StagedOp,
 } from "@roundhouse/shared";
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { users } from "./auth";
 import { id, json, timestamp, timestamps } from "./columns";
-import { environments, projects, type SealedValue } from "./projects";
+import { environments, projects, type SealedValue, services } from "./projects";
 import { apiTokens } from "./workspaces";
 
 /** Why an apply stopped, stored on the set so the review panel can show it. */
@@ -33,6 +35,8 @@ export interface StagedBase {
   variable_version?: number | null;
   /** `service.update`: the fields it changes, as they were when staged. */
   service?: { name?: string; slug?: string; icon?: string | null };
+  /** `volume.*`: the volume as it was when staged; `null` when there was none. */
+  volume?: { id: string; size_mb: number } | null;
 }
 
 /** Why an op can't apply as staged. */
@@ -71,8 +75,18 @@ export const changeSets = sqliteTable(
     createdByToken: text("created_by_token").references(() => apiTokens.id, {
       onDelete: "set null",
     }),
+    /** Where the set is in review; see `CHANGE_SET_REVIEW_STATUSES`. */
+    reviewStatus: text("review_status").$type<ChangeSetReviewStatus>().notNull().default("none"),
+    submittedBy: text("submitted_by").references(() => users.id, { onDelete: "set null" }),
+    submittedAt: timestamp("submitted_at"),
     approvedBy: text("approved_by").references(() => users.id, { onDelete: "set null" }),
     approvedAt: timestamp("approved_at"),
+    /** The revision an approval covers; an approval at any other revision is void. */
+    approvedRevision: integer("approved_revision"),
+    rejectedBy: text("rejected_by").references(() => users.id, { onDelete: "set null" }),
+    rejectedAt: timestamp("rejected_at"),
+    /** The submitter's or reviewer's note. User-written: render as text, never as markup. */
+    reviewNote: text("review_note"),
     appliedBy: text("applied_by").references(() => users.id, { onDelete: "set null" }),
     appliedAt: timestamp("applied_at"),
     error: json<ChangeSetError>("error"),
@@ -86,6 +100,7 @@ export const changeSets = sqliteTable(
       .where(sql`status IN ('open', 'applying') AND is_draft = 1`),
     index("change_sets_env_status_idx").on(t.environmentId, t.status, t.id),
     index("change_sets_project_idx").on(t.projectId, t.id),
+    index("change_sets_review_idx").on(t.projectId, t.reviewStatus, t.status),
   ],
 );
 
@@ -137,3 +152,31 @@ export const canvasLayouts = sqliteTable("canvas_layouts", {
   version: integer("version").notNull().default(1),
   ...timestamps,
 });
+
+/**
+ * A "connects to" edge between two services of a project (ADR 0006): a
+ * dependency no variable reference expresses, such as a hard-coded URL or a
+ * queue. Display data only; it changes no networking.
+ */
+export const serviceEdges = sqliteTable(
+  "service_edges",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    fromServiceId: text("from_service_id")
+      .notNull()
+      .references(() => services.id, { onDelete: "cascade" }),
+    toServiceId: text("to_service_id")
+      .notNull()
+      .references(() => services.id, { onDelete: "cascade" }),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("service_edges_pair_uq").on(t.fromServiceId, t.toServiceId),
+    index("service_edges_project_idx").on(t.projectId),
+    check("service_edges_not_self", sql`${t.fromServiceId} <> ${t.toServiceId}`),
+  ],
+);
