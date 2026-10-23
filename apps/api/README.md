@@ -6,7 +6,7 @@ static assets.
 ## Run
 
 ```sh
-pnpm --dir ../.. setup:dev        # creates .dev.vars with a MASTER_KEY
+pnpm --dir ../.. setup:dev        # creates .dev.vars from .dev.vars.example, with a MASTER_KEY
 pnpm dev                          # http://127.0.0.1:8787
 ```
 
@@ -26,7 +26,8 @@ pnpm typecheck
 
 ```sh
 pnpm run deploy                    # builds the dashboard, deploys, applies D1 migrations
-npx wrangler secret put MASTER_KEY
+openssl rand -base64 32 | npx wrangler secret put MASTER_KEY
+npx wrangler secret put PUBLIC_ORIGIN   # e.g. https://cp.example.com
 ```
 
 The first deploy creates the D1 database, so `wrangler.jsonc` has no
@@ -43,11 +44,19 @@ The first deploy creates the D1 database, so `wrangler.jsonc` has no
 | `PROJECT_ROOM`                    | Durable Object | One per project: the dashboard's realtime socket            |
 | `AUDIT_CHAIN`                     | Durable Object | One per install: hash-chains audit entries in `seq` order   |
 | `KEY_ROTATION_WORKFLOW`           | Workflow       | `KeyRotationWorkflow`, re-seals stored secrets              |
+| `PROVISION_WORKFLOW`              | Workflow       | `ProvisionWorkflow`, one-click cloud servers                |
 | `AUTH_LIMITER`, `WEBHOOK_LIMITER` | Rate limit     | Secret-accepting endpoints; GitHub webhooks                 |
 | `MCP_LIMITER`                     | Rate limit     | MCP tool calls, 60 a minute per token                       |
+| `METRICS`                         | Analytics      | Metrics dataset; optional                                   |
+| `ASSETS`                          | Static assets  | The dashboard build                                         |
 
-No secrets beyond `MASTER_KEY`: project data keys, GitHub App credentials and
-signing keys are stored in D1, sealed under keys derived from it.
+Every secret, variable and binding, with defaults and production guidance, is
+in [docs/configuration.md](../../docs/configuration.md#control-plane);
+`.dev.vars.example` lists the same settings for development, and
+`test/configuration.test.ts` keeps `src/env.ts`, `wrangler.jsonc`, the example
+and that page in agreement. `MASTER_KEY` is the only required secret: project
+data keys, GitHub App credentials and signing keys are stored in D1, sealed
+under keys derived from it.
 
 ## Layout
 
@@ -77,9 +86,10 @@ OpenAPI: `GET /v1/openapi.json`.
 
 ## Notes
 
-- `MASTER_KEY` is the only secret. The auth secret and encryption key are
-  derived from it, so rotating it signs everyone out and makes stored secrets
-  unreadable.
+- The auth secret and encryption keys are derived from `MASTER_KEY`.
+  Rotating it signs everyone out; stored secrets stay readable through
+  `MASTER_KEYS_PREVIOUS` until `KeyRotationWorkflow` has re-sealed them (see
+  [Rotating the master key](../../docs/configuration.md#rotating-the-master-key)).
 - Setup requires the master key, so nobody else can claim a fresh deploy.
 - Public sign-up is off. Accounts come from setup or invites.
 

@@ -1,5 +1,5 @@
 {
-  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "roundhouse",
   "main": "src/index.ts",
   // NOTE: Pinned to the newest date the workerd bundled with
@@ -7,6 +7,11 @@
   // behaviour as production. Bump it together with that package.
   "compatibility_date": "2026-10-19",
   "compatibility_flags": ["nodejs_compat"],
+  // NOTE: There is no `vars` block: every setting in src/env.ts is optional
+  // and per install (docs/configuration.md). Without keep_vars, each
+  // `wrangler deploy` would delete plain-text variables an operator set in
+  // the Cloudflare dashboard, such as PUBLIC_ORIGIN. Secrets survive either way.
+  "keep_vars": true,
   "assets": {
     "directory": "../web/dist",
     "binding": "ASSETS",

@@ -1,4 +1,51 @@
-# Root secret for the install. Everything else (auth secret, encryption key)
-# is derived from it, so losing it means losing access to encrypted data.
-# Generate with: openssl rand -base64 32
+# Local settings for `wrangler dev`. `pnpm setup:dev` copies this file to
+# `.dev.vars` (gitignored) and fills in MASTER_KEY.
+#
+# Every key here is a Worker secret or variable typed in `src/env.ts`; the
+# reference, with production guidance, is docs/configuration.md.
+#
+# IMPORTANT: this file is for development only. Never commit a filled-in
+# `.dev.vars`, and never upload it to a production Worker as is: ROUNDHOUSE_DEV
+# turns off checks production depends on.
+
+# -----------------------------------------------------------------------------
+# Secrets
+# -----------------------------------------------------------------------------
+
+# Root secret of the install, base64 of 32 random bytes. The auth secret and
+# every encryption key are derived from it, so losing it means losing access
+# to everything encrypted. Generate with: openssl rand -base64 32
 MASTER_KEY=
+
+# Master keys that MASTER_KEY replaced, comma-separated, newest first. Only
+# set while a key rotation is in progress; see "Rotating the master key" in
+# docs/configuration.md.
+# MASTER_KEYS_PREVIOUS=
+
+# -----------------------------------------------------------------------------
+# Variables
+# -----------------------------------------------------------------------------
+
+# Allows plain http:// origins (OAuth issuer, provider callbacks) and lets
+# agents run workloads over ws://. Development only.
+ROUNDHOUSE_DEV=1
+
+# The control plane's public origin. Production installs set it to their
+# https:// URL; in development the request's origin is used.
+# PUBLIC_ORIGIN=http://localhost:5173
+
+# DNS-over-HTTPS JSON endpoint for custom-domain checks. Defaults to
+# Cloudflare's resolver, with Google's as the fallback.
+# DNS_RESOLVER_URL=https://cloudflare-dns.com/dns-query
+
+# -----------------------------------------------------------------------------
+# Test and development knobs (leave unset in production)
+# -----------------------------------------------------------------------------
+
+# Seconds a rollout waits for healthy replicas (10 to 600, default 600).
+# ROLLOUT_TIMEOUT_S=60
+
+# Seconds a provisioned cloud server gets to join (default 600), and seconds
+# between join checks (default 10).
+# PROVISION_JOIN_TIMEOUT_S=120
+# PROVISION_JOIN_POLL_S=5
