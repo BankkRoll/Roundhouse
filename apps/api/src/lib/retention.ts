@@ -6,7 +6,7 @@
  *   the row for the next run instead of an orphaned object.
  * - GitHub delivery IDs past the redelivery window.
  * - Expired node join tokens, sessions, invites, Better Auth verifications,
- *   and redeemed single-use nonces.
+ *   GitHub installation claims, and redeemed single-use nonces.
  *
  * Every deletion runs in bounded batches with a per-run cap, so one run
  * stays well inside a Worker's limits however much has piled up; whatever is
@@ -18,6 +18,7 @@ import {
   consumedNonces,
   createDb,
   type Db,
+  githubClaimStates,
   githubDeliveries,
   invites,
   logChunks,
@@ -78,6 +79,7 @@ export interface RetentionReport {
   invites: number;
   verifications: number;
   nonces: number;
+  githubClaims: number;
 }
 
 function chunks<T>(items: readonly T[], size: number): T[][] {
@@ -178,5 +180,10 @@ export async function runRetention(
     invites: await prune(invites, invites.id, lt(invites.expiresAt, at(EXPIRED_GRACE_MS))),
     verifications: await prune(verifications, verifications.id, lt(verifications.expiresAt, at(0))),
     nonces: await prune(consumedNonces, consumedNonces.id, lt(consumedNonces.expiresAt, at(0))),
+    githubClaims: await prune(
+      githubClaimStates,
+      githubClaimStates.id,
+      lt(githubClaimStates.expiresAt, at(0)),
+    ),
   };
 }

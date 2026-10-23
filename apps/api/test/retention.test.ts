@@ -103,7 +103,7 @@ describe("log retention", () => {
 });
 
 describe("expired records", () => {
-  it("prunes delivery IDs, join tokens, sessions, invites, verifications and nonces", async () => {
+  it("prunes delivery IDs, join tokens, sessions, invites, verifications, nonces and claims", async () => {
     const { owner, workspaceId, userId } = await install();
     const ins = (sql: string, ...args: unknown[]) =>
       env.DB.prepare(sql)
@@ -151,6 +151,15 @@ describe("expired records", () => {
       at(-1),
       at(1),
     );
+    await ins(
+      "INSERT INTO github_claim_states (id, workspace_id, user_id, expires_at, created_at, updated_at) VALUES ('ghc_old', ?, ?, ?, 0, 0), ('ghc_live', ?, ?, ?, 0, 0)",
+      workspaceId,
+      userId,
+      at(-0.01),
+      workspaceId,
+      userId,
+      at(0.01),
+    );
 
     const report = await runRetention(env, NOW);
     expect(report).toEqual({
@@ -161,6 +170,7 @@ describe("expired records", () => {
       invites: 1,
       verifications: 1,
       nonces: 1,
+      githubClaims: 1,
     });
     const ids = async (table: string) =>
       (
@@ -171,6 +181,7 @@ describe("expired records", () => {
     expect(await ids("invites")).toEqual(["inv_live"]);
     expect(await ids("verifications")).toEqual(["ver_live"]);
     expect(await ids("consumed_nonces")).toEqual(["github-install:live"]);
+    expect(await ids("github_claim_states")).toEqual(["ghc_live"]);
     expect(await ids("sessions")).not.toContain("ses_old");
     expect(await count("sessions")).toBe(1);
     expect((await owner.json("/v1/me")).status).toBe(200);
