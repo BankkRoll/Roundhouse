@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	"github.com/BankkRoll/Open-Rail/agent/internal/leaktest"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	"github.com/BankkRoll/Roundhouse/agent/internal/leaktest"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // fakeLogs serves each container's lines as the engine does: multiplexed,

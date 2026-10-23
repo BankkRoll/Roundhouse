@@ -1,11 +1,11 @@
-import { PRODUCT_NAME } from "@openrail/shared";
+import { PRODUCT_NAME } from "@roundhouse/shared";
 import {
   CommandPalette,
   cn,
   copyText,
   type PaletteCommand,
   useCommandPaletteHotkey,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import {
   BookOpenIcon,
   ChevronDownIcon,
@@ -252,7 +252,7 @@ export function SiteHeader() {
           </button>
           <ExternalLink
             href={REPO_URL}
-            aria-label="OpenRail on GitHub"
+            aria-label="Roundhouse on GitHub"
             className="hidden size-10 items-center justify-center rounded-md text-foreground outline-none transition-colors hover:bg-[var(--lp-step-2)] focus-visible:ring-2 focus-visible:ring-ring sm:flex"
           >
             <GitHubMark className="size-4" />

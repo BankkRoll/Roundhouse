@@ -1,4 +1,4 @@
-import { PRODUCT_NAME, ROLES } from "@openrail/shared";
+import { PRODUCT_NAME, ROLES } from "@roundhouse/shared";
 import { describe, expect, it, vi } from "vitest";
 import { queryKeys } from "../queries/keys";
 import { ApiError } from "./api/client";

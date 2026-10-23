@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/leaktest"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/leaktest"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")

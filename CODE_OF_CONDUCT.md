@@ -1,6 +1,6 @@
 # Code of conduct
 
-OpenRail adopts the [Contributor Covenant, version 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/)
+Roundhouse adopts the [Contributor Covenant, version 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/)
 as its code of conduct. It applies to all project spaces, including issues,
 pull requests, discussions, chat, and events, and to anyone representing the
 project in public spaces.

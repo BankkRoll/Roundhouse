@@ -1,5 +1,5 @@
-import { PRODUCT_NAME } from "@openrail/shared";
-import { Button, Skeleton } from "@openrail/ui";
+import { PRODUCT_NAME } from "@roundhouse/shared";
+import { Button, Skeleton } from "@roundhouse/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { AuthLayout } from "../../components/auth-layout";

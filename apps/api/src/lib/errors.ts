@@ -26,6 +26,8 @@ export type ErrorCode =
   | "invalid_reference"
   | "invalid_signature"
   | "github_not_configured"
+  | "installation_not_in_workspace"
+  | "repository_not_in_installation"
   | "upstream_error"
   | "internal";
 

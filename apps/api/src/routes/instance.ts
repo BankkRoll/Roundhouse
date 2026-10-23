@@ -9,7 +9,7 @@
  *
  * @module
  */
-import { type Db, domains } from "@openrail/db";
+import { type Db, domains } from "@roundhouse/db";
 import { and, eq, ne } from "drizzle-orm";
 import { clientIp, createRouter, requireInstanceAction } from "../context";
 import { getInstanceSettings, policyOf, updateInstanceSettings } from "../contracts";

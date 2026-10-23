@@ -4,7 +4,7 @@
  *
  * @module
  */
-import { slugify } from "@openrail/shared";
+import { slugify } from "@roundhouse/shared";
 
 /** Longest service name the API accepts. */
 export const MAX_SERVICE_NAME = 100;

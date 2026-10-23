@@ -3,8 +3,8 @@
  *
  * @module
  */
-import { type Db, workspaceMembers, workspaces } from "@openrail/db";
-import { newId, slugify } from "@openrail/shared";
+import { type Db, workspaceMembers, workspaces } from "@roundhouse/db";
+import { newId, slugify } from "@roundhouse/shared";
 import { like } from "drizzle-orm";
 import { isUniqueViolation } from "./errors";
 

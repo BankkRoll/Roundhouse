@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "openrail",
+  "name": "roundhouse",
   "main": "src/index.ts",
   // NOTE: Pinned to the newest date the workerd bundled with
   // @cloudflare/vitest-plugin supports, so tests run with the same runtime
@@ -21,12 +21,12 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "openrail",
+      "database_name": "roundhouse",
       "migrations_dir": "../../packages/db/migrations"
     }
   ],
   // Created on the first deploy if missing, like the D1 database.
-  "r2_buckets": [{ "binding": "LOGS", "bucket_name": "openrail-logs" }],
+  "r2_buckets": [{ "binding": "LOGS", "bucket_name": "roundhouse-logs" }],
   "durable_objects": {
     "bindings": [
       { "name": "NODE_CONNECTION", "class_name": "NodeConnection" },
@@ -38,7 +38,7 @@
     { "tag": "v2", "new_sqlite_classes": ["ProjectRoom"] }
   ],
   "workflows": [
-    { "name": "openrail-deploy", "binding": "DEPLOY_WORKFLOW", "class_name": "DeployWorkflow" }
+    { "name": "roundhouse-deploy", "binding": "DEPLOY_WORKFLOW", "class_name": "DeployWorkflow" }
   ],
   // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
   // a small number like the docs' "1001" can collide with another project's
@@ -57,7 +57,7 @@
       "simple": { "limit": 300, "period": 60 }
     }
   ],
-  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "openrail_metrics" }],
+  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "roundhouse_metrics" }],
   // Hourly retention: expired log chunks (R2 and D1), GitHub delivery IDs,
   // join tokens, sessions, invites, verifications. See src/lib/retention.ts.
   "triggers": { "crons": ["17 * * * *"] },

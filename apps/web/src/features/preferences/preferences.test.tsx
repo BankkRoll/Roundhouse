@@ -1,4 +1,4 @@
-import { THEME_STORAGE_KEY } from "@openrail/ui";
+import { THEME_STORAGE_KEY } from "@roundhouse/ui";
 import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { DENSITY_STORAGE_KEY, MOTION_STORAGE_KEY } from "../../lib/preferences";

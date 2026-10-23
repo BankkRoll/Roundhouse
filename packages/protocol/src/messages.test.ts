@@ -44,7 +44,7 @@ function workload(overrides: Partial<WorkloadSpec> = {}): WorkloadSpec {
     healthcheck: null,
     resources: { cpu_millis: 250, memory_mb: 256, pids: 128 },
     restart: { policy: "always", max_retries: 0 },
-    network: "openrail-prj_1-env_1",
+    network: "roundhouse-prj_1-env_1",
     labels: {},
     drain_s: 10,
     spec_hash: HASH,

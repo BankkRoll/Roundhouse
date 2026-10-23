@@ -5,8 +5,8 @@
  *
  * @module
  */
-import { builds, deployments, environments, projects, services, workspaces } from "@openrail/db";
-import type { Action } from "@openrail/shared";
+import { builds, deployments, environments, projects, services, workspaces } from "@roundhouse/db";
+import type { Action } from "@roundhouse/shared";
 import { and, eq, isNull } from "drizzle-orm";
 import { type AppContext, requireWorkspace } from "../context";
 import { ApiError, notFound } from "./errors";

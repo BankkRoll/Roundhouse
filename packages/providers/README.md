@@ -1,4 +1,4 @@
-# @openrail/providers
+# @roundhouse/providers
 
 One-click provisioning: the user pastes a cloud API token, picks a plan, and
 the control plane creates a server whose cloud-init joins it to the
@@ -14,7 +14,7 @@ Runtime-agnostic: only `fetch`, `AbortController`, timers, and WebCrypto, so
 it runs in Workers. No dependencies.
 
 ```ts
-import { createProvider, PROVIDERS, recommend } from "@openrail/providers";
+import { createProvider, PROVIDERS, recommend } from "@roundhouse/providers";
 
 const provider = createProvider("digitalocean", { token }); // unsealed per request
 const check = await provider.validateToken(); // { valid, canWrite, missing?, account? }
@@ -81,7 +81,7 @@ rather than created twice.
 
 Labels are stable and must never change: `roundhouse.managed=true`,
 `roundhouse.node`, `roundhouse.role`, `roundhouse.workspace`, and
-`roundhouse.firewall`, the same keys `@openrail/hetzner` wrote. Providers
+`roundhouse.firewall`, the same keys `@roundhouse/hetzner` wrote. Providers
 with plain tags store `roundhouse.node=web-1` (Vultr, Linode) or
 `roundhouse:node:web-1` (DigitalOcean, whose tags forbid `.` and `=`).
 
@@ -167,7 +167,7 @@ header, and the sources are in `SOURCES.md`.
 ## Test
 
 ```sh
-pnpm --filter @openrail/providers test
+pnpm --filter @roundhouse/providers test
 ```
 
 Tests run against in-memory fakes of each API (`test/fakes/`) built from

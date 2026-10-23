@@ -4,7 +4,7 @@
  *
  * @module
  */
-import type { AuditAction, AuditActorType, Role } from "@openrail/shared";
+import type { AuditAction, AuditActorType, Role } from "@roundhouse/shared";
 import { index, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { users } from "./auth";
 import { id, json, timestamp, timestamps } from "./columns";

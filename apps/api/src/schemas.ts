@@ -8,7 +8,7 @@
  *   GitHub App, and realtime messages. Routes using them are in `./contracts`.
  * - API tokens, project summaries and resolved variables.
  *
- * Config part schemas are checked against the `@openrail/shared` types they
+ * Config part schemas are checked against the `@roundhouse/shared` types they
  * store (`satisfies z.ZodType<…>`), so the API, the database and the
  * dashboard can't drift apart.
  *
@@ -30,7 +30,7 @@ import {
   type TlsMode as ProtocolTlsMode,
   utf8ByteLength,
   WORKLOAD_STATES,
-} from "@openrail/protocol";
+} from "@roundhouse/protocol";
 import {
   API_TOKEN_SCOPES,
   AUDIT_ACTIONS,
@@ -62,7 +62,7 @@ import {
   type ServiceSource,
   TLS_MODES,
   type TlsMode,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 
 /** Error envelope returned by every non-2xx response. */
 export const ErrorSchema = z
@@ -373,7 +373,15 @@ export const GitSourceSchema = z.object({
     .regex(/^https:\/\/[^\s/@?#]+\/[^\s?#]+$/, "expected an https clone URL without credentials"),
   branch: BranchField,
   root_dir: RepoPathField,
-  github_installation_id: z.string().optional(),
+  github_installation_id: z
+    .string()
+    .optional()
+    .openapi({
+      description:
+        "Our ID (ghi_…) of a GitHub App installation the service's workspace claimed and that can " +
+        "read repo_url, which must then be https://github.com/<owner>/<repo>. Tokens minted for it " +
+        "are scoped to that one repository.",
+    }),
 });
 
 /** Where a service's code comes from. */
@@ -703,7 +711,7 @@ export const DomainSchema = z
 // -----------------------------------------------------------------------------
 
 /**
- * Ingress TLS mode. `@openrail/shared` and `@openrail/protocol` both define
+ * Ingress TLS mode. `@roundhouse/shared` and `@roundhouse/protocol` both define
  * the values; the two `satisfies` checks fail the build if they drift apart.
  */
 export const TlsModeSchema = z

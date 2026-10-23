@@ -35,7 +35,7 @@ import {
   resolveVariables,
   scopesBeyondRole,
   slugify,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { HttpResponse, http, ws } from "msw";
 import { PHASE1_ROUTES, policyOf } from "../../../api/src/contracts";
 import type {
@@ -367,10 +367,10 @@ function resolveEnvironment(service: Service, environment: Environment) {
       .sort(byId)[0]?.hostname;
     builtins[entry.slug] = {
       ...(port ? { PORT: String(port) } : {}),
-      ...(host ? { OPENRAIL_PUBLIC_DOMAIN: host } : {}),
-      OPENRAIL_PRIVATE_DOMAIN: `${entry.slug}.${environment.slug}.internal`,
-      OPENRAIL_ENVIRONMENT: environment.slug,
-      OPENRAIL_SERVICE_NAME: entry.name,
+      ...(host ? { ROUNDHOUSE_PUBLIC_DOMAIN: host } : {}),
+      ROUNDHOUSE_PRIVATE_DOMAIN: `${entry.slug}.${environment.slug}.internal`,
+      ROUNDHOUSE_ENVIRONMENT: environment.slug,
+      ROUNDHOUSE_SERVICE_NAME: entry.name,
     };
   }
   const current = db.deploy.deployments
@@ -383,9 +383,9 @@ function resolveEnvironment(service: Service, environment: Environment) {
     .sort(byNewest)[0];
   const own = builtins[service.slug];
   if (current && own) {
-    own.OPENRAIL_DEPLOYMENT_ID = current.id;
+    own.ROUNDHOUSE_DEPLOYMENT_ID = current.id;
     const sha = db.deploy.builds.find((row) => row.id === current.build_id)?.commit_sha;
-    if (sha) own.OPENRAIL_GIT_COMMIT_SHA = sha;
+    if (sha) own.ROUNDHOUSE_GIT_COMMIT_SHA = sha;
   }
   return resolveVariables({
     service: service.slug,
@@ -1564,7 +1564,7 @@ export const deployHandlers = [
       : "https://github.com/settings/apps/new";
     return HttpResponse.json({
       manifest: {
-        name: `OpenRail (${new URL(origin).hostname})`,
+        name: `Roundhouse (${new URL(origin).hostname})`,
         url: origin,
         hook_attributes: { url: `${origin}/v1/webhooks/github` },
         redirect_url: `${origin}/v1/github/callback`,
@@ -1606,10 +1606,10 @@ export const deployHandlers = [
       db.deploy.github.states = db.deploy.github.states.filter((row) => row !== pending);
       db.deploy.github.app = {
         id: 900_001,
-        slug: "openrail-mock",
-        name: "OpenRail (mock)",
-        html_url: "https://github.com/apps/openrail-mock",
-        install_url: "https://github.com/apps/openrail-mock/installations/new",
+        slug: "roundhouse-mock",
+        name: "Roundhouse (mock)",
+        html_url: "https://github.com/apps/roundhouse-mock",
+        install_url: "https://github.com/apps/roundhouse-mock/installations/new",
       };
       recordAudit({
         workspaceId: pending.workspace_id,

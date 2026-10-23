@@ -3,7 +3,7 @@ package runtime
 import (
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // Crash-loop backoff defaults: the delay before restart n (from 0) is

@@ -9,7 +9,7 @@ import {
   type DesiredState,
   type JoinResponse,
   verifyEnvelope,
-} from "@openrail/protocol";
+} from "@roundhouse/protocol";
 import {
   type Client,
   eventually,

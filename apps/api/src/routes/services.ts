@@ -6,6 +6,9 @@
  *   apps domain is set, a generated hostname.
  * - A config change always inserts version N+1 and never deploys; the next
  *   deployment picks it up.
+ * - A git source naming a GitHub installation is only stored when the
+ *   service's workspace claimed that installation and it can read the
+ *   github.com repository (`assertSourceInstallation`).
  * - Deleting a service is a soft delete that stops its deployments and pulls
  *   its replicas from nodes.
  * - The slug is the `${{slug.VAR}}` namespace: on create, a taken or reserved
@@ -14,10 +17,15 @@
  *
  * @module
  */
-import { type Db, domains, environments, serviceConfigs, services } from "@openrail/db";
-import { defaultServiceConfig, newId, RESERVED_SERVICE_SLUGS } from "@openrail/shared";
+import { type Db, domains, environments, serviceConfigs, services } from "@roundhouse/db";
+import {
+  defaultServiceConfig,
+  newId,
+  RESERVED_SERVICE_SLUGS,
+  type ServiceSource,
+} from "@roundhouse/shared";
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
-import { clientIp, createRouter } from "../context";
+import { type AppContext, clientIp, createRouter, requireMasterKey } from "../context";
 import {
   createService,
   deleteService,
@@ -30,6 +38,7 @@ import {
 } from "../contracts";
 import { recordAudit } from "../lib/audit";
 import { conflict, isUniqueViolation, notFound } from "../lib/errors";
+import { assertSourceInstallation } from "../lib/github";
 import {
   type ConfigPatch,
   configInsert,
@@ -57,6 +66,12 @@ async function liveSlugs(db: Db, projectId: string): Promise<string[]> {
   return rows.map((r) => r.slug);
 }
 
+/** {@link assertSourceInstallation}, unsealing the App only for sources that name an installation. */
+async function checkSource(c: AppContext, workspaceId: string, source: ServiceSource) {
+  if (source.type !== "git" || !source.github_installation_id) return;
+  await assertSourceInstallation(c.get("db"), requireMasterKey(c), workspaceId, source);
+}
+
 /** Service, config and domain routes. */
 export const serviceRoutes = createRouter()
   .openapi(listServices, async (c) => {
@@ -71,6 +86,7 @@ export const serviceRoutes = createRouter()
     const body = c.req.valid("json");
     const db = c.get("db");
     const spec = mergeConfig(defaultServiceConfig(body.source), body.config ?? {});
+    await checkSource(c, project.workspaceId, spec.source);
 
     const envs = await db
       .select()
@@ -172,6 +188,7 @@ export const serviceRoutes = createRouter()
         );
       }
       const spec = mergeConfig(specOf(latest), patch);
+      if (patch.source) await checkSource(c, project.workspaceId, spec.source);
       try {
         [config = null] = await configInsert(db, {
           serviceId,

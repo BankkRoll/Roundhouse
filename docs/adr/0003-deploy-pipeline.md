@@ -64,7 +64,7 @@ and config version; it skips the build.
 
 `desired_state.workloads[]` is the complete list for the node. The agent
 converges Docker to it: it creates what is missing, recreates what changed
-(by spec hash), and removes containers labelled `openrail.managed=true` that
+(by spec hash), and removes containers labelled `roundhouse.managed=true` that
 are no longer listed. Containers run with `no-new-privileges`, all
 capabilities dropped except those listed, a PID limit, and memory/CPU limits.
 Each environment of a project gets its own Docker bridge network; see
@@ -102,9 +102,9 @@ reach that registry: the builder itself, or any node once the WireGuard mesh
 
 Values are encrypted with a per-project data key (AES-256-GCM), itself
 sealed by the master-derived KEK. References `${{service.VAR}}`,
-`${{shared.VAR}}`, and built-ins (`PORT`, `OPENRAIL_PUBLIC_DOMAIN`,
-`OPENRAIL_PRIVATE_DOMAIN`, `OPENRAIL_ENVIRONMENT`, `OPENRAIL_GIT_COMMIT_SHA`,
-`OPENRAIL_SERVICE_NAME`, `OPENRAIL_DEPLOYMENT_ID`) are resolved only when
+`${{shared.VAR}}`, and built-ins (`PORT`, `ROUNDHOUSE_PUBLIC_DOMAIN`,
+`ROUNDHOUSE_PRIVATE_DOMAIN`, `ROUNDHOUSE_ENVIRONMENT`, `ROUNDHOUSE_GIT_COMMIT_SHA`,
+`ROUNDHOUSE_SERVICE_NAME`, `ROUNDHOUSE_DEPLOYMENT_ID`) are resolved only when
 building a node's desired state. Cycles and unknown references are errors at
 deploy time. Secret values never appear in API responses unless explicitly
 revealed (audited) and never in logs: the control plane redacts known
@@ -213,18 +213,17 @@ Decisions made while hardening Phase 1.
 One network per project let a staging container reach production containers
 by IP. Every environment now gets its own bridge network,
 `environmentNetworkName(project_id, environment_id)`:
-`openrail-<project_id>-<environment_id>`, or, when that would exceed the 128
+`roundhouse-<project_id>-<environment_id>`, or, when that would exceed the 128
 characters the protocol allows for a network name,
-`openrail-env-<hex SHA-256 of "<project_id>/<environment_id>">`. IDs always
+`roundhouse-env-<hex SHA-256 of "<project_id>/<environment_id>">`. IDs always
 contain `_` and the hash never does, so the two forms cannot collide. TS and
 Go compute the name independently and agree on `fixtures/network-names.json`.
-
 - Private domains (`<service>.<environment>.internal`) are network aliases on
   the environment's network only, so Docker's DNS answers them only inside
   that environment, and Docker's inter-bridge isolation drops traffic between
   environment networks, so another environment's address is unreachable.
 - Migration needs no code path of its own: `network` is part of the spec
-  hash, so a replica still on `openrail-<project_id>` gets a new hash and the
+  hash, so a replica still on `roundhouse-<project_id>` gets a new hash and the
   reconciler replaces it with its usual zero-downtime rollout. The agent then
   removes the old project network once no container uses it. Every replica
   of a node moves in the same pass, so during that one rollout old replicas
@@ -237,8 +236,8 @@ Go compute the name independently and agree on `fixtures/network-names.json`.
 ### Node namespace
 
 An agent sharing a Docker engine with another node used to manage, and
-garbage-collect, every `openrail.managed=true` container. Every container and
-network an agent creates is now labelled `openrail.namespace=<node ID>`, and
+garbage-collect, every `roundhouse.managed=true` container. Every container and
+network an agent creates is now labelled `roundhouse.namespace=<node ID>`, and
 the agent manages only those. A Phase 1 container (no namespace) is adopted
 once its workload ID is in this node's desired state, which the control plane
 only puts there for workloads it placed on the node. The adoption is recorded
@@ -291,7 +290,6 @@ loop, at every upstream swap.
 
 Options considered, after reading Caddy's documentation and the source of
 the version we pin (2.11.7, `modules/caddyhttp/reverseproxy`):
-
 - **A stable per-route local upstream that the agent proxies and switches
   atomically.** Swaps would be a pointer change in the agent, but the agent
   joins the data path: an agent restart or crash drops every request.
@@ -304,7 +302,7 @@ the version we pin (2.11.7, `modules/caddyhttp/reverseproxy`):
   runs on loopback.** Chosen.
 
 Each route (host and path prefix) gets, per container port, the name
-`<hash>.upstreams.openrail.invalid.`: `.invalid` is reserved (RFC 6761), so
+`<hash>.upstreams.roundhouse.invalid.`: `.invalid` is reserved (RFC 6761), so
 the name can never leak to a public resolver, and the trailing dot stops a
 search domain being appended. The route's reverse proxy has
 `dynamic_upstreams` `{"source": "a", "name": …, "port": …, "refresh": "1s",
@@ -312,7 +310,6 @@ search domain being appended. The route's reverse proxy has
 (a `multi` source while a route spans two ports) and no static upstreams. The
 agent answers those names authoritatively over UDP and TCP with the replicas
 the runtime picks, and refuses every other name.
-
 - Caddy's config now depends only on the routes, their ports and the TLS
   mode, so a full `/load` happens only when a hostname or path is added or
   removed, a route's port changes, or the TLS mode changes; never for a swap.

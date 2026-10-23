@@ -95,8 +95,8 @@ function input(overrides: Partial<ResolveVariablesInput> = {}): ResolveVariables
     services: { api: {}, db: {} },
     shared: {},
     builtins: {
-      api: { PORT: "8080", OPENRAIL_PRIVATE_DOMAIN: "api.internal" },
-      db: { PORT: "5432", OPENRAIL_PRIVATE_DOMAIN: "db.internal" },
+      api: { PORT: "8080", ROUNDHOUSE_PRIVATE_DOMAIN: "api.internal" },
+      db: { PORT: "5432", ROUNDHOUSE_PRIVATE_DOMAIN: "db.internal" },
     },
     ...overrides,
   };
@@ -107,7 +107,7 @@ describe("resolveVariables", () => {
     const result = resolveVariables(input({ services: { api: { PORT: "3000", A: "x" }, db: {} } }));
     expect(result).toEqual({
       ok: true,
-      env: { PORT: "3000", OPENRAIL_PRIVATE_DOMAIN: "api.internal", A: "x" },
+      env: { PORT: "3000", ROUNDHOUSE_PRIVATE_DOMAIN: "api.internal", A: "x" },
     });
   });
 
@@ -117,7 +117,7 @@ describe("resolveVariables", () => {
         services: {
           api: {
             DATABASE_URL:
-              "postgres://${{db.USER}}@${{db.OPENRAIL_PRIVATE_DOMAIN}}:${{db.PORT}}/app",
+              "postgres://${{db.USER}}@${{db.ROUNDHOUSE_PRIVATE_DOMAIN}}:${{db.PORT}}/app",
             LISTEN: ":${{PORT}}",
             REGION: "${{shared.REGION}}",
           },
@@ -130,7 +130,7 @@ describe("resolveVariables", () => {
       ok: true,
       env: {
         PORT: "8080",
-        OPENRAIL_PRIVATE_DOMAIN: "api.internal",
+        ROUNDHOUSE_PRIVATE_DOMAIN: "api.internal",
         DATABASE_URL: "postgres://app@db.internal:5432/app",
         LISTEN: ":8080",
         REGION: "eu",
@@ -158,8 +158,8 @@ describe("resolveVariables", () => {
   it("does not parse built-in values", () => {
     const result = resolveVariables(
       input({
-        services: { api: { X: "${{OPENRAIL_GIT_COMMIT_SHA}}" }, db: {} },
-        builtins: { api: { OPENRAIL_GIT_COMMIT_SHA: "${{nope}}" }, db: {} },
+        services: { api: { X: "${{ROUNDHOUSE_GIT_COMMIT_SHA}}" }, db: {} },
+        builtins: { api: { ROUNDHOUSE_GIT_COMMIT_SHA: "${{nope}}" }, db: {} },
       }),
     );
     expect(result).toMatchObject({ ok: true, env: { X: "${{nope}}" } });

@@ -18,17 +18,18 @@ import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const NODE_FIXTURE = join(ROOT, "e2e", "phase1", "fixtures", "node");
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: dev-only script, never run through turbo.
 const API_PORT = process.env.DEV_API_PORT ?? "8787";
 
 const NAMES = {
-  agent: "openrail-dev-agent",
-  caddy: "openrail-dev-caddy",
-  caddyData: "openrail-dev-caddy-data",
-  image: "openrail-dev-node:local",
+  agent: "roundhouse-dev-agent",
+  caddy: "roundhouse-dev-caddy",
+  caddyData: "roundhouse-dev-caddy-data",
+  image: "roundhouse-dev-node:local",
 };
 // Same path inside and outside the agent container: the agent bind-mounts
 // directories under it into the registry, and the engine resolves them on its host.
-const DATA_DIR = "/var/lib/openrail-dev";
+const DATA_DIR = "/var/lib/roundhouse-dev";
 const CADDY_IMAGE =
   "caddy:2.11.7-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f";
 
@@ -45,7 +46,7 @@ const docker = (args, opts) => sh("docker", args, opts);
 
 function down() {
   docker(["rm", "-f", NAMES.agent, NAMES.caddy], { allowFail: true, quiet: true });
-  const managed = docker(["ps", "-aq", "--filter", "label=openrail.managed=true"], {
+  const managed = docker(["ps", "-aq", "--filter", "label=roundhouse.managed=true"], {
     quiet: true,
     allowFail: true,
   });
@@ -58,7 +59,7 @@ function down() {
   }
   docker(["volume", "rm", NAMES.caddyData], { allowFail: true, quiet: true });
   // The data dir lives on the engine host (the Docker VM on Docker Desktop).
-  docker(["run", "--rm", "-v", "/var/lib:/host", "alpine", "rm", "-rf", "/host/openrail-dev"], {
+  docker(["run", "--rm", "-v", "/var/lib:/host", "alpine", "rm", "-rf", "/host/roundhouse-dev"], {
     allowFail: true,
     quiet: true,
   });
@@ -89,9 +90,9 @@ const url = dockerDesktop
   : `http://127.0.0.1:${API_PORT}`;
 
 console.log(`Building the agent for linux/${arch}…`);
-const ctx = mkdtempSync(join(tmpdir(), "openrail-dev-node-"));
+const ctx = mkdtempSync(join(tmpdir(), "roundhouse-dev-node-"));
 try {
-  sh("go", ["build", "-trimpath", "-o", join(ctx, "openrail-agent"), "./cmd/openrail-agent"], {
+  sh("go", ["build", "-trimpath", "-o", join(ctx, "roundhouse-agent"), "./cmd/roundhouse-agent"], {
     cwd: join(ROOT, "agent"),
     env: { ...process.env, GOOS: "linux", GOARCH: arch, CGO_ENABLED: "0" },
   });
@@ -142,7 +143,7 @@ const join_ = docker(
     "--rm",
     ...mounts,
     "-e",
-    "OPENRAIL_JOIN_TOKEN",
+    "ROUNDHOUSE_JOIN_TOKEN",
     NAMES.image,
     "join",
     "--url",
@@ -158,7 +159,7 @@ const join_ = docker(
     // The dev control plane is plain HTTP on a non-loopback address from the container's view.
     ...(dockerDesktop ? ["--insecure"] : []),
   ],
-  { env: { ...process.env, OPENRAIL_JOIN_TOKEN: token } },
+  { env: { ...process.env, ROUNDHOUSE_JOIN_TOKEN: token } },
 );
 if (join_.status !== 0) process.exit(1);
 

@@ -24,7 +24,7 @@ import {
   nodeJoinTokens,
   sessions,
   verifications,
-} from "@openrail/db";
+} from "@roundhouse/db";
 import { inArray, lt, type SQL } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Env } from "../env";

@@ -7,7 +7,7 @@ certs=/certs
 root=/srv/git
 
 if [ ! -f "$certs/ca.crt" ]; then
-	openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj "/CN=openrail-e2e CA" \
+	openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj "/CN=roundhouse-e2e CA" \
 		-keyout "$certs/ca.key" -out "$certs/ca.crt" 2>/dev/null
 	openssl req -newkey rsa:2048 -nodes -subj "/CN=127.0.0.1" \
 		-keyout "$certs/server.key" -out "$certs/server.csr" 2>/dev/null
@@ -17,8 +17,8 @@ if [ ! -f "$certs/ca.crt" ]; then
 	chmod 0644 "$certs"/*.crt
 fi
 
-export GIT_AUTHOR_NAME=openrail-e2e GIT_AUTHOR_EMAIL=e2e@openrail.invalid
-export GIT_COMMITTER_NAME=openrail-e2e GIT_COMMITTER_EMAIL=e2e@openrail.invalid
+export GIT_AUTHOR_NAME=roundhouse-e2e GIT_AUTHOR_EMAIL=e2e@roundhouse.invalid
+export GIT_COMMITTER_NAME=roundhouse-e2e GIT_COMMITTER_EMAIL=e2e@roundhouse.invalid
 export GIT_AUTHOR_DATE="2026-01-01T00:00:00Z" GIT_COMMITTER_DATE="2026-01-01T00:00:00Z"
 
 # publish <name> <source dir> [<sed expression for a second commit>]

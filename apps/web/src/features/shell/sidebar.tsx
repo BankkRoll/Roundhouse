@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
   KbdHint,
   Tooltip,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { KeyboardIcon, LogOutIcon, MoonIcon, SlidersHorizontalIcon, SunIcon } from "lucide-react";
 import type { ReactNode } from "react";

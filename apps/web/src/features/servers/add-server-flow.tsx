@@ -1,5 +1,5 @@
-import { JOIN_TOKEN_TTL_MS } from "@openrail/shared";
-import { Button, Spinner } from "@openrail/ui";
+import { JOIN_TOKEN_TTL_MS } from "@roundhouse/shared";
+import { Button, Spinner } from "@roundhouse/ui";
 import { Link } from "@tanstack/react-router";
 import { CircleCheckIcon, RefreshCwIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";

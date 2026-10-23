@@ -13,8 +13,8 @@ import {
   SettingsStack,
   Skeleton,
   toast,
-} from "@openrail/ui";
-import { Slider, Switch } from "@openrail/ui/controls";
+} from "@roundhouse/ui";
+import { Slider, Switch } from "@roundhouse/ui/controls";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { RocketIcon } from "lucide-react";
@@ -847,7 +847,7 @@ function PlacementSection({ config, context }: { config: ServiceConfig; context:
   const errors = Object.fromEntries(
     pairs.flatMap((pair, index) =>
       pair.key && !LABEL_KEY.test(pair.key)
-        ? [[index, "Expected a label key like region or openrail.io/gpu."]]
+        ? [[index, "Expected a label key like region or roundhouse.io/gpu."]]
         : [],
     ),
   );

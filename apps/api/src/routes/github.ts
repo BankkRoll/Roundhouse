@@ -25,8 +25,8 @@ import {
   serviceConfigs,
   services,
   workspaces,
-} from "@openrail/db";
-import { type GithubAccountType, newId } from "@openrail/shared";
+} from "@roundhouse/db";
+import { type GithubAccountType, newId } from "@roundhouse/shared";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import {
   type AppContext,
@@ -267,7 +267,7 @@ export const githubRoutes = createRouter()
       : `${GITHUB_WEB}/settings/apps/new`;
     return c.json(
       {
-        manifest: buildManifest(origin, `OpenRail ${host} ${suffix}`),
+        manifest: buildManifest(origin, `Roundhouse ${host} ${suffix}`),
         state,
         post_url: `${target}?state=${encodeURIComponent(state)}`,
       },
@@ -567,9 +567,8 @@ async function handlePush(c: AppContext, delivery: string, payload: WebhookPaylo
     // that claimed it, never another workspace's.
     const viaInstallation = r.source.github_installation_id;
     if (
-      viaInstallation
-        ? viaInstallation !== installation?.id
-        : r.workspaceId !== installation?.workspaceId
+      r.workspaceId !== installation?.workspaceId ||
+      (viaInstallation && viaInstallation !== installation.id)
     ) {
       continue;
     }

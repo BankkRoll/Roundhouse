@@ -2,7 +2,9 @@
  * The instance's GitHub App: creation through the manifest flow, sealed
  * credential storage, App JWTs (RS256 via WebCrypto), installation tokens,
  * the user-authorization check that proves who may claim an installation,
- * the few REST calls the control plane makes, and webhook signatures.
+ * the few REST calls the control plane makes, webhook signatures, and the
+ * checks that tie a service source's installation to its workspace and
+ * repository (on write, and again whenever a token is minted for it).
  *
  * GitHub hands out App private keys as PKCS#1 PEM (`BEGIN RSA PRIVATE KEY`),
  * which WebCrypto can't import; {@link pemToPkcs8} wraps it in a PKCS#8
@@ -10,11 +12,13 @@
  *
  * @module
  */
-import { type Db, instanceSettings } from "@openrail/db";
-import { fromBase64, toBase64 } from "@openrail/protocol";
-import { eq } from "drizzle-orm";
+import { type Db, githubInstallations, instanceSettings } from "@roundhouse/db";
+import { fromBase64, toBase64 } from "@roundhouse/protocol";
+import type { ServiceSource } from "@roundhouse/shared";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { type Sealed, seal, unseal } from "./crypto";
+import { ApiError } from "./errors";
 import { SettingKey } from "./settings";
 
 /** GitHub REST API origin. */
@@ -289,12 +293,18 @@ export async function githubRequest<T>(
   path: string,
   init: { method?: string; auth?: string; body?: unknown } = {},
 ): Promise<T> {
+  // SECURITY: A path not starting with "/" could move the request, and its
+  // bearer credential, to another host (`@evil.example/…`).
+  if (!path.startsWith("/")) throw new Error(`GitHub API path must start with "/": ${path}`);
   const res = await fetch(`${GITHUB_API}${path}`, {
     method: init.method ?? "GET",
+    // SECURITY: A redirect is never followed with the credential attached;
+    // the 3xx surfaces as a GithubApiError below.
+    redirect: "manual",
     headers: {
       accept: "application/vnd.github+json",
       "x-github-api-version": "2022-11-28",
-      "user-agent": "openrail",
+      "user-agent": "roundhouse",
       ...(init.auth ? { authorization: `Bearer ${init.auth}` } : {}),
       ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
     },
@@ -392,10 +402,11 @@ export async function getInstallation(
 export async function exchangeUserCode(app: GithubApp, code: string): Promise<string> {
   const res = await fetch(`${GITHUB_WEB}/login/oauth/access_token`, {
     method: "POST",
+    redirect: "manual",
     headers: {
       accept: "application/json",
       "content-type": "application/json",
-      "user-agent": "openrail",
+      "user-agent": "roundhouse",
     },
     body: JSON.stringify({ client_id: app.clientId, client_secret: app.clientSecret, code }),
   });
@@ -455,10 +466,11 @@ export async function revokeUserToken(app: GithubApp, userToken: string): Promis
       `${GITHUB_API}/applications/${encodeURIComponent(app.clientId)}/token`,
       {
         method: "DELETE",
+        redirect: "manual",
         headers: {
           accept: "application/vnd.github+json",
           "x-github-api-version": "2022-11-28",
-          "user-agent": "openrail",
+          "user-agent": "roundhouse",
           "content-type": "application/json",
           authorization: `Basic ${btoa(`${app.clientId}:${app.clientSecret}`)}`,
         },
@@ -614,4 +626,140 @@ export async function verifyWebhookSignature(
     ["verify"],
   );
   return crypto.subtle.verify("HMAC", key, hexToBytes(m[1]!), body);
+}
+
+// -----------------------------------------------------------------------------
+// Service sources
+// -----------------------------------------------------------------------------
+
+/** The installation with our `ghi_…` ID, only when `workspaceId` has claimed it. */
+function claimedInstallation(db: Db, workspaceId: string, ref: string) {
+  return db.query.githubInstallations.findFirst({
+    where: and(eq(githubInstallations.id, ref), eq(githubInstallations.workspaceId, workspaceId)),
+  });
+}
+
+/**
+ * Checks, before a service source is stored, that it may read its repository
+ * through the GitHub installation it names: the service's workspace claimed
+ * the installation, `repo_url` is a github.com repository, and the
+ * installation's repository list includes it. Sources without an
+ * installation pass unchecked.
+ *
+ * @param db - Database client.
+ * @param masterKey - Base64 master key, to unseal the App.
+ * @param workspaceId - Workspace that owns the service.
+ * @param source - The source being written.
+ * @throws {ApiError} 400 `installation_not_in_workspace`, 400
+ *   `repository_not_in_installation`, 400 `github_not_configured`, or 502
+ *   `upstream_error` when GitHub can't answer.
+ */
+export async function assertSourceInstallation(
+  db: Db,
+  masterKey: string,
+  workspaceId: string,
+  source: ServiceSource,
+): Promise<void> {
+  if (source.type !== "git" || !source.github_installation_id) return;
+  const installation = await claimedInstallation(db, workspaceId, source.github_installation_id);
+  if (!installation) {
+    throw new ApiError(
+      400,
+      "installation_not_in_workspace",
+      "The GitHub installation is not connected to this workspace",
+    );
+  }
+  const fullName = githubFullName(source.repo_url);
+  if (!fullName) {
+    throw new ApiError(
+      400,
+      "repository_not_in_installation",
+      "A GitHub installation only grants access to https://github.com/<owner>/<repo> repositories",
+    );
+  }
+  const app = await loadGithubApp(db, masterKey);
+  if (!app) throw new ApiError(400, "github_not_configured", "No GitHub App is configured");
+  let repos: GithubRepo[];
+  try {
+    const { token } = await installationToken(app, installation.installationId, {
+      permissions: { metadata: "read" },
+    });
+    repos = await listInstallationRepositories(token);
+  } catch (err) {
+    if (!(err instanceof GithubApiError)) throw err;
+    // 403/404: the installation was suspended or removed on GitHub's side.
+    if (err.status === 403 || err.status === 404) {
+      throw new ApiError(
+        400,
+        "repository_not_in_installation",
+        "The GitHub installation is suspended or no longer exists",
+      );
+    }
+    throw new ApiError(502, "upstream_error", "GitHub could not be asked about repository access");
+  }
+  const wanted = fullName.toLowerCase();
+  if (!repos.some((r) => r.full_name.toLowerCase() === wanted)) {
+    throw new ApiError(
+      400,
+      "repository_not_in_installation",
+      `The GitHub installation cannot access ${fullName}`,
+    );
+  }
+}
+
+/** A service's GitHub installation can no longer be used for its repository. */
+export class InstallationAccessError extends Error {
+  /** @param message - Why, safe to show as a deployment failure reason. */
+  constructor(message: string) {
+    super(message);
+    this.name = "InstallationAccessError";
+  }
+}
+
+/**
+ * Mints an installation token for one service's repository, scoped to that
+ * single repository and the given permissions.
+ *
+ * SECURITY: The installation is re-checked against the service's workspace
+ * here, not just when the source was written, so an installation released or
+ * moved to another workspace since stops yielding tokens. Repositories off
+ * github.com never get credentials.
+ *
+ * @param db - Database client.
+ * @param masterKey - Base64 master key, to unseal the App.
+ * @param input - The service's workspace, its source's installation (our
+ *   `ghi_…` ID) and repository URL, and the permissions the token needs.
+ * @returns The token, or `null` when the source has no installation or its
+ *   repository is not on github.com.
+ * @throws {InstallationAccessError} When the workspace no longer holds the
+ *   installation or no App is configured.
+ * @throws {GithubApiError} When GitHub refuses, e.g. the repository left the
+ *   installation.
+ */
+export async function mintRepoToken(
+  db: Db,
+  masterKey: string,
+  input: {
+    workspaceId: string;
+    installationRef: string | null;
+    repoUrl: string;
+    permissions: Record<string, string>;
+  },
+): Promise<string | null> {
+  if (!input.installationRef) return null;
+  const fullName = githubFullName(input.repoUrl);
+  if (!fullName) return null;
+  const installation = await claimedInstallation(db, input.workspaceId, input.installationRef);
+  if (!installation) {
+    throw new InstallationAccessError(
+      "The service's GitHub installation is no longer connected to its workspace",
+    );
+  }
+  const app = await loadGithubApp(db, masterKey);
+  if (!app) throw new InstallationAccessError("No GitHub App is configured");
+  const { token } = await installationToken(app, installation.installationId, {
+    repositories: [fullName.split("/")[1]!],
+    permissions: input.permissions,
+  });
+  return token;
 }

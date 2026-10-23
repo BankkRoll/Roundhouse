@@ -1,4 +1,4 @@
-import { cn } from "@openrail/ui";
+import { cn } from "@roundhouse/ui";
 import { useState } from "react";
 import { FAQ } from "../content";
 import { useMediaQuery } from "../hooks";

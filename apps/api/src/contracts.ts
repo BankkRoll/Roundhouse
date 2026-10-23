@@ -20,7 +20,7 @@
  * @module
  */
 import { createRoute, type RouteConfig, z } from "@hono/zod-openapi";
-import { type Action, type AuditAction, SERVICE_KINDS } from "@openrail/shared";
+import { type Action, type AuditAction, SERVICE_KINDS } from "@roundhouse/shared";
 import {
   ApiTokenSchema,
   body,
@@ -65,7 +65,7 @@ import {
 // -----------------------------------------------------------------------------
 
 /** OpenAPI extension key carrying a route's {@link RoutePolicy}. */
-export const POLICY_KEY = "x-openrail-policy";
+export const POLICY_KEY = "x-roundhouse-policy";
 
 /** How a route authenticates its caller. */
 export type RouteAuth =
@@ -407,7 +407,15 @@ export const listServices = defineRoute(session("services:read"), {
   },
 });
 
-/** Creates a service and its first config version in every environment. Does not deploy. */
+/**
+ * Creates a service and its first config version in every environment. Does not deploy.
+ *
+ * A git source with `github_installation_id` must name an installation the
+ * project's workspace claimed (else 400 `installation_not_in_workspace`) and
+ * a `https://github.com/<owner>/<repo>` repository that installation can read
+ * (else 400 `repository_not_in_installation`). 502 `upstream_error` when
+ * GitHub can't be asked.
+ */
 export const createService = defineRoute(session("services:manage", ["service.created"]), {
   method: "post",
   path: "/v1/projects/{projectId}/services",
@@ -415,7 +423,10 @@ export const createService = defineRoute(session("services:manage", ["service.cr
   summary: "Create a service",
   security: sessionAuth,
   request: { params: ProjectParams, ...body(CreateServiceBody) },
-  responses: { 201: json(CreatedServiceSchema, "Created"), ...errors(400, 401, 403, 404, 409) },
+  responses: {
+    201: json(CreatedServiceSchema, "Created"),
+    ...errors(400, 401, 403, 404, 409, 502),
+  },
 });
 
 /** A service's metadata. Config is per environment; see {@link getServiceConfig}. */
@@ -431,7 +442,9 @@ export const getService = defineRoute(session("services:read"), {
 
 /**
  * Updates metadata and/or applies a new config version for one environment.
- * A config change takes effect on the next deployment.
+ * A config change takes effect on the next deployment. A new `source` is
+ * checked like on {@link createService} (400 `installation_not_in_workspace`,
+ * 400 `repository_not_in_installation`, 502 `upstream_error`).
  */
 export const updateService = defineRoute(session("services:manage", ["service.updated"]), {
   method: "patch",
@@ -440,7 +453,7 @@ export const updateService = defineRoute(session("services:manage", ["service.up
   summary: "Update a service or its config",
   security: sessionAuth,
   request: { params: ServiceParams, ...body(UpdateServiceBody) },
-  responses: { 200: json(UpdatedServiceSchema), ...errors(400, 401, 403, 404, 409) },
+  responses: { 200: json(UpdatedServiceSchema), ...errors(400, 401, 403, 404, 409, 502) },
 });
 
 /** Soft-deletes a service and removes its workloads from every node. */
@@ -517,8 +530,8 @@ export const revealServiceVariables = defineRoute(
 /**
  * Resolves a service's environment the way a deployment does: built-ins,
  * then its own variables with every `${{…}}` substituted, through the same
- * `resolveVariables`. Deployment built-ins (`OPENRAIL_DEPLOYMENT_ID`,
- * `OPENRAIL_GIT_COMMIT_SHA`) come from the service's live deployment, and are
+ * `resolveVariables`. Deployment built-ins (`ROUNDHOUSE_DEPLOYMENT_ID`,
+ * `ROUNDHOUSE_GIT_COMMIT_SHA`) come from the service's live deployment, and are
  * absent without one. Plaintext, secrets included, so it needs
  * `variables:reveal` and is audited with the keys. Unknown references and
  * cycles are a 400 `invalid_reference` with one detail per problem.
@@ -922,7 +935,7 @@ export const ProjectRealtimeQuery = z.object({
  * A browser can't read the status of a refused upgrade, so a missing or
  * expired session, a lost membership and an unknown project are reported by
  * accepting the socket and closing it at once with `REALTIME_CLOSE_CODES`
- * 4401, 4403 or 4404 (from `@openrail/shared`). The session (or token) and
+ * 4401, 4403 or 4404 (from `@roundhouse/shared`). The session (or token) and
  * membership are re-checked every minute while connected, and the socket is
  * closed the same way when either lapses. Only a non-upgrade request (426)
  * and a cross-origin browser upgrade (403) are refused over HTTP.

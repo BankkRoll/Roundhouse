@@ -1,4 +1,4 @@
-import { can, type Role } from "@openrail/shared";
+import { can, type Role } from "@roundhouse/shared";
 import { describe, expect, it, vi } from "vitest";
 import { buildCommands } from "./commands";
 import { activeNavId, NAV_ITEMS } from "./nav";

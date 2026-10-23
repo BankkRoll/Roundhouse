@@ -13,7 +13,7 @@
         "image": "127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab",
         "registry_auth": {
           "server": "127.0.0.1:5000",
-          "username": "openrail",
+          "username": "roundhouse",
           "password": "registry-secret"
         },
         "command": [
@@ -68,16 +68,16 @@
           "policy": "on_failure",
           "max_retries": 5
         },
-        "network": "openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "network": "roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
         "labels": {
-          "openrail.service_name": "api",
+          "roundhouse.service_name": "api",
           "com.example.team": "platform"
         },
         "drain_s": 30,
-        "spec_hash": "40e46fe17d48ada0d383f59e04ca79b89959a4c5a13b43a98eefc7de70af94e0"
+        "spec_hash": "70bf491fb624fa86f19d7606d83efb2648545298d31b9e9003e7e049242627c7"
       },
-      "canonical": "{\"command\":[\"node\",\"server.js\"],\"deployment_id\":\"dep_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"entrypoint\":[\"/sbin/tini\",\"--\"],\"env\":{\"DATABASE_URL\":\"postgres://db:5432/app\",\"GREETING\":\"héllo 🚀\",\"PORT\":\"3000\"},\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"interval_s\":10,\"path\":\"/healthz\",\"port\":3000,\"retries\":3,\"start_period_s\":15,\"timeout_s\":3,\"type\":\"http\"},\"id\":\"wl_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"image\":\"127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab\",\"kind\":\"service\",\"labels\":{\"com.example.team\":\"platform\",\"openrail.service_name\":\"api\"},\"network\":\"openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[{\"container_port\":3000,\"protocol\":\"http\"},{\"container_port\":9229,\"protocol\":\"tcp\"}],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":0,\"resources\":{\"cpu_millis\":500,\"memory_mb\":512,\"pids\":512},\"restart\":{\"max_retries\":5,\"policy\":\"on_failure\"},\"service_id\":\"svc_01JAAAAAAAAAAAAAAAAAAAAAAA\"}",
-      "spec_hash": "40e46fe17d48ada0d383f59e04ca79b89959a4c5a13b43a98eefc7de70af94e0"
+      "canonical": "{\"command\":[\"node\",\"server.js\"],\"deployment_id\":\"dep_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"entrypoint\":[\"/sbin/tini\",\"--\"],\"env\":{\"DATABASE_URL\":\"postgres://db:5432/app\",\"GREETING\":\"héllo 🚀\",\"PORT\":\"3000\"},\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"interval_s\":10,\"path\":\"/healthz\",\"port\":3000,\"retries\":3,\"start_period_s\":15,\"timeout_s\":3,\"type\":\"http\"},\"id\":\"wl_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"image\":\"127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab\",\"kind\":\"service\",\"labels\":{\"com.example.team\":\"platform\",\"roundhouse.service_name\":\"api\"},\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[{\"container_port\":3000,\"protocol\":\"http\"},{\"container_port\":9229,\"protocol\":\"tcp\"}],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":0,\"resources\":{\"cpu_millis\":500,\"memory_mb\":512,\"pids\":512},\"restart\":{\"max_retries\":5,\"policy\":\"on_failure\"},\"service_id\":\"svc_01JAAAAAAAAAAAAAAAAAAAAAAA\"}",
+      "spec_hash": "70bf491fb624fa86f19d7606d83efb2648545298d31b9e9003e7e049242627c7"
     },
     {
       "name": "minimal",
@@ -103,13 +103,13 @@
           "policy": "always",
           "max_retries": 0
         },
-        "network": "openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "network": "roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
         "labels": {},
         "drain_s": 0,
-        "spec_hash": "9a2da062fda192a021456351551230b09063f9cd3a2e40ec6088f93ad5978bb9"
+        "spec_hash": "26a254aae569f331ed16759bc99e0f1f41e5c4b78c28086209c037907db66710"
       },
-      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"env\":{},\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"id\":\"wl_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{},\"network\":\"openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
-      "spec_hash": "9a2da062fda192a021456351551230b09063f9cd3a2e40ec6088f93ad5978bb9"
+      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"env\":{},\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"id\":\"wl_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{},\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
+      "spec_hash": "26a254aae569f331ed16759bc99e0f1f41e5c4b78c28086209c037907db66710"
     },
     {
       "name": "escaping",
@@ -151,16 +151,16 @@
           "policy": "always",
           "max_retries": 0
         },
-        "network": "openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "network": "roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA",
         "labels": {
           "x.unicode": "café",
           "a.empty": ""
         },
         "drain_s": 0,
-        "spec_hash": "215fd5ea8d39bb038ae84111492a17e3b7dac8644545daa40b54ee5eff1c021a"
+        "spec_hash": "533c74daa8ccd05b1548464f675de2d61689de6b1d05b46fcdc9724aeba61f0a"
       },
-      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"env\":{\"CONTROL\":\"tab\\u0009here\\u000anew\\u0001line\\u001f\",\"DEL\":\"\",\"HTML\":\"<script>&amp;</script>\",\"QUOTES\":\"say \\\"hi\\\" \\\\ bye\",\"SEPARATORS\":\"line para end\",\"UNICODE\":\"日本語 ñ 🚀  \",\"Z_UPPER\":\"sorted before lowercase\",\"a_lower\":\"sorted after uppercase\"},\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"interval_s\":1,\"port\":5432,\"retries\":0,\"start_period_s\":0,\"timeout_s\":1,\"type\":\"tcp\"},\"id\":\"wl_01JCCCCCCCCCCCCCCCCCCCCCCC\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{\"a.empty\":\"\",\"x.unicode\":\"café\"},\"network\":\"openrail-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
-      "spec_hash": "215fd5ea8d39bb038ae84111492a17e3b7dac8644545daa40b54ee5eff1c021a"
+      "canonical": "{\"deployment_id\":\"dep_01JBBBBBBBBBBBBBBBBBBBBBBB\",\"env\":{\"CONTROL\":\"tab\\u0009here\\u000anew\\u0001line\\u001f\",\"DEL\":\"\",\"HTML\":\"<script>&amp;</script>\",\"QUOTES\":\"say \\\"hi\\\" \\\\ bye\",\"SEPARATORS\":\"line para end\",\"UNICODE\":\"日本語 ñ 🚀  \",\"Z_UPPER\":\"sorted before lowercase\",\"a_lower\":\"sorted after uppercase\"},\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"healthcheck\":{\"interval_s\":1,\"port\":5432,\"retries\":0,\"start_period_s\":0,\"timeout_s\":1,\"type\":\"tcp\"},\"id\":\"wl_01JCCCCCCCCCCCCCCCCCCCCCCC\",\"image\":\"nginx:1.27\",\"kind\":\"service\",\"labels\":{\"a.empty\":\"\",\"x.unicode\":\"café\"},\"network\":\"roundhouse-prj_01JAAAAAAAAAAAAAAAAAAAAAAA-env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"ports\":[],\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"replica\":2,\"resources\":{\"cpu_millis\":10,\"memory_mb\":16,\"pids\":16},\"restart\":{\"max_retries\":0,\"policy\":\"always\"},\"service_id\":\"svc_01JBBBBBBBBBBBBBBBBBBBBBBB\"}",
+      "spec_hash": "533c74daa8ccd05b1548464f675de2d61689de6b1d05b46fcdc9724aeba61f0a"
     },
     {
       "name": "system",
@@ -200,13 +200,13 @@
           "policy": "always",
           "max_retries": 0
         },
-        "network": "openrail-system",
+        "network": "roundhouse-system",
         "labels": {},
         "drain_s": 0,
-        "spec_hash": "3acd6bff51a322076d6011439d65426460631cdb95dd72abcef2bd4c24f85327"
+        "spec_hash": "21e05421175017aadf37ee5f534091e96e68132dc77ceae640acc246765c4156"
       },
-      "canonical": "{\"env\":{\"REGISTRY_HTTP_ADDR\":\"0.0.0.0:5000\"},\"healthcheck\":{\"interval_s\":30,\"port\":5000,\"retries\":3,\"start_period_s\":0,\"timeout_s\":5,\"type\":\"none\"},\"id\":\"sys_registry\",\"image\":\"registry:3\",\"kind\":\"system\",\"labels\":{},\"network\":\"openrail-system\",\"ports\":[{\"container_port\":5000,\"protocol\":\"tcp\"}],\"replica\":0,\"resources\":{\"cpu_millis\":1000,\"memory_mb\":256,\"pids\":256},\"restart\":{\"max_retries\":0,\"policy\":\"always\"}}",
-      "spec_hash": "3acd6bff51a322076d6011439d65426460631cdb95dd72abcef2bd4c24f85327"
+      "canonical": "{\"env\":{\"REGISTRY_HTTP_ADDR\":\"0.0.0.0:5000\"},\"healthcheck\":{\"interval_s\":30,\"port\":5000,\"retries\":3,\"start_period_s\":0,\"timeout_s\":5,\"type\":\"none\"},\"id\":\"sys_registry\",\"image\":\"registry:3\",\"kind\":\"system\",\"labels\":{},\"network\":\"roundhouse-system\",\"ports\":[{\"container_port\":5000,\"protocol\":\"tcp\"}],\"replica\":0,\"resources\":{\"cpu_millis\":1000,\"memory_mb\":256,\"pids\":256},\"restart\":{\"max_retries\":0,\"policy\":\"always\"}}",
+      "spec_hash": "21e05421175017aadf37ee5f534091e96e68132dc77ceae640acc246765c4156"
     }
   ]
 }

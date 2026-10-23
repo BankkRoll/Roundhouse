@@ -1,17 +1,24 @@
 /**
  * The GitHub App: PEM conversion and RS256 JWTs, the manifest and install
  * callbacks, repository listing, and the webhook (signature, replay
- * protection, installations, push → deploy with commit statuses). GitHub's
+ * protection, installations, push → deploy with commit statuses), and the
+ * checks that keep installation tokens to their workspace, their one
+ * repository and github.com (source writes, minting, redirects). GitHub's
  * API is replaced by a fetch stub; webhook bodies are recorded payloads.
  */
 import { env, introspectWorkflow } from "cloudflare:test";
-import { createDb } from "@openrail/db";
-import { CREDENTIAL_FRAME_TTL_MS, fromBase64, toBase64 } from "@openrail/protocol";
+import { createDb } from "@roundhouse/db";
+import { CREDENTIAL_FRAME_TTL_MS, fromBase64, toBase64 } from "@roundhouse/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveBranch } from "../src/lib/git";
 import {
   appJwt,
   GITHUB_APP_PERMISSIONS,
+  GithubApiError,
+  githubRequest,
+  InstallationAccessError,
   importRsaPrivateKey,
+  mintRepoToken,
   pemToPkcs8,
   storeGithubApp,
 } from "../src/lib/github";
@@ -21,9 +28,11 @@ import ping from "./fixtures/github/ping.json";
 import push from "./fixtures/github/push.json";
 import { addMember, type Client, call, eventually, install, joinNode } from "./helpers";
 import {
+  COMMIT_SHA,
   connectWorkloadAgent,
   createProject,
   createService,
+  deploy,
   waitForStatus,
 } from "./pipeline-helpers";
 
@@ -88,9 +97,9 @@ async function seedApp() {
   const k = await testKeys();
   await storeGithubApp(createDb(env.DB), env.MASTER_KEY!, {
     id: APP_ID,
-    slug: "openrail-cp-a1b2c3",
-    name: "OpenRail cp a1b2c3",
-    html_url: "https://github.com/apps/openrail-cp-a1b2c3",
+    slug: "roundhouse-cp-a1b2c3",
+    name: "Roundhouse cp a1b2c3",
+    html_url: "https://github.com/apps/roundhouse-cp-a1b2c3",
     owner: { login: "acme" },
     client_id: "Iv23liAbCdEfGh123456",
     client_secret: "client-secret",
@@ -113,9 +122,12 @@ interface Recorded {
 const realFetch = globalThis.fetch;
 let recorded: Recorded[] = [];
 let routes: [RegExp, (req: Request, body: unknown) => Response][] = [];
+/** `owner/repo` names the stubbed installation can read. */
+let installationRepos: string[] = ["acme/api"];
 
 function stubGithub(extra: [RegExp, (req: Request, body: unknown) => Response][] = []) {
   routes = [
+    ...extra,
     [
       /^POST https:\/\/api\.github\.com\/app\/installations\/\d+\/access_tokens$/,
       () =>
@@ -125,10 +137,23 @@ function stubGithub(extra: [RegExp, (req: Request, body: unknown) => Response][]
         ),
     ],
     [
+      /^GET https:\/\/api\.github\.com\/installation\/repositories\?per_page=100&page=1$/,
+      () =>
+        Response.json({
+          total_count: installationRepos.length,
+          repositories: installationRepos.map((full_name, i) => ({
+            id: 1000 + i,
+            full_name,
+            private: true,
+            default_branch: "main",
+            clone_url: `https://github.com/${full_name}.git`,
+          })),
+        }),
+    ],
+    [
       /^POST https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/statuses\/[a-f0-9]+$/,
       () => Response.json({}, { status: 201 }),
     ],
-    ...extra,
   ];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = new Request(input, init);
@@ -150,6 +175,7 @@ function stubGithub(extra: [RegExp, (req: Request, body: unknown) => Response][]
 let introspector: Awaited<ReturnType<typeof introspectWorkflow>> | undefined;
 beforeEach(async () => {
   recorded = [];
+  installationRepos = ["acme/api"];
   introspector = await introspectWorkflow(env.DEPLOY_WORKFLOW);
 });
 afterEach(async () => {
@@ -370,7 +396,7 @@ describe("push → deploy", () => {
     ]);
     expect(statuses[0]!.url).toBe(`https://api.github.com/repos/acme/api/statuses/${push.after}`);
     expect(statuses[0]!.authorization).toBe("Bearer ghs_installationtoken123");
-    expect((statuses[1]!.body as { context: string }).context).toBe("openrail/api/production");
+    expect((statuses[1]!.body as { context: string }).context).toBe("roundhouse/api/production");
     const tokenRequests = recorded.filter((r) => r.url.endsWith("/access_tokens"));
     expect(tokenRequests[0]!.authorization).toMatch(/^Bearer [\w-]+\.[\w-]+\.[\w-]+$/);
     expect(tokenRequests.map((r) => r.body)).toContainEqual({
@@ -487,9 +513,9 @@ describe("App setup", () => {
           Response.json(
             {
               id: APP_ID,
-              slug: "openrail-cp-a1b2c3",
-              name: "OpenRail cp a1b2c3",
-              html_url: "https://github.com/apps/openrail-cp-a1b2c3",
+              slug: "roundhouse-cp-a1b2c3",
+              name: "Roundhouse cp a1b2c3",
+              html_url: "https://github.com/apps/roundhouse-cp-a1b2c3",
               owner: { login: "mara" },
               client_id: "Iv23li",
               client_secret: "cs-secret",
@@ -511,7 +537,7 @@ describe("App setup", () => {
     );
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toMatch(
-      /^https:\/\/github\.com\/apps\/openrail-cp-a1b2c3\/installations\/new\?state=/,
+      /^https:\/\/github\.com\/apps\/roundhouse-cp-a1b2c3\/installations\/new\?state=/,
     );
     const stored = await env.DB.prepare(
       "SELECT value FROM instance_settings WHERE key = 'github_app'",
@@ -530,7 +556,7 @@ describe("App setup", () => {
       app: { slug: string; install_url: string };
     }>(`/v1/github/status?workspace_id=${workspaceId}`);
     expect(status.body.configured).toBe(true);
-    expect(status.body.app.slug).toBe("openrail-cp-a1b2c3");
+    expect(status.body.app.slug).toBe("roundhouse-cp-a1b2c3");
   });
 });
 
@@ -836,5 +862,262 @@ describe("repositories", () => {
     ).toBe(404);
     const viewerStatus = await viewer.json(`/v1/github/status?workspace_id=${workspaceId}`);
     expect(viewerStatus.status).toBe(200);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Installation tokens: source checks, minting, redirects
+// -----------------------------------------------------------------------------
+
+function privateSource(ghi: string, repoUrl = "https://github.com/acme/api") {
+  return {
+    type: "git",
+    repo_url: repoUrl,
+    branch: "main",
+    root_dir: ".",
+    github_installation_id: ghi,
+  };
+}
+
+function postService(c: Client, projectId: string, source: Record<string, unknown>) {
+  return c.json<{ error: { code: string } }>(`/v1/projects/${projectId}/services`, {
+    method: "POST",
+    json: { name: "api", source },
+  });
+}
+
+async function otherWorkspace(owner: Client): Promise<string> {
+  const res = await owner.json<{ id: string }>("/v1/workspaces", {
+    method: "POST",
+    json: { name: "Other" },
+  });
+  return res.body.id;
+}
+
+const tokenRequests = () => recorded.filter((r) => r.url.endsWith("/access_tokens"));
+
+describe("service sources through an installation", () => {
+  it("accepts a github.com repository the workspace's installation can read", async () => {
+    stubGithub();
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const ghi = await claimInstallation(workspaceId);
+    const project = await createProject(owner, workspaceId);
+    const res = await postService(
+      owner,
+      project.id,
+      privateSource(ghi, "https://github.com/ACME/api.git"),
+    );
+    expect(res.status).toBe(201);
+    const listing = recorded.find((r) => r.url.includes("/installation/repositories"));
+    expect(listing?.authorization).toBe("Bearer ghs_installationtoken123");
+  });
+
+  it("rejects an installation another workspace claimed, or none did, on create and update", async () => {
+    stubGithub();
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const ghi = await claimInstallation(await otherWorkspace(owner));
+    const project = await createProject(owner, workspaceId);
+
+    const created = await postService(owner, project.id, privateSource(ghi));
+    expect(created.status).toBe(400);
+    expect(created.body.error.code).toBe("installation_not_in_workspace");
+
+    const svc = await createService(owner, project.id, {
+      name: "public",
+      source: {
+        type: "git",
+        repo_url: "https://github.com/acme/api",
+        branch: "main",
+        root_dir: ".",
+      },
+    });
+    const patch = () =>
+      owner.json<{ error: { code: string } }>(`/v1/services/${svc.service.id}`, {
+        method: "PATCH",
+        json: { environment_id: project.environments[0]!.id, source: privateSource(ghi) },
+      });
+    const patched = await patch();
+    expect(patched.status).toBe(400);
+    expect(patched.body.error.code).toBe("installation_not_in_workspace");
+
+    await env.DB.prepare("UPDATE github_installations SET workspace_id = NULL").run();
+    expect((await patch()).body.error.code).toBe("installation_not_in_workspace");
+    expect(tokenRequests()).toEqual([]);
+  });
+
+  it("rejects a repository off github.com without minting anything", async () => {
+    stubGithub();
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const ghi = await claimInstallation(workspaceId);
+    const project = await createProject(owner, workspaceId);
+    for (const url of [
+      "https://gitlab.com/acme/api",
+      "https://github.com.evil.example/acme/api",
+      "https://evil.example/github.com/acme/api",
+      "https://github.com/acme/api/tree/main",
+    ]) {
+      const res = await postService(owner, project.id, privateSource(ghi, url));
+      expect(res.status, url).toBe(400);
+      expect(res.body.error.code, url).toBe("repository_not_in_installation");
+    }
+    expect(tokenRequests()).toEqual([]);
+  });
+
+  it("rejects a repository the installation can't read, or a suspended installation", async () => {
+    installationRepos = ["acme/web", "other/api"];
+    stubGithub();
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const ghi = await claimInstallation(workspaceId);
+    const project = await createProject(owner, workspaceId);
+    const res = await postService(owner, project.id, privateSource(ghi));
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("repository_not_in_installation");
+
+    stubGithub([
+      [
+        /^POST https:\/\/api\.github\.com\/app\/installations\/\d+\/access_tokens$/,
+        () => Response.json({ message: "This installation has been suspended" }, { status: 403 }),
+      ],
+    ]);
+    const suspended = await postService(owner, project.id, privateSource(ghi));
+    expect(suspended.status).toBe(400);
+    expect(suspended.body.error.code).toBe("repository_not_in_installation");
+  });
+});
+
+describe("minting installation tokens", () => {
+  it("scopes a token to the one repository and re-checks the workspace every time", async () => {
+    stubGithub();
+    const { workspaceId } = await install();
+    await seedApp();
+    const ghi = await claimInstallation(workspaceId);
+    const db = createDb(env.DB);
+    const mint = (over: Partial<Parameters<typeof mintRepoToken>[2]> = {}) =>
+      mintRepoToken(db, env.MASTER_KEY!, {
+        workspaceId,
+        installationRef: ghi,
+        repoUrl: "https://github.com/acme/api.git",
+        permissions: { contents: "read" },
+        ...over,
+      });
+
+    expect(await mint()).toBe("ghs_installationtoken123");
+    expect(tokenRequests().map((r) => r.body)).toEqual([
+      { repositories: ["api"], permissions: { contents: "read" } },
+    ]);
+    expect(await mint({ repoUrl: "https://gitlab.com/acme/api" })).toBeNull();
+    expect(await mint({ installationRef: null })).toBeNull();
+
+    await expect(mint({ workspaceId: "ws_someoneelse" })).rejects.toBeInstanceOf(
+      InstallationAccessError,
+    );
+    await env.DB.prepare("UPDATE github_installations SET workspace_id = NULL").run();
+    await expect(mint()).rejects.toBeInstanceOf(InstallationAccessError);
+    await env.DB.prepare("DELETE FROM github_installations").run();
+    await expect(mint()).rejects.toBeInstanceOf(InstallationAccessError);
+    expect(tokenRequests()).toHaveLength(1);
+  });
+
+  it("fails deployments once the installation left the service's workspace", async () => {
+    stubGithub();
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const ghi = await claimInstallation(workspaceId);
+    const agent = await connectWorkloadAgent(await joinNode(owner, workspaceId));
+    const project = await createProject(owner, workspaceId);
+    const svc = await createService(owner, project.id, { name: "api", source: privateSource(ghi) });
+    const envId = project.environments.find((e) => e.kind === "production")!.id;
+    await env.DB.prepare("UPDATE github_installations SET workspace_id = ?")
+      .bind(await otherWorkspace(owner))
+      .run();
+    recorded = [];
+
+    // With a commit the token is for the build job; without one, for resolving the branch.
+    const built = await deploy(owner, svc.service.id, envId, { commit_sha: COMMIT_SHA });
+    const failedBuild = await waitForStatus(owner, built.id, ["active", "failed"]);
+    expect(failedBuild.failure_reason).toMatch(/no longer connected to its workspace/);
+    const resolved = await deploy(owner, svc.service.id, envId);
+    const failedResolve = await waitForStatus(owner, resolved.id, ["active", "failed"]);
+    expect(failedResolve.failure_reason).toMatch(/no longer connected to its workspace/);
+
+    expect(agent.received.some((m) => m.type === "build_job")).toBe(false);
+    expect(tokenRequests()).toEqual([]);
+  });
+});
+
+describe("credentials and redirects", () => {
+  const pkt = (line: string) => `${(line.length + 4).toString(16).padStart(4, "0")}${line}`;
+
+  function stubFetch(answer: () => Response) {
+    const seen: { url: string; authorization: string | null; redirect: unknown }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      seen.push({
+        url: req.url,
+        authorization: req.headers.get("authorization"),
+        redirect: init?.redirect,
+      });
+      return answer();
+    }) as typeof fetch;
+    return seen;
+  }
+
+  it("resolveBranch sends a token only to https://github.com", async () => {
+    const seen = stubFetch(() => new Response(`${pkt(`${COMMIT_SHA} refs/heads/main\n`)}0000`));
+    expect(await resolveBranch("https://github.com/acme/api", "main", "ghs_tok")).toBe(COMMIT_SHA);
+    expect(seen).toEqual([
+      {
+        url: "https://github.com/acme/api/info/refs?service=git-upload-pack",
+        authorization: `Basic ${btoa("x-access-token:ghs_tok")}`,
+        redirect: "manual",
+      },
+    ]);
+    for (const url of [
+      "https://gitlab.com/acme/api",
+      "https://github.com.evil.example/acme/api",
+      "https://evil.example@github.com/acme/api",
+      "http://github.com/acme/api",
+    ]) {
+      await expect(resolveBranch(url, "main", "ghs_tok"), url).rejects.toThrow(/refusing/);
+    }
+    expect(seen).toHaveLength(1);
+
+    expect(await resolveBranch("https://gitlab.com/acme/api", "main")).toBe(COMMIT_SHA);
+    expect(seen[1]).toMatchObject({ authorization: null, redirect: "manual" });
+  });
+
+  it("resolveBranch treats a redirect as an error instead of following it", async () => {
+    const seen = stubFetch(
+      () => new Response(null, { status: 302, headers: { location: "https://evil.example/x" } }),
+    );
+    await expect(resolveBranch("https://github.com/acme/api", "main", "ghs_tok")).rejects.toThrow(
+      /redirect/,
+    );
+    await expect(resolveBranch("https://gitlab.com/acme/api", "main")).rejects.toThrow(/redirect/);
+    expect(seen.map((s) => new URL(s.url).host)).toEqual(["github.com", "gitlab.com"]);
+  });
+
+  it("GitHub API calls stay on api.github.com and don't follow redirects", async () => {
+    const seen = stubFetch(
+      () => new Response(null, { status: 307, headers: { location: "https://evil.example/x" } }),
+    );
+    const err = await githubRequest("/installation/repositories", { auth: "ghs_tok" }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(GithubApiError);
+    expect((err as GithubApiError).status).toBe(307);
+    expect(seen).toEqual([
+      {
+        url: "https://api.github.com/installation/repositories",
+        authorization: "Bearer ghs_tok",
+        redirect: "manual",
+      },
+    ]);
+    await expect(githubRequest("@evil.example/steal", { auth: "ghs_tok" })).rejects.toThrow();
+    expect(seen).toHaveLength(1);
   });
 });

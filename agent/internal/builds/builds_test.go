@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/leaktest"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/leaktest"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // fakeBuilder blocks each build until release is closed or ctx ends.

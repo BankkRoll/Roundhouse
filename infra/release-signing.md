@@ -2,12 +2,12 @@
 
 Every `agent-v*` release publishes:
 
-| File                         | Purpose                                         |
-| ---------------------------- | ----------------------------------------------- |
-| `openrail-agent-linux-amd64` | Static binary (`CGO_ENABLED=0`)                 |
-| `openrail-agent-linux-arm64` | Static binary (`CGO_ENABLED=0`)                 |
-| `SHA256SUMS`                 | Signed version line plus `sha256sum` output     |
-| `SHA256SUMS.sig`             | Raw 64-byte Ed25519 signature over `SHA256SUMS` |
+| File                           | Purpose                                         |
+| ------------------------------ | ----------------------------------------------- |
+| `roundhouse-agent-linux-amd64` | Static binary (`CGO_ENABLED=0`)                 |
+| `roundhouse-agent-linux-arm64` | Static binary (`CGO_ENABLED=0`)                 |
+| `SHA256SUMS`                   | Signed version line plus `sha256sum` output     |
+| `SHA256SUMS.sig`               | Raw 64-byte Ed25519 signature over `SHA256SUMS` |
 
 The release also carries a SLSA build provenance attestation for the binaries
 and `SHA256SUMS`, produced by `actions/attest-build-provenance`.
@@ -28,8 +28,8 @@ host or a tampered GitHub release asset cannot produce a valid signature.
 
 ```text
 # version: agent-v0.1.0
-3b1f…  openrail-agent-linux-amd64
-9c0e…  openrail-agent-linux-arm64
+3b1f…  roundhouse-agent-linux-amd64
+9c0e…  roundhouse-agent-linux-arm64
 ```
 
 The line is covered by the signature, so a mirror cannot pass off an older,
@@ -41,7 +41,7 @@ it refuses any `SHA256SUMS` without one. GNU `sha256sum -c SHA256SUMS` skips
 Provenance is a second, independent check for people who want it:
 
 ```sh
-gh attestation verify openrail-agent-linux-amd64 --repo BankkRoll/Open-Rail
+gh attestation verify roundhouse-agent-linux-amd64 --repo BankkRoll/Roundhouse
 ```
 
 ## Generating the key

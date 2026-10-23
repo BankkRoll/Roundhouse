@@ -51,7 +51,7 @@ async function setup() {
   await putVars(owner, `/v1/services/${web.service.id}/variables?environment_id=${envId}`, [
     {
       key: "DATABASE_URL",
-      value: `postgres://app:${ref("db.PASSWORD")}@${ref("db.OPENRAIL_PRIVATE_DOMAIN")}:5432/${ref("shared.DB_NAME")}`,
+      value: `postgres://app:${ref("db.PASSWORD")}@${ref("db.ROUNDHOUSE_PRIVATE_DOMAIN")}:5432/${ref("shared.DB_NAME")}`,
     },
     { key: "API_KEY", value: "sk_live_123", is_secret: true },
     { key: "LISTEN", value: `0.0.0.0:${ref("PORT")}` },
@@ -77,14 +77,14 @@ describe("resolving a service's environment", () => {
       API_KEY: "sk_live_123",
       LISTEN: "0.0.0.0:8080",
       LITERAL: ref("not a ref"),
-      OPENRAIL_ENVIRONMENT: "production",
-      OPENRAIL_SERVICE_NAME: "web",
+      ROUNDHOUSE_ENVIRONMENT: "production",
+      ROUNDHOUSE_SERVICE_NAME: "web",
       PORT: "8080",
     });
     expect(byKey.DATABASE_URL).toMatch(/^postgres:\/\/app:hunter2-long-secret@db\..+:5432\/shop$/);
-    expect(byKey.DATABASE_URL).toContain(byKey.OPENRAIL_PRIVATE_DOMAIN!.replace(/^web/, "db"));
+    expect(byKey.DATABASE_URL).toContain(byKey.ROUNDHOUSE_PRIVATE_DOMAIN!.replace(/^web/, "db"));
     // Nothing has been deployed, so there are no deployment built-ins.
-    expect(byKey).not.toHaveProperty("OPENRAIL_DEPLOYMENT_ID");
+    expect(byKey).not.toHaveProperty("ROUNDHOUSE_DEPLOYMENT_ID");
     // Shared variables are injected only where referenced, as on deploy.
     expect(byKey).not.toHaveProperty("DB_NAME");
     const keys = res.body.variables.map((v) => v.key);
@@ -108,7 +108,7 @@ describe("resolving a service's environment", () => {
     expect(Object.fromEntries(res.body.variables.map((v) => [v.key, v.value]))).toEqual(
       workload.env,
     );
-    expect(res.body.variables).toContainEqual({ key: "OPENRAIL_DEPLOYMENT_ID", value: d.id });
+    expect(res.body.variables).toContainEqual({ key: "ROUNDHOUSE_DEPLOYMENT_ID", value: d.id });
   });
 
   it("reports unknown references and cycles per variable", async () => {

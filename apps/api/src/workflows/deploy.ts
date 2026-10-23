@@ -40,20 +40,19 @@ import {
   type Db,
   deployments,
   environments,
-  githubInstallations,
   nodes,
   placements,
   projects,
   serviceConfigs,
   services,
-} from "@openrail/db";
+} from "@roundhouse/db";
 import {
   EnvSchema,
   localImageRepository,
   MAX_WORKLOADS_PER_NODE,
   REGISTRY_LISTEN,
   WORKLOADS_PROTOCOL_VERSION,
-} from "@openrail/protocol";
+} from "@roundhouse/protocol";
 import {
   BUILD_TIMEOUT_S,
   type BuildConfig,
@@ -62,7 +61,7 @@ import {
   ROLLOUT_TIMEOUT_MS,
   type SchedulerNode,
   schedule,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
@@ -82,8 +81,8 @@ import {
   type CommitState,
   createCommitStatus,
   githubFullName,
-  installationToken,
-  loadGithubApp,
+  InstallationAccessError,
+  mintRepoToken,
 } from "../lib/github";
 import { effectiveStatus } from "../lib/nodes";
 import { resolveServiceEnvironment } from "../lib/resolve-env";
@@ -145,7 +144,7 @@ const MAX_WAKEUPS = 100;
  * Key prefix that carries build args through variable resolution, so they
  * may reference variables like any other value.
  */
-const BUILD_ARG_PREFIX = "__OPENRAIL_BUILD_ARG__";
+const BUILD_ARG_PREFIX = "__ROUNDHOUSE_BUILD_ARG__";
 
 /**
  * A service's build config as stored. `secret_build_args` is part of the
@@ -412,15 +411,14 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     const source = config.source;
     let sha = params.commit?.sha ?? null;
     if (!sha) {
-      const token = await this.repoToken(
-        db,
-        source.github_installation_id ?? null,
-        source.repo_url,
-        {
-          contents: "read",
-        },
-      );
       try {
+        const token = await this.repoToken(
+          db,
+          plan.workspaceId,
+          source.github_installation_id ?? null,
+          source.repo_url,
+          { contents: "read" },
+        );
         sha = await resolveBranch(source.repo_url, source.branch, token ?? undefined);
       } catch (err) {
         return fail(`Could not read ${source.repo_url}: ${(err as Error).message}`);
@@ -642,7 +640,15 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         >)
       : {};
     const git = plan.git!;
-    const token = await this.repoToken(db, git.installationRef, git.repoUrl, { contents: "read" });
+    let token: string | null;
+    try {
+      token = await this.repoToken(db, plan.workspaceId, git.installationRef, git.repoUrl, {
+        contents: "read",
+      });
+    } catch (err) {
+      if (err instanceof InstallationAccessError) return fail(err.message);
+      throw err;
+    }
     const builder = config?.build.builder ?? "railpack";
     const secretArgs = secretBuildArgNames(config?.build as StoredBuildConfig | undefined).filter(
       (name) => Object.hasOwn(buildArgs, name),
@@ -1058,29 +1064,23 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
   }
 
   /**
-   * Mints an installation token for a repository the service tracks through
-   * an installation, or `null` for public repositories.
+   * A token for the one repository the service tracks through an
+   * installation, or `null` for public repositories. See {@link mintRepoToken}.
    */
-  private async repoToken(
+  private repoToken(
     db: Db,
+    workspaceId: string,
     installationRef: string | null,
     repoUrl: string,
     permissions: Record<string, string>,
   ): Promise<string | null> {
-    if (!installationRef) return null;
-    const [installation] = await db
-      .select({ installationId: githubInstallations.installationId })
-      .from(githubInstallations)
-      .where(eq(githubInstallations.id, installationRef))
-      .limit(1);
-    const app = installation ? await loadGithubApp(db, this.masterKey()) : null;
-    if (!installation || !app) return null;
-    const fullName = githubFullName(repoUrl);
-    const { token } = await installationToken(app, installation.installationId, {
-      ...(fullName ? { repositories: [fullName.split("/")[1]!] } : {}),
+    if (!installationRef) return Promise.resolve(null);
+    return mintRepoToken(db, this.masterKey(), {
+      workspaceId,
+      installationRef,
+      repoUrl,
       permissions,
     });
-    return token;
   }
 
   /** Best-effort GitHub commit status; never fails the deployment. */
@@ -1095,7 +1095,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     if (!git || !fullName || !git.installationRef) return false;
     try {
       const { db } = this.lifecycle();
-      const token = await this.repoToken(db, git.installationRef, git.repoUrl, {
+      const token = await this.repoToken(db, plan.workspaceId, git.installationRef, git.repoUrl, {
         statuses: "write",
       });
       if (!token) return false;
@@ -1103,7 +1103,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         state,
         target_url: `${params.origin}/deployments/${plan.deploymentId}`,
         description,
-        context: `openrail/${plan.serviceSlug}/${plan.environmentSlug}`,
+        context: `roundhouse/${plan.serviceSlug}/${plan.environmentSlug}`,
       });
       return true;
     } catch (err) {

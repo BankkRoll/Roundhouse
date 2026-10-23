@@ -62,7 +62,7 @@ describe("landing page content", () => {
       .filter((href) => href.includes("github.com"));
     expect(external.length).toBeGreaterThan(0);
     for (const href of external) {
-      expect(href).toMatch(/^https:\/\/github\.com\/BankkRoll\/Open-Rail/);
+      expect(href).toMatch(/^https:\/\/github\.com\/BankkRoll\/Roundhouse/);
     }
   });
 

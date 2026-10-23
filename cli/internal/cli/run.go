@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/api"
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/api"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
 )
 
 func (a *App) runCmd() *cobra.Command {
@@ -21,8 +21,8 @@ func (a *App) runCmd() *cobra.Command {
 		Long: `Run a command on this machine with the linked service's variables in its
 environment, exactly as a deployment would get them: the control plane
 resolves references to other services and shared variables and adds the
-built-ins such as PORT and OPENRAIL_PRIVATE_DOMAIN (and
-OPENRAIL_DEPLOYMENT_ID and OPENRAIL_GIT_COMMIT_SHA of the live deployment,
+built-ins such as PORT and ROUNDHOUSE_PRIVATE_DOMAIN (and
+ROUNDHOUSE_DEPLOYMENT_ID and ROUNDHOUSE_GIT_COMMIT_SHA of the live deployment,
 when there is one).
 
 Resolving reveals secrets, so it needs the variables:reveal permission and is

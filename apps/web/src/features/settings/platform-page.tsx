@@ -4,7 +4,7 @@ import {
   MAX_LOG_RETENTION_DAYS,
   PRODUCT_NAME,
   type TlsMode,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import {
   Badge,
   Button,
@@ -16,7 +16,7 @@ import {
   SettingsStack,
   Skeleton,
   toast,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { ExternalLinkIcon, ShieldIcon } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { ErrorState } from "../../components/error-state";

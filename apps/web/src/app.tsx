@@ -1,4 +1,4 @@
-import { Toaster } from "@openrail/ui";
+import { Toaster } from "@roundhouse/ui";
 import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import type { AppRouter } from "./router";

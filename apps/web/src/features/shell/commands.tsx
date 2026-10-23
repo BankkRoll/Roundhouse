@@ -1,5 +1,5 @@
-import type { Action } from "@openrail/shared";
-import type { PaletteCommand } from "@openrail/ui";
+import type { Action } from "@roundhouse/shared";
+import type { PaletteCommand } from "@roundhouse/ui";
 import {
   BoxIcon,
   FolderKanbanIcon,

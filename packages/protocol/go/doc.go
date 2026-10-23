@@ -1,4 +1,4 @@
-// Package protocol is the Go mirror of the OpenRail control-plane ↔ node-agent
+// Package protocol is the Go mirror of the Roundhouse control-plane ↔ node-agent
 // wire protocol defined by the zod schemas in packages/protocol/src.
 //
 // The TypeScript schemas are the source of truth. The shared JSON fixtures in

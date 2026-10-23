@@ -1,4 +1,4 @@
-import { NODE_STATUSES } from "@openrail/shared";
+import { NODE_STATUSES } from "@roundhouse/shared";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { NODE_STATUS_META, nodeStatusLabel, StatusBadge, StatusDot } from "./status";

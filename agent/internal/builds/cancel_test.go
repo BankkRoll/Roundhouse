@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/leaktest"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/leaktest"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // slowBuilder ignores cancellation until released, as a solve winding down

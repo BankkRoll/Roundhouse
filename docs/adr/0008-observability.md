@@ -3,7 +3,6 @@
 ## Status
 
 Proposed.
-
 - Date: 2026-10-22
 - Phase: 3
 - Protocol: version 5 (`metrics` frame)
@@ -15,10 +14,9 @@ Names follow the Roundhouse rename (0013, "Naming").
 ## Context
 
 Today:
-
 - **Metrics.** The agent reports node-level usage in each heartbeat (every
   10 s), and the node DO writes one Analytics Engine data point per
-  heartbeat (`METRICS`, dataset `openrail_metrics`, `indexes: [nodeId]`,
+  heartbeat (`METRICS`, dataset `roundhouse_metrics`, `indexes: [nodeId]`,
   `blobs: [nodeId, "node"]`). Nothing measures containers, and nothing
   queries the dataset.
 - **Logs** are NDJSON chunks in R2, indexed in `log_chunks` by service,
@@ -27,7 +25,6 @@ Today:
 - **Alerts.** There are none.
 
 Facts (sources at the end):
-
 - **Analytics Engine writes.** `writeDataPoint` takes 20 blobs, 20 doubles
   and 1 index (≤ 96 bytes). Blobs total ≤ 16 KB. At most 250 data points
   per invocation. Data is kept 3 months.
@@ -56,15 +53,15 @@ stats stream per container. It finds the cgroup through
 `/proc/<init pid>/cgroup` and supports both the `systemd` and `cgroupfs`
 drivers.
 
-| Field                 | Source                                                | Sent as                         |
-| --------------------- | ----------------------------------------------------- | ------------------------------- |
-| `cpu_millis`          | Δ`cpu.stat usage_usec` / Δt                            | average millicores over the interval |
-| `mem_bytes`           | `memory.current` − `memory.stat inactive_file`         | working set at sample time      |
-| `mem_limit_bytes`     | `memory.max` (`max` → node total)                      |                                 |
-| `net_rx_bytes`, `net_tx_bytes` | `/proc/<pid>/net/dev`, every interface except `lo`, Δ | bytes in the interval      |
-| `disk_read_bytes`, `disk_write_bytes` | `io.stat rbytes/wbytes`, summed, Δ    | bytes in the interval           |
-| `pids`                | `pids.current`                                        |                                 |
-| `restarts`            | agent's restart counter, Δ                            |                                 |
+| Field                                 | Source                                                | Sent as                              |
+| ------------------------------------- | ----------------------------------------------------- | ------------------------------------ |
+| `cpu_millis`                          | Δ`cpu.stat usage_usec` / Δt                           | average millicores over the interval |
+| `mem_bytes`                           | `memory.current` − `memory.stat inactive_file`        | working set at sample time           |
+| `mem_limit_bytes`                     | `memory.max` (`max` → node total)                     |                                      |
+| `net_rx_bytes`, `net_tx_bytes`        | `/proc/<pid>/net/dev`, every interface except `lo`, Δ | bytes in the interval                |
+| `disk_read_bytes`, `disk_write_bytes` | `io.stat rbytes/wbytes`, summed, Δ                    | bytes in the interval                |
+| `pids`                                | `pids.current`                                        |                                      |
+| `restarts`                            | agent's restart counter, Δ                            |                                      |
 
 On a cgroup v1 host, the agent falls back to
 `GET /containers/{id}/stats?stream=false&one-shot=true`, and the dashboard
@@ -75,12 +72,23 @@ starts carries no deltas.
 second, normally one every 15 s:
 
 ```ts
-{ type: "metrics";
-  ts: number;                          // sample time, unix ms
-  interval_ms: number;                 // 15000 nominal
-  samples: { workload_id: IdString; cpu_millis: number; mem_bytes: number; mem_limit_bytes: number;
-             net_rx_bytes: number; net_tx_bytes: number; disk_read_bytes: number; disk_write_bytes: number;
-             pids: number; restarts: number }[];    // ≤ MAX_STATUSES_PER_HELLO (160)
+{
+  type: "metrics";
+  ts: number; // sample time, unix ms
+  interval_ms: number; // 15000 nominal
+  samples: {
+    workload_id: IdString;
+    cpu_millis: number;
+    mem_bytes: number;
+    mem_limit_bytes: number;
+    net_rx_bytes: number;
+    net_tx_bytes: number;
+    disk_read_bytes: number;
+    disk_write_bytes: number;
+    pids: number;
+    restarts: number;
+  }
+  []; // ≤ MAX_STATUSES_PER_HELLO (160)
 }
 ```
 
@@ -96,19 +104,19 @@ to the same layout. The layout is fixed in
 `packages/shared/src/metrics-layout.ts` and never reordered; new fields
 append.
 
-| Column     | Container row                | Node row                    |
-| ---------- | ---------------------------- | --------------------------- |
-| `index1`   | `service_id`                 | `node_id`                   |
-| `blob1`    | `"container"`                | `"node"`                    |
-| `blob2`    | `workspace_id`               | `workspace_id`              |
-| `blob3`    | `project_id`                 | `""`                        |
-| `blob4`    | `environment_id`             | `""`                        |
-| `blob5`    | `service_id`                 | `""`                        |
-| `blob6`    | `deployment_id`              | `""`                        |
-| `blob7`    | `workload_id`                | `""`                        |
-| `blob8`    | `node_id`                    | `node_id`                   |
+| Column               | Container row                                                                                                   | Node row                                                          |
+| -------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `index1`             | `service_id`                                                                                                    | `node_id`                                                         |
+| `blob1`              | `"container"`                                                                                                   | `"node"`                                                          |
+| `blob2`              | `workspace_id`                                                                                                  | `workspace_id`                                                    |
+| `blob3`              | `project_id`                                                                                                    | `""`                                                              |
+| `blob4`              | `environment_id`                                                                                                | `""`                                                              |
+| `blob5`              | `service_id`                                                                                                    | `""`                                                              |
+| `blob6`              | `deployment_id`                                                                                                 | `""`                                                              |
+| `blob7`              | `workload_id`                                                                                                   | `""`                                                              |
+| `blob8`              | `node_id`                                                                                                       | `node_id`                                                         |
 | `double1`–`double10` | cpu_millis, cpu_limit_millis, mem_bytes, mem_limit_bytes, net_rx, net_tx, disk_read, disk_write, pids, restarts | cpu_percent, —, mem_used, mem_total, —, —, —, —, disk_used, load1 |
-| `double11` | `interval_s`                 | `interval_s`                |
+| `double11`           | `interval_s`                                                                                                    | `interval_s`                                                      |
 
 Indexing on `service_id` makes write-time sampling fair per service. One
 `metrics` frame is at most 160 points, inside the 250-points-per-invocation
@@ -118,7 +126,6 @@ shows the projection in Settings → Usage.
 
 **Query path.** A `MetricsStore` interface (`apps/api/src/lib/metrics/`)
 has two implementations:
-
 - **`AnalyticsEngineStore`** (production). It needs the Worker variable
   `CF_ACCOUNT_ID` and the secret `CF_ANALYTICS_TOKEN` (Account Analytics
   Read), both set by the deploy script. It builds SQL from a typed
@@ -147,11 +154,11 @@ has two implementations:
 keeps every chart at 360 points or fewer. Results are cached in the Cache
 API for 30 s, keyed by the query.
 
-| Method and path                                                       | RBAC            | Notes                         |
-| --------------------------------------------------------------------- | --------------- | ----------------------------- |
-| `GET /v1/services/{serviceId}/metrics?environment_id=&from=&to=&metrics=&group=` | `services:read` | `group: service \| replica` |
-| `GET /v1/projects/{projectId}/metrics/summary?environment_id=`        | `projects:read` | latest 5-min average per service, for the canvas |
-| `GET /v1/workspaces/{workspaceId}/nodes/{nodeId}/metrics?from=&to=`   | `nodes:read`    |                               |
+| Method and path                                                                  | RBAC            | Notes                                            |
+| -------------------------------------------------------------------------------- | --------------- | ------------------------------------------------ |
+| `GET /v1/services/{serviceId}/metrics?environment_id=&from=&to=&metrics=&group=` | `services:read` | `group: service \| replica`                      |
+| `GET /v1/projects/{projectId}/metrics/summary?environment_id=`                   | `projects:read` | latest 5-min average per service, for the canvas |
+| `GET /v1/workspaces/{workspaceId}/nodes/{nodeId}/metrics?from=&to=`              | `nodes:read`    |                                                  |
 
 The response is `{ step_s, limits: { cpu_millis, memory_bytes }, series:
 [{ metric, workload_id?, points: [[t_ms, value | null]] }] }`.
@@ -160,7 +167,6 @@ The response is `{ step_s, limits: { cpu_millis, memory_bytes }, series:
 
 **Ingest additions**, in the node DO, where lines are already parsed and
 redacted:
-
 - **Level detection.** Each stored line gains `lvl`:
   1. A JSON line with a string `level`, `severity` or `lvl` key is
      normalised to `trace | debug | info | warn | error | fatal`.
@@ -174,16 +180,16 @@ redacted:
 **Query syntax** (`packages/shared/src/log-query.ts`, a pure parser with
 error positions). Terms are AND-ed:
 
-| Term                          | Meaning                                                      |
-| ----------------------------- | ------------------------------------------------------------ |
-| `service:api`                 | service slug (repeatable: OR within the field)               |
-| `deployment:dep_…`            | deployment ID                                                |
-| `replica:wl_…`                | workload                                                     |
-| `level:error`, `level:>=warn` | detected level; `>=` uses the order trace<debug<info<warn<error<fatal |
-| `stream:stderr`               | stdout, stderr, system                                       |
-| `@status:500`                 | top-level key of a JSON line, string or number equality      |
-| `timeout`, `"connection reset"` | case-insensitive substring                                 |
-| `-term`                       | negation of any term above                                   |
+| Term                            | Meaning                                                               |
+| ------------------------------- | --------------------------------------------------------------------- |
+| `service:api`                   | service slug (repeatable: OR within the field)                        |
+| `deployment:dep_…`              | deployment ID                                                         |
+| `replica:wl_…`                  | workload                                                              |
+| `level:error`, `level:>=warn`   | detected level; `>=` uses the order trace<debug<info<warn<error<fatal |
+| `stream:stderr`                 | stdout, stderr, system                                                |
+| `@status:500`                   | top-level key of a JSON line, string or number equality               |
+| `timeout`, `"connection reset"` | case-insensitive substring                                            |
+| `-term`                         | negation of any term above                                            |
 
 Regular expressions are not supported. Workers cannot bound regex
 backtracking, and a pathological pattern over millions of lines is a CPU
@@ -227,12 +233,12 @@ environment_id, level?: ">=warn", stream? }` forwards matching lines live.
 The room applies only the level and stream filters; text filters are
 applied in the browser.
 
-| Method and path                                              | RBAC              | Audit                    |
-| ------------------------------------------------------------ | ----------------- | ------------------------ |
-| `POST /v1/projects/{projectId}/logs/search`                  | `services:read`   | none                     |
-| `GET /v1/projects/{projectId}/saved-searches`                | `services:read`   | none                     |
-| `POST /v1/projects/{projectId}/saved-searches`               | `services:read` (`shared: true` needs `services:manage`) | none |
-| `PATCH`, `DELETE /v1/saved-searches/{searchId}`              | owner of the search, or `services:manage` for shared | none |
+| Method and path                                 | RBAC                                                     | Audit |
+| ----------------------------------------------- | -------------------------------------------------------- | ----- |
+| `POST /v1/projects/{projectId}/logs/search`     | `services:read`                                          | none  |
+| `GET /v1/projects/{projectId}/saved-searches`   | `services:read`                                          | none  |
+| `POST /v1/projects/{projectId}/saved-searches`  | `services:read` (`shared: true` needs `services:manage`) | none  |
+| `PATCH`, `DELETE /v1/saved-searches/{searchId}` | owner of the search, or `services:manage` for shared     | none  |
 
 ### Alerts
 
@@ -261,23 +267,22 @@ CREATE TABLE alert_rule_channels (rule_id TEXT NOT NULL REFERENCES alert_rules(i
   channel_id TEXT NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE, PRIMARY KEY (rule_id, channel_id));
 ```
 
-| `type`              | Kind   | `params`                                                                 | Fires when / resolves when                                       |
-| ------------------- | ------ | ------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| `deployment_failed` | event  | `{}`                                                                     | a deployment ends `failed` / the next one is `active`             |
-| `deployment_crashed`| event  | `{}`                                                                     | `active → crashed` / back to `active` or superseded               |
-| `node_offline`      | event  | `{ node_id? }`                                                           | node `offline` / `online`                                         |
-| `service_degraded`  | event  | `{}`                                                                     | 0005 `service.degraded` / `service.recovered`                     |
-| `backup_failed`     | event  | `{}`                                                                     | backup `failed` / next backup `succeeded`                         |
-| `cron_failed`       | event  | `{ consecutive: 1..10 }`                                                 | N consecutive failed, timed-out or lost runs / a run succeeds     |
-| `cron_missed`       | event  | `{}`                                                                     | a `missed` record / next run succeeds                             |
-| `domain_failed`     | event  | `{}`                                                                     | 0009 verification or certificate `failed` / `issued`              |
-| `cert_expiring`     | event  | `{ days: 1..30 }`                                                        | `cert_not_after − now < days` (0009) / renewed                     |
-| `volume_usage`      | polled | `{ percent: 50..99 }`                                                    | `used_bytes / size ≥ percent` / below `percent − 5`                |
-| `metric_threshold`  | polled | `{ metric: "cpu_pct_limit" \| "mem_pct_limit" \| "restarts" \| "net_rx_bps" \| "net_tx_bps", agg: "avg" \| "max", window_s: 60..3600, op: ">" \| "<", value: number }` | condition holds for `for_s` / false for `resolve_after_s` |
-| `log_match`         | counted| `{ query: string /* log-query subset: service, level, stream, text */, count: 1..100000, window_s: 60..3600 }` | matches in the window ≥ `count` / < `count` for `resolve_after_s` |
+| `type`               | Kind    | `params`                                                                                                                                                               | Fires when / resolves when                                        |
+| -------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `deployment_failed`  | event   | `{}`                                                                                                                                                                   | a deployment ends `failed` / the next one is `active`             |
+| `deployment_crashed` | event   | `{}`                                                                                                                                                                   | `active → crashed` / back to `active` or superseded               |
+| `node_offline`       | event   | `{ node_id? }`                                                                                                                                                         | node `offline` / `online`                                         |
+| `service_degraded`   | event   | `{}`                                                                                                                                                                   | 0005 `service.degraded` / `service.recovered`                     |
+| `backup_failed`      | event   | `{}`                                                                                                                                                                   | backup `failed` / next backup `succeeded`                         |
+| `cron_failed`        | event   | `{ consecutive: 1..10 }`                                                                                                                                               | N consecutive failed, timed-out or lost runs / a run succeeds     |
+| `cron_missed`        | event   | `{}`                                                                                                                                                                   | a `missed` record / next run succeeds                             |
+| `domain_failed`      | event   | `{}`                                                                                                                                                                   | 0009 verification or certificate `failed` / `issued`              |
+| `cert_expiring`      | event   | `{ days: 1..30 }`                                                                                                                                                      | `cert_not_after − now < days` (0009) / renewed                    |
+| `volume_usage`       | polled  | `{ percent: 50..99 }`                                                                                                                                                  | `used_bytes / size ≥ percent` / below `percent − 5`               |
+| `metric_threshold`   | polled  | `{ metric: "cpu_pct_limit" \| "mem_pct_limit" \| "restarts" \| "net_rx_bps" \| "net_tx_bps", agg: "avg" \| "max", window_s: 60..3600, op: ">" \| "<", value: number }` | condition holds for `for_s` / false for `resolve_after_s`         |
+| `log_match`          | counted | `{ query: string /* log-query subset: service, level, stream, text */, count: 1..100000, window_s: 60..3600 }`                                                         | matches in the window ≥ `count` / < `count` for `resolve_after_s` |
 
 **Evaluation.**
-
 - **Event rules.** The code that observes the event calls
   `signalAlert(env, AlertSignal)`, which enqueues
   `{ kind: "alert_signal", … }` on `JOBS`. The callers are the deploy
@@ -374,15 +379,14 @@ goes to the DLQ and is marked `failed`. Each channel is rate-limited to 20
 deliveries per minute, and beyond that, incidents are summarised into one
 message.
 
-| `type`    | `config` (sealed)                                                           | Request                                                                                      |
-| --------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `email`   | `{ to: string[] \| { roles: Role[] } }`                                     | through the instance's `EmailProvider`                                                        |
-| `discord` | `{ webhook_url }` (`https://discord.com/api/webhooks/…`)                    | `POST` `{ content, embeds: [{ title, description, color, fields, url, timestamp }] }`, content ≤ 2,000 chars |
-| `slack`   | `{ webhook_url }` (`https://hooks.slack.com/…`)                             | `POST` `{ text, blocks }`                                                                     |
-| `webhook` | `{ url (https), secret (32 random bytes, base64url) }`                      | `POST` JSON, signed (below)                                                                   |
+| `type`    | `config` (sealed)                                        | Request                                                                                                      |
+| --------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `email`   | `{ to: string[] \| { roles: Role[] } }`                  | through the instance's `EmailProvider`                                                                       |
+| `discord` | `{ webhook_url }` (`https://discord.com/api/webhooks/…`) | `POST` `{ content, embeds: [{ title, description, color, fields, url, timestamp }] }`, content ≤ 2,000 chars |
+| `slack`   | `{ webhook_url }` (`https://hooks.slack.com/…`)          | `POST` `{ text, blocks }`                                                                                    |
+| `webhook` | `{ url (https), secret (32 random bytes, base64url) }`   | `POST` JSON, signed (below)                                                                                  |
 
 **Generic webhook format.**
-
 - **Body:**
   `{ "id": "<delivery id>", "type": "incident.firing" | "incident.resolved" | "incident.reminder" | "incident.flapping" | "incident.flapping_ended" | "channel.test", "created_at": <ms>, "workspace_id", "incident": {...}, "rule": {...} }`.
 - **Headers:** `Content-Type: application/json`,
@@ -399,7 +403,6 @@ message.
 
 **Email providers.** `EmailProvider { send({ to, subject, text, html }): Promise<{ id }> }`
 is selected by the instance setting `email_provider`:
-
 - `cloudflare`: the `send_email` binding of Cloudflare Email Service.
   Workers Paid, onboarded sending domain.
 - `resend`, `postmark`: their HTTP APIs, with an API key sealed in the
@@ -438,24 +441,23 @@ otherwise the dashboard polls every 60 s.
 
 **Routes.**
 
-| Method and path                                                  | RBAC              | Audit                         |
-| ---------------------------------------------------------------- | ----------------- | ----------------------------- |
-| `GET`, `POST /v1/workspaces/{ws}/alert-rules`                    | `alerts:read` / `alerts:manage` | `alert_rule.created` |
-| `PATCH`, `DELETE /v1/alert-rules/{ruleId}`                       | `alerts:manage`   | `alert_rule.updated` / `alert_rule.deleted` |
-| `GET /v1/workspaces/{ws}/incidents?status=&project_id=`          | `alerts:read`     | none                          |
-| `POST /v1/incidents/{incidentId}/acknowledge`                    | `alerts:manage`   | `incident.acknowledged`       |
-| `POST /v1/incidents/{incidentId}/resolve`                        | `alerts:manage`   | `incident.resolved_manually`  |
-| `GET`, `POST /v1/workspaces/{ws}/notification-channels`          | `alerts:read` / `channels:manage` | `channel.created` |
-| `PATCH`, `DELETE /v1/notification-channels/{channelId}`          | `channels:manage` | `channel.updated` / `channel.deleted` |
-| `POST /v1/notification-channels/{channelId}/test`                | `channels:manage` | `channel.tested`              |
-| `POST /v1/notification-channels/{channelId}/reveal-secret`       | `channels:manage` | `channel.secret_revealed`     |
-| `GET /v1/notification-channels/{channelId}/deliveries`           | `channels:manage` | none                          |
-| `GET /v1/me/inbox?workspace_id=&unread=`                         | session           | none                          |
-| `POST /v1/me/inbox/read` `{ ids \| all }`                        | session           | none                          |
-| `GET`, `PUT /v1/me/notification-preferences?workspace_id=`       | session           | none                          |
+| Method and path                                            | RBAC                              | Audit                                       |
+| ---------------------------------------------------------- | --------------------------------- | ------------------------------------------- |
+| `GET`, `POST /v1/workspaces/{ws}/alert-rules`              | `alerts:read` / `alerts:manage`   | `alert_rule.created`                        |
+| `PATCH`, `DELETE /v1/alert-rules/{ruleId}`                 | `alerts:manage`                   | `alert_rule.updated` / `alert_rule.deleted` |
+| `GET /v1/workspaces/{ws}/incidents?status=&project_id=`    | `alerts:read`                     | none                                        |
+| `POST /v1/incidents/{incidentId}/acknowledge`              | `alerts:manage`                   | `incident.acknowledged`                     |
+| `POST /v1/incidents/{incidentId}/resolve`                  | `alerts:manage`                   | `incident.resolved_manually`                |
+| `GET`, `POST /v1/workspaces/{ws}/notification-channels`    | `alerts:read` / `channels:manage` | `channel.created`                           |
+| `PATCH`, `DELETE /v1/notification-channels/{channelId}`    | `channels:manage`                 | `channel.updated` / `channel.deleted`       |
+| `POST /v1/notification-channels/{channelId}/test`          | `channels:manage`                 | `channel.tested`                            |
+| `POST /v1/notification-channels/{channelId}/reveal-secret` | `channels:manage`                 | `channel.secret_revealed`                   |
+| `GET /v1/notification-channels/{channelId}/deliveries`     | `channels:manage`                 | none                                        |
+| `GET /v1/me/inbox?workspace_id=&unread=`                   | session                           | none                                        |
+| `POST /v1/me/inbox/read` `{ ids \| all }`                  | session                           | none                                        |
+| `GET`, `PUT /v1/me/notification-preferences?workspace_id=` | session                           | none                                        |
 
 New RBAC actions:
-
 - `alerts:read`: every role.
 - `alerts:manage`: owner, admin and member.
 - `channels:manage`: owner and admin. Channel configs hold webhook URLs,
@@ -548,7 +550,7 @@ New ID prefixes: `alr`, `inc`, `nch`, `inb`, `lsq`.
   `welcome.metrics_interval_ms`. v4 agents send none, and their containers
   show no metrics.
 - **Datasets.** The dataset name changes to `roundhouse_metrics` with the
-  new layout. The old `openrail_metrics` points are not migrated; node
+  new layout. The old `roundhouse_metrics` points are not migrated; node
   history restarts once.
 - **Configuration.** `CF_ACCOUNT_ID` and `CF_ANALYTICS_TOKEN` are optional.
   Without them the store falls back to D1, with 48 h retention, and Settings

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // With DNS-resolved upstreams the ingress keeps sending requests to a

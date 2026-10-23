@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // health is the agent's view of a running container's probe.
@@ -109,7 +109,7 @@ func DefaultProber(ctx context.Context, hc protocol.Healthcheck, ip string) erro
 		if err != nil {
 			return err
 		}
-		req.Header.Set("User-Agent", "openrail-agent/healthcheck")
+		req.Header.Set("User-Agent", "roundhouse-agent/healthcheck")
 		resp, err := probeClient.Do(req)
 		if err != nil {
 			return fmt.Errorf("GET %s: %w", hc.Path, err)

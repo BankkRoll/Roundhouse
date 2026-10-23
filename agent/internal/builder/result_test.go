@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 func TestBuildResultMapping(t *testing.T) {

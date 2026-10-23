@@ -16,7 +16,7 @@
  *
  * @module
  */
-import { REALTIME_CLOSE_CODES, shouldReconnect } from "@openrail/shared";
+import { REALTIME_CLOSE_CODES, shouldReconnect } from "@roundhouse/shared";
 import type {
   RealtimeClientMessage,
   RealtimeLogLines,

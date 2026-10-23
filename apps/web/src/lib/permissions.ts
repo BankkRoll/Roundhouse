@@ -1,4 +1,4 @@
-import { type Action, can, type Role } from "@openrail/shared";
+import { type Action, can, type Role } from "@roundhouse/shared";
 import { useMembership } from "../queries/me";
 import type { Me } from "./api/types";
 

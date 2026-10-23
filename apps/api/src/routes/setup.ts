@@ -5,7 +5,7 @@
  * @module
  */
 import { createRoute, z } from "@hono/zod-openapi";
-import { instanceSettings, users, workspaces } from "@openrail/db";
+import { instanceSettings, users, workspaces } from "@roundhouse/db";
 import { eq } from "drizzle-orm";
 import { createRouter, requireMasterKey, signUp } from "../context";
 import { recordAudit } from "../lib/audit";

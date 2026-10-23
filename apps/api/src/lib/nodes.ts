@@ -5,8 +5,8 @@
  *
  * @module
  */
-import type { nodes } from "@openrail/db";
-import { type NodeStatus, OFFLINE_AFTER_MS } from "@openrail/shared";
+import type { nodes } from "@roundhouse/db";
+import { type NodeStatus, OFFLINE_AFTER_MS } from "@roundhouse/shared";
 
 type NodeRow = typeof nodes.$inferSelect;
 
@@ -14,7 +14,7 @@ type NodeRow = typeof nodes.$inferSelect;
  * Header the Worker sets when forwarding an authenticated agent upgrade to the
  * node's Durable Object. Only the Worker can reach the object, so it is trusted there.
  */
-export const NODE_ID_HEADER = "x-openrail-node-id";
+export const NODE_ID_HEADER = "x-roundhouse-node-id";
 
 /**
  * The status to show for a node. The Durable Object alarm normally flips

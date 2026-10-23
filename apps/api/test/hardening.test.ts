@@ -15,7 +15,7 @@ import {
   type BuildJob,
   type ControlMessage,
   environmentNetworkName,
-} from "@openrail/protocol";
+} from "@roundhouse/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { NodeConnection } from "../src/durable/node-connection";
 import { secretBuildArgNames } from "../src/workflows/deploy";
@@ -68,8 +68,8 @@ describe("environment networks", () => {
     expect(prodWl.network).toBe(await environmentNetworkName(s.project.id, s.envId));
     expect(stgWl.network).toBe(await environmentNetworkName(s.project.id, staging.body.id));
     expect(prodWl.network).not.toBe(stgWl.network);
-    expect(prodWl.labels["openrail.private_domain"]).toBe("web.production.internal");
-    expect(stgWl.labels["openrail.private_domain"]).toBe("web.staging.internal");
+    expect(prodWl.labels["roundhouse.private_domain"]).toBe("web.production.internal");
+    expect(stgWl.labels["roundhouse.private_domain"]).toBe("web.staging.internal");
   });
 });
 

@@ -6,7 +6,7 @@
  */
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
-import "@openrail/ui/styles.css";
+import "@roundhouse/ui/styles.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { LandingPage } from "./landing-page";

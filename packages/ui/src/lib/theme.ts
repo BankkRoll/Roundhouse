@@ -2,7 +2,7 @@
 export type ThemePreference = "system" | "dark" | "light";
 
 /** localStorage key holding the user's theme preference. */
-export const THEME_STORAGE_KEY = "openrail.theme";
+export const THEME_STORAGE_KEY = "roundhouse.theme";
 
 /**
  * Applies a theme preference by toggling `.dark` / `.light` on the root element.

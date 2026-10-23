@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# OpenRail node installer.
+# Roundhouse node installer.
 #
 #   curl -fsSL https://<control-plane>/install.sh | sudo bash -s -- --token <JOIN_TOKEN> [options]
 #
@@ -25,13 +25,13 @@
 #                     and signature verification.
 #
 # Environment:
-#   OPENRAIL_DOWNLOAD_BASE  Release download base
-#                           (default: https://github.com/BankkRoll/Open-Rail/releases/download).
+#   ROUNDHOUSE_DOWNLOAD_BASE  Release download base
+#                           (default: https://github.com/BankkRoll/Roundhouse/releases/download).
 #                           Version v is fetched from <base>/agent-v<v>/; "latest"
 #                           is fetched from the sibling <base>/../latest/download/,
 #                           GitHub's redirect to the newest release, so mirrors must
 #                           mimic that layout.
-#   OPENRAIL_SKIP_OS_CHECK  Set to 1 to install on an unsupported distribution.
+#   ROUNDHOUSE_SKIP_OS_CHECK  Set to 1 to install on an unsupported distribution.
 #
 # Order of work: the join token is single-use and short-lived, so the agent
 # is downloaded and joined first, and only then are Docker and the other slow
@@ -40,7 +40,7 @@
 # Every node gets Docker, git and Caddy (ingress). Caddy is configured only by
 # the agent, through its admin API on localhost:2019.
 #
-# Firewall: OpenRail needs no inbound port for its control traffic (the agent
+# Firewall: Roundhouse needs no inbound port for its control traffic (the agent
 # dials out). Allow inbound TCP 80 and 443 (and UDP 443 for HTTP/3) for
 # ingress, and keep everything else closed. If ufw is active, the installer
 # adds those rules itself.
@@ -72,10 +72,10 @@ PEM
 )"
 PLACEHOLDER_KEY_DER_B64="MCowBQYDK2VwAyEAkHLBdd+mLYOoixvDbr8za3PLXSGyGu4wFPf5jmAiK88="
 
-DOWNLOAD_BASE="${OPENRAIL_DOWNLOAD_BASE:-https://github.com/BankkRoll/Open-Rail/releases/download}"
-BIN_PATH=/usr/local/bin/openrail-agent
-CONFIG_PATH=/etc/openrail/agent.yaml
-UNIT_PATH=/etc/systemd/system/openrail-agent.service
+DOWNLOAD_BASE="${ROUNDHOUSE_DOWNLOAD_BASE:-https://github.com/BankkRoll/Roundhouse/releases/download}"
+BIN_PATH=/usr/local/bin/roundhouse-agent
+CONFIG_PATH=/etc/roundhouse/agent.yaml
+UNIT_PATH=/etc/systemd/system/roundhouse-agent.service
 APT_GET=(apt-get -o DPkg::Lock::Timeout=300)
 
 MIN_CPUS=1
@@ -94,7 +94,7 @@ CADDY_KEY_FINGERPRINT="65760C51EDEA2017CEA2CA15155B6D79CA56EA34"
 CADDY_REPO="https://dl.cloudsmith.io/public/caddy/stable/deb/debian"
 CADDY_KEYRING=/etc/apt/keyrings/caddy-stable.asc
 CADDY_LIST=/etc/apt/sources.list.d/caddy-stable.list
-CADDY_DROPIN=/etc/systemd/system/caddy.service.d/openrail.conf
+CADDY_DROPIN=/etc/systemd/system/caddy.service.d/roundhouse.conf
 
 # IMPORTANT: builder pins. The Railpack CLI version must match the frontend
 # image the agent builds with, and the image references must match the
@@ -107,7 +107,7 @@ BUILDKIT_IMAGE="moby/buildkit:v0.34.1-rootless@sha256:f68752a5a94acfcdad2d07867b
 REGISTRY_IMAGE="registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2"
 # The build network's bridge and the agent's per-build registry proxy port,
 # which BuildKit's container must reach on the host.
-BUILD_BRIDGE=openrail-bk0
+BUILD_BRIDGE=roundhouse-bk0
 REGISTRY_PROXY_PORT=5001
 
 # NOTE: these globals must not share names with /etc/os-release variables
@@ -259,10 +259,10 @@ check_os() {
 	case "${OS_ID}:${OS_VER}" in
 	ubuntu:22.04 | ubuntu:24.04 | debian:12) ;;
 	*)
-		if [ "${OPENRAIL_SKIP_OS_CHECK:-0}" = 1 ]; then
-			warn "unsupported OS ${OS_PRETTY}; continuing because OPENRAIL_SKIP_OS_CHECK=1"
+		if [ "${ROUNDHOUSE_SKIP_OS_CHECK:-0}" = 1 ]; then
+			warn "unsupported OS ${OS_PRETTY}; continuing because ROUNDHOUSE_SKIP_OS_CHECK=1"
 		else
-			die "unsupported OS ${OS_PRETTY}: OpenRail supports Ubuntu 22.04, Ubuntu 24.04 and Debian 12"
+			die "unsupported OS ${OS_PRETTY}: Roundhouse supports Ubuntu 22.04, Ubuntu 24.04 and Debian 12"
 		fi
 		;;
 	esac
@@ -275,7 +275,7 @@ check_arch() {
 	case "$(uname -m)" in
 	x86_64 | amd64) ARCH=amd64 ;;
 	aarch64 | arm64) ARCH=arm64 ;;
-	*) die "unsupported architecture $(uname -m): OpenRail supports x86_64 and aarch64" ;;
+	*) die "unsupported architecture $(uname -m): Roundhouse supports x86_64 and aarch64" ;;
 	esac
 }
 
@@ -325,10 +325,10 @@ check_docker_flavour() {
 	docker_bin="$(command -v docker || true)"
 	[ -n "$docker_bin" ] || return 0
 	case "$(readlink -f "$docker_bin")" in
-	/snap/*) die "Docker is installed as a snap, which OpenRail does not support; run 'snap remove docker' and re-run this script" ;;
+	/snap/*) die "Docker is installed as a snap, which Roundhouse does not support; run 'snap remove docker' and re-run this script" ;;
 	esac
 	if dpkg -s podman-docker >/dev/null 2>&1 || docker --version 2>/dev/null | grep -qi podman; then
-		die "'docker' is provided by Podman (podman-docker), which OpenRail does not support; remove podman-docker and re-run this script"
+		die "'docker' is provided by Podman (podman-docker), which Roundhouse does not support; remove podman-docker and re-run this script"
 	fi
 }
 
@@ -377,7 +377,7 @@ acquire_token() {
 		return 0
 	fi
 	if [ -z "$TOKEN" ] && { : </dev/tty; } 2>/dev/null; then
-		printf 'OpenRail join token: ' >/dev/tty
+		printf 'Roundhouse join token: ' >/dev/tty
 		IFS= read -rs TOKEN </dev/tty || true
 		printf '\n' >/dev/tty
 	fi
@@ -405,7 +405,7 @@ write_release_keys() {
 }
 
 download_agent() {
-	local dir="$1" asset="openrail-agent-linux-${ARCH}" base
+	local dir="$1" asset="roundhouse-agent-linux-${ARCH}" base
 	if [[ "$RELEASE_PUBLIC_KEYS_PEM" == *"$PLACEHOLDER_KEY_DER_B64"* ]]; then
 		die "this installer has no release signing key yet, so downloads cannot be verified; use --binary <path> for development"
 	fi
@@ -555,7 +555,7 @@ install_caddy() {
 	local dropin
 	dropin="$(
 		cat <<'CADDY'
-# Managed by the OpenRail installer. openrail-agent configures Caddy through
+# Managed by the Roundhouse installer. roundhouse-agent configures Caddy through
 # its admin API; the packaged Caddyfile is not used.
 [Service]
 Environment=CADDY_ADMIN=localhost:2019
@@ -634,25 +634,25 @@ configure_firewall() {
 			ufw allow in on "$BUILD_BRIDGE" to any port "$REGISTRY_PROXY_PORT" proto tcp >/dev/null
 		fi
 	else
-		log "firewall: allow inbound 80/tcp and 443/tcp (443/udp for HTTP/3) for ingress; OpenRail needs no other inbound port"
+		log "firewall: allow inbound 80/tcp and 443/tcp (443/udp for HTTP/3) for ingress; Roundhouse needs no other inbound port"
 	fi
 }
 
-# NOTE: the unit below is a verbatim copy of install/openrail-agent.service,
+# NOTE: the unit below is a verbatim copy of install/roundhouse-agent.service,
 # embedded because this script runs via curl | bash with no other files
 # available. CI fails if the two differ.
 install_service() {
 	log "installing systemd unit"
 	cat >"$UNIT_PATH" <<'UNIT'
 [Unit]
-Description=OpenRail node agent
-Documentation=https://github.com/BankkRoll/Open-Rail
+Description=Roundhouse node agent
+Documentation=https://github.com/BankkRoll/Roundhouse
 Wants=network-online.target docker.service caddy.service
 After=network-online.target docker.service caddy.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/openrail-agent run --config /etc/openrail/agent.yaml
+ExecStart=/usr/local/bin/roundhouse-agent run --config /etc/roundhouse/agent.yaml
 Restart=always
 RestartSec=5
 TimeoutStopSec=20
@@ -666,11 +666,11 @@ UMask=0077
 # nodes it also runs git and railpack, which inherit this sandbox; their
 # checkouts live in the state directory and are removed after each build.
 CapabilityBoundingSet=
-StateDirectory=openrail
+StateDirectory=roundhouse
 StateDirectoryMode=0700
 # The agent records the control plane's key id in its config after the
 # first verified welcome.
-ReadWritePaths=-/etc/openrail
+ReadWritePaths=-/etc/roundhouse
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -699,9 +699,9 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 WantedBy=multi-user.target
 UNIT
 	systemctl daemon-reload
-	systemctl enable openrail-agent.service >/dev/null
+	systemctl enable roundhouse-agent.service >/dev/null
 	# NOTE: restart rather than start so a re-run picks up a new binary.
-	systemctl restart openrail-agent.service
+	systemctl restart roundhouse-agent.service
 }
 
 main() {
@@ -725,7 +725,7 @@ main() {
 	configure_firewall
 	install_service
 
-	log "OpenRail agent is running. Follow logs with: journalctl -u openrail-agent -f"
+	log "Roundhouse agent is running. Follow logs with: journalctl -u roundhouse-agent -f"
 }
 
 main "$@"

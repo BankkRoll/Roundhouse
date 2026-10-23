@@ -1,4 +1,4 @@
-import { StatusDot } from "@openrail/ui";
+import { StatusDot } from "@roundhouse/ui";
 import type { ProjectHealth } from "../../queries/projects";
 
 /** Label and drawing of each project health, reusing the node/deployment glyphs. */

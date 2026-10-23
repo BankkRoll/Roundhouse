@@ -8,7 +8,7 @@ import {
   SettingsStack,
   Skeleton,
   toast,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { type FormEvent, useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
 import { ErrorState } from "../../components/error-state";

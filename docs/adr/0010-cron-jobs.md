@@ -3,7 +3,6 @@
 ## Status
 
 Proposed.
-
 - Date: 2026-10-22
 - Phase: 3
 - Protocol: version 5
@@ -32,7 +31,7 @@ tolerate that: a slot is a row claim, not the tick itself.
 ### Service model
 
 A `kind: "cron"` service is built and deployed like any other. Its
-deployment ends `active` **without placing replicas**: it is the *armed*
+deployment ends `active` **without placing replicas**: it is the _armed_
 deployment whose image digest, config version and sealed environment
 every run uses. Deploying a new version re-arms it. A run already in
 progress keeps its own deployment.
@@ -50,21 +49,20 @@ interface CronConfig {
   /** 5-field cron or a macro; see "Schedule syntax". */
   schedule: string;
   /** IANA zone the schedule is read in. */
-  timezone: string;                        // default "UTC"
-  concurrency: "forbid" | "replace" | "allow";   // default "forbid"
+  timezone: string; // default "UTC"
+  concurrency: "forbid" | "replace" | "allow"; // default "forbid"
   /** Hard limit per run; the agent kills the container after it. */
-  timeout_s: number;                       // 10..86400, default 3600
+  timeout_s: number; // 10..86400, default 3600
   /** How late a run may still start after its slot; later slots are recorded as missed. */
-  starting_deadline_s: number;             // 0..3600, default 300
-  retries: number;                         // 0..5, default 0
-  retry_backoff_s: number;                 // 10..3600, default 60, doubled per attempt
+  starting_deadline_s: number; // 0..3600, default 300
+  retries: number; // 0..5, default 0
+  retry_backoff_s: number; // 10..3600, default 60, doubled per attempt
   /** Runs kept in history per (service, environment). */
-  history_limit: number;                   // 10..1000, default 100
+  history_limit: number; // 10..1000, default 100
 }
 ```
 
 For `kind: "cron"`:
-
 - `cron` is required, and `deploy.replicas`, `healthcheck`, `networking.port`
   and `generated_domain` are ignored. The API rejects domains and TCP
   proxies with `422 cron_has_no_endpoint`.
@@ -80,7 +78,6 @@ reviewed like everything else.
 `packages/shared/src/cron.ts` exports a pure, dependency-free parser plus
 `nextRuns(schedule, timezone, from, count)`. It is the only implementation;
 the agent never parses schedules.
-
 - **Fields.** Five, in this order:
   - minute 0–59
   - hour 0–23
@@ -156,7 +153,6 @@ the state is resumed. Arming does not trigger a run.
 
 The 0004 minute tick has a `cron` claimer. For each `cron_states` row with
 `next_run_at <= now` (at most 100 per tick), it:
-
 1. Lists the slots between `next_run_at` and `now` with
    `nextRuns(…, last_scheduled_for, k)`, capped at 1,000.
 2. Splits them: the **latest** slot runs if
@@ -172,7 +168,6 @@ The 0004 minute tick has a `cron` claimer. For each `cron_states` row with
    Then it enqueues `{ kind: "cron", id: crn_… }` on `JOBS`.
 
 The rules that follow:
-
 - At most **one catch-up run** happens, however long the control plane or
   the cron trigger was down. Older slots are recorded once, never run.
 - Pausing stops everything: no runs, and no missed records while paused.
@@ -183,7 +178,6 @@ The rules that follow:
 
 The `JOBS` consumer starts `CRON_RUN_WORKFLOW` with the run ID as instance
 ID.
-
 1. **Concurrency.** Look for a run of the same (service, environment) in
    `starting` or `running`.
    - `forbid`: mark this run `skipped` with
@@ -251,7 +245,6 @@ and forwards them to `ProjectRoom` under the topic
 `{ kind: "cron_run_logs", run_id }`.
 
 The agent runs jobs in `internal/jobs`, separate from the reconciler:
-
 - **Containers.** Job containers carry `roundhouse.kind=job`,
   `roundhouse.run_id` and the namespace label. The reconciler's garbage
   collection skips them, because `desired_state` is a complete list of
@@ -278,16 +271,16 @@ The agent runs jobs in `internal/jobs`, separate from the reconciler:
 
 ### Routes, RBAC, audit
 
-| Method and path                                              | RBAC                  | Audit                 |
-| ------------------------------------------------------------ | --------------------- | --------------------- |
-| `GET /v1/cron/preview?schedule=&timezone=&count=`            | `projects:read`       | none                  |
-| `GET /v1/services/{serviceId}/cron-runs?environment_id=&cursor=` | `services:read`   | none                  |
-| `GET /v1/cron-runs/{runId}`                                  | `services:read`       | none                  |
-| `GET /v1/cron-runs/{runId}/logs`                             | `services:read`       | none                  |
+| Method and path                                                      | RBAC                 | Audit                |
+| -------------------------------------------------------------------- | -------------------- | -------------------- |
+| `GET /v1/cron/preview?schedule=&timezone=&count=`                    | `projects:read`      | none                 |
+| `GET /v1/services/{serviceId}/cron-runs?environment_id=&cursor=`     | `services:read`      | none                 |
+| `GET /v1/cron-runs/{runId}`                                          | `services:read`      | none                 |
+| `GET /v1/cron-runs/{runId}/logs`                                     | `services:read`      | none                 |
 | `POST /v1/services/{serviceId}/cron-runs` `{environment_id, force?}` | `deployments:create` | `cron.run_triggered` |
-| `POST /v1/cron-runs/{runId}/cancel`                          | `deployments:create`  | `cron.run_cancelled`  |
-| `POST /v1/services/{serviceId}/cron/pause` `{environment_id}`  | `services:manage`   | `cron.paused`         |
-| `POST /v1/services/{serviceId}/cron/resume` `{environment_id}` | `services:manage`   | `cron.resumed`        |
+| `POST /v1/cron-runs/{runId}/cancel`                                  | `deployments:create` | `cron.run_cancelled` |
+| `POST /v1/services/{serviceId}/cron/pause` `{environment_id}`        | `services:manage`    | `cron.paused`        |
+| `POST /v1/services/{serviceId}/cron/resume` `{environment_id}`       | `services:manage`    | `cron.resumed`       |
 
 `GET /v1/cron/preview` returns the next `count` (≤ 10) run instants, or a
 `ScheduleError`. The dashboard calls it while the user types.

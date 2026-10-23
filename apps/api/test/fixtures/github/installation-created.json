@@ -15,7 +15,7 @@
     "repositories_url": "https://api.github.com/installation/repositories",
     "html_url": "https://github.com/organizations/acme/settings/installations/55501234",
     "app_id": 1012345,
-    "app_slug": "openrail-cp-a1b2c3",
+    "app_slug": "roundhouse-cp-a1b2c3",
     "target_id": 9919,
     "target_type": "Organization",
     "permissions": {

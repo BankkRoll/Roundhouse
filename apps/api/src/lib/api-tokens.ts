@@ -11,7 +11,7 @@
  *
  * @module
  */
-import { apiTokens, type Db, users, workspaceMembers, workspaces } from "@openrail/db";
+import { apiTokens, type Db, users, workspaceMembers, workspaces } from "@roundhouse/db";
 import {
   type Action,
   API_TOKEN_DISPLAY_PREFIX_LENGTH,
@@ -20,7 +20,7 @@ import {
   isApiTokenScope,
   newId,
   type Role,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { and, eq, isNull } from "drizzle-orm";
 import { hashToken, randomToken } from "./crypto";
 

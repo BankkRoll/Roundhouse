@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/leaktest"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/leaktest"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 func TestShouldRestart(t *testing.T) {
@@ -261,7 +261,7 @@ func TestLabelsRoundTrip(t *testing.T) {
 	s := &wantSpec{WorkloadSpec: w, generation: 7}
 	l := containerLabels(s)
 	if l[LabelManaged] != "true" {
-		t.Fatal("user label overrode openrail.managed")
+		t.Fatal("user label overrode roundhouse.managed")
 	}
 	m := parseMeta(l)
 	if m.workloadID != "wl_a" || m.generation != 7 || m.drainS != 30 || len(m.routes) != 2 ||

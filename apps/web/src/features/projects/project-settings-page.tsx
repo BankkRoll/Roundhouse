@@ -8,7 +8,7 @@ import {
   SettingsStack,
   Textarea,
   toast,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon } from "lucide-react";

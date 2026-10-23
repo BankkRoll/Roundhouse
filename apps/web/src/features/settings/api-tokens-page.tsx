@@ -10,7 +10,7 @@ import {
   TableHeader,
   TableRow,
   toast,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { KeyRoundIcon, LockIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";

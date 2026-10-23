@@ -1,4 +1,4 @@
-import { SettingsLayout, SettingsNav, SettingsNavGroup, SettingsNavItem } from "@openrail/ui";
+import { SettingsLayout, SettingsNav, SettingsNavGroup, SettingsNavItem } from "@roundhouse/ui";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { canManageInstance, usePermissions } from "../../lib/permissions";

@@ -4,8 +4,8 @@
  * collide with a live route; request schemas enforce their cross-field rules.
  */
 import { OpenAPIHono, type RouteConfig } from "@hono/zod-openapi";
-import { TLS_MODES as PROTOCOL_TLS_MODES } from "@openrail/protocol";
-import { ACTIONS, AUDIT_ACTIONS, TLS_MODES } from "@openrail/shared";
+import { TLS_MODES as PROTOCOL_TLS_MODES } from "@roundhouse/protocol";
+import { ACTIONS, AUDIT_ACTIONS, TLS_MODES } from "@roundhouse/shared";
 import { describe, expect, it } from "vitest";
 import {
   CreateServiceBody,

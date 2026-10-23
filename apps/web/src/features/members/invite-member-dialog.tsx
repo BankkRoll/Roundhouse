@@ -1,4 +1,4 @@
-import { ROLES, type Role } from "@openrail/shared";
+import { ROLES, type Role } from "@roundhouse/shared";
 import {
   Button,
   CodeBlock,
@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
   Label,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { type FormEvent, useId, useState } from "react";
 import { FormField } from "../../components/form-field";
 import { errorMessage } from "../../lib/api/client";

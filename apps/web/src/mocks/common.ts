@@ -4,7 +4,7 @@
  *
  * @module
  */
-import { type Action, type AuditAction, can } from "@openrail/shared";
+import { type Action, type AuditAction, can } from "@roundhouse/shared";
 import { HttpResponse } from "msw";
 import { type DbMembership, type DbUser, db } from "./db";
 

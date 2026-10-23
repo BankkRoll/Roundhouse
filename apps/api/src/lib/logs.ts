@@ -9,8 +9,8 @@
  *
  * @module
  */
-import { type Db, logChunks } from "@openrail/db";
-import type { LogStream } from "@openrail/protocol";
+import { type Db, logChunks } from "@roundhouse/db";
+import type { LogStream } from "@roundhouse/protocol";
 import { and, desc, eq, lte } from "drizzle-orm";
 import { ApiError } from "./errors";
 

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/apitest"
-	"github.com/BankkRoll/Open-Rail/cli/internal/ui"
+	"github.com/BankkRoll/Roundhouse/cli/internal/apitest"
+	"github.com/BankkRoll/Roundhouse/cli/internal/ui"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files in testdata/golden")

@@ -1,4 +1,4 @@
-# @openrail/protocol
+# @roundhouse/protocol
 
 Wire protocol between the control plane and agents.
 

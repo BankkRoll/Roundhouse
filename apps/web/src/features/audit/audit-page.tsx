@@ -8,7 +8,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { HistoryIcon, LockIcon } from "lucide-react";
 import { ErrorState } from "../../components/error-state";
 import { errorMessage } from "../../lib/api/client";

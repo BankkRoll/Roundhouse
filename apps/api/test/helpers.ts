@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import type { JoinResponse } from "@openrail/protocol";
+import type { JoinResponse } from "@roundhouse/protocol";
 
 /** Base URL for requests through the Worker under test. */
 export const ORIGIN = "https://cp.test";

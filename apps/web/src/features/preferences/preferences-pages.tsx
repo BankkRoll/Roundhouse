@@ -7,8 +7,8 @@
  *
  * @module
  */
-import type { ThemePreference } from "@openrail/ui";
-import { ChoiceCards, cn, SettingsRow, SettingsSection, SettingsStack } from "@openrail/ui";
+import type { ThemePreference } from "@roundhouse/ui";
+import { ChoiceCards, cn, SettingsRow, SettingsSection, SettingsStack } from "@roundhouse/ui";
 import { useSyncExternalStore } from "react";
 import { isApplePlatform } from "../../lib/platform";
 import { type Density, type MotionPreference, usePreferences } from "../../lib/preferences";

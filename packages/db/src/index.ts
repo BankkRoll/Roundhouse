@@ -1,7 +1,7 @@
 /**
  * Control-plane metadata schema (D1 / SQLite via Drizzle).
  *
- * Migrations are generated into `../migrations` with `pnpm --filter @openrail/db generate`
+ * Migrations are generated into `../migrations` with `pnpm --filter @roundhouse/db generate`
  * and applied by wrangler (`d1 migrations apply`) as part of every deploy.
  *
  * @module

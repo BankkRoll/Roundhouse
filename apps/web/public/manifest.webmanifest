@@ -1,6 +1,6 @@
 {
-  "name": "OpenRail",
-  "short_name": "OpenRail",
+  "name": "Roundhouse",
+  "short_name": "Roundhouse",
   "start_url": "/dashboard",
   "scope": "/",
   "display": "standalone",

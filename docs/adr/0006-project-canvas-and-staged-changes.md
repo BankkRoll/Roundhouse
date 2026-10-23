@@ -3,7 +3,6 @@
 ## Status
 
 Proposed.
-
 - Date: 2026-10-22
 - Phase: 2
 - Depends on: 0003. Used by 0004 (adding a database), 0007 (promote), and
@@ -17,7 +16,6 @@ built-ins. See 0013, "Naming".
 Phase 1 edits are immediate. `PATCH /v1/services/{id}` inserts config
 version N+1, `PUT .../variables` rewrites variables, and a deploy is a
 separate click. That leaves three gaps:
-
 - A real change touches several services at once: add a database, point
   `api` at it, raise `worker` replicas. Each edit lands, and may deploy, on
   its own, so the project passes through states nobody intended.
@@ -25,7 +23,7 @@ separate click. That leaves three gaps:
   same service overwrite each other. `expected_version` exists on the API,
   but the dashboard gives no way to resolve the conflict it reports.
 - Templates (0012), promotion (0007) and MCP clients (0012) all need to
-  *propose* a change for a human to accept. Without a first-class proposal
+  _propose_ a change for a human to accept. Without a first-class proposal
   object, each would invent its own.
 
 The project page is a list today. Railway-style projects are read as a
@@ -53,9 +51,8 @@ CREATE TABLE canvas_layouts (
 ```
 
 **Edges** come from two sources:
-
 - `kind: "reference"` edges are derived on read from
-  `variableDependencies(...)` over the environment's *current* variables,
+  `variableDependencies(...)` over the environment's _current_ variables,
   plus any staged ones (rendered dashed while staged). They are never
   stored.
 - `kind: "explicit"` edges come from the "connects to" action. They cover
@@ -139,21 +136,21 @@ discriminated union on `type`. The API, dashboard, MCP server and template
 renderer all import it. Services created in the same set are addressed by
 `ref`, a `new:<n>` temporary reference that resolves at apply time.
 
-| `type`                 | Fields                                                                                                                | `target_key`                   | RBAC action         |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------- |
-| `service.create`       | `ref`, `name`, `slug?`, `kind`, `icon?`, `source`, `config?` (ServiceConfigPatch), `database?` (0004 template engine) | `create:<ref>`                 | `services:manage`   |
-| `service.update`       | `service_id`, `name?`, `slug?`, `icon?`                                                                               | `service:<id>`                 | `services:manage`   |
-| `service.delete`       | `service_id`                                                                                                          | `service:<id>`                 | `services:manage`   |
-| `config.patch`         | `service` (id or ref), `patch` (ServiceConfigPatch)                                                                   | `config:<svc>`                 | `services:manage`   |
-| `variable.set`         | `scope`, `service?`, `key`, `value` (sealed), `is_secret`                                                             | `var:<svc\|shared>:<KEY>`      | `variables:manage`  |
-| `variable.delete`      | `scope`, `service?`, `key`                                                                                            | `var:<svc\|shared>:<KEY>`      | `variables:manage`  |
-| `volume.set`           | `service`, `mount_path`, `size_mb` (0004)                                                                             | `volume:<svc>`                 | `services:manage`   |
-| `volume.delete`        | `service`                                                                                                             | `volume:<svc>`                 | `services:manage`   |
-| `domain.add`           | `service`, `hostname`, `target_port` (0009)                                                                           | `domain:<hostname>`            | `domains:manage`    |
-| `domain.remove`        | `domain_id`                                                                                                           | `domain:<hostname>`            | `domains:manage`    |
-| `tcp_proxy.set`        | `service`, `container_port`, `enabled` (0004)                                                                         | `tcp:<svc>:<port>`             | `services:manage`   |
-| `backup_policy.set`    | `service`, policy fields (0004)                                                                                       | `backup:<svc>`                 | `backups:manage`    |
-| `deployment.promote`   | `service_id`, `from_deployment_id` (0007)                                                                             | `promote:<svc>`                | `deployments:create`|
+| `type`               | Fields                                                                                                                | `target_key`              | RBAC action          |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------- | -------------------- |
+| `service.create`     | `ref`, `name`, `slug?`, `kind`, `icon?`, `source`, `config?` (ServiceConfigPatch), `database?` (0004 template engine) | `create:<ref>`            | `services:manage`    |
+| `service.update`     | `service_id`, `name?`, `slug?`, `icon?`                                                                               | `service:<id>`            | `services:manage`    |
+| `service.delete`     | `service_id`                                                                                                          | `service:<id>`            | `services:manage`    |
+| `config.patch`       | `service` (id or ref), `patch` (ServiceConfigPatch)                                                                   | `config:<svc>`            | `services:manage`    |
+| `variable.set`       | `scope`, `service?`, `key`, `value` (sealed), `is_secret`                                                             | `var:<svc\|shared>:<KEY>` | `variables:manage`   |
+| `variable.delete`    | `scope`, `service?`, `key`                                                                                            | `var:<svc\|shared>:<KEY>` | `variables:manage`   |
+| `volume.set`         | `service`, `mount_path`, `size_mb` (0004)                                                                             | `volume:<svc>`            | `services:manage`    |
+| `volume.delete`      | `service`                                                                                                             | `volume:<svc>`            | `services:manage`    |
+| `domain.add`         | `service`, `hostname`, `target_port` (0009)                                                                           | `domain:<hostname>`       | `domains:manage`     |
+| `domain.remove`      | `domain_id`                                                                                                           | `domain:<hostname>`       | `domains:manage`     |
+| `tcp_proxy.set`      | `service`, `container_port`, `enabled` (0004)                                                                         | `tcp:<svc>:<port>`        | `services:manage`    |
+| `backup_policy.set`  | `service`, policy fields (0004)                                                                                       | `backup:<svc>`            | `backups:manage`     |
+| `deployment.promote` | `service_id`, `from_deployment_id` (0007)                                                                             | `promote:<svc>`           | `deployments:create` |
 
 Staging an op whose `target_key` already exists in the set **coalesces**:
 `config.patch` patches deep-merge, the newer one winning per JSON pointer,
@@ -183,7 +180,6 @@ for display. Staged values are sealed under the project DEK with AAD
 Direct edits (`PATCH /v1/services/{id}`, `PUT .../variables`, CLI, CI) stay
 and keep working. They advance versions, which is how a staged op ends up
 stale. Apply and the explicit `rebase` route check every op:
-
 1. **No drift**: the current version equals `base`. The op applies as is.
 2. **Drift that merges**: for `config.patch`, compute the pointers the
    concurrent change touched, `diff(config@base, config@current)`. If they
@@ -203,7 +199,6 @@ its values. `theirs` drops the op. Both bump `revision`.
 `POST /v1/change-sets/{id}/apply { expected_revision, deploy: "affected" | "none" }`
 runs `planApply` (pure, in `packages/shared/src/changes.ts`, unit-tested)
 and then commits:
-
 1. **Lock.** `UPDATE change_sets SET status='applying', revision=revision+1
    WHERE id=? AND status='open' AND revision=?`. If no row changes, the
    result is `409 change_set_changed`: someone edited the set after the
@@ -238,9 +233,8 @@ and then commits:
    `workflow_instance_id`.
 
 `deploy: "affected"`, the default, deploys:
-
 - every service whose config, own variables or volume changed;
-- every service whose *resolved* environment changes because a variable it
+- every service whose _resolved_ environment changes because a variable it
   references changed. This is computed with `variableDependencies` over the
   post-apply model.
 
@@ -259,26 +253,26 @@ dashboard links the set to its deployments.
 All routes go in `apps/api/src/contracts.ts` under a new
 `// Change sets` section.
 
-| Method and path                                          | RBAC action                         | Audit                               |
-| -------------------------------------------------------- | ----------------------------------- | ----------------------------------- |
-| `GET /v1/projects/{projectId}/canvas?environment_id=`    | `projects:read`                     | none                                |
-| `PATCH /v1/projects/{projectId}/canvas/layout`           | `services:manage`                   | none (cosmetic, see below)          |
-| `POST /v1/projects/{projectId}/edges`                    | `services:manage`                   | `canvas.edge_added`                 |
-| `DELETE /v1/projects/{projectId}/edges/{edgeId}`         | `services:manage`                   | `canvas.edge_removed`               |
-| `GET /v1/environments/{environmentId}/change-sets`       | `projects:read`                     | none                                |
-| `POST /v1/environments/{environmentId}/change-sets`      | `services:manage`                   | `change_set.created`                |
-| `GET /v1/environments/{environmentId}/draft`             | `projects:read`                     | none                                |
-| `POST /v1/environments/{environmentId}/draft/ops`        | each op's action                    | none (the apply is audited)         |
-| `GET /v1/change-sets/{changeSetId}`                      | `projects:read`                     | none                                |
-| `POST /v1/change-sets/{changeSetId}/ops`                 | each op's action                    | none                                |
-| `DELETE /v1/change-sets/{changeSetId}/ops/{opId}`        | `services:manage`                   | none                                |
-| `POST /v1/change-sets/{changeSetId}/ops/{opId}/resolve`  | the op's action                     | none                                |
-| `POST /v1/change-sets/{changeSetId}/rebase`              | `services:manage`                   | none                                |
-| `POST /v1/change-sets/{changeSetId}/approve`             | `changes:approve`                   | `change_set.approved`               |
-| `POST /v1/change-sets/{changeSetId}/apply`               | every op's action                   | `change_set.applied` + per-op¹      |
-| `POST /v1/change-sets/{changeSetId}/discard`             | `services:manage`                   | `change_set.discarded`              |
-| `POST /v1/change-sets/{changeSetId}/reveal`              | `variables:reveal`                  | `variables.revealed`                |
-| `PATCH /v1/environments/{environmentId}` `{protected}`   | `projects:manage`                   | `environment.updated`               |
+| Method and path                                         | RBAC action        | Audit                          |
+| ------------------------------------------------------- | ------------------ | ------------------------------ |
+| `GET /v1/projects/{projectId}/canvas?environment_id=`   | `projects:read`    | none                           |
+| `PATCH /v1/projects/{projectId}/canvas/layout`          | `services:manage`  | none (cosmetic, see below)     |
+| `POST /v1/projects/{projectId}/edges`                   | `services:manage`  | `canvas.edge_added`            |
+| `DELETE /v1/projects/{projectId}/edges/{edgeId}`        | `services:manage`  | `canvas.edge_removed`          |
+| `GET /v1/environments/{environmentId}/change-sets`      | `projects:read`    | none                           |
+| `POST /v1/environments/{environmentId}/change-sets`     | `services:manage`  | `change_set.created`           |
+| `GET /v1/environments/{environmentId}/draft`            | `projects:read`    | none                           |
+| `POST /v1/environments/{environmentId}/draft/ops`       | each op's action   | none (the apply is audited)    |
+| `GET /v1/change-sets/{changeSetId}`                     | `projects:read`    | none                           |
+| `POST /v1/change-sets/{changeSetId}/ops`                | each op's action   | none                           |
+| `DELETE /v1/change-sets/{changeSetId}/ops/{opId}`       | `services:manage`  | none                           |
+| `POST /v1/change-sets/{changeSetId}/ops/{opId}/resolve` | the op's action    | none                           |
+| `POST /v1/change-sets/{changeSetId}/rebase`             | `services:manage`  | none                           |
+| `POST /v1/change-sets/{changeSetId}/approve`            | `changes:approve`  | `change_set.approved`          |
+| `POST /v1/change-sets/{changeSetId}/apply`              | every op's action  | `change_set.applied` + per-op¹ |
+| `POST /v1/change-sets/{changeSetId}/discard`            | `services:manage`  | `change_set.discarded`         |
+| `POST /v1/change-sets/{changeSetId}/reveal`             | `variables:reveal` | `variables.revealed`           |
+| `PATCH /v1/environments/{environmentId}` `{protected}`  | `projects:manage`  | `environment.updated`          |
 
 ¹ The existing per-resource audit actions: `service.created`,
 `service.updated`, `service.deleted`, `variables.updated`,
@@ -292,7 +286,6 @@ purpose. They are cosmetic and fire on every drag, and the audit log
 records changes to what runs.
 
 New RBAC actions:
-
 - `changes:approve`: owner and admin.
 - `changes:auto_apply`: owner, admin and member. It lets an API token apply
   a set it created without a human; see 0012. A browser session never
@@ -308,7 +301,6 @@ New audit actions: `change_set.created`, `change_set.approved`,
 the following, with schemas in `apps/api/src/schemas.ts`.
 
 Server → browser:
-
 - `change_set.updated { change_set: ChangeSetSummary }`: id, status,
   revision, op count, conflicted count, and the ops' masked diffs. Sent
   after every op mutation, rebase, approve and apply.
@@ -320,7 +312,6 @@ Server → browser:
   (0–11) derived from the user ID.
 
 Browser → server:
-
 - `presence.update { environment_id, selection, editing }`. The room keeps
   only the latest per socket, accepts at most 10 per second per socket
   (extras are dropped), and broadcasts presence at most every 100 ms.
@@ -335,7 +326,6 @@ visible in everyone's review panel within one broadcast.
 
 React Flow, `@xyflow/react` 12.x (MIT), in
 `apps/web/src/features/canvas/`.
-
 - **Layout.** The canvas is the project page's main view, and the existing
   service list is a toggle with full parity: every action on the canvas
   can be done from the list. Clicking a node opens the service drawer

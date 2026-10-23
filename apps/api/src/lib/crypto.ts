@@ -5,7 +5,7 @@
  *
  * @module
  */
-import { fromBase64, toBase64 } from "@openrail/protocol";
+import { fromBase64, toBase64 } from "@roundhouse/protocol";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -44,7 +44,7 @@ export async function deriveKey(masterKey: string, purpose: KeyPurpose): Promise
     {
       name: "HKDF",
       hash: "SHA-256",
-      salt: encoder.encode("openrail/v1"),
+      salt: encoder.encode("roundhouse/v1"),
       info: encoder.encode(purpose),
     },
     ikm,

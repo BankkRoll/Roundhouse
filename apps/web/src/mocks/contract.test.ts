@@ -25,7 +25,7 @@ import {
   JOIN_TOKEN_TTL_MS,
   REALTIME_CLOSE_CODES,
   type Role,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PHASE1_ROUTES } from "../../../api/src/contracts";
 import { RealtimeServerMessageSchema } from "../../../api/src/schemas";
@@ -86,7 +86,7 @@ async function loadApiRoutes(): Promise<ApiRoute[]> {
     // Worker-only code (D1 and Durable Object bindings) that it has no types for.
     ROUTE_MODULES.map(
       (name) =>
-        import(/* @vite-ignore */ `@openrail/api-source/routes/${name}.ts`) as Promise<
+        import(/* @vite-ignore */ `@roundhouse/api-source/routes/${name}.ts`) as Promise<
           Record<string, unknown>
         >,
     ),
@@ -1348,7 +1348,7 @@ describe("MSW mocks match the API contract", () => {
       expect(value("API_URL")).toBe("http://api.production.internal:8080");
       expect(value("REGION")).toBe("hel1");
       expect(value("DATABASE_URL")).toContain("hunter2");
-      expect(value("OPENRAIL_DEPLOYMENT_ID")).toBe(SEED.webActive);
+      expect(value("ROUNDHOUSE_DEPLOYMENT_ID")).toBe(SEED.webActive);
       expect(value("PORT")).toBe("3000");
       expect(db.audit.at(-1)).toMatchObject({
         action: "variables.resolved",

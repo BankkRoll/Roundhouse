@@ -9,8 +9,8 @@ import {
   DialogTitle,
   Label,
   toast,
-} from "@openrail/ui";
-import { SegmentedControl, Switch } from "@openrail/ui/controls";
+} from "@roundhouse/ui";
+import { SegmentedControl, Switch } from "@roundhouse/ui/controls";
 import { useNavigate } from "@tanstack/react-router";
 import { ContainerIcon } from "lucide-react";
 import { type FormEvent, type ReactNode, useId, useState } from "react";

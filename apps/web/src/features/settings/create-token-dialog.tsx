@@ -3,7 +3,7 @@ import {
   type ApiTokenScope,
   type Role,
   scopesBeyondRole,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import {
   Button,
   Checkbox,
@@ -16,7 +16,7 @@ import {
   DialogTitle,
   Label,
   Select,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { TriangleAlertIcon } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { FormField } from "../../components/form-field";

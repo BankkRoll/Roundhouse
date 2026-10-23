@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/apitest"
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/apitest"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
 )
 
 func TestVarsList(t *testing.T) {
@@ -32,7 +32,7 @@ func TestVarsGet(t *testing.T) {
 	h := newHarness(t)
 	h.link()
 	r := h.ok("", "vars", "get", "DATABASE_URL")
-	if r.stdout != "postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.OPENRAIL_PRIVATE_DOMAIN}}:${{db.PORT}}/shop\n" {
+	if r.stdout != "postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.ROUNDHOUSE_PRIVATE_DOMAIN}}:${{db.PORT}}/shop\n" {
 		t.Errorf("get printed %q", r.stdout)
 	}
 	r = h.expect(exitcode.Usage, "", "vars", "get", "API_KEY")

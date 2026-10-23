@@ -26,7 +26,7 @@ func TestResolveToken(t *testing.T) {
 		t.Fatal("expected --token and --token-file together to be rejected")
 	}
 
-	t.Setenv("OPENRAIL_JOIN_TOKEN", "njt_env")
+	t.Setenv("ROUNDHOUSE_JOIN_TOKEN", "njt_env")
 	tok = ""
 	if err := resolveToken(&tok, ""); err != nil || tok != "njt_env" {
 		t.Fatalf("env: got %q, %v", tok, err)

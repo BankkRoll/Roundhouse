@@ -1,4 +1,4 @@
-import { cn, copyText } from "@openrail/ui";
+import { cn, copyText } from "@roundhouse/ui";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import {
   type KeyboardEventHandler,

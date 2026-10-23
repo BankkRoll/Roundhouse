@@ -16,8 +16,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/atomicfile"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/atomicfile"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 	"gopkg.in/yaml.v3"
 )
 
@@ -53,22 +53,22 @@ type Config struct {
 }
 
 // DefaultPath returns the config path used when --config is not given:
-// /etc/openrail/agent.yaml on Linux, and a per-user location elsewhere so the
+// /etc/roundhouse/agent.yaml on Linux, and a per-user location elsewhere so the
 // agent can be run unprivileged during local development.
 func DefaultPath() string {
 	if runtime.GOOS == "linux" {
-		return "/etc/openrail/agent.yaml"
+		return "/etc/roundhouse/agent.yaml"
 	}
 	return filepath.Join(userDir(), "agent.yaml")
 }
 
 // DefaultDataDir returns the directory for the credential, identity key and
-// state files belonging to the config at configPath: /var/lib/openrail on
+// state files belonging to the config at configPath: /var/lib/roundhouse on
 // Linux, and a sibling of the config elsewhere, so local agents started with
 // different --config paths never share a credential.
 func DefaultDataDir(configPath string) string {
 	if runtime.GOOS == "linux" {
-		return "/var/lib/openrail"
+		return "/var/lib/roundhouse"
 	}
 	base := filepath.Base(configPath)
 	return filepath.Join(filepath.Dir(configPath), strings.TrimSuffix(base, filepath.Ext(base))+"-data")
@@ -79,7 +79,7 @@ func userDir() string {
 	if err != nil {
 		dir = os.TempDir()
 	}
-	return filepath.Join(dir, "openrail")
+	return filepath.Join(dir, "roundhouse")
 }
 
 // WithDataDir returns a copy of c with every unset file path defaulted to a

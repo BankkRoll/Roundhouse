@@ -3,7 +3,6 @@
 ## Status
 
 Proposed.
-
 - Date: 2026-10-22
 - Phase: 2
 - Protocol: version 4
@@ -16,7 +15,6 @@ Names follow the Roundhouse rename (0013, "Naming").
 
 Phase 1 runs stateless containers. `SERVICE_KINDS` already includes
 `database`, but nothing behind it differs from an app:
-
 - **No persistent storage.** Containers keep nothing across a replace.
 - **Unsafe rollout.** The agent starts the new container before stopping
   the old one. Two Postgres processes on one data directory would corrupt
@@ -31,7 +29,6 @@ Phase 1 runs stateless containers. `SERVICE_KINDS` already includes
   (HTTP), so a database cannot be reached from outside.
 
 Facts that constrain the design (sources at the end):
-
 - **Docker volume quotas.** `--storage-opt size` limits only a container's
   writable layer, on overlay2 over XFS with `pquota`. The `local` volume
   driver has no size quota.
@@ -76,19 +73,18 @@ resolves the digests through the registry API. A weekly CI job re-resolves
 them and fails if a pinned digest no longer exists, so drift is a reviewed
 PR, never silent.
 
-| `engine`  | Versions offered (default first) | Image                        | Port  | Mount                 | Health (`exec`)                                                      | Backup         |
-| --------- | -------------------------------- | ---------------------------- | ----- | --------------------- | -------------------------------------------------------------------- | -------------- |
-| `postgres`| 18, 17, 16                       | `postgres:<v>-bookworm`      | 5432  | `/var/lib/postgresql` | `pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"`      | dump           |
-| `mysql`   | 9.7, 8.4                         | `mysql:<v>`                  | 3306  | `/var/lib/mysql`      | `mysqladmin ping -h 127.0.0.1 --silent`                              | dump           |
-| `redis`   | 8.10                             | `redis:<v>`                  | 6379  | `/data`               | `redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping`              | dump (RDB)     |
-| `mongodb` | 9.0, 8.0                         | `mongo:<v>`                  | 27017 | `/data/db`            | `mongosh --quiet --eval 'db.adminCommand("ping").ok'`                | dump (archive) |
+| `engine`   | Versions offered (default first) | Image                   | Port  | Mount                 | Health (`exec`)                                                 | Backup         |
+| ---------- | -------------------------------- | ----------------------- | ----- | --------------------- | --------------------------------------------------------------- | -------------- |
+| `postgres` | 18, 17, 16                       | `postgres:<v>-bookworm` | 5432  | `/var/lib/postgresql` | `pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"` | dump           |
+| `mysql`    | 9.7, 8.4                         | `mysql:<v>`             | 3306  | `/var/lib/mysql`      | `mysqladmin ping -h 127.0.0.1 --silent`                         | dump           |
+| `redis`    | 8.10                             | `redis:<v>`             | 6379  | `/data`               | `redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping`         | dump (RDB)     |
+| `mongodb`  | 9.0, 8.0                         | `mongo:<v>`             | 27017 | `/data/db`            | `mongosh --quiet --eval 'db.adminCommand("ping").ok'`           | dump (archive) |
 
 A template is a `service.create` op (0006) with `database: { engine,
 version }`. `renderDatabaseService(engine, version)` expands it into the
 following.
 
 **Service and config.**
-
 - `kind: "database"`, an `image` source with the pinned digest reference,
   `replicas: 1`, and `strategy: "recreate"`.
 - Resources default to 1000 m CPU and 1024 MiB memory (512 MiB for Redis).
@@ -103,15 +99,14 @@ following.
 Values are 32 random bytes, base64url (43 characters), minted in the
 Worker with `crypto.getRandomValues`.
 
-| Engine   | Secret variables                                                          | Derived (reference-valued, secret)                                                                       |
-| -------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| postgres | `POSTGRES_PASSWORD`, `ROUNDHOUSE_RO_PASSWORD`; plain `POSTGRES_USER=postgres`, `POSTGRES_DB=app` | `DATABASE_URL=postgresql://${{POSTGRES_USER}}:${{POSTGRES_PASSWORD}}@${{ROUNDHOUSE_PRIVATE_DOMAIN}}:5432/${{POSTGRES_DB}}`, `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` |
-| mysql    | `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, `ROUNDHOUSE_RO_PASSWORD`; plain `MYSQL_USER=app`, `MYSQL_DATABASE=app` | `DATABASE_URL=mysql://…`, `MYSQL_URL`                                                                     |
-| redis    | `REDIS_PASSWORD`, `ROUNDHOUSE_RO_PASSWORD`                                 | `REDIS_URL=redis://default:${{REDIS_PASSWORD}}@${{ROUNDHOUSE_PRIVATE_DOMAIN}}:6379`                       |
-| mongodb  | `MONGO_INITDB_ROOT_PASSWORD`, `ROUNDHOUSE_RO_PASSWORD`; plain `MONGO_INITDB_ROOT_USERNAME=root` | `MONGO_URL=mongodb://root:${{MONGO_INITDB_ROOT_PASSWORD}}@${{ROUNDHOUSE_PRIVATE_DOMAIN}}:27017/?authSource=admin`, `DATABASE_URL` (same) |
+| Engine   | Secret variables                                                                                                | Derived (reference-valued, secret)                                                                                                                                                   |
+| -------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| postgres | `POSTGRES_PASSWORD`, `ROUNDHOUSE_RO_PASSWORD`; plain `POSTGRES_USER=postgres`, `POSTGRES_DB=app`                | `DATABASE_URL=postgresql://${{POSTGRES_USER}}:${{POSTGRES_PASSWORD}}@${{ROUNDHOUSE_PRIVATE_DOMAIN}}:5432/${{POSTGRES_DB}}`, `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` |
+| mysql    | `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, `ROUNDHOUSE_RO_PASSWORD`; plain `MYSQL_USER=app`, `MYSQL_DATABASE=app` | `DATABASE_URL=mysql://…`, `MYSQL_URL`                                                                                                                                                |
+| redis    | `REDIS_PASSWORD`, `ROUNDHOUSE_RO_PASSWORD`                                                                      | `REDIS_URL=redis://default:${{REDIS_PASSWORD}}@${{ROUNDHOUSE_PRIVATE_DOMAIN}}:6379`                                                                                                  |
+| mongodb  | `MONGO_INITDB_ROOT_PASSWORD`, `ROUNDHOUSE_RO_PASSWORD`; plain `MONGO_INITDB_ROOT_USERNAME=root`                 | `MONGO_URL=mongodb://root:${{MONGO_INITDB_ROOT_PASSWORD}}@${{ROUNDHOUSE_PRIVATE_DOMAIN}}:27017/?authSource=admin`, `DATABASE_URL` (same)                                             |
 
 Notes:
-
 - **Redis** has no password environment variable in its image. The
   template sets the command to `["sh", "-c", "exec redis-server --requirepass \"$REDIS_PASSWORD\" --user \"roundhouse_ro on >$ROUNDHOUSE_RO_PASSWORD ~* &* +@read -@dangerous\" --appendonly yes"]`.
   The password is then visible to processes inside the container only.
@@ -161,7 +156,6 @@ volumes?: { id: IdString; size_mb: number; project_id: IdString; environment_id:
 ```
 
 **Agent invariants.** These hold even if the control plane is wrong.
-
 1. A volume missing from `volumes` is never deleted. It is reported as
    `orphaned`. Only a `volume_delete` frame deletes data.
 2. At most one container mounts a volume at a time. A workload with
@@ -212,7 +206,6 @@ restore and migration output. It is stored in R2 and indexed in
 
 **On the node.** The volumes root is `/var/lib/roundhouse/volumes`
 (agent config `volumes.root`).
-
 - Each volume is a filesystem, or a project-quota tree, mounted at
   `<root>/mnt/<volume_id>`.
 - The container gets the bind mount `<root>/mnt/<volume_id>/data` →
@@ -225,25 +218,23 @@ restore and migration output. It is stored in R2 and indexed in
 
 **Quota enforcement** (agent config `volumes.quota: auto | xfs | ext4 | loop | none`):
 
-| Mode           | When `auto` picks it                                          | Mechanism                                                                                                                       |
-| -------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `xfs_project`  | the volumes root is on XFS mounted with `prjquota`            | `quotactl(Q_XSETQLIM)` with project ID = a per-volume counter persisted in `<data-dir>/volumes.json`; resize is a new limit    |
-| `ext4_project` | the root is on ext4 with the `project` feature and `prjquota` | `FS_IOC_FSSETXATTR` (`chattr -p ID +P`) and `quotactl(Q_SETQUOTA, PRJQUOTA)`                                                     |
+| Mode           | When `auto` picks it                                          | Mechanism                                                                                                                                                             |
+| -------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `xfs_project`  | the volumes root is on XFS mounted with `prjquota`            | `quotactl(Q_XSETQLIM)` with project ID = a per-volume counter persisted in `<data-dir>/volumes.json`; resize is a new limit                                           |
+| `ext4_project` | the root is on ext4 with the `project` feature and `prjquota` | `FS_IOC_FSSETXATTR` (`chattr -p ID +P`) and `quotactl(Q_SETQUOTA, PRJQUOTA)`                                                                                          |
 | `loop`         | otherwise, when `/dev/loop-control` exists                    | sparse image `<root>/images/<volume_id>.img`, `mkfs.ext4 -m 0`, mounted `loop,noatime,nodev,nosuid`; grow online with `truncate`, `LOOP_SET_CAPACITY` and `resize2fs` |
-| `none`         | none of the above (e.g. Docker Desktop)                       | no enforcement; usage is still reported, and the dashboard shows "quota not enforced"                                           |
+| `none`         | none of the above (e.g. Docker Desktop)                       | no enforcement; usage is still reported, and the dashboard shows "quota not enforced"                                                                                 |
 
 **Choice.** `loop` is the effective default on common cloud images: ext4
 root, no project feature. It is the only mode that enforces a hard limit
 on any host filesystem without remounting `/`. The project-quota modes
 are preferred when present, because they have no loop or fsck overhead.
-
 - Shrinking is refused (`422 volume_shrink_unsupported`).
 - Growing applies online in every mode.
 - The agent mounts every `loop` volume at start, before reconciling any
   workload. Workloads have restart policy `no`, so nothing starts first.
 
 **Placement affinity.**
-
 - `volumes.node_id` is null until the first deployment. The scheduler then
   places the replica with `diskMb = size_mb`, and the same `db.batch()` that
   writes the placement sets `node_id`.
@@ -293,8 +284,7 @@ A deleted volume enters `pending_deletion` for `VOLUME_DELETE_GRACE_MS =
 
 `scheduled()` checks `controller.cron`.
 
-**The minute tick** (`lib/dispatch.ts`) is a set of registered *claimers*:
-
+**The minute tick** (`lib/dispatch.ts`) is a set of registered _claimers_:
 - backup policies due;
 - cron services due (0010);
 - alert evaluation (0008);
@@ -380,19 +370,17 @@ Read & Write. Without the setting, backup routes return
 **Pipeline on the agent** (`internal/backup`): source, then the RHBK1
 container, then zstd, then age, then fixed-size parts, then presigned
 `PUT`s, with 2 parts in flight.
-
 - **Source** for `dump`: the engine's tool, run with `docker exec` inside
   the database container. The tool then always matches the server version,
   and credentials come from the container's own environment. The commands
   are built into the agent, never sent:
 
-| Engine   | Command (stdout)                                                                                                    | Notes                                                                                     |
-| -------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Engine   | Command (stdout)                                                                                                   | Notes                                                                                                          |
+| -------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
 | postgres | `pg_dumpall -U "$POSTGRES_USER" --globals-only`, then per database `pg_dump -U "$POSTGRES_USER" -Fc -d <db>`       | databases from `psql -Atc "SELECT datname FROM pg_database WHERE NOT datistemplate"` unless `databases` is set |
-| mysql    | `mysqldump --defaults-extra-file=/dev/stdin --single-transaction --routines --events --triggers --databases <dbs>` | password written to the exec's stdin as `[client]\npassword=…`; system schemas excluded    |
-| redis    | `redis-cli -a "$REDIS_PASSWORD" --no-auth-warning --rdb -`                                                          | exit code checked (SYNC transfer)                                                         |
-| mongodb  | `mongodump --archive --config=/dev/stdin`                                                                           | YAML with the password on stdin                                                           |
-
+| mysql    | `mysqldump --defaults-extra-file=/dev/stdin --single-transaction --routines --events --triggers --databases <dbs>` | password written to the exec's stdin as `[client]\npassword=…`; system schemas excluded                        |
+| redis    | `redis-cli -a "$REDIS_PASSWORD" --no-auth-warning --rdb -`                                                         | exit code checked (SYNC transfer)                                                                              |
+| mongodb  | `mongodump --archive --config=/dev/stdin`                                                                          | YAML with the password on stdin                                                                                |
 - **Source** for `snapshot`: a Go `archive/tar` walk of `<root>/mnt/<vol>/data`,
   preserving owners, modes and xattrs. With `quiesce: "stop"`, the agent
   first stops the workload, as the `stop_first` rules require, and starts
@@ -418,7 +406,6 @@ container, then zstd, then age, then fixed-size parts, then presigned
 - **SHA-256** is computed over the stored (encrypted) bytes.
 
 **Workflow** `BACKUP_WORKFLOW`, instance ID = `bak_…`:
-
 1. Insert or claim the `backups` row.
 2. `CreateMultipartUpload` and record the `upload_id`.
 3. Presign the first 16 `UploadPart` URLs, each valid for 1 h, and send
@@ -445,7 +432,6 @@ uploads after 1 day.
 `POST /v1/backups/{id}/restore` takes
 `{ mode: "in_place" | "new_service", target_environment_id?, target_node_id?, confirm }`.
 `confirm` must equal the service slug.
-
 - **`in_place`**: needs `backups:restore`.
   1. Take a safety backup (`trigger: pre_restore`), skipped only with
      `skip_safety_backup: true`.
@@ -497,7 +483,6 @@ combines the two.
 starts `VOLUME_MIGRATION_WORKFLOW`, instance ID `mig_…`. Migration copies
 through object storage, so it works between any two nodes, mesh or not,
 and leaves a backup behind:
-
 1. **Check.** The target node is online with protocol 4 or later, passes
    the scheduler (disk, selector), and has `quota_mode` other than `none`,
    unless the source also has `none`.
@@ -532,17 +517,16 @@ read-only transactions, single statements, row caps and typed results.
 
 **Operations** (`DbOp`, discriminated on `type`):
 
-| `type`               | Engines        | Semantics                                                                       |
-| -------------------- | -------------- | ------------------------------------------------------------------------------- |
-| `list_namespaces`    | all            | databases / schemas / Redis DB indexes                                          |
-| `list_tables`        | all            | tables, views, collections, or a `SCAN` page of keys with type                   |
-| `describe`           | SQL, mongo     | columns and types / sampled document fields                                      |
-| `rows`               | all            | page of a table (identifiers quoted by the driver, `LIMIT`/`OFFSET`, optional `order_by` column) or key values |
-| `raw`                | all            | `statement` (≤ 64 KiB) with positional `params`; for mongo a command document; for redis an argv |
-| `provision_readonly` | all            | creates `roundhouse_ro` (system use only, never from the API)                    |
+| `type`               | Engines    | Semantics                                                                                                      |
+| -------------------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
+| `list_namespaces`    | all        | databases / schemas / Redis DB indexes                                                                         |
+| `list_tables`        | all        | tables, views, collections, or a `SCAN` page of keys with type                                                 |
+| `describe`           | SQL, mongo | columns and types / sampled document fields                                                                    |
+| `rows`               | all        | page of a table (identifiers quoted by the driver, `LIMIT`/`OFFSET`, optional `order_by` column) or key values |
+| `raw`                | all        | `statement` (≤ 64 KiB) with positional `params`; for mongo a command document; for redis an argv               |
+| `provision_readonly` | all        | creates `roundhouse_ro` (system use only, never from the API)                                                  |
 
 **Read-only by default, enforced three ways.**
-
 1. **Principal.** `mode: "read"` connects as `roundhouse_ro`. `write` uses
    the admin credential.
 2. **Transaction.**
@@ -570,7 +554,6 @@ dashboard, a typed service slug once per browser session. Each statement
 runs in its own transaction and is committed if it succeeds.
 
 **Audit.**
-
 - `database.query_executed` records every `raw` query, read or write: mode,
   the first 2 KiB of the statement, its SHA-256, row count, duration and
   outcome.
@@ -583,7 +566,6 @@ runs in its own transaction and is committed if it succeeds.
 `PUT /v1/services/{id}/tcp-proxies` takes
 `{ environment_id, container_port, allowed_cidrs: string[] }`, also
 available as a staged op.
-
 - Only single-replica services can use it.
 - The control plane allocates a host port from the instance setting
   `tcp_proxy_port_range` (default `20000-29999`), unique per node, and
@@ -616,31 +598,30 @@ ALTER TABLE nodes ADD COLUMN public_hostname TEXT;
 
 ### Routes, RBAC, audit
 
-| Method and path                                              | RBAC action                                         | Audit                           |
-| ------------------------------------------------------------ | --------------------------------------------------- | ------------------------------- |
-| `POST /v1/projects/{projectId}/databases`                    | `services:manage`, `variables:manage`, `deployments:create` | via 0006 apply            |
-| `POST /v1/services/{serviceId}/database/rotate-credentials`  | `variables:reveal`, `deployments:create`            | `database.credentials_rotated`  |
-| `GET /v1/services/{serviceId}/volume?environment_id=`        | `services:read`                                     | none                            |
-| `PATCH /v1/volumes/{volumeId}` `{size_mb}`                   | `services:manage`                                   | `volume.resized`                |
-| `DELETE /v1/volumes/{volumeId}`                              | `services:manage`                                   | `volume.deleted`                |
-| `POST /v1/volumes/{volumeId}/undelete`                       | `services:manage`                                   | `volume.undeleted`              |
-| `POST /v1/volumes/{volumeId}/migrate`                        | `services:manage`                                   | `volume.migration_started`      |
-| `GET /v1/volume-migrations/{migrationId}`                    | `services:read`                                     | none                            |
-| `GET`, `PUT /v1/services/{serviceId}/backup-policy?environment_id=` | `services:read` / `backups:manage`           | `backup.policy_updated`         |
-| `GET /v1/services/{serviceId}/backups?environment_id=`       | `services:read`                                     | none                            |
-| `POST /v1/services/{serviceId}/backups`                      | `backups:manage`                                    | `backup.requested`              |
-| `GET /v1/backups/{backupId}`                                 | `services:read`                                     | none                            |
-| `DELETE /v1/backups/{backupId}`                              | `backups:manage`                                    | `backup.deleted`                |
-| `GET /v1/backups/{backupId}/download`                        | `backups:restore`                                   | `backup.downloaded`             |
-| `POST /v1/backups/{backupId}/decryption-key`                 | `variables:reveal`                                  | `backup.key_revealed`           |
-| `POST /v1/backups/{backupId}/restore`                        | `backups:restore` (+ `services:manage` for `new_service`) | `restore.started`         |
-| `GET /v1/restores/{restoreId}`                               | `services:read`                                     | none                            |
-| `GET /v1/services/{serviceId}/database/schema?environment_id=` | `data:read`                                       | `database.browser_opened`       |
-| `POST /v1/services/{serviceId}/database/query`               | `data:read` (`data:write` for `mode: write`)        | `database.query_executed` (raw) |
-| `PUT`, `DELETE /v1/services/{serviceId}/tcp-proxies`         | `services:manage`                                   | `tcp_proxy.enabled` / `tcp_proxy.disabled` |
+| Method and path                                                     | RBAC action                                                 | Audit                                      |
+| ------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------ |
+| `POST /v1/projects/{projectId}/databases`                           | `services:manage`, `variables:manage`, `deployments:create` | via 0006 apply                             |
+| `POST /v1/services/{serviceId}/database/rotate-credentials`         | `variables:reveal`, `deployments:create`                    | `database.credentials_rotated`             |
+| `GET /v1/services/{serviceId}/volume?environment_id=`               | `services:read`                                             | none                                       |
+| `PATCH /v1/volumes/{volumeId}` `{size_mb}`                          | `services:manage`                                           | `volume.resized`                           |
+| `DELETE /v1/volumes/{volumeId}`                                     | `services:manage`                                           | `volume.deleted`                           |
+| `POST /v1/volumes/{volumeId}/undelete`                              | `services:manage`                                           | `volume.undeleted`                         |
+| `POST /v1/volumes/{volumeId}/migrate`                               | `services:manage`                                           | `volume.migration_started`                 |
+| `GET /v1/volume-migrations/{migrationId}`                           | `services:read`                                             | none                                       |
+| `GET`, `PUT /v1/services/{serviceId}/backup-policy?environment_id=` | `services:read` / `backups:manage`                          | `backup.policy_updated`                    |
+| `GET /v1/services/{serviceId}/backups?environment_id=`              | `services:read`                                             | none                                       |
+| `POST /v1/services/{serviceId}/backups`                             | `backups:manage`                                            | `backup.requested`                         |
+| `GET /v1/backups/{backupId}`                                        | `services:read`                                             | none                                       |
+| `DELETE /v1/backups/{backupId}`                                     | `backups:manage`                                            | `backup.deleted`                           |
+| `GET /v1/backups/{backupId}/download`                               | `backups:restore`                                           | `backup.downloaded`                        |
+| `POST /v1/backups/{backupId}/decryption-key`                        | `variables:reveal`                                          | `backup.key_revealed`                      |
+| `POST /v1/backups/{backupId}/restore`                               | `backups:restore` (+ `services:manage` for `new_service`)   | `restore.started`                          |
+| `GET /v1/restores/{restoreId}`                                      | `services:read`                                             | none                                       |
+| `GET /v1/services/{serviceId}/database/schema?environment_id=`      | `data:read`                                                 | `database.browser_opened`                  |
+| `POST /v1/services/{serviceId}/database/query`                      | `data:read` (`data:write` for `mode: write`)                | `database.query_executed` (raw)            |
+| `PUT`, `DELETE /v1/services/{serviceId}/tcp-proxies`                | `services:manage`                                           | `tcp_proxy.enabled` / `tcp_proxy.disabled` |
 
 New RBAC actions:
-
 - `data:read`, `backups:manage`: owner, admin and member.
 - `data:write`, `backups:restore`: owner and admin.
 

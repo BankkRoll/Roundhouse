@@ -1,4 +1,4 @@
-import { freeSlug, slugify } from "@openrail/shared";
+import { freeSlug, slugify } from "@roundhouse/shared";
 import {
   Button,
   Dialog,
@@ -10,7 +10,7 @@ import {
   Label,
   Textarea,
   toast,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useId, useState } from "react";
 import { FormField } from "../../components/form-field";

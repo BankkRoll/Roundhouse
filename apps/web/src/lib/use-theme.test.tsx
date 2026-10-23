@@ -1,4 +1,4 @@
-import { THEME_STORAGE_KEY } from "@openrail/ui";
+import { THEME_STORAGE_KEY } from "@roundhouse/ui";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import themeInit from "../../public/theme-init.js?raw";

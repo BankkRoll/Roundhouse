@@ -3,7 +3,6 @@
 ## Status
 
 Proposed.
-
 - Date: 2026-10-22
 - Phase: 4
 - Protocol: version 6 (`image_push`, edge gateway)
@@ -23,7 +22,6 @@ in that account. The goal is a provider switch per service, `nodes` ↔
 variables model.
 
 Facts (sources at the end; this area changes monthly):
-
 - **Status and plan.** Containers have been GA since 2026-04-13, on the
   Workers Paid plan.
 - **Model.** A container belongs to a Durable Object class in a Worker
@@ -83,7 +81,7 @@ Facts (sources at the end; this area changes monthly):
     and since 2026-06-16 `connect()`, to any host reachable through a
     tunnel.
   - It needs cloudflared 2025.7.0 or later with outbound UDP 7844.
-  - No documented integration exists *for containers*. A container's HTTP
+  - No documented integration exists _for containers_. A container's HTTP
     can reach it only through an outbound handler.
 - **Local development.** `wrangler dev` runs containers in the local
   Docker. No official fake of the Containers REST API exists.
@@ -99,12 +97,12 @@ Facts (sources at the end; this area changes monthly):
 ```ts
 interface PlacementConfig {
   node_selector: Record<string, string>;
-  provider: "nodes" | "cloudflare";            // default "nodes"
+  provider: "nodes" | "cloudflare"; // default "nodes"
   cloudflare?: {
     instance_type: "lite" | "basic" | "standard-1" | "standard-2" | "standard-3" | "standard-4";
-    max_instances: number;                     // 1..100; the getRandom pool size
-    sleep_after: string;                       // "1m".."24h", default "10m"
-    regions?: string[];                        // `constraints`, when set
+    max_instances: number; // 1..100; the getRandom pool size
+    sleep_after: string; // "1m".."24h", default "10m"
+    regions?: string[]; // `constraints`, when set
   };
 }
 ```
@@ -112,7 +110,6 @@ interface PlacementConfig {
 A service may use `provider: "cloudflare"` only if all of these hold. The
 apply-time validation in 0006 enforces them, with
 `422 provider_ineligible` and the failing rule:
-
 - `kind: "app"`;
 - `networking.port` set;
 - no volume;
@@ -143,7 +140,6 @@ apex.
 ### Runtime Worker
 
 Each Cloudflare-provider service-environment gets one Worker script:
-
 - **Name:** `rh-<base32(sha256(service_id "/" environment_id))[0..20]>`.
 - **Code:** a generic runtime bundle, `apps/cf-runtime/`, built with the
   control plane and embedded in it as a text module.
@@ -166,7 +162,9 @@ export class AppContainer extends Container<Env> {
   defaultPort = config.port;
   sleepAfter = config.sleep_after;
   enableInternet = true;
-  static outboundByHost = { /* "*.internal": meshGateway, see "Reaching node services" */ };
+  static outboundByHost = {
+    /* "*.internal": meshGateway, see "Reaching node services" */
+  };
   override async fetch(req: Request) {
     if (!(await this.getState()).status.startsWith("running")) {
       const { env, deployment_id } = await this.env.CONTROL.resolveEnv(this.env.RH_RUNTIME_TOKEN);
@@ -177,7 +175,8 @@ export class AppContainer extends Container<Env> {
 }
 export default {
   async fetch(req, env) {
-    if (!config.hostnames.includes(new URL(req.url).hostname)) return new Response("no route", { status: 404 });
+    if (!config.hostnames.includes(new URL(req.url).hostname))
+      return new Response("no route", { status: 404 });
     const started = Date.now();
     const res = await getRandom(env.APP, config.max_instances).then((c) => c.fetch(req));
     env.METRICS.writeDataPoint(/* edge_request row: status, latency */);
@@ -191,7 +190,6 @@ That would hit the 128-variable and 5 KB limits, and would leave every
 resolved secret at rest in another product. `RuntimeEnv` is a
 `WorkerEntrypoint` on the control plane, reachable only through service
 bindings in the same account, never over HTTP. `resolveEnv(token)`:
-
 1. verifies `token = HMAC-SHA256(derive(master, "runtime-token"), service_id "|" environment_id "|" generation)`,
    where `generation` is bumped on every Cloudflare deploy and on disable;
 2. unseals the active Cloudflare deployment's `env_sealed`;
@@ -232,7 +230,6 @@ container's environment.
 
 The deploy workflow (0003) branches on `placement.provider` after
 `resolve-variables` and the build. Steps for `cloudflare`:
-
 1. **push**: `image_push`, or a direct reference.
 2. **script**: upload or update the runtime script with the new
    `RH_CONFIG`, and rotate `RH_RUNTIME_TOKEN` (new generation). On first
@@ -287,7 +284,6 @@ CREATE TABLE cf_deployments (
 ### Reaching node services
 
 Findings that set the scope:
-
 - Container outbound HTTP or HTTPS on ports 80 and 443 can be intercepted
   by `outboundByHost`, and the handler can call a `vpc_networks` binding.
   Workers VPC reaches a tunnel-attached network.
@@ -295,7 +291,6 @@ Findings that set the scope:
   nor routed through VPC by any documented path.
 
 Decision for Phase 4:
-
 - **HTTP to node services: supported, behind an experimental flag**
   (`cloudflare.mesh_access`, because Workers VPC is in beta).
   - **Gateway.** One or more nodes labelled
@@ -314,7 +309,7 @@ Decision for Phase 4:
     `env.MESH.fetch()`, a `vpc_networks` binding by `tunnel_id`.
   - **Policy.** The gateway accepts a request only if `RH-Auth` is valid
     for the environment named in `RH-Target`. It resolves the target with
-    the private DNS (0005) *as that environment*, and forwards over the
+    the private DNS (0005) _as that environment_, and forwards over the
     mesh with the gateway node's own address. Receiving nodes admit
     gateway traffic through a per-environment set `gw_<tag>` that the
     control plane fills with gateway addresses for environments that have
@@ -331,7 +326,6 @@ Decision for Phase 4:
     integration.
 
 Protocol 6:
-
 - `desired_state.edge_gateway?: { listen: string; tunnel_token: string /* credential */; tokens: { env_tag: number; key_id: string; secret_hash: string }[] }`.
 - The `sys_cloudflared` system workload, derived by the agent like
   `sys_registry`.
@@ -354,11 +348,11 @@ Protocol 6:
 
 ### Routes, RBAC, audit
 
-| Method and path                                        | RBAC                                 | Audit                              |
-| ------------------------------------------------------ | ------------------------------------ | ---------------------------------- |
-| `GET`, `PUT /v1/instance/cloudflare`                   | `instance:manage` (session only)     | `instance.settings_updated`        |
-| `POST /v1/instance/cloudflare/verify`                  | `instance:manage`                    | none                               |
-| `GET /v1/services/{serviceId}/cloudflare?environment_id=` | `services:read`                   | none (status, instances, script)   |
+| Method and path                                             | RBAC                                     | Audit                                                                |
+| ----------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------- |
+| `GET`, `PUT /v1/instance/cloudflare`                        | `instance:manage` (session only)         | `instance.settings_updated`                                          |
+| `POST /v1/instance/cloudflare/verify`                       | `instance:manage`                        | none                                                                 |
+| `GET /v1/services/{serviceId}/cloudflare?environment_id=`   | `services:read`                          | none (status, instances, script)                                     |
 | Provider switch: `config.patch` `placement.provider` (0006) | `services:manage` + `deployments:create` | `service.provider_changed` (per apply, besides `change_set.applied`) |
 
 There are no new RBAC actions. New ID prefix: `cfd`.
@@ -402,14 +396,13 @@ There are no new RBAC actions. New ID prefix: `cfd`.
 
 What can be verified locally and what only live:
 
-| Behaviour                                                                 | Local / CI                                                                                                      | Live only |
-| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------- |
-| Runtime Worker: host check, `getRandom` pool, cold start through `resolveEnv`, warm-up auth, AE writes | `wrangler dev` runs `apps/cf-runtime` with a container from a local image (Docker), plus the control plane as a second local Worker for the service binding | |
-| Deploy workflow orchestration (push → script → application → rollout → warm → routes → drain), switch back, rollback | **fake Cloudflare API** (`e2e/lib/fake-cloudflare.mjs`): Scripts upload (validates multipart metadata and migrations), DO namespace list, containers applications and rollouts with a scripted state progression, registry credentials, Workers routes, `workers.dev` | ✓ the real API's acceptance of our bodies |
-| Image copy to a registry with temporary credentials                       | agent integration test copying to a local `registry:3` with htpasswd, standing in for `registry.cloudflare.com` | ✓ the real registry's auth flow and arch checks |
-| Edge gateway policy                                                       | agent integration: gateway with HMAC check and environment-scoped resolution; the cloudflared hop is skipped     | ✓ Workers VPC `vpc_networks.fetch` through a tunnel |
-| Scale to zero, cold-start latency, route takeover latency, container stdout logs | —                                                                                                   | ✓         |
-
+| Behaviour                                                                                                            | Local / CI                                                                                                                                                                                                                                                            | Live only                                           |
+| -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Runtime Worker: host check, `getRandom` pool, cold start through `resolveEnv`, warm-up auth, AE writes               | `wrangler dev` runs `apps/cf-runtime` with a container from a local image (Docker), plus the control plane as a second local Worker for the service binding                                                                                                           |                                                     |
+| Deploy workflow orchestration (push → script → application → rollout → warm → routes → drain), switch back, rollback | **fake Cloudflare API** (`e2e/lib/fake-cloudflare.mjs`): Scripts upload (validates multipart metadata and migrations), DO namespace list, containers applications and rollouts with a scripted state progression, registry credentials, Workers routes, `workers.dev` | ✓ the real API's acceptance of our bodies           |
+| Image copy to a registry with temporary credentials                                                                  | agent integration test copying to a local `registry:3` with htpasswd, standing in for `registry.cloudflare.com`                                                                                                                                                       | ✓ the real registry's auth flow and arch checks     |
+| Edge gateway policy                                                                                                  | agent integration: gateway with HMAC check and environment-scoped resolution; the cloudflared hop is skipped                                                                                                                                                          | ✓ Workers VPC `vpc_networks.fetch` through a tunnel |
+| Scale to zero, cold-start latency, route takeover latency, container stdout logs                                     | —                                                                                                                                                                                                                                                                     | ✓                                                   |
 - **Real-stack e2e** (`e2e/phase4/cloudflare-provider.test.mjs`, with the
   fake API and `wrangler dev` for the runtime):
   1. A Next.js app on nodes, then switch to `cloudflare` through a change
@@ -417,7 +410,7 @@ What can be verified locally and what only live:
      and the route creates in order. Requests to the hostname through the
      local runtime Worker reach the container, and the node placements
      are removed after the drain.
-  2. Switching back: node replicas are healthy *before* the routes are
+  2. Switching back: node replicas are healthy _before_ the routes are
      deleted, with no failed request in a request loop at the runtime
      Worker and Caddy (the harness flips its "edge" from Worker to Caddy
      when the fake deletes the route).

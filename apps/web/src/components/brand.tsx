@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@openrail/shared";
+import { PRODUCT_NAME } from "@roundhouse/shared";
 
 /**
  * Logo mark: a lime X with square nodes on a dark tile. Drawn from the same

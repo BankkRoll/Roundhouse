@@ -1,4 +1,4 @@
-import { CANCELLABLE_DEPLOYMENT_STATUSES } from "@openrail/shared";
+import { CANCELLABLE_DEPLOYMENT_STATUSES } from "@roundhouse/shared";
 import {
   type InfiniteData,
   type QueryClient,

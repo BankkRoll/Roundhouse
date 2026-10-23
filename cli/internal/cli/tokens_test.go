@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/api"
-	"github.com/BankkRoll/Open-Rail/cli/internal/apitest"
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/api"
+	"github.com/BankkRoll/Roundhouse/cli/internal/apitest"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
 )
 
 func lastBody(t *testing.T, h *harness, pattern string) map[string]any {

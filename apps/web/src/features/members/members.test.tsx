@@ -1,4 +1,4 @@
-import type { Role } from "@openrail/shared";
+import type { Role } from "@roundhouse/shared";
 import { screen, waitFor, within } from "@testing-library/react";
 import { http } from "msw";
 import { describe, expect, it } from "vitest";

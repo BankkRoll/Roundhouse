@@ -4,7 +4,7 @@
  *
  * @module
  */
-import { consumedNonces, type Db } from "@openrail/db";
+import { consumedNonces, type Db } from "@roundhouse/db";
 
 /**
  * Redeems a single-use value. The first redemption wins, atomically; the row

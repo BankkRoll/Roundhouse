@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/apitest"
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/apitest"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
 )
 
 func envMap(env []string) map[string]string {
@@ -39,12 +39,12 @@ func TestRunInjectsResolvedVariables(t *testing.T) {
 		"REGION":                  "eu-west",
 		"LISTEN":                  "0.0.0.0:8080",
 		"PORT":                    "8080",
-		"OPENRAIL_PUBLIC_DOMAIN":  "api-production-x7k2.apps.example.com",
-		"OPENRAIL_PRIVATE_DOMAIN": "api.production.internal",
-		"OPENRAIL_ENVIRONMENT":    "production",
-		"OPENRAIL_SERVICE_NAME":   "API",
-		"OPENRAIL_DEPLOYMENT_ID":  apitest.ActiveDeploy,
-		"OPENRAIL_GIT_COMMIT_SHA": strings.Repeat("a", 40),
+		"ROUNDHOUSE_PUBLIC_DOMAIN":  "api-production-x7k2.apps.example.com",
+		"ROUNDHOUSE_PRIVATE_DOMAIN": "api.production.internal",
+		"ROUNDHOUSE_ENVIRONMENT":    "production",
+		"ROUNDHOUSE_SERVICE_NAME":   "API",
+		"ROUNDHOUSE_DEPLOYMENT_ID":  apitest.ActiveDeploy,
+		"ROUNDHOUSE_GIT_COMMIT_SHA": strings.Repeat("a", 40),
 	}
 	for k, v := range want {
 		if env[k] != v {
@@ -139,10 +139,10 @@ func TestRunOtherService(t *testing.T) {
 	h.link()
 	h.ok("", "run", "--service", "db", "--", "psql")
 	env := envMap(h.execEnv)
-	if env["POSTGRES_PASSWORD"] != "pg-secret-password" || env["PORT"] != "5432" || env["OPENRAIL_PRIVATE_DOMAIN"] != "db.production.internal" {
+	if env["POSTGRES_PASSWORD"] != "pg-secret-password" || env["PORT"] != "5432" || env["ROUNDHOUSE_PRIVATE_DOMAIN"] != "db.production.internal" {
 		t.Errorf("db env = %v", env)
 	}
-	if _, ok := env["OPENRAIL_DEPLOYMENT_ID"]; ok {
+	if _, ok := env["ROUNDHOUSE_DEPLOYMENT_ID"]; ok {
 		t.Error("db has no live deployment, so no deployment built-ins")
 	}
 }

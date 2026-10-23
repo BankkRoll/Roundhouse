@@ -1,4 +1,4 @@
-import { Meter } from "@openrail/ui";
+import { Meter } from "@roundhouse/ui";
 import type { ReactNode } from "react";
 import type { FeatureGroup } from "../content";
 
@@ -107,7 +107,7 @@ const PREVIEWS: Record<FeatureGroup["id"], ReactNode> = {
         </span>
       </div>
       <p className="rounded-md bg-[var(--lp-step)] p-2 font-mono text-[12px] text-foreground">
-        $ openrail logs api --follow
+        $ roundhouse logs api --follow
       </p>
       <Row left="LOG_LEVEL  info → debug" right="staged" />
     </>

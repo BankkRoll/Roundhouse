@@ -1,4 +1,4 @@
-import { createShortcutHandler, isOverlayOpen, type ShortcutBinding } from "@openrail/ui";
+import { createShortcutHandler, isOverlayOpen, type ShortcutBinding } from "@roundhouse/ui";
 import { useEffect, useRef } from "react";
 import { NAV_ITEMS, type NavPath } from "./nav";
 

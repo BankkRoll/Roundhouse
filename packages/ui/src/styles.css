@@ -10,7 +10,7 @@
  * tab, active nav item, setup steps) draw with `--accent-text` instead.
  *
  * Consumers import this file once from their entry stylesheet:
- *   @import "@openrail/ui/styles.css";
+ *   @import "@roundhouse/ui/styles.css";
  */
 @import "tailwindcss";
 

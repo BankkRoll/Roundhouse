@@ -9,7 +9,7 @@ import {
   DialogTitle,
   Input,
   Label,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { type FormEvent, type ReactNode, useId, useState } from "react";
 
 /** Props for {@link ConfirmDialog}. */

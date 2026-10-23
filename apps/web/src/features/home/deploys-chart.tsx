@@ -1,4 +1,4 @@
-import { cn, Skeleton } from "@openrail/ui";
+import { cn, Skeleton } from "@roundhouse/ui";
 import { SectionHeader } from "../../components/section-header";
 import { usePermissions } from "../../lib/permissions";
 import { DEPLOY_HISTORY_DAYS, type DeployDay, useDeployHistory } from "../../queries/audit";

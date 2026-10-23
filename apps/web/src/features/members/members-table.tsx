@@ -1,4 +1,4 @@
-import { ROLES } from "@openrail/shared";
+import { ROLES } from "@roundhouse/shared";
 import {
   Avatar,
   Badge,
@@ -10,7 +10,7 @@ import {
   TableHeader,
   TableRow,
   toast,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
 import { errorMessage } from "../../lib/api/client";

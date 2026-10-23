@@ -1,4 +1,4 @@
-import { Input, SettingsRow } from "@openrail/ui";
+import { Input, SettingsRow } from "@roundhouse/ui";
 import { type ComponentProps, useId } from "react";
 
 /** Props for {@link SettingsField}. */

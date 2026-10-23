@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Report privately through GitHub Security Advisories:
-<https://github.com/BankkRoll/Open-Rail/security/advisories/new>
+<https://github.com/BankkRoll/Roundhouse/security/advisories/new>
 
 Do not open a public issue, pull request, or discussion. Include the affected
 component and commit, the impact, and steps to reproduce.

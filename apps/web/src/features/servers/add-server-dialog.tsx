@@ -1,4 +1,10 @@
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@openrail/ui";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@roundhouse/ui";
 import { AddServerFlow } from "./add-server-flow";
 
 /** Props for {@link AddServerDialog}. */

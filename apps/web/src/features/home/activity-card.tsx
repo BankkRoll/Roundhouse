@@ -1,5 +1,5 @@
-import type { AuditAction } from "@openrail/shared";
-import { Badge, type BadgeProps, Skeleton } from "@openrail/ui";
+import type { AuditAction } from "@roundhouse/shared";
+import { Badge, type BadgeProps, Skeleton } from "@roundhouse/ui";
 import { Link } from "@tanstack/react-router";
 import { SectionHeader, sectionLinkClasses } from "../../components/section-header";
 import { formatAgo, formatTimestamp } from "../../lib/format";

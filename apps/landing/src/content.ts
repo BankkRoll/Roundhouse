@@ -3,7 +3,7 @@
  *
  * @module
  */
-import { JOIN_TOKEN_TTL_MS, PRODUCT_NAME } from "@openrail/shared";
+import { JOIN_TOKEN_TTL_MS, PRODUCT_NAME } from "@roundhouse/shared";
 
 /** Join-token lifetime in minutes, from the same constant the API uses. */
 export const JOIN_TOKEN_MINUTES = Math.round(JOIN_TOKEN_TTL_MS / 60_000);

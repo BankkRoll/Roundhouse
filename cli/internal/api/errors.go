@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
 )
 
 // ErrorDetail is one problem inside a request, such as a malformed `${{…}}`

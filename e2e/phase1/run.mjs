@@ -72,7 +72,7 @@ try {
     existsSync(join(ROOT, "apps", "web", "dist", "index.html"));
   if (withUi && !skipWeb) {
     log("run", "building the dashboard");
-    await runInherit("pnpm", ["--filter", "@openrail/web", "build"], {
+    await runInherit("pnpm", ["--filter", "@roundhouse/web", "build"], {
       cwd: ROOT,
       shell: isWindows,
     });

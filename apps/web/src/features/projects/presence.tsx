@@ -1,5 +1,5 @@
-import { cn } from "@openrail/ui";
-import { AvatarStack } from "@openrail/ui/controls";
+import { cn } from "@roundhouse/ui";
+import { AvatarStack } from "@roundhouse/ui/controls";
 import type { RealtimeStatus } from "../../lib/realtime/client";
 import { useRealtime } from "../../lib/realtime/provider";
 

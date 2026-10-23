@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
   toast,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { ErrorState } from "../../components/error-state";
 import { errorMessage } from "../../lib/api/client";
 import { formatDuration, formatTimestamp } from "../../lib/format";

@@ -13,8 +13,8 @@
  * @module
  */
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { createDb, type Db, workspaceMembers, workspaces } from "@openrail/db";
-import { type Action, type AuditActorType, can, type Role } from "@openrail/shared";
+import { createDb, type Db, workspaceMembers, workspaces } from "@roundhouse/db";
+import { type Action, type AuditActorType, can, type Role } from "@roundhouse/shared";
 import { APIError } from "better-auth/api";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";

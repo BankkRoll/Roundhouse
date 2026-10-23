@@ -1,4 +1,4 @@
-import { Button } from "@openrail/ui";
+import { Button } from "@roundhouse/ui";
 import { Link } from "@tanstack/react-router";
 import { CircleAlertIcon, CircleCheckIcon, ClockIcon } from "lucide-react";
 import { AuthLayout } from "../../components/auth-layout";
@@ -45,7 +45,7 @@ const OUTCOMES: Record<string, { title: string; description: string; tone: Tone 
   authorization_required: {
     title: "GitHub didn't confirm who you are",
     description:
-      "GitHub sent you back without authorizing your account, so OpenRail can't tell whether you may use that installation. Install again from Platform settings and approve the authorization step.",
+      "GitHub sent you back without authorizing your account, so Roundhouse can't tell whether you may use that installation. Install again from Platform settings and approve the authorization step.",
     tone: "error",
   },
   authorization_failed: {

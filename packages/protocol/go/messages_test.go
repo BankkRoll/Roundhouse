@@ -23,7 +23,7 @@ func validSpec() WorkloadSpec {
 		Routes:        []WorkloadRoute{{Hostname: "web.example.com", ContainerPort: 8080}},
 		Resources:     Resources{CPUMillis: 250, MemoryMB: 256, PIDs: 128},
 		Restart:       Restart{Policy: RestartAlways},
-		Network:       "openrail-prj_1-env_1",
+		Network:       "roundhouse-prj_1-env_1",
 		Labels:        map[string]string{},
 		DrainS:        10,
 		SpecHash:      strings.Repeat("0", 64),
@@ -475,7 +475,7 @@ func TestBuildResultCancelled(t *testing.T) {
 func TestEnvironmentNetworkName(t *testing.T) {
 	prod := EnvironmentNetworkName("prj_1", "env_prod")
 	staging := EnvironmentNetworkName("prj_1", "env_staging")
-	if prod != "openrail-prj_1-env_prod" || staging == prod {
+	if prod != "roundhouse-prj_1-env_prod" || staging == prod {
 		t.Errorf("got %q and %q", prod, staging)
 	}
 	long := EnvironmentNetworkName("prj_"+strings.Repeat("a", 64), "env_"+strings.Repeat("b", 64))

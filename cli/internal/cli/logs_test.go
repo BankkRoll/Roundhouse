@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/api"
-	"github.com/BankkRoll/Open-Rail/cli/internal/apitest"
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
-	"github.com/BankkRoll/Open-Rail/cli/internal/ui"
+	"github.com/BankkRoll/Roundhouse/cli/internal/api"
+	"github.com/BankkRoll/Roundhouse/cli/internal/apitest"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/ui"
 )
 
 func TestLogsHistory(t *testing.T) {

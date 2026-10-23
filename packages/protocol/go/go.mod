@@ -1,4 +1,4 @@
-module github.com/BankkRoll/Open-Rail/packages/protocol/go
+module github.com/BankkRoll/Roundhouse/packages/protocol/go
 
 go 1.26.0
 

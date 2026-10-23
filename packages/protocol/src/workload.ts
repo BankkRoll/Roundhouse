@@ -98,17 +98,17 @@ export function localImageRepository(projectId: string, serviceId: string): stri
  * @deprecated One network per project let every environment reach every
  * other one. Use {@link environmentNetworkName}.
  * @param projectId - Project ID.
- * @returns `openrail-<project_id>`.
+ * @returns `roundhouse-<project_id>`.
  */
 export function projectNetworkName(projectId: string): string {
-  return `openrail-${projectId}`;
+  return `roundhouse-${projectId}`;
 }
 
 /** Longest Docker network name {@link NETWORK_RE} admits. */
 export const MAX_NETWORK_NAME_LENGTH = 128;
 
 /** Prefix of the hashed form of {@link environmentNetworkName}. */
-export const HASHED_NETWORK_PREFIX = "openrail-env-";
+export const HASHED_NETWORK_PREFIX = "roundhouse-env-";
 
 /**
  * Docker network for one environment of a project. Every replica of the
@@ -116,9 +116,9 @@ export const HASHED_NETWORK_PREFIX = "openrail-env-";
  * and nothing outside the environment can reach them: environments never
  * share a network.
  *
- * The readable `openrail-<project_id>-<environment_id>` is used whenever it
+ * The readable `roundhouse-<project_id>-<environment_id>` is used whenever it
  * fits {@link MAX_NETWORK_NAME_LENGTH}. Longer IDs get
- * `openrail-env-<sha256(project_id "/" environment_id) in hex>`, which never
+ * `roundhouse-env-<sha256(project_id "/" environment_id) in hex>`, which never
  * equals a readable name: IDs always contain `_`, hex digits never do.
  * Go's `EnvironmentNetworkName` returns the same name, which
  * `fixtures/network-names.json` checks.
@@ -127,13 +127,13 @@ export const HASHED_NETWORK_PREFIX = "openrail-env-";
  * @param environmentId - Environment ID.
  * @returns The network name; it always matches {@link NETWORK_RE}.
  * @example
- * await environmentNetworkName("prj_1", "env_2"); // "openrail-prj_1-env_2"
+ * await environmentNetworkName("prj_1", "env_2"); // "roundhouse-prj_1-env_2"
  */
 export async function environmentNetworkName(
   projectId: string,
   environmentId: string,
 ): Promise<string> {
-  const readable = `openrail-${projectId}-${environmentId}`;
+  const readable = `roundhouse-${projectId}-${environmentId}`;
   if (readable.length <= MAX_NETWORK_NAME_LENGTH) return readable;
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -171,7 +171,7 @@ export const EnvSchema = z
     { message: `at most ${MAX_ENV_TOTAL_BYTES} bytes of variables` },
   );
 
-/** Docker labels on the container. The agent adds its own `openrail.*` labels on top. */
+/** Docker labels on the container. The agent adds its own `roundhouse.*` labels on top. */
 export const LabelsSchema = z
   .record(
     z.string().max(MAX_LABEL_KEY_BYTES).regex(LABEL_KEY_RE, "expected a label key"),

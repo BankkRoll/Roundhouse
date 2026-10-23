@@ -1,4 +1,4 @@
-import { can, REALTIME_CLOSE_CODES, type Role } from "@openrail/shared";
+import { can, REALTIME_CLOSE_CODES, type Role } from "@roundhouse/shared";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { db, signInAs, USERS } from "../../mocks/db";
@@ -143,7 +143,7 @@ describe("palette and shortcuts in a project", () => {
   it("titles the tab with the page, service, project and workspace", async () => {
     renderApp(servicePath(SEED.web, "logs"));
     await findPageHeading("web");
-    await waitFor(() => expect(document.title).toBe("Logs · web · storefront · Acme · OpenRail"));
+    await waitFor(() => expect(document.title).toBe("Logs · web · storefront · Acme · Roundhouse"));
   });
 });
 

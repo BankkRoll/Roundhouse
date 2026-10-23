@@ -15,7 +15,7 @@ import {
 } from "../src/naming";
 
 describe("label keys", () => {
-  it("keeps the exact keys @openrail/hetzner wrote to users' clouds", () => {
+  it("keeps the exact keys @roundhouse/hetzner wrote to users' clouds", () => {
     expect([LABEL_MANAGED, LABEL_NODE, LABEL_ROLE, LABEL_WORKSPACE, LABEL_FIREWALL]).toEqual([
       "roundhouse.managed",
       "roundhouse.node",

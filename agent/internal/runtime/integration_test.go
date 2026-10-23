@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	"github.com/BankkRoll/Open-Rail/agent/internal/dockertest"
-	"github.com/BankkRoll/Open-Rail/agent/internal/ingress"
-	"github.com/BankkRoll/Open-Rail/agent/internal/runtime"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	"github.com/BankkRoll/Roundhouse/agent/internal/dockertest"
+	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
+	"github.com/BankkRoll/Roundhouse/agent/internal/runtime"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -89,7 +89,7 @@ func newHarness(t *testing.T) *harness {
 	dockertest.Network(t, c, h.network, map[string]string{runtime.LabelManaged: "true"})
 	dockertest.Attach(t, c, h.network)
 
-	h.caddy = dockertest.Unique("openrail-it-caddy-")
+	h.caddy = dockertest.Unique("roundhouse-it-caddy-")
 	dockertest.Run(t, c, h.caddy, docker.ContainerCreate{
 		Image: dockertest.CaddyImage,
 		Entrypoint: []string{"sh", "-c",
@@ -115,7 +115,7 @@ func newHarness(t *testing.T) *harness {
 	h.rt = runtime.New(runtime.Options{
 		Docker:            c,
 		Ingress:           ing,
-		DataDir:           "/tmp/openrail-it-" + ns,
+		DataDir:           "/tmp/roundhouse-it-" + ns,
 		Report:            h.st.report,
 		Interval:          500 * time.Millisecond,
 		RestartBackoff:    200 * time.Millisecond,
@@ -147,7 +147,7 @@ func (h *harness) workload(id string, env map[string]string) protocol.WorkloadSp
 		Image:         dockertest.WhoamiImage,
 		Env:           env,
 		Ports:         []protocol.WorkloadPort{{ContainerPort: 80, Protocol: protocol.PortHTTP}},
-		Routes:        []protocol.WorkloadRoute{{Hostname: "app.openrail.test", ContainerPort: 80}},
+		Routes:        []protocol.WorkloadRoute{{Hostname: "app.roundhouse.test", ContainerPort: 80}},
 		Healthcheck: &protocol.Healthcheck{
 			Type: protocol.HealthcheckHTTP, Path: "/health", Port: 80, IntervalS: 1, TimeoutS: 1, Retries: 2,
 		},
@@ -204,7 +204,7 @@ func (h *harness) containers(workloadID string) []docker.ContainerSummary {
 // hostname asks the app through Caddy which container answered.
 func (h *harness) hostname() (string, error) {
 	req, _ := http.NewRequest(http.MethodGet, "http://"+h.caddy+"/", nil)
-	req.Host = "app.openrail.test"
+	req.Host = "app.roundhouse.test"
 	resp, err := h.http.Do(req)
 	if err != nil {
 		return "", err

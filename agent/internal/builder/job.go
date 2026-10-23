@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 var (
@@ -124,7 +124,7 @@ func repositoryPath(repo string) (string, error) {
 // paths cannot, so the key is hashed; jobs sharing a key share the cache.
 func cacheRepositoryPath(cacheKey string) string {
 	sum := sha256.Sum256([]byte(cacheKey))
-	return "openrail-cache/" + hex.EncodeToString(sum[:16])
+	return "roundhouse-cache/" + hex.EncodeToString(sum[:16])
 }
 
 // buildTimeout is the job's timeout capped by the node's own limit.

@@ -1,10 +1,10 @@
-# @openrail/db
+# @roundhouse/db
 
 D1 schema (Drizzle) and migrations.
 
 ```sh
 pnpm generate                                          # after editing src/schema
-pnpm --filter @openrail/api db:migrate:local           # apply locally
+pnpm --filter @roundhouse/api db:migrate:local           # apply locally
 ```
 
 Migrations in `migrations/` are applied by `wrangler d1 migrations apply`

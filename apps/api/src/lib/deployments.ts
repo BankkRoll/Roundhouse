@@ -13,7 +13,7 @@
  *
  * @module
  */
-import { builds, type Db, deploymentEvents, deployments, serviceConfigs } from "@openrail/db";
+import { builds, type Db, deploymentEvents, deployments, serviceConfigs } from "@roundhouse/db";
 import {
   CANCELLABLE_DEPLOYMENT_STATUSES,
   canTransition,
@@ -21,7 +21,7 @@ import {
   type DeploymentStatus,
   type DeploymentTrigger,
   newId,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import type { Env } from "../env";
 import type { DeployParams } from "../workflows/deploy";

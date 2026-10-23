@@ -3,8 +3,8 @@
 //
 // Responsibilities:
 //   - diff the desired workloads (plus the agent's own system workloads)
-//     against this node's containers (openrail.managed=true and
-//     openrail.namespace=<node ID>), every 5 s and immediately on a new
+//     against this node's containers (roundhouse.managed=true and
+//     roundhouse.namespace=<node ID>), every 5 s and immediately on a new
 //     generation or a container event; containers of other nodes sharing
 //     the engine are never touched, and Phase 1 containers without a
 //     namespace are adopted once when their workload is desired;
@@ -32,9 +32,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	"github.com/BankkRoll/Open-Rail/agent/internal/ingress"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // Docker is the subset of the engine API the runtime uses; *docker.Client
@@ -111,13 +111,13 @@ type Options struct {
 	// take to stop sending it requests ([ingress.SwitchDelay]).
 	MinDrain time.Duration
 	// Namespace, when set, restricts the runtime to containers labelled
-	// openrail.namespace=<Namespace> and labels the containers and networks
+	// roundhouse.namespace=<Namespace> and labels the containers and networks
 	// it creates so. The agent sets it to the node ID, so two nodes sharing
 	// a Docker engine never manage or remove each other's containers;
 	// integration tests use a random one to stay clear of everything else.
 	Namespace string
 	// AdoptUnlabelled makes the runtime also manage containers labelled
-	// openrail.managed=true without any namespace, as Phase 1 agents created
+	// roundhouse.managed=true without any namespace, as Phase 1 agents created
 	// them, but only once their workload ID is in the desired state. An
 	// adopted container stays managed (it is recorded in DataDir) until it is
 	// removed, so it is still drained and removed after its workload is

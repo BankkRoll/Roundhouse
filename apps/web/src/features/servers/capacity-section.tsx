@@ -1,4 +1,4 @@
-import { StackedBar } from "@openrail/ui";
+import { StackedBar } from "@roundhouse/ui";
 import { SectionHeader } from "../../components/section-header";
 import type { Node } from "../../lib/api/types";
 import { formatBytesPair } from "../../lib/format";

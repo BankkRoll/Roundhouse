@@ -26,13 +26,13 @@ importers:
       '@hono/zod-openapi':
         specifier: ^1.6.3
         version: 1.6.3(hono@4.13.13)(zod@4.6.7)
-      '@openrail/db':
+      '@roundhouse/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@openrail/protocol':
+      '@roundhouse/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@openrail/shared':
+      '@roundhouse/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       better-auth:
@@ -72,10 +72,10 @@ importers:
       '@fontsource-variable/jetbrains-mono':
         specifier: ^5.3.0
         version: 5.3.0
-      '@openrail/shared':
+      '@roundhouse/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@openrail/ui':
+      '@roundhouse/ui':
         specifier: workspace:*
         version: link:../../packages/ui
       lucide-react:
@@ -133,13 +133,13 @@ importers:
       '@fontsource-variable/jetbrains-mono':
         specifier: ^5.3.0
         version: 5.3.0
-      '@openrail/hetzner':
+      '@roundhouse/providers':
         specifier: workspace:*
-        version: link:../../packages/hetzner
-      '@openrail/shared':
+        version: link:../../packages/providers
+      '@roundhouse/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@openrail/ui':
+      '@roundhouse/ui':
         specifier: workspace:*
         version: link:../../packages/ui
       '@tanstack/react-query':
@@ -215,10 +215,10 @@ importers:
 
   packages/db:
     dependencies:
-      '@openrail/protocol':
+      '@roundhouse/protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@openrail/shared':
+      '@roundhouse/shared':
         specifier: workspace:*
         version: link:../shared
       drizzle-orm:
@@ -234,15 +234,6 @@ importers:
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
-
-  packages/hetzner:
-    devDependencies:
-      typescript:
-        specifier: ~6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ~4.1.0
-        version: 4.1.12(@types/node@22.20.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
   packages/protocol:
     dependencies:
@@ -287,7 +278,7 @@ importers:
 
   packages/ui:
     dependencies:
-      '@openrail/shared':
+      '@roundhouse/shared':
         specifier: workspace:*
         version: link:../shared
       class-variance-authority:

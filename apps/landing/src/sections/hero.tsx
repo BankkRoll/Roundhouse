@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@openrail/shared";
+import { PRODUCT_NAME } from "@roundhouse/shared";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { DEPLOY_URL, INSTALL_COMMAND, REPO_URL } from "../links";
 import { buttonClass, CommandLine, ExternalLink, useRevealOnce } from "../ui";

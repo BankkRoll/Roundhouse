@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // Defaults for zero [Options] fields.

@@ -1,11 +1,11 @@
-# @openrail/e2e
+# @roundhouse/e2e
 
 Tests the real stack: `wrangler dev` + the built dashboard + a real agent.
 
 ```sh
 node agent-smoke.mjs              # join, heartbeat, offline detection (no browser)
 
-pnpm --filter @openrail/web build
+pnpm --filter @roundhouse/web build
 pnpm exec playwright install chromium   # once
 pnpm test:browser                 # setup → add server → invite, in Chromium
 ```

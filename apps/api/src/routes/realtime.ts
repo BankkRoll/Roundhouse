@@ -14,7 +14,7 @@
  *
  * @module
  */
-import { REALTIME_CLOSE_CODES, type RealtimeCloseCode } from "@openrail/shared";
+import { REALTIME_CLOSE_CODES, type RealtimeCloseCode } from "@roundhouse/shared";
 import { createRouter, originOf } from "../context";
 import { policyOf, projectRealtime } from "../contracts";
 import { ROOM_VIEWER_HEADER, type RoomViewer } from "../durable/project-room";

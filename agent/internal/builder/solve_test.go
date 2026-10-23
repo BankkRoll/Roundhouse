@@ -13,7 +13,7 @@ import (
 	bkclient "github.com/moby/buildkit/client"
 	"github.com/opencontainers/go-digest"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 func TestSolveSpecs(t *testing.T) {
@@ -185,7 +185,7 @@ func TestDockerErrors(t *testing.T) {
 func TestDaemonConfig(t *testing.T) {
 	d := &daemon{image: BuildKitImage, proxyPort: 5001, cacheMaxBytes: 20 << 30, minFreeBytes: 5 << 30}
 	cfg := d.daemonConfig()
-	for _, want := range []string{`[registry."openrail-registry.internal:5001"]`, "http = true", "maxUsedSpace = 21474836480", "gc = true"} {
+	for _, want := range []string{`[registry."roundhouse-registry.internal:5001"]`, "http = true", "maxUsedSpace = 21474836480", "gc = true"} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config missing %q:\n%s", want, cfg)
 		}

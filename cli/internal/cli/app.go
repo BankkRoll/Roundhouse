@@ -26,11 +26,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/api"
-	"github.com/BankkRoll/Open-Rail/cli/internal/browser"
-	"github.com/BankkRoll/Open-Rail/cli/internal/config"
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
-	"github.com/BankkRoll/Open-Rail/cli/internal/ui"
+	"github.com/BankkRoll/Roundhouse/cli/internal/api"
+	"github.com/BankkRoll/Roundhouse/cli/internal/browser"
+	"github.com/BankkRoll/Roundhouse/cli/internal/config"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/ui"
 )
 
 // Environment variables the CLI reads.

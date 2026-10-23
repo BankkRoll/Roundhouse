@@ -3,7 +3,6 @@
 ## Status
 
 Proposed.
-
 - Date: 2026-10-22
 - Phase: 3
 - Protocol: no change
@@ -20,7 +19,6 @@ Docker network (0003) and, with 0005, its own isolation set across nodes.
 `POST /v1/projects/{id}/environments` can copy configs and variables from
 another environment. `environments` already has `pr_number` and
 `source_branch`. Missing:
-
 - a proper clone that handles volumes and database credentials;
 - a diff between environments;
 - promotion of a tested change, its exact image included, into
@@ -34,7 +32,6 @@ to `installation` and `push`. Webhook deliveries are deduplicated by
 `X-GitHub-Delivery` in `github_deliveries`.
 
 GitHub facts (sources at the end):
-
 - **`pull_request` actions** include `opened`, `reopened`, `synchronize`
   (head branch updated), `closed` (merged or not, see
   `pull_request.merged`), `ready_for_review`, `converted_to_draft`,
@@ -72,7 +69,6 @@ clone?: {
 The clone is built as a change set (0006, `source: "promote"` with
 `source_ref` = the source environment) and applied right away. Applying
 it creates:
-
 - **Configs.** The latest config version of each service, as version 1 in
   the new environment.
 - **Variables**, per `variables`. Exception: the credential variables of
@@ -93,7 +89,6 @@ environment.
 
 **Delete.** `DELETE /v1/environments/{environmentId}` refuses
 `kind: "production"`. In one batch it:
-
 - marks every live deployment `removed`;
 - sets volumes to `pending_deletion` (72 h grace, 0004);
 - deletes domains;
@@ -131,7 +126,6 @@ credential variables.
 
 The response is a **change set** in the target environment (`source:
 "promote"`). It is never applied by the promote call. It contains:
-
 - `config.patch` ops for the config differences;
 - `variable.set`/`variable.delete` ops per `include.variables`;
 - with `include.image`, a `deployment.promote { service_id,
@@ -210,17 +204,16 @@ ALTER TABLE environments ADD COLUMN preview_id TEXT REFERENCES preview_environme
   `pull_request.updated_at >= last_event_at`. Older events are dropped as
   stale, which covers out-of-order deliveries.
 
-| Action                                   | Effect                                                                                           |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `opened`, `reopened`, `ready_for_review` | Upsert the preview. Drafts are ignored while `skip_drafts`. Then **gate** (below), then **create** |
-| `synchronize`                            | Update `head_sha` and `last_activity_at`. Gate, then **deploy** git services at `head.sha`, cancelling in-flight preview deployments of the old SHA |
+| Action                                   | Effect                                                                                                                                                                                                                         |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `opened`, `reopened`, `ready_for_review` | Upsert the preview. Drafts are ignored while `skip_drafts`. Then **gate** (below), then **create**                                                                                                                             |
+| `synchronize`                            | Update `head_sha` and `last_activity_at`. Gate, then **deploy** git services at `head.sha`, cancelling in-flight preview deployments of the old SHA                                                                            |
 | `labeled` with `approval_label`          | If `sender`'s `permission` from `GET /repos/{o}/{r}/collaborators/{sender}/permission` is `write` or `admin` (GitHub maps `maintain` to `write`), set `approved_sha = head.sha` and `approved_by_login`. Then create or deploy |
-| `converted_to_draft`                     | With `skip_drafts`: delete the environment, status `closed`, until `ready_for_review`             |
-| `edited` with a changed `base.ref`       | Close if the new base is not tracked; else nothing                                                |
-| `closed`                                 | Delete the environment (merged or not), status `closed`, update the comment                       |
+| `converted_to_draft`                     | With `skip_drafts`: delete the environment, status `closed`, until `ready_for_review`                                                                                                                                          |
+| `edited` with a changed `base.ref`       | Close if the new base is not tracked; else nothing                                                                                                                                                                             |
+| `closed`                                 | Delete the environment (merged or not), status `closed`, update the comment                                                                                                                                                    |
 
 **Gate.**
-
 - Same-repo PRs (`head.repo.full_name == base.repo.full_name`) pass.
 - Fork PRs, and PRs whose `head.repo` is null, are treated as forks:
   - `fork_policy: "disabled"`: status `fork_disabled` and a comment that
@@ -232,7 +225,6 @@ ALTER TABLE environments ADD COLUMN preview_id TEXT REFERENCES preview_environme
     `pending_approval`, and comments that the new commits need approval.
 
 **Create.**
-
 1. **Count.** If `max_active` previews are already `creating` or `active`,
    set `queued_limit` and comment. The minute tick promotes the oldest
    `queued_limit` preview whenever a slot frees.
@@ -271,7 +263,6 @@ recreates the preview.
 
 This is the rule the whole feature is built around: **a preview built
 from a fork never receives a secret that exists outside that preview.**
-
 - **Same-repo PRs** (`same_repo_secrets: "copy"`, the default): variables
   are cloned as in a normal clone. Their authors already have write access
   to the repository and its deploy pipeline.
@@ -313,18 +304,17 @@ from a fork never receives a secret that exists outside that preview.**
 
 ### Routes, RBAC, audit
 
-| Method and path                                                   | RBAC                                           | Audit                          |
-| ----------------------------------------------------------------- | ---------------------------------------------- | ------------------------------ |
-| `POST /v1/projects/{projectId}/environments` (create/clone)       | `environments:manage`                          | `environment.created` (+ `environment.cloned`) |
-| `DELETE /v1/environments/{environmentId}`                         | `environments:manage` (preview: also `previews:manage` if `protected`) | `environment.deleted` |
-| `GET /v1/projects/{projectId}/environments/diff`                  | `projects:read`                                | none                           |
-| `POST /v1/environments/{environmentId}/promote`                   | `environments:manage`                          | `environment.promote_proposed` |
-| `GET`, `PUT /v1/projects/{projectId}/preview-settings`            | `projects:read` / `previews:manage`            | `preview.settings_updated`     |
-| `GET /v1/projects/{projectId}/previews`                           | `projects:read`                                | none                           |
-| `POST /v1/previews/{previewId}/approve`                           | `previews:manage`                              | `preview.approved`             |
-| `POST /v1/previews/{previewId}/redeploy`                          | `deployments:create`                           | `deployment.created`           |
-| `DELETE /v1/previews/{previewId}`                                 | `environments:manage`                          | `preview.deleted`              |
-
+| Method and path                                             | RBAC                                                                   | Audit                                          |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------- |
+| `POST /v1/projects/{projectId}/environments` (create/clone) | `environments:manage`                                                  | `environment.created` (+ `environment.cloned`) |
+| `DELETE /v1/environments/{environmentId}`                   | `environments:manage` (preview: also `previews:manage` if `protected`) | `environment.deleted`                          |
+| `GET /v1/projects/{projectId}/environments/diff`            | `projects:read`                                                        | none                                           |
+| `POST /v1/environments/{environmentId}/promote`             | `environments:manage`                                                  | `environment.promote_proposed`                 |
+| `GET`, `PUT /v1/projects/{projectId}/preview-settings`      | `projects:read` / `previews:manage`                                    | `preview.settings_updated`                     |
+| `GET /v1/projects/{projectId}/previews`                     | `projects:read`                                                        | none                                           |
+| `POST /v1/previews/{previewId}/approve`                     | `previews:manage`                                                      | `preview.approved`                             |
+| `POST /v1/previews/{previewId}/redeploy`                    | `deployments:create`                                                   | `deployment.created`                           |
+| `DELETE /v1/previews/{previewId}`                           | `environments:manage`                                                  | `preview.deleted`                              |
 - `environments:manage` (new) is held by owner, admin and member. It
   replaces `projects:manage` on environment creation, which becomes
   member-level, as staging is day-to-day work. Production can never be

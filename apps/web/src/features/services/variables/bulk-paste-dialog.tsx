@@ -8,8 +8,8 @@ import {
   DialogTitle,
   Label,
   Textarea,
-} from "@openrail/ui";
-import { Switch } from "@openrail/ui/controls";
+} from "@roundhouse/ui";
+import { Switch } from "@roundhouse/ui/controls";
 import { useId, useMemo, useState } from "react";
 import { type DotenvEntry, parseDotenv } from "./dotenv";
 

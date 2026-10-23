@@ -1,11 +1,11 @@
-module github.com/BankkRoll/Open-Rail/agent
+module github.com/BankkRoll/Roundhouse/agent
 
 go 1.26.8
 
 toolchain go1.26.10
 
 require (
-	github.com/BankkRoll/Open-Rail/packages/protocol/go v0.0.0
+	github.com/BankkRoll/Roundhouse/packages/protocol/go v0.0.0
 	github.com/coder/websocket v1.8.15
 	github.com/moby/buildkit v0.34.1
 	github.com/opencontainers/go-digest v1.0.0
@@ -76,4 +76,4 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 )
 
-replace github.com/BankkRoll/Open-Rail/packages/protocol/go => ../packages/protocol/go
+replace github.com/BankkRoll/Roundhouse/packages/protocol/go => ../packages/protocol/go

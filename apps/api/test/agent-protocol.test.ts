@@ -10,7 +10,7 @@ import {
   MAX_AGENT_FRAME_BYTES,
   MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-} from "@openrail/protocol";
+} from "@roundhouse/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CloseCode } from "../src/durable/node-connection";
 import { connectAgent, hello, install, joinNode } from "./helpers";

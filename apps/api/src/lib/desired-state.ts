@@ -21,7 +21,7 @@ import {
   projects,
   serviceConfigs,
   services,
-} from "@openrail/db";
+} from "@roundhouse/db";
 import {
   computeSpecHash,
   type DesiredState,
@@ -32,13 +32,13 @@ import {
   type RegistryConfig,
   WORKLOADS_PROTOCOL_VERSION,
   type WorkloadSpec,
-} from "@openrail/protocol";
+} from "@roundhouse/protocol";
 import {
   DEFAULT_PIDS_LIMIT,
   type DeploymentStatus,
   type HealthcheckConfig,
   type ServiceConfigSpec,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { NodeConnection } from "../durable/node-connection";
 import type { Sealed } from "./crypto";
@@ -54,14 +54,14 @@ export const LIVE_DEPLOYMENT_STATUSES: readonly DeploymentStatus[] = [
 ];
 
 /** Label carrying a replica's private hostname; see {@link privateDomain}. */
-export const PRIVATE_DOMAIN_LABEL = "openrail.private_domain";
+export const PRIVATE_DOMAIN_LABEL = "roundhouse.private_domain";
 
 /** The body of a `desired_state` frame, without the signed header. */
 export type DesiredStateBody = Omit<DesiredState, "id" | "node_id" | "iat" | "exp">;
 
 /**
  * Private hostname of a service in an environment, injected as
- * `OPENRAIL_PRIVATE_DOMAIN` and carried on each replica as
+ * `ROUNDHOUSE_PRIVATE_DOMAIN` and carried on each replica as
  * {@link PRIVATE_DOMAIN_LABEL} for the agent to register as a network alias.
  *
  * The agent registers it as an alias on the environment's own network only

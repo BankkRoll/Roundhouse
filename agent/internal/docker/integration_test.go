@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	"github.com/BankkRoll/Open-Rail/agent/internal/dockertest"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	"github.com/BankkRoll/Roundhouse/agent/internal/dockertest"
 )
 
 func TestEngine(t *testing.T) {
@@ -32,14 +32,14 @@ func TestEngine(t *testing.T) {
 	if err != nil || !strings.HasPrefix(img.ID, "sha256:") {
 		t.Fatalf("inspect image %+v, %v", img, err)
 	}
-	if _, err := c.InspectImage(ctx, "openrail/does-not-exist:1"); !docker.IsNotFound(err) {
+	if _, err := c.InspectImage(ctx, "roundhouse/does-not-exist:1"); !docker.IsNotFound(err) {
 		t.Fatalf("missing image: %v", err)
 	}
-	if err := c.PullImage(ctx, "openrail-integration/does-not-exist:1", nil); err == nil {
+	if err := c.PullImage(ctx, "roundhouse-integration/does-not-exist:1", nil); err == nil {
 		t.Fatal("pulling a missing image succeeded")
 	}
 
-	net := dockertest.Unique("openrail-it-net-")
+	net := dockertest.Unique("roundhouse-it-net-")
 	dockertest.Network(t, c, net, nil)
 	if _, err := c.CreateNetwork(ctx, docker.NetworkCreate{Name: net, Driver: "bridge"}); !docker.IsConflict(err) {
 		t.Fatalf("duplicate network: %v", err)
@@ -55,7 +55,7 @@ func TestEngine(t *testing.T) {
 	var actions []string
 	evDone := make(chan error, 1)
 	go func() {
-		evDone <- c.Events(evCtx, map[string][]string{"type": {"container"}, "label": {"openrail.it=events"}}, func(e docker.Event) {
+		evDone <- c.Events(evCtx, map[string][]string{"type": {"container"}, "label": {"roundhouse.it=events"}}, func(e docker.Event) {
 			mu.Lock()
 			actions = append(actions, e.Action)
 			mu.Unlock()
@@ -64,14 +64,14 @@ func TestEngine(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	pids := int64(32)
-	name := dockertest.Unique("openrail-it-ctr-")
+	name := dockertest.Unique("roundhouse-it-ctr-")
 	id := dockertest.Run(t, c, name, docker.ContainerCreate{
 		Image:      dockertest.BusyboxImage,
 		Cmd:        []string{"sh", "-c", "echo out-1; echo err-1 >&2; echo out-2; sleep 30"},
-		Labels:     map[string]string{"openrail.it": "events"},
+		Labels:     map[string]string{"roundhouse.it": "events"},
 		HostConfig: docker.HostConfig{NetworkMode: net, CapDrop: []string{"ALL"}, PidsLimit: &pids, SecurityOpt: []string{"no-new-privileges:true"}},
 	})
-	list, err := c.ListContainers(ctx, "openrail.it=events")
+	list, err := c.ListContainers(ctx, "roundhouse.it=events")
 	if err != nil || len(list) != 1 || list[0].ID != id || list[0].State != "running" {
 		t.Fatalf("list %+v, %v", list, err)
 	}
@@ -141,7 +141,7 @@ func TestEngine(t *testing.T) {
 
 func TestLogsOfMissingContainer(t *testing.T) {
 	c := dockertest.Client(t)
-	_, err := c.ContainerLogs(context.Background(), "openrail-missing", docker.LogsOptions{})
+	_, err := c.ContainerLogs(context.Background(), "roundhouse-missing", docker.LogsOptions{})
 	if !docker.IsNotFound(err) {
 		t.Fatalf("err = %v", err)
 	}

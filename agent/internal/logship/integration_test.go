@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	"github.com/BankkRoll/Open-Rail/agent/internal/dockertest"
-	"github.com/BankkRoll/Open-Rail/agent/internal/logship"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	"github.com/BankkRoll/Roundhouse/agent/internal/dockertest"
+	"github.com/BankkRoll/Roundhouse/agent/internal/logship"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 type collector struct {
@@ -48,7 +48,7 @@ func (c *collector) texts() []string {
 func TestFollowRealContainerAcrossRestarts(t *testing.T) {
 	c := dockertest.Client(t)
 	ctx := context.Background()
-	id := dockertest.Run(t, c, dockertest.Unique("openrail-it-logs-"), docker.ContainerCreate{
+	id := dockertest.Run(t, c, dockertest.Unique("roundhouse-it-logs-"), docker.ContainerCreate{
 		Image: dockertest.BusyboxImage,
 		Cmd: []string{"sh", "-c",
 			`for i in 1 2 3; do echo "out $i"; echo "err $i" >&2; done; sleep 1`},

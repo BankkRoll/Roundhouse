@@ -28,7 +28,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/api"
+	"github.com/BankkRoll/Roundhouse/cli/internal/api"
 )
 
 // Seed data, fixed so golden files are stable.
@@ -176,7 +176,7 @@ func (f *Fake) seed() {
 	}
 	f.vars[varKey(APIServiceID, ProductionID)] = map[string]*variable{
 		"NODE_ENV":     {value: "production", version: 1},
-		"DATABASE_URL": {value: "postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.OPENRAIL_PRIVATE_DOMAIN}}:${{db.PORT}}/shop", version: 2},
+		"DATABASE_URL": {value: "postgres://app:${{db.POSTGRES_PASSWORD}}@${{db.ROUNDHOUSE_PRIVATE_DOMAIN}}:${{db.PORT}}/shop", version: 2},
 		"API_KEY":      {value: SecretValue, secret: true, version: 1},
 		"REGION":       {value: "${{shared.REGION}}", version: 1},
 		"LISTEN":       {value: "0.0.0.0:${{PORT}}", version: 1},
@@ -1034,9 +1034,9 @@ func (f *Fake) builtins(p *api.ProjectDetail, svc api.Service, envID string) map
 		}
 	}
 	b := map[string]string{
-		"OPENRAIL_PRIVATE_DOMAIN": svc.Slug + "." + envSlug + ".internal",
-		"OPENRAIL_ENVIRONMENT":    envSlug,
-		"OPENRAIL_SERVICE_NAME":   svc.Name,
+		"ROUNDHOUSE_PRIVATE_DOMAIN": svc.Slug + "." + envSlug + ".internal",
+		"ROUNDHOUSE_ENVIRONMENT":    envSlug,
+		"ROUNDHOUSE_SERVICE_NAME":   svc.Name,
 	}
 	if c, ok := f.configs[svc.ID+"/"+envID]; ok && c.Networking.Port != nil {
 		b["PORT"] = strconv.Itoa(*c.Networking.Port)
@@ -1048,13 +1048,13 @@ func (f *Fake) builtins(p *api.ProjectDetail, svc api.Service, envID string) map
 		}
 	}
 	if first != nil {
-		b["OPENRAIL_PUBLIC_DOMAIN"] = first.Hostname
+		b["ROUNDHOUSE_PUBLIC_DOMAIN"] = first.Hostname
 	}
 	for _, d := range f.deployments {
 		if d.ServiceID == svc.ID && d.EnvironmentID == envID && d.Status == api.StatusActive {
-			b["OPENRAIL_DEPLOYMENT_ID"] = d.ID
+			b["ROUNDHOUSE_DEPLOYMENT_ID"] = d.ID
 			if d.Build != nil {
-				b["OPENRAIL_GIT_COMMIT_SHA"] = d.Build.CommitSHA
+				b["ROUNDHOUSE_GIT_COMMIT_SHA"] = d.Build.CommitSHA
 			}
 		}
 	}

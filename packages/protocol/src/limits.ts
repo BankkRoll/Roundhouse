@@ -99,7 +99,7 @@ export const MAX_MESSAGE_BYTES = 4096;
 // -----------------------------------------------------------------------------
 
 /**
- * Prefixed entity ID as minted by `@openrail/shared` (`prj_01J…`), or a
+ * Prefixed entity ID as minted by `@roundhouse/shared` (`prj_01J…`), or a
  * fixed system name such as `sys_registry`.
  */
 export const ID_RE = /^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$/;
@@ -107,7 +107,7 @@ export const ID_RE = /^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$/;
 /** POSIX-portable environment variable name. Also used for build args. */
 export const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Docker label key: reverse-DNS style, e.g. `openrail.service_id`. */
+/** Docker label key: reverse-DNS style, e.g. `roundhouse.service_id`. */
 export const LABEL_KEY_RE = /^[A-Za-z0-9]([A-Za-z0-9._/-]*[A-Za-z0-9])?$/;
 
 /**

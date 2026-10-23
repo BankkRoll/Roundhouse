@@ -1,4 +1,4 @@
-import { Button, EmptyState, SettingsSection, SettingsStack, Skeleton } from "@openrail/ui";
+import { Button, EmptyState, SettingsSection, SettingsStack, Skeleton } from "@roundhouse/ui";
 import { LockIcon, UserPlusIcon } from "lucide-react";
 import { ErrorState } from "../../components/error-state";
 import { errorMessage } from "../../lib/api/client";

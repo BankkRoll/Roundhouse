@@ -62,12 +62,12 @@ jobs:
           mkdir -p ../dist
           go build -trimpath -buildvcs=true \
             -ldflags "-s -w -X main.version=${version}" \
-            -o "../dist/openrail-agent-linux-${GOARCH}" ./cmd/openrail-agent
-          file "../dist/openrail-agent-linux-${GOARCH}"
+            -o "../dist/roundhouse-agent-linux-${GOARCH}" ./cmd/roundhouse-agent
+          file "../dist/roundhouse-agent-linux-${GOARCH}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: openrail-agent-linux-${{ matrix.arch }}
-          path: dist/openrail-agent-linux-${{ matrix.arch }}
+          name: roundhouse-agent-linux-${{ matrix.arch }}
+          path: dist/roundhouse-agent-linux-${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 7
 
@@ -89,7 +89,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: openrail-agent-linux-*
+          pattern: roundhouse-agent-linux-*
           path: dist
           merge-multiple: true
       - name: Checksums
@@ -99,7 +99,7 @@ jobs:
           # a pinned install whose SHA256SUMS names a different tag.
           {
             printf '# version: %s\n' "$GITHUB_REF_NAME"
-            sha256sum openrail-agent-linux-amd64 openrail-agent-linux-arm64
+            sha256sum roundhouse-agent-linux-amd64 roundhouse-agent-linux-arm64
           } > SHA256SUMS
           cat SHA256SUMS
           sha256sum -c --strict SHA256SUMS
@@ -151,8 +151,8 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            dist/openrail-agent-linux-amd64
-            dist/openrail-agent-linux-arm64
+            dist/roundhouse-agent-linux-amd64
+            dist/roundhouse-agent-linux-arm64
             dist/SHA256SUMS
       - name: Publish GitHub release
         env:
@@ -174,7 +174,7 @@ jobs:
               --title "Agent ${tag#agent-}" --generate-notes "${prerelease[@]}"
           fi
           gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
-            dist/openrail-agent-linux-amd64 \
-            dist/openrail-agent-linux-arm64 \
+            dist/roundhouse-agent-linux-amd64 \
+            dist/roundhouse-agent-linux-arm64 \
             dist/SHA256SUMS \
             dist/SHA256SUMS.sig

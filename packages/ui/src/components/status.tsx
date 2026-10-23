@@ -1,4 +1,4 @@
-import type { DeploymentStatus, NodeStatus } from "@openrail/shared";
+import type { DeploymentStatus, NodeStatus } from "@roundhouse/shared";
 import { cn } from "../lib/cn";
 
 type StatusShape = "dot" | "half" | "cross";
@@ -14,7 +14,7 @@ export interface StatusMeta {
 /** Which vocabulary a status string belongs to. */
 export type StatusKind = "node" | "deployment" | "workload";
 
-/** Replica states reported by the agent; mirrors `WORKLOAD_STATES` in `@openrail/protocol`. */
+/** Replica states reported by the agent; mirrors `WORKLOAD_STATES` in `@roundhouse/protocol`. */
 export type WorkloadState =
   | "pending"
   | "pulling"

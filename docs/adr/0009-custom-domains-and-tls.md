@@ -3,7 +3,6 @@
 ## Status
 
 Proposed.
-
 - Date: 2026-10-22
 - Phase: 3
 - Protocol: version 5
@@ -22,7 +21,6 @@ only hostnames in the node's desired routes), `internal` and `off`.
 
 Three problems appear as soon as there are custom domains or more than one
 node:
-
 1. **HTTP-01 and TLS-ALPN-01 break across ingress nodes.** With 0005,
    every ingress node serves every route, and DNS may point a hostname at
    several of them. Each node's Caddy keeps its ACME state on local disk,
@@ -39,7 +37,6 @@ node:
    would otherwise be claimable.
 
 Facts (sources at the end):
-
 - **Caddy on-demand TLS.** The `permission` module `http` with `endpoint`
   replaces the deprecated `ask` field; Caddy sends `?domain=`. A permission
   module is mandatory, and the old `interval`/`burst` rate limits were
@@ -81,11 +78,11 @@ single-node default. Certificates are issued once and distributed to every
 ingress node. That fixes multi-node validation, duplicates and rate limits
 in one place.
 
-| TLS mode (`tls_mode`) | Generated domains                                          | Custom domains                                          | Use                         |
-| --------------------- | ---------------------------------------------------------- | ------------------------------------------------------- | --------------------------- |
-| `acme` (existing)     | Caddy on-demand per node, gated by `ask`                   | Caddy on-demand per node                                | one ingress node only        |
+| TLS mode (`tls_mode`) | Generated domains                                                  | Custom domains                                                   | Use                         |
+| --------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------- | --------------------------- |
+| `acme` (existing)     | Caddy on-demand per node, gated by `ask`                           | Caddy on-demand per node                                         | one ingress node only       |
 | `managed` (new)       | one **wildcard** `*.<apps_domain>` via DNS-01 (Cloudflare DNS API) | control-plane ACME, HTTP-01 (or DNS-01 delegation for wildcards) | any number of ingress nodes |
-| `internal`, `off`     | unchanged (development, tests)                              | same                                                    |                             |
+| `internal`, `off`     | unchanged (development, tests)                                     | same                                                             |                             |
 
 `acme` stays for the simplest install. Selecting it with more than one
 ingress node is refused: `409 acme_mode_single_ingress_only`. The
@@ -100,7 +97,6 @@ and generated domains fall back to per-name HTTP-01 through the same path.
 The dashboard shows the 50-per-week warning in that case.
 
 **ACME client** (`apps/api/src/lib/acme/`, WebCrypto only).
-
 - **Protocol.** RFC 8555 with ES256 account keys, against Let's Encrypt
   production by default. The directory URL is an instance setting, which
   is how tests point it at Pebble.
@@ -134,7 +130,6 @@ The dashboard shows the 50-per-week warning in that case.
   `renew_after <= now`.
 
 **Distribution to nodes (protocol 5).**
-
 - **Manifest.** `desired_state.certificates: { id, sha256, not_after }[]`
   (≤ 4096) lists what an ingress node must hold. It is small, so the
   desired state stays small.
@@ -155,7 +150,7 @@ The dashboard shows the 50-per-week warning in that case.
 - The agent's Caddy config lists the files under
   `apps.tls.certificates.load_files` and keeps managed hosts out of Caddy's
   own automation (`automatic_https.skip_certificates`).
-- **Reload cost.** Adding a certificate for a *new* hostname rides the
+- **Reload cost.** Adding a certificate for a _new_ hostname rides the
   `/load` that adding the route already causes, which ADR 0003 permits. A
   **renewal** for an existing hostname is the only extra reload. The agent
   batches renewals, at most one load every 10 min. At 64–90-day lifetimes
@@ -213,7 +208,6 @@ SSL and Certificates → Edit and DNS → Edit on it. Both go in the instance
 setting `saas: { zone_id, api_token (sealed), cname_target, fallback_origin }`.
 
 **Setup** (`PUT /v1/instance/domains`):
-
 1. Create the proxied records `fallback_origin`
    (`origin.<saas zone>`, A/AAAA to every ingress node; the list is updated
    when ingress nodes change) and `cname_target`
@@ -226,7 +220,6 @@ setting `saas: { zone_id, api_token (sealed), cname_target, fallback_origin }`.
    `inet roundhouse`.
 
 **Adding a hostname:**
-
 1. `POST /zones/{zone}/custom_hostnames` with
    `{ hostname, ssl: { method: "http", type: "dv", settings: { min_tls_version: "1.2" } } }`,
    then `GET` it for the DCV records. Store `cf_custom_hostname_id`.
@@ -250,7 +243,6 @@ setting `saas: { zone_id, api_token (sealed), cname_target, fallback_origin }`.
    `active` and the origin certificate is on every ingress node.
 
 **Limits enforced.**
-
 - Wildcard custom hostnames return `422 wildcard_requires_enterprise`
   unless `saas.enterprise: true`.
 - Apex hostnames are accepted with a warning: they work only if the
@@ -342,16 +334,16 @@ Verification is always per row, so a takeover still needs the new TXT.
 
 ### Routes, RBAC, audit
 
-| Method and path                                     | RBAC              | Audit                         |
-| --------------------------------------------------- | ----------------- | ----------------------------- |
-| `GET /v1/services/{serviceId}/domains` (exists)     | `services:read`   | none                          |
-| `POST /v1/services/{serviceId}/domains`             | `domains:manage`  | `domain.added`                |
-| `GET /v1/domains/{domainId}`                        | `services:read`   | none                          |
-| `PATCH /v1/domains/{domainId}` `{target_port, hsts}`| `domains:manage`  | `domain.updated`              |
-| `POST /v1/domains/{domainId}/check`                 | `domains:manage`  | none                          |
-| `DELETE /v1/domains/{domainId}`                     | `domains:manage`  | `domain.removed`              |
-| `GET`, `PUT /v1/instance/domains`                   | `instance:manage` (session only) | `instance.settings_updated` |
-| `GET /v1/acme/http-01/{token}`                      | public            | none (rate-limited per IP, 60/min) |
+| Method and path                                      | RBAC                             | Audit                              |
+| ---------------------------------------------------- | -------------------------------- | ---------------------------------- |
+| `GET /v1/services/{serviceId}/domains` (exists)      | `services:read`                  | none                               |
+| `POST /v1/services/{serviceId}/domains`              | `domains:manage`                 | `domain.added`                     |
+| `GET /v1/domains/{domainId}`                         | `services:read`                  | none                               |
+| `PATCH /v1/domains/{domainId}` `{target_port, hsts}` | `domains:manage`                 | `domain.updated`                   |
+| `POST /v1/domains/{domainId}/check`                  | `domains:manage`                 | none                               |
+| `DELETE /v1/domains/{domainId}`                      | `domains:manage`                 | `domain.removed`                   |
+| `GET`, `PUT /v1/instance/domains`                    | `instance:manage` (session only) | `instance.settings_updated`        |
+| `GET /v1/acme/http-01/{token}`                       | public                           | none (rate-limited per IP, 60/min) |
 
 System audit actions: `domain.verified`, `domain.failed`,
 `certificate.issued`, `certificate.renewed`, `certificate.failed`. The

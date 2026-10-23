@@ -5,10 +5,10 @@
 // import them, so src/lib/use-theme.test.tsx and preferences.test.ts assert they agree.
 try {
   const root = document.documentElement;
-  const theme = localStorage.getItem("openrail.theme");
+  const theme = localStorage.getItem("roundhouse.theme");
   if (theme === "dark" || theme === "light") root.classList.add(theme);
-  if (localStorage.getItem("openrail.density") === "compact") root.dataset.density = "compact";
-  const motion = localStorage.getItem("openrail.motion");
+  if (localStorage.getItem("roundhouse.density") === "compact") root.dataset.density = "compact";
+  const motion = localStorage.getItem("roundhouse.motion");
   if (motion === "reduce" || motion === "allow") root.dataset.motion = motion;
 } catch {
   // Storage blocked: fall back to the defaults and the OS preferences.

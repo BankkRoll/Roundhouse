@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // imageConfig fetches the config blob of a pushed image from the test
@@ -135,9 +135,9 @@ func TestIntegrationSecretBuildArgsRailpack(t *testing.T) {
 	const secret = "railpack-marked-4d2b8e1f"
 	g := newGitServer(t)
 	repoURL, sha := g.repo(t, "node-secret", map[string]string{
-		"package.json": `{"name":"openrail-it-secret","version":"1.0.0","private":true,` +
+		"package.json": `{"name":"roundhouse-it-secret","version":"1.0.0","private":true,` +
 			`"scripts":{"build":"node -e \"console.log('license ' + process.env.BUILD_LICENSE)\"","start":"node index.js"},"engines":{"node":"22"}}`,
-		"package-lock.json": `{"name":"openrail-it-secret","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"openrail-it-secret","version":"1.0.0","engines":{"node":"22"}}}}`,
+		"package-lock.json": `{"name":"roundhouse-it-secret","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"roundhouse-it-secret","version":"1.0.0","engines":{"node":"22"}}}}`,
 		"index.js":          "console.log('up');\n",
 	})
 	job := testJob(protocol.BuilderRailpack, repoURL, sha)

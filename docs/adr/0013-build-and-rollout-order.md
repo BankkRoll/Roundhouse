@@ -3,7 +3,6 @@
 ## Status
 
 Proposed.
-
 - Date: 2026-10-22
 - Covers: 0004–0012
 
@@ -27,27 +26,26 @@ without third-party accounts.
 
 ### Cross-cutting conventions
 
-**Naming.** The rename sweep (OpenRail → Roundhouse) lands **before**
+**Naming.** The rename sweep (Roundhouse → Roundhouse) lands **before**
 Phase 2's contracts PR. New identifiers in 0004–0012 exist only in their
 renamed form:
-
 - labels `roundhouse.*`
 - built-ins `ROUNDHOUSE_*`
 - datasets and queues `roundhouse-*` / `roundhouse_*`
 - Worker scripts `rh-*`
 
 The sweep defines the mapping for existing identifiers. Live containers
-carry `openrail.*` labels, so the agent reads both prefixes for one
+carry `roundhouse.*` labels, so the agent reads both prefixes for one
 protocol version, the same way it adopts unlabelled Phase 1 containers.
 
 **Protocol versions.** One version per phase, and each phase's control
 plane accepts exactly N−1.
 
-| Phase | `PROTOCOL_VERSION` | `MIN_PROTOCOL_VERSION` | Gates (constant = version)                                                                                       |
-| ----- | ------------------ | ---------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Phase | `PROTOCOL_VERSION` | `MIN_PROTOCOL_VERSION` | Gates (constant = version)                                                                                                                                                                                   |
+| ----- | ------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 2     | 4                  | 3                      | `MESH_`, `VOLUMES_`, `BACKUPS_`, `DB_QUERY_PROTOCOL_VERSION` = 4 (mesh, route workloads, mounts, `exec` probes, `stop_first`, publish, backup/restore/copy frames, `db_query`, `task` logs, `volume_status`) |
-| 3     | 5                  | 4                      | `JOBS_`, `METRICS_`, `CERTS_PROTOCOL_VERSION` = 5 (`job_*`, `metrics`, `cert_*`, wildcard routes, `hsts`, `ingress` block, `managed` TLS) |
-| 4     | 6                  | 5                      | `EXEC_`, `IMAGE_PUSH_`, `EDGE_GATEWAY_PROTOCOL_VERSION` = 6 (`exec_*`, `image_push`, `edge_gateway`)               |
+| 3     | 5                  | 4                      | `JOBS_`, `METRICS_`, `CERTS_PROTOCOL_VERSION` = 5 (`job_*`, `metrics`, `cert_*`, wildcard routes, `hsts`, `ingress` block, `managed` TLS)                                                                    |
+| 4     | 6                  | 5                      | `EXEC_`, `IMAGE_PUSH_`, `EDGE_GATEWAY_PROTOCOL_VERSION` = 6 (`exec_*`, `image_push`, `edge_gateway`)                                                                                                         |
 
 Raising `MIN_PROTOCOL_VERSION` from 1 to 3 at Phase 2 drops pre-release
 Phase 0 and Phase 1 agents. `hello` from an agent below the minimum is
@@ -60,7 +58,6 @@ or frame is sent only at or above its gate, and the scheduler's
 **Control-plane signing key rotation.** ADR 0002 left key rollover as a
 TODO (`agent/internal/conn/conn.go`). Phases 2–4 add many
 credential-carrying frames, so rollover lands in Phase 2:
-
 - `welcome.next_keys: { kid, public_key, not_before }[]`, signed by the
   current key, lets the agent pin successors.
 - `POST /v1/instance/signing-keys/rotate` (`instance:manage`) generates a
@@ -72,23 +69,23 @@ ADR, so a short ADR 0014 accompanies the Phase 2 contracts PR.
 **RBAC.** New actions, all added to `ACTIONS`, `ROLE_GRANTS` and the token
 scopes:
 
-| Action               | owner | admin | member | viewer | ADR  |
-| -------------------- | ----- | ----- | ------ | ------ | ---- |
-| `changes:approve`    | ✓     | ✓     |        |        | 0006 |
-| `changes:auto_apply` | ✓     | ✓     | ✓      |        | 0006 (token scope that matters) |
-| `data:read`          | ✓     | ✓     | ✓      |        | 0004 |
-| `data:write`         | ✓     | ✓     |        |        | 0004 |
-| `backups:manage`     | ✓     | ✓     | ✓      |        | 0004 |
-| `backups:restore`    | ✓     | ✓     |        |        | 0004 |
-| `environments:manage`| ✓     | ✓     | ✓      |        | 0007 |
-| `previews:manage`    | ✓     | ✓     |        |        | 0007 |
-| `alerts:read`        | ✓     | ✓     | ✓      | ✓      | 0008 |
-| `alerts:manage`      | ✓     | ✓     | ✓      |        | 0008 |
-| `channels:manage`    | ✓     | ✓     |        |        | 0008 |
-| `domains:manage`     | ✓     | ✓     | ✓      |        | 0009 |
-| `shell:open`         | ✓     | ✓     |        |        | 0012 |
-| `templates:publish`  | ✓     | ✓     |        |        | 0012 |
-| `providers:manage`   | ✓     | ✓     |        |        | 0012 |
+| Action                | owner | admin | member | viewer | ADR                             |
+| --------------------- | ----- | ----- | ------ | ------ | ------------------------------- |
+| `changes:approve`     | ✓     | ✓     |        |        | 0006                            |
+| `changes:auto_apply`  | ✓     | ✓     | ✓      |        | 0006 (token scope that matters) |
+| `data:read`           | ✓     | ✓     | ✓      |        | 0004                            |
+| `data:write`          | ✓     | ✓     |        |        | 0004                            |
+| `backups:manage`      | ✓     | ✓     | ✓      |        | 0004                            |
+| `backups:restore`     | ✓     | ✓     |        |        | 0004                            |
+| `environments:manage` | ✓     | ✓     | ✓      |        | 0007                            |
+| `previews:manage`     | ✓     | ✓     |        |        | 0007                            |
+| `alerts:read`         | ✓     | ✓     | ✓      | ✓      | 0008                            |
+| `alerts:manage`       | ✓     | ✓     | ✓      |        | 0008                            |
+| `channels:manage`     | ✓     | ✓     |        |        | 0008                            |
+| `domains:manage`      | ✓     | ✓     | ✓      |        | 0009                            |
+| `shell:open`          | ✓     | ✓     |        |        | 0012                            |
+| `templates:publish`   | ✓     | ✓     |        |        | 0012                            |
+| `providers:manage`    | ✓     | ✓     |        |        | 0012                            |
 
 `API_TOKEN_PRESETS.deploy` stays as it is. It does not gain
 `changes:auto_apply`; that scope must be chosen explicitly.
@@ -96,16 +93,16 @@ scopes:
 **ID prefixes.** New `ID_PREFIXES`, all 1–8 lowercase letters per
 `ID_RE`:
 
-| ADR  | Prefixes                                             |
-| ---- | ---------------------------------------------------- |
-| 0004 | `vol`, `bak`, `bpl`, `rst`, `mig`, `tcp`             |
-| 0006 | `chs`, `stg`, `edg`                                  |
-| 0007 | `prv`                                                |
-| 0008 | `alr`, `inc`, `nch`, `inb`, `lsq`                    |
-| 0009 | `cer`                                                |
-| 0010 | `crn`                                                |
-| 0011 | `cfd`                                                |
-| 0012 | `oac`, `oag`, `tpl`, `shl`, `pcr`, `prov`            |
+| ADR  | Prefixes                                  |
+| ---- | ----------------------------------------- |
+| 0004 | `vol`, `bak`, `bpl`, `rst`, `mig`, `tcp`  |
+| 0006 | `chs`, `stg`, `edg`                       |
+| 0007 | `prv`                                     |
+| 0008 | `alr`, `inc`, `nch`, `inb`, `lsq`         |
+| 0009 | `cer`                                     |
+| 0010 | `crn`                                     |
+| 0011 | `cfd`                                     |
+| 0012 | `oac`, `oag`, `tpl`, `shl`, `pcr`, `prov` |
 
 **Scheduled work.** One mechanism serves every phase: the minute tick
 plus the `JOBS` queue plus a Workflow per unit of work (0004, "Scheduled
@@ -114,12 +111,11 @@ claimers.
 
 **Fakes.** All live in `e2e/lib/` and are shared with unit tests. Each is
 backed by fixtures recorded from official docs or live accounts:
-
 - `fake-s3.mjs`, which enforces R2's rules;
 - `fake-github.mjs`;
 - `fake-cloudflare.mjs` (DNS, custom hostnames, Workers scripts and
   routes, Containers, registry credentials);
-- the existing `packages/hetzner/test/fake-hetzner.ts`;
+- the existing `packages/providers/test/fakes/hetzner.ts`;
 - Pebble with `pebble-challtestsrv` for ACME, and a DoH shim over it.
 
 A fake never invents behaviour the docs do not state. Undocumented
@@ -130,7 +126,6 @@ verification scripts.
 
 Each phase starts with **one contracts PR**, owned by the phase lead. It
 must be merged before any workstream starts, and it contains:
-
 1. **Protocol:** zod schemas in `packages/protocol/src`, the Go types in
    `packages/protocol/go`, JSON Schemas, signed fixtures verified by both
    sides, the version gates, and `carriesCredentials` updates.
@@ -210,18 +205,18 @@ in parallel.
 
 ### Phase 2 (protocol 4): data, mesh, canvas
 
-| Stream | Scope                                                                                     | Owns (exclusive)                                                                                                    |
-| ------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| 2A     | Agent mesh: `wg0`, keys, rotation, nftables, private DNS, gateway-ready policy hooks       | `agent/internal/mesh/**`, `agent/internal/netpol/**`, `agent/internal/ingress/dns.go` (private zone)                 |
-| 2B     | Agent data plane: volumes and quotas, mount exclusivity, `stop_first`, `exec` probes, backup/restore/copy pipeline, RHBK1, `db_query` drivers, TCP publish | `agent/internal/volumes/**`, `agent/internal/backup/**`, `agent/internal/dbquery/**`, `agent/internal/runtime/**` (implements the hooks) |
-| 2C     | Control plane placement: scheduler fields and filters, mesh allocation (indexes, mesh IPs, `net_tag`, PSKs, pair paths), registry modes, drain and offline workflows | `packages/shared/src/scheduler.ts`, `apps/api/src/lib/mesh/**`, `lib/desired-state/{mesh,registry,ingress}.ts`, `workflows/drain.ts`, `durable/node/handlers/mesh.ts` |
+| Stream | Scope                                                                                                                                                                             | Owns (exclusive)                                                                                                                                                                                                                                                     |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2A     | Agent mesh: `wg0`, keys, rotation, nftables, private DNS, gateway-ready policy hooks                                                                                              | `agent/internal/mesh/**`, `agent/internal/netpol/**`, `agent/internal/ingress/dns.go` (private zone)                                                                                                                                                                 |
+| 2B     | Agent data plane: volumes and quotas, mount exclusivity, `stop_first`, `exec` probes, backup/restore/copy pipeline, RHBK1, `db_query` drivers, TCP publish                        | `agent/internal/volumes/**`, `agent/internal/backup/**`, `agent/internal/dbquery/**`, `agent/internal/runtime/**` (implements the hooks)                                                                                                                             |
+| 2C     | Control plane placement: scheduler fields and filters, mesh allocation (indexes, mesh IPs, `net_tag`, PSKs, pair paths), registry modes, drain and offline workflows              | `packages/shared/src/scheduler.ts`, `apps/api/src/lib/mesh/**`, `lib/desired-state/{mesh,registry,ingress}.ts`, `workflows/drain.ts`, `durable/node/handlers/mesh.ts`                                                                                                |
 | 2D     | Control plane data services: database templates, credentials and rotation, volumes API, minute tick and `JOBS`, backup and migration workflows, query relay, TCP proxy allocation | `packages/shared/src/databases.ts`, `apps/api/src/lib/{dispatch,databases,backups,s3}/**`, `workflows/{backup,volume-migration}.ts`, `routes/{databases,volumes,backups,data}.ts`, `lib/desired-state/volumes.ts`, `durable/node/handlers/{backup,query,volumes}.ts` |
-| 2E     | Change sets and canvas API, realtime presence                                             | `packages/shared/src/changes.ts`, `apps/api/src/lib/changes/**`, `routes/{change-sets,canvas}.ts`, `durable/project-room.ts` |
-| 2F     | Dashboard: canvas, staged bar, review panel, presence                                     | `apps/web/src/features/{canvas,changes}/**`                                                                         |
-| 2G     | Dashboard: database add, Data, Backups, Volume tabs, Servers → Network, drain UI           | `apps/web/src/features/{data,backups,volumes,network}/**`                                                           |
-| 2H     | Real-stack harness: two-node dind stack, fake S3                                          | `e2e/phase2/**`, `e2e/lib/{fake-s3,stack2}.mjs`                                                                     |
-| 2I     | Installer: `--upgrade`, sysctl, `daemon.json` fwmark, ufw 51820/udp; Hetzner firewall rule | `install/**`, `packages/hetzner/src/firewall.ts`                                                                    |
-| 2J     | Signing key rotation (ADR 0014)                                                           | `agent/internal/conn/keys.go`, `apps/api/src/lib/signing-keys.ts`, `routes/signing-keys.ts`                          |
+| 2E     | Change sets and canvas API, realtime presence                                                                                                                                     | `packages/shared/src/changes.ts`, `apps/api/src/lib/changes/**`, `routes/{change-sets,canvas}.ts`, `durable/project-room.ts`                                                                                                                                         |
+| 2F     | Dashboard: canvas, staged bar, review panel, presence                                                                                                                             | `apps/web/src/features/{canvas,changes}/**`                                                                                                                                                                                                                          |
+| 2G     | Dashboard: database add, Data, Backups, Volume tabs, Servers → Network, drain UI                                                                                                  | `apps/web/src/features/{data,backups,volumes,network}/**`                                                                                                                                                                                                            |
+| 2H     | Real-stack harness: two-node dind stack, fake S3                                                                                                                                  | `e2e/phase2/**`, `e2e/lib/{fake-s3,stack2}.mjs`                                                                                                                                                                                                                      |
+| 2I     | Installer: `--upgrade`, sysctl, `daemon.json` fwmark, ufw 51820/udp; Hetzner firewall rule                                                                                        | `install/**`, `packages/providers/src/firewall.ts`                                                                                                                                                                                                                   |
+| 2J     | Signing key rotation (ADR 0014)                                                                                                                                                   | `agent/internal/conn/keys.go`, `apps/api/src/lib/signing-keys.ts`, `routes/signing-keys.ts`                                                                                                                                                                          |
 
 **Order inside the phase.** 2H starts on day one against stubs. 2A+2C and
 2B+2D pair up on fixtures early.
@@ -237,7 +232,6 @@ in parallel.
 
 **Phase 2 real-stack e2e** (`node e2e/phase2/run.mjs`, CI job
 `e2e-phase2`, 60 min budget):
-
 1. **Two nodes, mesh, isolation.** Two agents join, `GET /mesh` shows a
    direct path, and `mesh_ready` is true on both. Production and staging
    spread over both nodes cannot reach each other by IP or name.
@@ -267,22 +261,21 @@ in parallel.
 
 ### Phase 3 (protocol 5): environments, observability, domains, cron
 
-| Stream | Scope                                                                         | Owns                                                                                                   |
-| ------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| 3A     | Cron: parser, claimer, run workflow, `pre_deploy`; agent job runner           | `packages/shared/src/cron.ts`, `workflows/cron-run.ts`, `routes/cron.ts`, `durable/node/handlers/jobs.ts`, `agent/internal/jobs/**` |
-| 3B     | Metrics: agent cgroup sampler, DO writes, `MetricsStore` (Analytics Engine and D1) | `agent/internal/metrics/**`, `apps/api/src/lib/metrics/**`, `durable/node/handlers/metrics.ts`, `routes/metrics.ts`, `packages/shared/src/metrics-layout.ts` |
-| 3C     | Logs explorer: level detection, chunk counts, query parser, search, saved searches, live topic | `packages/shared/src/log-query.ts`, `apps/api/src/lib/logs/**` (the existing `lib/logs.ts` moves here), `routes/log-search.ts`, `durable/node/handlers/logs.ts` |
-| 3D     | Alerts: signals, evaluator, state machine, channels, delivery, inbox          | `apps/api/src/lib/alerts/**`, `routes/{alerts,channels,inbox}.ts`                                      |
-| 3E     | Environments and previews: clone, diff, promote, webhook `pull_request`, preview workflow, GitHub feedback, fake GitHub | `apps/api/src/lib/{environments,previews}/**`, `workflows/preview.ts`, `routes/{environments,previews}.ts`, `lib/github.ts` (preview additions), `e2e/lib/fake-github.mjs` |
+| Stream | Scope                                                                                                                                        | Owns                                                                                                                                                                                                                                   |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 3A     | Cron: parser, claimer, run workflow, `pre_deploy`; agent job runner                                                                          | `packages/shared/src/cron.ts`, `workflows/cron-run.ts`, `routes/cron.ts`, `durable/node/handlers/jobs.ts`, `agent/internal/jobs/**`                                                                                                    |
+| 3B     | Metrics: agent cgroup sampler, DO writes, `MetricsStore` (Analytics Engine and D1)                                                           | `agent/internal/metrics/**`, `apps/api/src/lib/metrics/**`, `durable/node/handlers/metrics.ts`, `routes/metrics.ts`, `packages/shared/src/metrics-layout.ts`                                                                           |
+| 3C     | Logs explorer: level detection, chunk counts, query parser, search, saved searches, live topic                                               | `packages/shared/src/log-query.ts`, `apps/api/src/lib/logs/**` (the existing `lib/logs.ts` moves here), `routes/log-search.ts`, `durable/node/handlers/logs.ts`                                                                        |
+| 3D     | Alerts: signals, evaluator, state machine, channels, delivery, inbox                                                                         | `apps/api/src/lib/alerts/**`, `routes/{alerts,channels,inbox}.ts`                                                                                                                                                                      |
+| 3E     | Environments and previews: clone, diff, promote, webhook `pull_request`, preview workflow, GitHub feedback, fake GitHub                      | `apps/api/src/lib/{environments,previews}/**`, `workflows/preview.ts`, `routes/{environments,previews}.ts`, `lib/github.ts` (preview additions), `e2e/lib/fake-github.mjs`                                                             |
 | 3F     | Domains and TLS: checker, ACME client, certificate workflow, SaaS client, `cert_sync`; agent cert store, Caddy config changes, `cert_status` | `apps/api/src/lib/{domains,acme,cloudflare}/**`, `workflows/cert.ts`, `routes/domains.ts`, `durable/node/handlers/certs.ts`, `agent/internal/ingress/{certs,config}.go`, `e2e/lib/fake-cloudflare.mjs` (DNS and custom-hostname parts) |
-| 3G     | Dashboard: environments, previews, metrics charts, logs explorer, alerts, inbox, domains, cron tabs | `apps/web/src/features/{environments,previews,metrics,logs,alerts,inbox,domains,cron}/**` — two engineers, split by folder |
-| 3H     | Real-stack harness: Pebble, challtestsrv, DoH shim, webhook receiver, scheduled-handler driver | `e2e/phase3/**`                                                                                       |
+| 3G     | Dashboard: environments, previews, metrics charts, logs explorer, alerts, inbox, domains, cron tabs                                          | `apps/web/src/features/{environments,previews,metrics,logs,alerts,inbox,domains,cron}/**` — two engineers, split by folder                                                                                                             |
+| 3H     | Real-stack harness: Pebble, challtestsrv, DoH shim, webhook receiver, scheduled-handler driver                                               | `e2e/phase3/**`                                                                                                                                                                                                                        |
 
 3D consumes 3A's and 3F's events through `signalAlert` (defined in the
 contracts PR), so the three streams run in parallel.
 
 **Phase 3 real-stack e2e** (`e2e-phase3`, 75 min):
-
 1. **Preview lifecycle** with the fake GitHub, for Next.js + Postgres:
    opened → environment `pr-1` with its own database and one comment;
    synchronize → redeploy and the comment is updated; a fork PR stays
@@ -313,20 +306,19 @@ contracts PR), so the three streams run in parallel.
 
 ### Phase 4 (protocol 6): developer platform, Cloudflare provider
 
-| Stream | Scope                                                                        | Owns                                                                                                  |
-| ------ | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| 4A     | MCP server and OAuth authorization server                                    | `apps/api/src/mcp/**`, `apps/api/src/oauth/**`, `routes/{mcp,oauth,well-known}.ts`                    |
-| 4B     | Templates: schema, renderer, official directory, publish and export          | `packages/shared/src/template.ts`, `templates/**`, `apps/api/src/lib/templates/**`, `routes/templates.ts` |
-| 4C     | Web shell: agent exec, DO relay, recording, xterm UI, CLI `shell`            | `agent/internal/shell/**`, `durable/node/handlers/shell.ts`, `apps/web/src/features/shell/**`, `cli/internal/shell/**` |
-| 4D     | Costs and Hetzner: allocation, accrual, provider credentials, provision workflow, Hetzner tab | `packages/shared/src/costs.ts`, `apps/api/src/lib/{costs,providers}/**`, `workflows/provision.ts`, `routes/{costs,providers}.ts`, `apps/web/src/features/{usage,servers/hetzner}/**` |
+| Stream | Scope                                                                                                                           | Owns                                                                                                                                                                                                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4A     | MCP server and OAuth authorization server                                                                                       | `apps/api/src/mcp/**`, `apps/api/src/oauth/**`, `routes/{mcp,oauth,well-known}.ts`                                                                                                                                                                                          |
+| 4B     | Templates: schema, renderer, official directory, publish and export                                                             | `packages/shared/src/template.ts`, `templates/**`, `apps/api/src/lib/templates/**`, `routes/templates.ts`                                                                                                                                                                   |
+| 4C     | Web shell: agent exec, DO relay, recording, xterm UI, CLI `shell`                                                               | `agent/internal/shell/**`, `durable/node/handlers/shell.ts`, `apps/web/src/features/shell/**`, `cli/internal/shell/**`                                                                                                                                                      |
+| 4D     | Costs and Hetzner: allocation, accrual, provider credentials, provision workflow, Hetzner tab                                   | `packages/shared/src/costs.ts`, `apps/api/src/lib/{costs,providers}/**`, `workflows/provision.ts`, `routes/{costs,providers}.ts`, `apps/web/src/features/{usage,servers/hetzner}/**`                                                                                        |
 | 4E     | Cloudflare provider: runtime Worker, deploy branch, image push (agent), edge gateway (agent, experimental), fake Containers API | `apps/cf-runtime/**`, `apps/api/src/lib/cf-provider/**`, `workflows/deploy-cloudflare.ts` (called from the deploy workflow's branch point, added in the contracts PR), `agent/internal/{imagepush,edgegw}/**`, `e2e/lib/fake-cloudflare.mjs` (Workers and Containers parts) |
-| 4F     | Real-stack harness for Phase 4                                               | `e2e/phase4/**`                                                                                       |
+| 4F     | Real-stack harness for Phase 4                                                                                                  | `e2e/phase4/**`                                                                                                                                                                                                                                                             |
 
 4A depends on 4B only for the `deploy_template` tool, which can be stubbed
 until 4B lands.
 
 **Phase 4 real-stack e2e** (`e2e-phase4`, 60 min):
-
 1. **MCP** with the SDK client and a `tok_` token: list, stage a database,
    `awaiting_confirmation`. A token with `changes:auto_apply` applies, and
    Postgres goes active. OAuth runs through CIMD, consent (Playwright),
@@ -370,7 +362,6 @@ until 4B lands.
 ### Rollout to users
 
 Each phase ships as one control-plane release plus one agent release.
-
 1. **Deploy the control plane.** It accepts N−1 agents, so nothing breaks
    while nodes upgrade.
 2. **Upgrade nodes** one at a time with `install.sh --upgrade`. In Phase
@@ -396,7 +387,7 @@ Each phase ships as one control-plane release plus one agent release.
 
 ## Open questions
 
-- Should the rename sweep keep reading `openrail.*` labels for longer than
+- Should the rename sweep keep reading `roundhouse.*` labels for longer than
   one protocol version? That depends on how many Phase 1 installs exist at
   release.
 - ADR 0014 (control-plane signing key rotation) needs writing alongside the

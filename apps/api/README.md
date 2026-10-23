@@ -1,4 +1,4 @@
-# @openrail/api
+# @roundhouse/api
 
 Control plane Worker: REST API, auth, agent connections, and the dashboard's
 static assets.
@@ -10,7 +10,7 @@ pnpm --dir ../.. setup:dev        # creates .dev.vars with a MASTER_KEY
 pnpm dev                          # http://127.0.0.1:8787
 ```
 
-Run `pnpm --filter @openrail/web build` first if you want the dashboard
+Run `pnpm --filter @roundhouse/web build` first if you want the dashboard
 served from here instead of from Vite.
 
 ## Test
@@ -32,14 +32,14 @@ The first deploy creates the D1 database, so `wrangler.jsonc` has no
 
 ### Bindings
 
-| Binding                           | Kind           | What                                                      |
-| --------------------------------- | -------------- | --------------------------------------------------------- |
-| `DB`                              | D1             | Control-plane metadata                                    |
-| `LOGS`                            | R2             | Log chunks (`openrail-logs`, created on the first deploy) |
-| `DEPLOY_WORKFLOW`                 | Workflow       | `DeployWorkflow`, one instance per deployment             |
-| `NODE_CONNECTION`                 | Durable Object | One per node: the agent's socket                          |
-| `PROJECT_ROOM`                    | Durable Object | One per project: the dashboard's realtime socket          |
-| `AUTH_LIMITER`, `WEBHOOK_LIMITER` | Rate limit     | Secret-accepting endpoints; GitHub webhooks               |
+| Binding                           | Kind           | What                                                        |
+| --------------------------------- | -------------- | ----------------------------------------------------------- |
+| `DB`                              | D1             | Control-plane metadata                                      |
+| `LOGS`                            | R2             | Log chunks (`roundhouse-logs`, created on the first deploy) |
+| `DEPLOY_WORKFLOW`                 | Workflow       | `DeployWorkflow`, one instance per deployment               |
+| `NODE_CONNECTION`                 | Durable Object | One per node: the agent's socket                            |
+| `PROJECT_ROOM`                    | Durable Object | One per project: the dashboard's realtime socket            |
+| `AUTH_LIMITER`, `WEBHOOK_LIMITER` | Rate limit     | Secret-accepting endpoints; GitHub webhooks                 |
 
 No secrets beyond `MASTER_KEY`: project data keys, GitHub App credentials and
 signing keys are stored in D1, sealed under keys derived from it.

@@ -3,7 +3,6 @@
 ## Status
 
 Proposed.
-
 - Date: 2026-10-22
 - Phase: 2
 - Protocol: version 4 (see "Rollout and compat")
@@ -15,7 +14,6 @@ Names follow the Roundhouse rename (0013, "Naming").
 ## Context
 
 Phase 1 runs a project on one node in practice:
-
 - Each environment has its own Docker bridge on the node, and Docker
   isolates bridges from each other. A bridge exists on one host only, so a
   replica on node A cannot reach a replica of the same environment on
@@ -36,7 +34,6 @@ The `nodes` table already has `wg_ip` and `wg_pubkey` columns, and
 `install.sh` already installs `wireguard-tools`.
 
 Facts that constrain the design (sources at the end):
-
 - **wgctrl-go** configures existing WireGuard devices: the Linux kernel
   module through generic netlink, and userspace devices through the UAPI
   socket. Creating the interface is out of its scope. `wgtypes` generates
@@ -82,11 +79,11 @@ Facts that constrain the design (sources at the end):
 - Each node gets an index `N` in 1–254 (`nodes.mesh_index`, unique) and owns
   `10.200.N.0/24`:
 
-| Address              | Use                                                                 |
-| -------------------- | ------------------------------------------------------------------- |
-| `10.200.N.1`         | `wg0` address (`/16` on the interface, so the supernet routes via it) |
-| `10.200.N.2`         | Internal DNS, on dummy interface `rh-dns0` (`/32`)                  |
-| `10.200.N.3`–`.9`    | Reserved (registry mesh listener uses `.1:5000`)                    |
+| Address              | Use                                                                               |
+| -------------------- | --------------------------------------------------------------------------------- |
+| `10.200.N.1`         | `wg0` address (`/16` on the interface, so the supernet routes via it)             |
+| `10.200.N.2`         | Internal DNS, on dummy interface `rh-dns0` (`/32`)                                |
+| `10.200.N.3`–`.9`    | Reserved (registry mesh listener uses `.1:5000`)                                  |
 | `10.200.N.10`–`.254` | **Mesh IPs** of service replicas on the node (245 > `MAX_WORKLOADS_PER_NODE` 128) |
 
 **Environment networks stay node-local Docker bridges**, as in the Phase 1
@@ -98,7 +95,6 @@ Every service replica also gets a **mesh IP** from its node's /24,
 allocated by the control plane per placement (`placements.mesh_ip`, lowest
 free, freed when the placement ends). The agent maps it 1:1 to the
 container's bridge IP with nftables:
-
 - DNAT on traffic arriving for the mesh IP;
 - SNAT to the mesh IP on traffic the container sends over `wg0`.
 
@@ -108,7 +104,6 @@ the environment "network" spans nodes.
 ### Mesh topology and key management
 
 **Keys are generated on the agent.**
-
 - With the mesh enabled (agent config `mesh.mode: auto | kernel | userspace
   | off`, default `auto`), the agent creates `<data-dir>/wireguard.key`
   (0600) with `wgtypes.GeneratePrivateKey`.
@@ -124,7 +119,6 @@ frame like any other. A node's peer list is every other node with a
 nodes the address plan allows.
 
 **Reachability.**
-
 - The agent reports `nat: "public" | "nat"`. It is `public` when the
   control plane's observed address for the connection (`CF-Connecting-IP`
   at connect, forwarded to the node DO) is assigned to one of the node's
@@ -135,11 +129,11 @@ nodes the address plan allows.
 
 **Pair paths.** The control plane chooses a path for each pair `{A, B}`:
 
-| A        | B        | Path                                                                        |
-| -------- | -------- | --------------------------------------------------------------------------- |
-| public   | any      | **direct**. The NAT side gets A's endpoint and `keepalive_s: 25`; the public side gets `endpoint: null` and learns B's address from B's first authenticated packet (roaming). |
-| nat      | nat      | **relayed** through relay R: a public node, preferring label `roundhouse.io/mesh-relay=true`, then the lowest node ID. A's peer entry for R gets `allowed_ips` R/24 **and** B/24, and the same for B. R forwards `wg0 → wg0` for that pair only. |
-| none public | —    | Mesh unavailable. Nodes report `mesh_ready: false`, and the scheduler keeps each environment on one node (see "Scheduler"). |
+| A           | B   | Path                                                                                                                                                                                                                                             |
+| ----------- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| public      | any | **direct**. The NAT side gets A's endpoint and `keepalive_s: 25`; the public side gets `endpoint: null` and learns B's address from B's first authenticated packet (roaming).                                                                    |
+| nat         | nat | **relayed** through relay R: a public node, preferring label `roundhouse.io/mesh-relay=true`, then the lowest node ID. A's peer entry for R gets `allowed_ips` R/24 **and** B/24, and the same for B. R forwards `wg0 → wg0` for that pair only. |
+| none public | —   | Mesh unavailable. Nodes report `mesh_ready: false`, and the scheduler keeps each environment on one node (see "Scheduler").                                                                                                                      |
 
 A direct pair with no handshake for 120 s after both sides applied the
 config falls back to relayed, and is tried direct again every 30 min. This
@@ -157,7 +151,6 @@ rotates.
 
 **Key rotation.** Rotation runs every 90 days
 (`MESH_KEY_MAX_AGE_MS`), or on `POST .../nodes/{id}/mesh/rotate-key`:
-
 1. The control plane sets `desired_state.mesh.rotate_key: true` for node X.
 2. X generates a new key, keeps using the old one, and sends
    `mesh_key { public_key, epoch }`.
@@ -206,23 +199,31 @@ means mesh off, and the agent tears `wg0` and its nftables table down.
 
 ```ts
 interface MeshConfig {
-  supernet: string;               // "10.200.0.0/16"
-  node_index: number;             // 1..254
-  address: string;                // "10.200.N.1"
-  dns_address: string;            // "10.200.N.2"
+  supernet: string; // "10.200.0.0/16"
+  node_index: number; // 1..254
+  address: string; // "10.200.N.1"
+  dns_address: string; // "10.200.N.2"
   listen_port: number;
-  mtu: number;                    // 1420
-  accept_fwmark: number;          // mark Docker accepts, e.g. 0x2000000
+  mtu: number; // 1420
+  accept_fwmark: number; // mark Docker accepts, e.g. 0x2000000
   rotate_key: boolean;
   activate_epoch: number | null;
   peers: {
-    node_id: string; public_key: string; preshared_key: string;   // credential
-    endpoint: string | null; allowed_ips: string[]; keepalive_s: 0 | 25;
-  }[];                            // ≤ 253
-  forward_pairs: [string, string][];   // CIDR pairs this node relays (wg0→wg0)
-  node_addresses: string[];       // every node's .1, the "ingress source" set
-  addresses: {                    // mesh IPs this node must know, ≤ MAX_MESH_ADDRESSES (4096)
-    ip: string; env_tag: number; node_id: string; routed_ports: number[];
+    node_id: string;
+    public_key: string;
+    preshared_key: string; // credential
+    endpoint: string | null;
+    allowed_ips: string[];
+    keepalive_s: 0 | 25;
+  }[]; // ≤ 253
+  forward_pairs: [string, string][]; // CIDR pairs this node relays (wg0→wg0)
+  node_addresses: string[]; // every node's .1, the "ingress source" set
+  addresses: {
+    // mesh IPs this node must know, ≤ MAX_MESH_ADDRESSES (4096)
+    ip: string;
+    env_tag: number;
+    node_id: string;
+    routed_ports: number[];
   }[];
 }
 ```
@@ -233,7 +234,6 @@ integer unique per install, assigned at environment creation, so nftables
 can key on it.
 
 `WorkloadSpec` gains two fields:
-
 - `mesh_ip?: string`. It is **excluded** from the spec hash
   (`SPEC_HASH_EXCLUDED_FIELDS`), because a new mesh IP changes NAT rules,
   not the container.
@@ -290,7 +290,6 @@ table inet roundhouse {
 ```
 
 Properties:
-
 - **Same environment, different node.** The sending node checks the
   destination is in the source's environment (`env_<tag>_out`). The
   receiving node checks the source is in the destination's environment
@@ -312,7 +311,6 @@ Properties:
 
 **Docker prerequisites.** The agent checks them at start and reports
 `accept_fwmark`.
-
 - **iptables backend** (the default): the agent inserts
   `-I DOCKER-USER -m mark --mark <m>/<m> -j ACCEPT` once and re-checks it
   every reconcile, because Docker recreates `DOCKER-USER` on restart.
@@ -332,7 +330,6 @@ The dashboard shows the exact fix.
 The agent serves `<service>.<environment>.<project>.internal` (slugs) on
 `10.200.N.2:53`, UDP and TCP, through the DNS server it already runs for
 Caddy upstreams (`internal/ingress/dns.go`).
-
 - **Who may ask.** It answers only queries whose source is a local
   container bridge IP. Docker's embedded resolver forwards from the
   container's namespace, so the source is the container. It looks up the
@@ -362,7 +359,6 @@ the normal rollout. Volume services restart once (`stop_first`, 0004).
 ### Cross-node ingress
 
 The upstream DNS on `127.0.0.1:2021` now answers a route's name with:
-
 - the **bridge IPs** of healthy local replicas;
 - the **mesh IPs** of healthy replicas on other nodes.
 
@@ -418,7 +414,7 @@ RegistryConfigSchema = {
   WireGuard, so it is encrypted without TLS. Filesystem storage supports
   exactly one builder; adding a second builder requires S3 storage, and
   the API refuses otherwise with `409 registry_requires_s3`.
-- The scheduler's `reachesRegistry` becomes: S3 storage, or the node *is*
+- The scheduler's `reachesRegistry` becomes: S3 storage, or the node _is_
   the builder, or the node has a recent handshake (`< 180 s`) with the
   builder.
 
@@ -431,19 +427,19 @@ the following.
 interface SchedulerNode {
   // existing fields …
   protocolVersion: number;
-  diskMb: number;                 // disk available to volumes
-  allocatedDiskMb: number;        // sum of volume quotas on the node (0004)
+  diskMb: number; // disk available to volumes
+  allocatedDiskMb: number; // sum of volume quotas on the node (0004)
   meshReady: boolean;
-  zone: string | null;            // labels["topology.roundhouse.io/zone"]
+  zone: string | null; // labels["topology.roundhouse.io/zone"]
 }
 interface ScheduleRequest {
   // existing fields …
-  minProtocolVersion: number;     // 4 for volumes, mesh-dependent placement, route workloads
-  pinnedNodeId: string | null;    // 0004: a service with a volume
-  excludeNodeIds: string[];       // drain, reschedule
-  diskMb: number;                 // 0004: new volume quota, 0 otherwise
-  requiresMesh: boolean;          // the environment already has replicas on another node
-  environmentNodeIds: string[];   // nodes already hosting this environment
+  minProtocolVersion: number; // 4 for volumes, mesh-dependent placement, route workloads
+  pinnedNodeId: string | null; // 0004: a service with a volume
+  excludeNodeIds: string[]; // drain, reschedule
+  diskMb: number; // 0004: new volume quota, 0 otherwise
+  requiresMesh: boolean; // the environment already has replicas on another node
+  environmentNodeIds: string[]; // nodes already hosting this environment
 }
 ```
 
@@ -464,7 +460,6 @@ same zone, then bin-packing, then node ID.
 ### Node lifecycle
 
 `NODE_STATUSES` keeps `draining` and `maintenance`, both operator-set:
-
 - `draining` means no new placements, and the drain workflow is moving
   workloads off.
 - `maintenance` means drained and safe to reboot. Heartbeats don't change
@@ -472,20 +467,19 @@ same zone, then bin-packing, then node ID.
 
 Routes:
 
-| Method and path                                           | RBAC           | Audit                 |
-| --------------------------------------------------------- | -------------- | --------------------- |
-| `POST /v1/workspaces/{ws}/nodes/{nodeId}/drain` `{force?}`  | `nodes:manage` | `node.drain_started`  |
-| `POST /v1/workspaces/{ws}/nodes/{nodeId}/resume`            | `nodes:manage` | `node.resumed`        |
-| `POST /v1/workspaces/{ws}/nodes/{nodeId}/mesh/rotate-key`   | `nodes:manage` | `node.mesh_key_rotated` |
-| `GET /v1/workspaces/{ws}/mesh`                              | `nodes:read`   | none                  |
-| `PATCH /v1/instance/settings` `{mesh_supernet}`             | `instance:manage` | `instance.settings_updated` |
+| Method and path                                            | RBAC              | Audit                       |
+| ---------------------------------------------------------- | ----------------- | --------------------------- |
+| `POST /v1/workspaces/{ws}/nodes/{nodeId}/drain` `{force?}` | `nodes:manage`    | `node.drain_started`        |
+| `POST /v1/workspaces/{ws}/nodes/{nodeId}/resume`           | `nodes:manage`    | `node.resumed`              |
+| `POST /v1/workspaces/{ws}/nodes/{nodeId}/mesh/rotate-key`  | `nodes:manage`    | `node.mesh_key_rotated`     |
+| `GET /v1/workspaces/{ws}/mesh`                             | `nodes:read`      | none                        |
+| `PATCH /v1/instance/settings` `{mesh_supernet}`            | `instance:manage` | `instance.settings_updated` |
 
 `GET /mesh` returns nodes, pair paths (`direct`/`relayed`/`down`), last
 handshakes and readiness, for the dashboard's Servers → Network view.
 
 **Drain** is a Workflow, `DRAIN_WORKFLOW`, with the instance ID
 `drain-<node_id>-<ts>`:
-
 1. Set the node to `draining`.
 2. For each live placement on the node, **stateless** first, schedule the
    same deployment replica elsewhere (`excludeNodeIds: [node]`), insert a
@@ -508,7 +502,6 @@ deployments may use the node again.
 (`OFFLINE_AFTER_MS`), as today. The node DO alarm then waits
 `RESCHEDULE_AFTER_MS = 120_000` more, to ride out agent restarts and
 network blips. After that:
-
 - **Stateless** replicas of live deployments are rescheduled like a drain
   move, without waiting for the old one. The old placement is
   `state = 'lost'`. If the node comes back, its next `desired_state` no
@@ -679,7 +672,7 @@ New audit actions: `node.drain_started`, `node.drained`, `node.resumed`,
 - **Upgrading** needs `install.sh --upgrade`, which opens UDP 51820 in ufw,
   writes the sysctl, and adds the fwmark key to `daemon.json` (a Docker
   restart, announced). Hetzner firewalls created by `ensureFirewall` are
-  never rewritten (packages/hetzner/README.md), so the dashboard tells the
+  never rewritten (packages/providers/README.md), so the dashboard tells the
   operator to add `51820/udp`, and new provisions include it:
   `defaultFirewallRules` gains `51820/udp`.
 

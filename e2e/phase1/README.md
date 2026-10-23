@@ -5,7 +5,7 @@ Proves the deploy pipeline works on the real stack: the control plane under
 BuildKit, the local registry and Caddy. Nothing is mocked.
 
 ```sh
-pnpm --filter @openrail/e2e test:phase1      # or: node e2e/phase1/run.mjs
+pnpm --filter @roundhouse/e2e test:phase1      # or: node e2e/phase1/run.mjs
 ```
 
 ## Requirements
@@ -18,13 +18,13 @@ pnpm --filter @openrail/e2e test:phase1      # or: node e2e/phase1/run.mjs
   upstream DNS server, UDP and TCP), 5000 and 18443 (`PHASE1_GIT_PORT`). Free
   on this machine: 8797 (`PHASE1_PORT`).
 - Go (to cross-compile the agent), Node 22, `pnpm install` done, and for the
-  dashboard spec `pnpm --filter @openrail/e2e exec playwright install chromium`.
+  dashboard spec `pnpm --filter @roundhouse/e2e exec playwright install chromium`.
 - Internet access the first time: base images, the Railpack CLI and BuildKit's
   Railpack frontend are pulled. Hostnames never need DNS.
 
 WARNING: the suite's agent only manages its own node's containers (labelled
-`openrail.namespace=<node ID>`), but teardown removes every node's
-`openrail.managed=true` containers and networks on the engine. Don't run it
+`roundhouse.namespace=<node ID>`), but teardown removes every node's
+`roundhouse.managed=true` containers and networks on the engine. Don't run it
 against an engine that hosts a real node.
 
 ## How long it takes
@@ -118,4 +118,4 @@ deployment's events are written to `e2e/phase1/.artifacts/` (uploaded by CI).
   can't reach a git server inside the Docker VM to resolve the branch.
 - **Same data path inside and out.** The agent bind-mounts directories of its
   data dir into the registry container, and the engine resolves those on its
-  own host, so `/var/lib/openrail-e2e` is mounted at the same path.
+  own host, so `/var/lib/roundhouse-e2e` is mounted at the same path.

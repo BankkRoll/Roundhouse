@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	"github.com/BankkRoll/Open-Rail/agent/internal/dockertest"
-	"github.com/BankkRoll/Open-Rail/agent/internal/ingress"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	"github.com/BankkRoll/Roundhouse/agent/internal/dockertest"
+	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // caddyCmd starts Caddy with its admin API reachable from other containers;
@@ -41,14 +41,14 @@ type env struct {
 // the agent. refresh overrides Caddy's upstream cache interval when set.
 func setup(t *testing.T, refresh time.Duration) *env {
 	c := dockertest.Client(t)
-	network := dockertest.Unique("openrail-it-ing-")
+	network := dockertest.Unique("roundhouse-it-ing-")
 	dockertest.Network(t, c, network, nil)
 	dockertest.Attach(t, c, network)
 
-	w := dockertest.Run(t, c, dockertest.Unique("openrail-it-whoami-"), docker.ContainerCreate{
+	w := dockertest.Run(t, c, dockertest.Unique("roundhouse-it-whoami-"), docker.ContainerCreate{
 		Image: dockertest.WhoamiImage, HostConfig: docker.HostConfig{NetworkMode: network},
 	})
-	caddy := dockertest.Unique("openrail-it-caddy-")
+	caddy := dockertest.Unique("roundhouse-it-caddy-")
 	caddyID := dockertest.Run(t, c, caddy, docker.ContainerCreate{
 		Image: dockertest.CaddyImage, Entrypoint: caddyCmd, HostConfig: docker.HostConfig{NetworkMode: network},
 	})
@@ -132,8 +132,8 @@ func (e *env) get(t *testing.T, url, host string) (int, string) {
 
 func (e *env) routes() []ingress.Route {
 	return []ingress.Route{
-		{Host: "app.openrail.test", Upstreams: []string{e.whoami}},
-		{Host: "api.openrail.test", PathPrefix: "/v1", Upstreams: []string{e.whoami}},
+		{Host: "app.roundhouse.test", Upstreams: []string{e.whoami}},
+		{Host: "api.roundhouse.test", PathPrefix: "/v1", Upstreams: []string{e.whoami}},
 	}
 }
 
@@ -145,16 +145,16 @@ func TestCaddyRoutingTLSOff(t *testing.T) {
 	}
 	base := "http://" + e.caddy
 	dockertest.Eventually(t, 15*time.Second, "routing", func() bool {
-		code, body := e.get(t, base+"/", "app.openrail.test")
+		code, body := e.get(t, base+"/", "app.roundhouse.test")
 		return code == 200 && strings.Contains(body, "Hostname:")
 	})
-	if code, body := e.get(t, base+"/v1/users", "api.openrail.test"); code != 200 || !strings.Contains(body, "GET /v1/users") {
+	if code, body := e.get(t, base+"/v1/users", "api.roundhouse.test"); code != 200 || !strings.Contains(body, "GET /v1/users") {
 		t.Fatalf("path prefix: %d %s", code, body)
 	}
-	if code, _ := e.get(t, base+"/v2", "api.openrail.test"); code != 404 {
+	if code, _ := e.get(t, base+"/v2", "api.roundhouse.test"); code != 404 {
 		t.Fatalf("outside the prefix: %d", code)
 	}
-	if code, body := e.get(t, base+"/", "unknown.openrail.test"); code != 404 || !strings.Contains(body, "no route") {
+	if code, body := e.get(t, base+"/", "unknown.roundhouse.test"); code != 404 || !strings.Contains(body, "no route") {
 		t.Fatalf("unknown host: %d %s", code, body)
 	}
 
@@ -164,7 +164,7 @@ func TestCaddyRoutingTLSOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	// While Caddy is down, a new config fails to load and is retried.
-	routes := append(e.routes(), ingress.Route{Host: "new.openrail.test", Upstreams: []string{e.whoami}})
+	routes := append(e.routes(), ingress.Route{Host: "new.roundhouse.test", Upstreams: []string{e.whoami}})
 	if err := e.mgr.Apply(ctx, ingress.Config{TLSMode: protocol.TLSOff, Routes: routes}); err == nil {
 		t.Fatal("Apply succeeded with caddy stopped")
 	}
@@ -175,7 +175,7 @@ func TestCaddyRoutingTLSOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	dockertest.Eventually(t, 30*time.Second, "routes after the restart", func() bool {
-		code, _ := e.get(t, base+"/", "new.openrail.test")
+		code, _ := e.get(t, base+"/", "new.roundhouse.test")
 		return code == 200 && e.mgr.Healthy()
 	})
 }
@@ -186,13 +186,13 @@ func TestCaddyRoutingTLSInternal(t *testing.T) {
 		t.Fatal(err)
 	}
 	dockertest.Eventually(t, 30*time.Second, "HTTPS routing with the internal CA", func() bool {
-		code, body := e.get(t, "https://"+e.caddy+"/", "app.openrail.test")
+		code, body := e.get(t, "https://"+e.caddy+"/", "app.roundhouse.test")
 		return code == 200 && strings.Contains(body, "Hostname:")
 	})
-	if code, body := e.get(t, "https://"+e.caddy+"/v1/x", "api.openrail.test"); code != 200 || !strings.Contains(body, "GET /v1/x") {
+	if code, body := e.get(t, "https://"+e.caddy+"/v1/x", "api.roundhouse.test"); code != 200 || !strings.Contains(body, "GET /v1/x") {
 		t.Fatalf("https path prefix: %d %s", code, body)
 	}
-	code, _ := e.get(t, "http://"+e.caddy+"/", "app.openrail.test")
+	code, _ := e.get(t, "http://"+e.caddy+"/", "app.roundhouse.test")
 	if code != http.StatusPermanentRedirect && code != http.StatusMovedPermanently && code != http.StatusFound {
 		t.Fatalf("plain HTTP is not redirected: %d", code)
 	}
@@ -220,7 +220,7 @@ func (l *loop) run(e *env, keepAlive bool, stop <-chan struct{}, wg *sync.WaitGr
 		default:
 		}
 		req, _ := http.NewRequest(http.MethodGet, "http://"+e.caddy+"/", nil)
-		req.Host = "app.openrail.test"
+		req.Host = "app.roundhouse.test"
 		resp, err := client.Do(req)
 		if err != nil {
 			l.fail(err.Error())
@@ -260,7 +260,7 @@ func (l *loop) fail(msg string) {
 func TestSwapsNeverReloadCaddy(t *testing.T) {
 	const swaps = 200
 	e := setup(t, 50*time.Millisecond)
-	second := dockertest.Run(t, e.c, dockertest.Unique("openrail-it-whoami-"), docker.ContainerCreate{
+	second := dockertest.Run(t, e.c, dockertest.Unique("roundhouse-it-whoami-"), docker.ContainerCreate{
 		Image: dockertest.WhoamiImage, HostConfig: docker.HostConfig{NetworkMode: e.network},
 	})
 	upstreams := []string{e.whoami, dockertest.IP(t, e.c, second, e.network) + ":80"}
@@ -268,7 +268,7 @@ func TestSwapsNeverReloadCaddy(t *testing.T) {
 		t.Helper()
 		err := e.mgr.Apply(context.Background(), ingress.Config{
 			TLSMode: protocol.TLSOff,
-			Routes:  []ingress.Route{{Host: "app.openrail.test", Upstreams: []string{up}, Ports: []int{80}}},
+			Routes:  []ingress.Route{{Host: "app.roundhouse.test", Upstreams: []string{up}, Ports: []int{80}}},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -277,7 +277,7 @@ func TestSwapsNeverReloadCaddy(t *testing.T) {
 	apply(upstreams[0])
 	base := "http://" + e.caddy
 	dockertest.Eventually(t, 15*time.Second, "routing", func() bool {
-		code, _ := e.get(t, base+"/", "app.openrail.test")
+		code, _ := e.get(t, base+"/", "app.roundhouse.test")
 		return code == 200
 	})
 	loadsBefore, hashBefore := e.mgr.Loads(), e.mgr.AppliedHash()
@@ -335,14 +335,14 @@ func TestSwapsNeverReloadCaddy(t *testing.T) {
 // instead of failing.
 func TestRouteWaitsForUpstreamDNS(t *testing.T) {
 	e := setup(t, 50*time.Millisecond)
-	route := ingress.Route{Host: "app.openrail.test", Upstreams: []string{e.whoami}, Ports: []int{80}}
+	route := ingress.Route{Host: "app.roundhouse.test", Upstreams: []string{e.whoami}, Ports: []int{80}}
 	apply := func(r ingress.Route) {
 		_ = e.mgr.Apply(context.Background(), ingress.Config{TLSMode: protocol.TLSOff, Routes: []ingress.Route{r}})
 	}
 	apply(route)
 	base := "http://" + e.caddy
 	dockertest.Eventually(t, 15*time.Second, "routing", func() bool {
-		code, _ := e.get(t, base+"/", "app.openrail.test")
+		code, _ := e.get(t, base+"/", "app.roundhouse.test")
 		return code == 200
 	})
 	loads := e.mgr.Loads()
@@ -353,7 +353,7 @@ func TestRouteWaitsForUpstreamDNS(t *testing.T) {
 	time.AfterFunc(2*time.Second, func() { apply(route) })
 	time.Sleep(200 * time.Millisecond)
 	started := time.Now()
-	code, body := e.get(t, base+"/", "app.openrail.test")
+	code, body := e.get(t, base+"/", "app.roundhouse.test")
 	if code != 200 {
 		t.Fatalf("request during the gap: %d %s", code, body)
 	}

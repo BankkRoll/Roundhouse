@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/atomicfile"
+	"github.com/BankkRoll/Roundhouse/agent/internal/atomicfile"
 )
 
 // Defaults applied when the corresponding [Options] field is zero.

@@ -1,14 +1,14 @@
 /**
  * The ways to join a server to this control plane, as the add-server flow offers them,
  * and what each one needs: the Linux one-liner, cloud-init user data (built by
- * `@openrail/hetzner`'s `buildUserData`, which keeps the token out of every command
+ * `@roundhouse/providers`'s `buildUserData`, which keeps the token out of every command
  * line), and the local Docker node for development.
  *
  * Pure, so the generated text is unit-tested directly.
  *
  * @module
  */
-import { buildUserData, ProvisionError } from "@openrail/hetzner";
+import { buildUserData, ProvisionError } from "@roundhouse/providers";
 
 /** An install method tab. `hetzner` is shown but not available yet. */
 export type InstallMethod = "linux" | "cloud-init" | "local" | "hetzner";
@@ -17,7 +17,7 @@ export type InstallMethod = "linux" | "cloud-init" | "local" | "hetzner";
 export const AVAILABLE_METHODS: readonly InstallMethod[] = ["linux", "cloud-init", "local"];
 
 /** localStorage key remembering the last method picked. */
-export const INSTALL_METHOD_STORAGE_KEY = "openrail.add-server.method";
+export const INSTALL_METHOD_STORAGE_KEY = "roundhouse.add-server.method";
 
 /**
  * Whether an origin points at this machine, where the local Docker node can reach it.

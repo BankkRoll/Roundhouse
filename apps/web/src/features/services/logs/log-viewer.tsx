@@ -1,5 +1,5 @@
-import { cn } from "@openrail/ui";
-import { AnsiText, useVirtualWindow } from "@openrail/ui/controls";
+import { cn } from "@roundhouse/ui";
+import { AnsiText, useVirtualWindow } from "@roundhouse/ui/controls";
 import { memo, useEffect, useLayoutEffect, useRef } from "react";
 import { formatLogTime } from "../../../lib/format";
 import type { LogLine } from "./log-buffer";

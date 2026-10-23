@@ -3,7 +3,7 @@
  * reference-syntax errors with positions, shared scope, and RBAC.
  */
 import { env } from "cloudflare:test";
-import { createDb } from "@openrail/db";
+import { createDb } from "@roundhouse/db";
 import { describe, expect, it } from "vitest";
 import { unsealWith } from "../src/lib/crypto";
 import { projectKey, variableAad } from "../src/lib/variables";

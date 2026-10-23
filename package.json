@@ -1,12 +1,13 @@
 {
-  "name": "openrail",
+  "name": "roundhouse",
+  "license": "FSL-1.1-ALv2",
   "private": true,
-  "homepage": "https://github.com/BankkRoll/Open-Rail",
+  "homepage": "https://github.com/BankkRoll/Roundhouse",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/BankkRoll/Open-Rail.git"
+    "url": "git+https://github.com/BankkRoll/Roundhouse.git"
   },
-  "bugs": "https://github.com/BankkRoll/Open-Rail/issues",
+  "bugs": "https://github.com/BankkRoll/Roundhouse/issues",
   "packageManager": "pnpm@10.6.5",
   "engines": {
     "node": ">=22.19"

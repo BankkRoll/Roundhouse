@@ -4,7 +4,7 @@
  *
  * @module
  */
-import type { GithubAccountType } from "@openrail/shared";
+import type { GithubAccountType } from "@roundhouse/shared";
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { id, timestamps } from "./columns";
 import { workspaces } from "./workspaces";

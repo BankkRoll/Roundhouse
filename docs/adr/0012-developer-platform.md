@@ -3,7 +3,6 @@
 ## Status
 
 Proposed.
-
 - Date: 2026-10-22
 - Phase: 4
 - Protocol: version 6 (`exec_*` frames)
@@ -18,14 +17,13 @@ Names follow the Roundhouse rename (0013, "Naming").
 Phase 1 hardening added scoped API tokens (`tok_…`, scopes are RBAC
 actions, and a token can do only what both its scopes and its creator's
 current role allow). The CLI lists `shell` and `db connect` as "not
-available yet". `packages/hetzner` can list offers and provision servers
+available yet". `packages/providers` can list offers and provision servers
 whose cloud-init joins the control plane, but nothing in the API or
 dashboard uses it; the dashboard's Hetzner tab is disabled. Five pieces
 complete the developer surface: an MCP server, templates, a web shell, a
 cost estimator, and Hetzner provisioning.
 
 MCP facts (sources at the end):
-
 - **Spec version.** The latest is **2026-07-28**.
   - **Core.** The core is stateless: no `initialize` handshake, no
     `Mcp-Session-Id`. Every request carries
@@ -63,7 +61,6 @@ MCP facts (sources at the end):
 implemented with `@modelcontextprotocol/server` v2 and its Hono adapter,
 mounted on the existing router. A spike must confirm that it runs in
 workerd; the fallback is Cloudflare's `createMcpHandler`.
-
 - **Stateless.** No session IDs are issued, and cross-call state is passed
   as handles in tool arguments, such as change set IDs. `GET` and `DELETE`
   answer 405.
@@ -78,7 +75,6 @@ workerd; the fallback is Cloudflare's `createMcpHandler`.
   calls per minute, through the rate-limit binding.
 
 **Authentication.** Every request needs `Authorization: Bearer`.
-
 1. **API tokens** (`tok_…`) work as they do on REST. Their scopes are
    their tools' permissions. Clients that let users set a header use
    this.
@@ -160,25 +156,25 @@ as JSON Schema 2020-12. Outputs carry `structuredContent` plus a JSON
 user-generated text (logs, commit messages), and the tool descriptions say
 so.
 
-| Tool                  | Scope(s)                                   | Annotations                         | Behaviour                                                         |
-| --------------------- | ------------------------------------------ | ----------------------------------- | ----------------------------------------------------------------- |
-| `list_projects`       | `projects:read`                            | readOnly, idempotent                | projects of the token's workspace, with summary status            |
-| `get_project`         | `projects:read`                            | readOnly, idempotent                | environments, services, latest deployment per service            |
-| `list_deployments`    | `services:read`                            | readOnly, idempotent                | paged                                                             |
-| `get_deployment`      | `services:read`                            | readOnly, idempotent                | with events and placements                                        |
-| `read_logs`           | `services:read`                            | readOnly, idempotent                | newest ≤ 500 lines of a deployment or build (redacted)            |
-| `search_logs`         | `services:read`                            | readOnly, idempotent                | 0008 query syntax, ≤ 24 h window, ≤ 200 lines                     |
-| `get_metrics`         | `services:read`                            | readOnly, idempotent                | 0008 summary series                                               |
-| `list_variables`      | `variables:read`                           | readOnly, idempotent                | keys; values only for non-secret variables                        |
-| `list_templates`      | `projects:read`                            | readOnly, idempotent                | official and workspace templates                                  |
-| `get_change_set`      | `projects:read`                            | readOnly, idempotent                | ops and masked diffs                                              |
-| `deploy_service`      | `deployments:create`                       | not readOnly, not idempotent        | deploys the latest config; returns the deployment ID              |
-| `rollback_deployment` | `deployments:create`                       | destructive                         | as `POST …/rollback`; the result repeats 0003's rollback semantics |
-| `add_database`        | `services:manage`, `variables:manage`      | not readOnly                        | **stages** a database (0004) in a new change set                  |
-| `set_variables`       | `variables:manage`                         | not readOnly                        | **stages** `variable.set`/`delete` ops; values marked secret by `secret_keys` |
-| `stage_config_change` | `services:manage`                          | not readOnly                        | **stages** a `config.patch`                                       |
-| `deploy_template`     | `services:manage`, `variables:manage`      | not readOnly                        | **stages** a rendered template                                    |
-| `apply_change_set`    | every op's action + `changes:auto_apply`   | destructive                         | see below                                                         |
+| Tool                  | Scope(s)                                 | Annotations                  | Behaviour                                                                     |
+| --------------------- | ---------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------- |
+| `list_projects`       | `projects:read`                          | readOnly, idempotent         | projects of the token's workspace, with summary status                        |
+| `get_project`         | `projects:read`                          | readOnly, idempotent         | environments, services, latest deployment per service                         |
+| `list_deployments`    | `services:read`                          | readOnly, idempotent         | paged                                                                         |
+| `get_deployment`      | `services:read`                          | readOnly, idempotent         | with events and placements                                                    |
+| `read_logs`           | `services:read`                          | readOnly, idempotent         | newest ≤ 500 lines of a deployment or build (redacted)                        |
+| `search_logs`         | `services:read`                          | readOnly, idempotent         | 0008 query syntax, ≤ 24 h window, ≤ 200 lines                                 |
+| `get_metrics`         | `services:read`                          | readOnly, idempotent         | 0008 summary series                                                           |
+| `list_variables`      | `variables:read`                         | readOnly, idempotent         | keys; values only for non-secret variables                                    |
+| `list_templates`      | `projects:read`                          | readOnly, idempotent         | official and workspace templates                                              |
+| `get_change_set`      | `projects:read`                          | readOnly, idempotent         | ops and masked diffs                                                          |
+| `deploy_service`      | `deployments:create`                     | not readOnly, not idempotent | deploys the latest config; returns the deployment ID                          |
+| `rollback_deployment` | `deployments:create`                     | destructive                  | as `POST …/rollback`; the result repeats 0003's rollback semantics            |
+| `add_database`        | `services:manage`, `variables:manage`    | not readOnly                 | **stages** a database (0004) in a new change set                              |
+| `set_variables`       | `variables:manage`                       | not readOnly                 | **stages** `variable.set`/`delete` ops; values marked secret by `secret_keys` |
+| `stage_config_change` | `services:manage`                        | not readOnly                 | **stages** a `config.patch`                                                   |
+| `deploy_template`     | `services:manage`, `variables:manage`    | not readOnly                 | **stages** a rendered template                                                |
+| `apply_change_set`    | every op's action + `changes:auto_apply` | destructive                  | see below                                                                     |
 
 Never exposed: revealing secrets, deleting anything, the shell, database
 queries, domains, nodes, tokens and members. These need a human in the
@@ -189,7 +185,6 @@ dashboard.
 the dashboard's review panel. `apply_change_set` applies only when **all**
 of the following hold; otherwise it returns
 `{ status: "awaiting_confirmation", review_url }`, not an error:
-
 - the token carries `changes:auto_apply`;
 - the change set was created by the same token, or the same OAuth grant;
 - the target environment is not `protected` (0006);
@@ -241,7 +236,6 @@ the OAuth client ID. Reads are not audited, as for REST. New actions:
 ```
 
 Validation goes beyond the shape:
-
 - refs are unique;
 - every `${{ref.VAR}}` names a ref and a variable it defines, or a
   built-in;
@@ -252,7 +246,6 @@ Validation goes beyond the shape:
 
 **Rendering.** `renderTemplate(template, { inputs, existingSlugs })`
 returns `StagedOp[]` (0006):
-
 1. a `service.create` per service, with `ref: "new:<n>"`, slugs
    deduplicated with -2, -3 against `existingSlugs`, and references
    rewritten to the final slugs;
@@ -288,7 +281,6 @@ CREATE UNIQUE INDEX templates_ws_slug_version_uq ON templates(workspace_id, slug
 
 `POST /v1/projects/{projectId}/export-template` drafts a manifest from a
 project:
-
 - Images are pinned by their active digest. Git sources are kept.
 - Configs are kept.
 - Non-secret variable values are kept as written, references included.
@@ -299,15 +291,15 @@ project:
 The draft is returned for editing, then published with
 `POST /v1/workspaces/{ws}/templates`.
 
-| Method and path                                            | RBAC                                       | Audit                  |
-| ---------------------------------------------------------- | ------------------------------------------ | ---------------------- |
-| `GET /v1/workspaces/{ws}/templates`                        | `projects:read`                            | none                   |
-| `GET /v1/templates/{slugOrId}?version=`                    | `projects:read`                            | none                   |
-| `POST /v1/projects/{projectId}/templates/deploy` `{template, version?, environment_id, inputs, apply?}` | `services:manage`, `variables:manage` (+ op actions on apply) | `change_set.created` (`change_set.applied` when `apply`) |
-| `POST /v1/workspaces/{ws}/projects/from-template`          | `projects:manage` + the above              | `project.created`, `change_set.applied` |
-| `POST /v1/projects/{projectId}/export-template`            | `projects:read`, `variables:read`          | none                   |
-| `POST /v1/workspaces/{ws}/templates`                       | `templates:publish` (instance visibility: also `instance:manage`) | `template.published` |
-| `DELETE /v1/templates/{templateId}`                        | `templates:publish`                        | `template.deleted`     |
+| Method and path                                                                                         | RBAC                                                              | Audit                                                    |
+| ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------- |
+| `GET /v1/workspaces/{ws}/templates`                                                                     | `projects:read`                                                   | none                                                     |
+| `GET /v1/templates/{slugOrId}?version=`                                                                 | `projects:read`                                                   | none                                                     |
+| `POST /v1/projects/{projectId}/templates/deploy` `{template, version?, environment_id, inputs, apply?}` | `services:manage`, `variables:manage` (+ op actions on apply)     | `change_set.created` (`change_set.applied` when `apply`) |
+| `POST /v1/workspaces/{ws}/projects/from-template`                                                       | `projects:manage` + the above                                     | `project.created`, `change_set.applied`                  |
+| `POST /v1/projects/{projectId}/export-template`                                                         | `projects:read`, `variables:read`                                 | none                                                     |
+| `POST /v1/workspaces/{ws}/templates`                                                                    | `templates:publish` (instance visibility: also `instance:manage`) | `template.published`                                     |
+| `DELETE /v1/templates/{templateId}`                                                                     | `templates:publish`                                               | `template.deleted`                                       |
 
 ### 3. Web shell
 
@@ -338,7 +330,6 @@ Agent → control:
 ```
 
 **Agent** (`internal/shell`).
-
 - **Open.** `POST /containers/{id}/exec` with `Tty`, `AttachStdin`,
   `AttachStdout` and `AttachStderr`, then a hijacked `start`. Output is
   coalesced into frames every 20 ms.
@@ -354,7 +345,6 @@ Agent → control:
 
 **Relay.** `GET /v1/workloads/{workloadId}/shell?cols=&rows=` is a
 WebSocket.
-
 - The Worker authenticates: a session cookie with Origin checked, or a
   `tok_` with the `shell:open` scope for the CLI. OAuth tokens are
   refused. It then checks `shell:open` on the workload's workspace.
@@ -376,7 +366,6 @@ WebSocket.
 
 **Recording.** The instance setting `shell_recording` is
 `"metadata" | "full"`, default `"full"`.
-
 - In `full`, the DO records an asciicast v2 stream (header, `[t, "o", data]`
   and `[t, "i", data]` events), compresses it with zstd, and encrypts it
   to the project's age recipient (0004).
@@ -401,12 +390,12 @@ CREATE TABLE shell_sessions (
 );
 ```
 
-| Method and path                                         | RBAC                           | Audit                    |
-| ------------------------------------------------------- | ------------------------------ | ------------------------ |
-| `GET /v1/workloads/{workloadId}/shell` (WebSocket)      | `shell:open`                   | `shell.opened`, `shell.closed` |
-| `GET /v1/workspaces/{ws}/shell-sessions?project_id=`    | `audit:read`                   | none                     |
-| `GET /v1/shell-sessions/{sessionId}/recording`          | `audit:read` + `shell:open`    | `shell.recording_viewed` |
-| `POST /v1/shell-sessions/{sessionId}/terminate`         | `shell:open` (others' sessions: `members:manage`) | `shell.terminated` |
+| Method and path                                      | RBAC                                              | Audit                          |
+| ---------------------------------------------------- | ------------------------------------------------- | ------------------------------ |
+| `GET /v1/workloads/{workloadId}/shell` (WebSocket)   | `shell:open`                                      | `shell.opened`, `shell.closed` |
+| `GET /v1/workspaces/{ws}/shell-sessions?project_id=` | `audit:read`                                      | none                           |
+| `GET /v1/shell-sessions/{sessionId}/recording`       | `audit:read` + `shell:open`                       | `shell.recording_viewed`       |
+| `POST /v1/shell-sessions/{sessionId}/terminate`      | `shell:open` (others' sessions: `members:manage`) | `shell.terminated`             |
 
 `shell:open` is new, held by owner and admin. A shell exposes the
 container's environment, so it is as sensitive as `variables:reveal`.
@@ -426,7 +415,6 @@ provisioning and refreshed daily from `GET /server_types`. Other nodes are
 priced by the operator (`PATCH …/nodes/{id}`, `nodes:manage`).
 
 **Allocation** (`packages/shared/src/costs.ts`, pure).
-
 1. **Node capacity** is `C_cpu = cores × 1000` (no overcommit) and
    `C_mem = memoryMb`.
 2. **Each live placement's raw share** is
@@ -459,10 +447,10 @@ CREATE TABLE cost_accruals (
 );
 ```
 
-| Method and path                                                    | RBAC                          | Audit          |
-| ------------------------------------------------------------------ | ----------------------------- | -------------- |
-| `GET /v1/workspaces/{ws}/costs?group=project\|service\|node&period=run_rate\|30d` | `nodes:read`, `projects:read` | none |
-| `PATCH /v1/workspaces/{ws}/nodes/{nodeId}` `{monthly_cost, cost_currency}` | `nodes:manage`         | `node.updated` |
+| Method and path                                                                   | RBAC                          | Audit          |
+| --------------------------------------------------------------------------------- | ----------------------------- | -------------- |
+| `GET /v1/workspaces/{ws}/costs?group=project\|service\|node&period=run_rate\|30d` | `nodes:read`, `projects:read` | none           |
+| `PATCH /v1/workspaces/{ws}/nodes/{nodeId}` `{monthly_cost, cost_currency}`        | `nodes:manage`                | `node.updated` |
 
 The dashboard has a Usage page (stacked bars by project, with preview
 environments split out, per-node idle callouts), a per-service cost on the
@@ -470,7 +458,7 @@ service page, and the node cost field.
 
 ### 5. Hetzner in the API and dashboard
 
-The package exists (`packages/hetzner`): typed client, `listOffers` and
+The package exists (`packages/providers`): typed client, `listOffers` and
 `recommend`, `buildUserData` (the token goes into a tmpfs file, never
 argv), idempotent `provisionServer` with cleanup on failure, and
 `deprovisionServer`, which refuses servers not labelled
@@ -505,7 +493,6 @@ ALTER TABLE node_join_tokens ADD COLUMN provision_id TEXT REFERENCES node_provis
 ```
 
 `PROVISION_WORKFLOW` (instance ID `prov_…`):
-
 1. Mint a join token (15 min) linked to the provision.
 2. `provisionServer(hz, { name, serverType, location, controlPlaneUrl, joinToken, sshPublicKey, workspaceId, allowSsh, builder })`
    with a 5 min `AbortSignal`, then record `server_id` and the IPs.
@@ -522,18 +509,17 @@ ALTER TABLE node_join_tokens ADD COLUMN provision_id TEXT REFERENCES node_provis
    then `failed (join_timeout)`. The dashboard suggests `allow_ssh` to
    debug.
 
-| Method and path                                                 | RBAC                                  | Audit                        |
-| --------------------------------------------------------------- | ------------------------------------- | ---------------------------- |
-| `GET /v1/workspaces/{ws}/providers`                             | `nodes:read`                          | none                         |
-| `PUT /v1/workspaces/{ws}/providers/hetzner` `{token}` (session only) | `providers:manage`               | `provider.connected`         |
-| `DELETE /v1/workspaces/{ws}/providers/hetzner` `{force?}`       | `providers:manage`                    | `provider.disconnected`      |
-| `GET /v1/workspaces/{ws}/providers/hetzner/offers?role=app\|builder` | `nodes:manage`                   | none (Cache API, 10 min)     |
-| `GET /v1/workspaces/{ws}/providers/hetzner/images`              | `nodes:manage`                        | none                         |
-| `POST /v1/workspaces/{ws}/nodes/provision`                      | `nodes:manage`                        | `node.provision_requested`   |
-| `GET /v1/workspaces/{ws}/node-provisions/{provisionId}`         | `nodes:read`                          | none                         |
-| `POST /v1/workspaces/{ws}/node-provisions/{provisionId}/cancel` | `nodes:manage`                        | `node.provision_cancelled`   |
-| `DELETE /v1/workspaces/{ws}/nodes/{nodeId}?deprovision=true&force=` | `nodes:manage`                    | `node.removed`, `node.deprovisioned` |
-
+| Method and path                                                      | RBAC               | Audit                                |
+| -------------------------------------------------------------------- | ------------------ | ------------------------------------ |
+| `GET /v1/workspaces/{ws}/providers`                                  | `nodes:read`       | none                                 |
+| `PUT /v1/workspaces/{ws}/providers/hetzner` `{token}` (session only) | `providers:manage` | `provider.connected`                 |
+| `DELETE /v1/workspaces/{ws}/providers/hetzner` `{force?}`            | `providers:manage` | `provider.disconnected`              |
+| `GET /v1/workspaces/{ws}/providers/hetzner/offers?role=app\|builder` | `nodes:manage`     | none (Cache API, 10 min)             |
+| `GET /v1/workspaces/{ws}/providers/hetzner/images`                   | `nodes:manage`     | none                                 |
+| `POST /v1/workspaces/{ws}/nodes/provision`                           | `nodes:manage`     | `node.provision_requested`           |
+| `GET /v1/workspaces/{ws}/node-provisions/{provisionId}`              | `nodes:read`       | none                                 |
+| `POST /v1/workspaces/{ws}/node-provisions/{provisionId}/cancel`      | `nodes:manage`     | `node.provision_cancelled`           |
+| `DELETE /v1/workspaces/{ws}/nodes/{nodeId}?deprovision=true&force=`  | `nodes:manage`     | `node.removed`, `node.deprovisioned` |
 - **Body** of `POST /nodes/provision`:
   `{ provider: "hetzner", name, server_type, location, image?, ssh_public_key?, allow_ssh?, builder?, labels? }`.
   A read-only Hetzner token gets `409 provider_read_only` before anything
@@ -546,7 +532,6 @@ ALTER TABLE node_join_tokens ADD COLUMN provision_id TEXT REFERENCES node_provis
   Hetzner token can create billable servers.
 
 **Dashboard.** The Add server → **Hetzner** tab is enabled:
-
 1. Connect a token, with the scope checked and read-only rejected.
 2. Choose a role (app or builder), then cards from `recommend` with live
    gross prices and currency, a location, and an optional SSH key.
@@ -578,7 +563,7 @@ cost, and adds Deprovision.
     membership every minute, are fully audited, and are recorded,
     encrypted per project, by default.
 - **Hetzner tokens** are sealed per workspace and set from a session
-  only. Join tokens in user data follow `packages/hetzner`'s documented
+  only. Join tokens in user data follow `packages/providers`'s documented
   handling: single use, 15 minutes, tmpfs.
 - **Costs** expose no secrets. Node prices are visible to `nodes:read`.
 
@@ -609,7 +594,7 @@ cost, and adds Deprovision.
   - Frame fixtures shared by TS and Go.
 - **Costs.** Pure unit tests: normalization under CPU overcommit, idle
   remainder, multi-currency separation, and accrual over a simulated day.
-- **Hetzner.** The existing fake (`packages/hetzner/test/fake-hetzner.ts`)
+- **Hetzner.** The existing fake (`packages/providers/test/fakes/hetzner.ts`)
   backs workflow tests: success, read-only token, `resource_limit_exceeded`,
   cleanup failure retried by the tick, and join timeout leading to
   deprovision.
@@ -680,4 +665,4 @@ cost, and adds Deprovision.
 - Tools and annotations, https://modelcontextprotocol.io/specification/2026-07-28/server/tools; elicitation via `input_required`, https://modelcontextprotocol.io/specification/2026-07-28/client/elicitation (retrieved 2026-10-22)
 - TypeScript SDK v2, https://github.com/modelcontextprotocol/typescript-sdk (retrieved 2026-10-22); Cloudflare transport guidance (`createMcpHandler`, `McpAgent` deprecated), https://developers.cloudflare.com/agents/model-context-protocol/transport/ (updated 2026-07-27); `workers-oauth-provider` (requires `OAUTH_KV`), https://github.com/cloudflare/workers-oauth-provider (retrieved 2026-10-22)
 - Docker exec API (hijack, resize, `Pid`, no kill on disconnect), Engine API swagger at moby tag docker-v29.9.2 (retrieved 2026-10-22)
-- Hetzner `GET /server_types` prices (`price_monthly.gross/net` decimal strings, per-location `included_traffic`), https://docs.hetzner.cloud/cloud.spec.json (retrieved 2026-10-22); package sources, `packages/hetzner/SOURCES.md` (checked 2026-10-22)
+- Hetzner `GET /server_types` prices (`price_monthly.gross/net` decimal strings, per-location `included_traffic`), https://docs.hetzner.cloud/cloud.spec.json (retrieved 2026-10-22); package sources, `packages/providers/SOURCES.md` (checked 2026-10-22)

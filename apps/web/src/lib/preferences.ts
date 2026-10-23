@@ -2,7 +2,7 @@
  * Per-browser display preferences that are not the theme: table density and motion.
  * Stored in localStorage (every access guarded, since storage can throw in private
  * windows or when blocked) and applied as attributes on `<html>` that the stylesheet in
- * `@openrail/ui` reads. One store for the page, so every caller sees the same values and
+ * `@roundhouse/ui` reads. One store for the page, so every caller sees the same values and
  * changes from other tabs are picked up.
  *
  * The theme keeps its own store in `use-theme.ts`.
@@ -18,10 +18,10 @@ export type Density = "comfortable" | "compact";
 export type MotionPreference = "system" | "reduce" | "allow";
 
 /** localStorage key for {@link Density}. Mirrored in `public/theme-init.js`. */
-export const DENSITY_STORAGE_KEY = "openrail.density";
+export const DENSITY_STORAGE_KEY = "roundhouse.density";
 
 /** localStorage key for {@link MotionPreference}. Mirrored in `public/theme-init.js`. */
-export const MOTION_STORAGE_KEY = "openrail.motion";
+export const MOTION_STORAGE_KEY = "roundhouse.motion";
 
 /** Every display preference. */
 export interface Preferences {

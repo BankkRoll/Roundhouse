@@ -6,7 +6,7 @@
  * and the same-origin guard's bearer exemption.
  */
 import { env } from "cloudflare:test";
-import { API_TOKEN_PRESETS } from "@openrail/shared";
+import { API_TOKEN_PRESETS } from "@roundhouse/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { hashToken } from "../src/lib/crypto";
 import { addMember, type Client, call, install, ORIGIN } from "./helpers";

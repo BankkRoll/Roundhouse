@@ -1,4 +1,4 @@
-import { Kpi, KpiStrip, Meter, Skeleton } from "@openrail/ui";
+import { Kpi, KpiStrip, Meter, Skeleton } from "@roundhouse/ui";
 import { EMPTY, formatPercent, formatRelativeTime } from "../../lib/format";
 import { usePermissions } from "../../lib/permissions";
 import { useNow } from "../../lib/use-now";

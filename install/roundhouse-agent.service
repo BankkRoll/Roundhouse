@@ -1,12 +1,12 @@
 [Unit]
-Description=OpenRail node agent
-Documentation=https://github.com/BankkRoll/Open-Rail
+Description=Roundhouse node agent
+Documentation=https://github.com/BankkRoll/Roundhouse
 Wants=network-online.target docker.service caddy.service
 After=network-online.target docker.service caddy.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/openrail-agent run --config /etc/openrail/agent.yaml
+ExecStart=/usr/local/bin/roundhouse-agent run --config /etc/roundhouse/agent.yaml
 Restart=always
 RestartSec=5
 TimeoutStopSec=20
@@ -20,11 +20,11 @@ UMask=0077
 # nodes it also runs git and railpack, which inherit this sandbox; their
 # checkouts live in the state directory and are removed after each build.
 CapabilityBoundingSet=
-StateDirectory=openrail
+StateDirectory=roundhouse
 StateDirectoryMode=0700
 # The agent records the control plane's key id in its config after the
 # first verified welcome.
-ReadWritePaths=-/etc/openrail
+ReadWritePaths=-/etc/roundhouse
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

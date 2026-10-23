@@ -1,4 +1,4 @@
-import { JOIN_TOKEN_TTL_MS } from "@openrail/shared";
+import { JOIN_TOKEN_TTL_MS } from "@roundhouse/shared";
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
@@ -199,7 +199,7 @@ describe("install method tabs", () => {
     await user.click(screen.getByRole("tab", { name: "This computer" }));
     expect(screen.getByRole("tabpanel")).toHaveTextContent(`pnpm dev:node ${token}`);
     expect(screen.getByRole("tabpanel")).toHaveTextContent(
-      /from a clone of the OpenRail repository/,
+      /from a clone of the Roundhouse repository/,
     );
 
     await user.click(screen.getByRole("tab", { name: "Linux server" }));

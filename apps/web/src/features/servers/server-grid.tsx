@@ -1,4 +1,4 @@
-import { ServerCard, Skeleton } from "@openrail/ui";
+import { ServerCard, Skeleton } from "@roundhouse/ui";
 import { Link } from "@tanstack/react-router";
 import type { Node } from "../../lib/api/types";
 import { formatAgentVersion, formatRelativeTime } from "../../lib/format";

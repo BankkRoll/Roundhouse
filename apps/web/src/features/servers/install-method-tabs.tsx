@@ -6,7 +6,7 @@ import {
   TabsList,
   TabsTrigger,
   Tooltip,
-} from "@openrail/ui";
+} from "@roundhouse/ui";
 import { CloudIcon, LaptopIcon, ServerIcon, TerminalIcon } from "lucide-react";
 import { useId, useState } from "react";
 import { FormField } from "../../components/form-field";
@@ -201,7 +201,7 @@ export function InstallMethodTabs({
       {local ? (
         <TabsContent value="local" className="grid gap-3">
           <p className="text-sm text-muted-foreground">
-            For local development from a clone of the OpenRail repository: runs a builder node in
+            For local development from a clone of the Roundhouse repository: runs a builder node in
             Docker on this computer, next to the control plane from{" "}
             <span className="font-mono text-foreground">pnpm dev</span>.
           </p>

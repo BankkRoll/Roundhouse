@@ -22,7 +22,7 @@ const DefaultDNSListen = "127.0.0.1:2021"
 // UpstreamZone is the zone the upstream DNS server answers for. ".invalid"
 // is reserved (RFC 6761), so no public resolver ever answers for it and a
 // name in it can never leave the node.
-const UpstreamZone = "upstreams.openrail.invalid."
+const UpstreamZone = "upstreams.roundhouse.invalid."
 
 const (
 	// maxUDPAnswer is the classic DNS UDP payload limit. A larger answer is

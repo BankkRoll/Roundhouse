@@ -11,8 +11,8 @@
  * @module
  */
 import "./landing.css";
-import { PRODUCT_NAME } from "@openrail/shared";
-import { cn } from "@openrail/ui";
+import { PRODUCT_NAME } from "@roundhouse/shared";
+import { cn } from "@roundhouse/ui";
 import { useEffect, useState } from "react";
 import { useReducedMotion } from "./hooks";
 import { CanvasSection } from "./sections/canvas-section";
@@ -27,7 +27,7 @@ import { PipelineScene } from "./sections/pipeline-scene";
 import { SecuritySection } from "./sections/security-section";
 
 const DESCRIPTION =
-  "Open-source, self-hosted platform for deploying apps. The control plane runs on your own Cloudflare account; your apps run on any Linux server.";
+  "Source-available, self-hosted platform for deploying apps. The control plane runs on your own Cloudflare account; your apps run on any Linux server.";
 
 function useDocumentMeta() {
   useEffect(() => {

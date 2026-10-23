@@ -4,26 +4,26 @@ import (
 	"encoding/json"
 	"strconv"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // Labels the agent puts on every container it manages. Everything needed to
 // route, drain and report a container is recoverable from them, so an agent
 // restart in the middle of a rollout loses nothing.
 const (
-	LabelManaged       = "openrail.managed"
-	LabelWorkloadID    = "openrail.workload_id"
-	LabelKind          = "openrail.kind"
-	LabelDeploymentID  = "openrail.deployment_id"
-	LabelServiceID     = "openrail.service_id"
-	LabelProjectID     = "openrail.project_id"
-	LabelEnvironmentID = "openrail.environment_id"
-	LabelSpecHash      = "openrail.spec_hash"
-	LabelGeneration    = "openrail.generation"
-	LabelNetwork       = "openrail.network"
-	LabelRoutes        = "openrail.routes"
-	LabelDrainS        = "openrail.drain_s"
-	LabelNamespace     = "openrail.namespace"
+	LabelManaged       = "roundhouse.managed"
+	LabelWorkloadID    = "roundhouse.workload_id"
+	LabelKind          = "roundhouse.kind"
+	LabelDeploymentID  = "roundhouse.deployment_id"
+	LabelServiceID     = "roundhouse.service_id"
+	LabelProjectID     = "roundhouse.project_id"
+	LabelEnvironmentID = "roundhouse.environment_id"
+	LabelSpecHash      = "roundhouse.spec_hash"
+	LabelGeneration    = "roundhouse.generation"
+	LabelNetwork       = "roundhouse.network"
+	LabelRoutes        = "roundhouse.routes"
+	LabelDrainS        = "roundhouse.drain_s"
+	LabelNamespace     = "roundhouse.namespace"
 )
 
 // ManagedFilter selects the agent's containers and networks.

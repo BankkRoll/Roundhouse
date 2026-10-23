@@ -5,8 +5,8 @@
  *
  * @module
  */
-import { apiTokens, users } from "@openrail/db";
-import { type Action, scopesBeyondRole } from "@openrail/shared";
+import { apiTokens, users } from "@roundhouse/db";
+import { type Action, scopesBeyondRole } from "@roundhouse/shared";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { clientIp, createRouter, requireWorkspace } from "../context";
 import { createApiToken, listApiTokens, policyOf, revokeApiToken } from "../contracts";

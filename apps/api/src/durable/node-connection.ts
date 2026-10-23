@@ -34,7 +34,7 @@ import {
   nodes,
   placements,
   services,
-} from "@openrail/db";
+} from "@roundhouse/db";
 import {
   type AgentMessage,
   AgentMessageSchema,
@@ -58,8 +58,13 @@ import {
   WORKLOADS_PROTOCOL_VERSION,
   type WorkloadState,
   type WorkloadStatusReport,
-} from "@openrail/protocol";
-import { HEARTBEAT_INTERVAL_MS, type NodeStatus, newId, OFFLINE_AFTER_MS } from "@openrail/shared";
+} from "@roundhouse/protocol";
+import {
+  HEARTBEAT_INTERVAL_MS,
+  type NodeStatus,
+  newId,
+  OFFLINE_AFTER_MS,
+} from "@roundhouse/shared";
 import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";

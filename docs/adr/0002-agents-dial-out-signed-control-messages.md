@@ -5,8 +5,8 @@
 
 ## Context
 
-Each OpenRail install has one control plane (a Cloudflare Worker with Durable
-Objects) and any number of Linux nodes running `openrail-agent`. The control
+Each Roundhouse install has one control plane (a Cloudflare Worker with Durable
+Objects) and any number of Linux nodes running `roundhouse-agent`. The control
 plane must push desired state to nodes with low latency, and nodes must report
 heartbeats and facts back.
 

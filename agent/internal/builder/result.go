@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // userError is a failure caused by the job or the repository, with a message

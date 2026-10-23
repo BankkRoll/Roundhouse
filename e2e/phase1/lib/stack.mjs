@@ -3,7 +3,7 @@
  *
  * - the control plane under `wrangler dev`, with fresh local state;
  * - Caddy, run by itself on the engine's host network as on a real node;
- * - an HTTPS git server and an HTTP prober (both `openrail-e2e-tools`);
+ * - an HTTPS git server and an HTTP prober (both `roundhouse-e2e-tools`);
  * - the node: the agent binary cross-compiled for Linux in a container on
  *   the host network with the engine's socket, joined as a builder.
  *
@@ -12,8 +12,8 @@
  * (the prober), never from the Windows/macOS host. On Linux the same
  * commands use the real host network.
  *
- * Everything is named `openrail-e2e-*` (plus what the agent itself creates:
- * `sys_registry`, `sys_buildkitd`, `openrail-build`, `openrail-buildkit` and
+ * Everything is named `roundhouse-e2e-*` (plus what the agent itself creates:
+ * `sys_registry`, `sys_buildkitd`, `roundhouse-build`, `roundhouse-buildkit` and
  * the environment networks), so a teardown can find it after a crash.
  *
  * @module
@@ -38,18 +38,18 @@ const API_DIR = join(ROOT, "apps", "api");
 
 /** Container, volume and image names. */
 export const NAMES = {
-  agent: "openrail-e2e-agent",
-  caddy: "openrail-e2e-caddy",
-  git: "openrail-e2e-git",
-  probe: "openrail-e2e-probe",
-  nodeImage: "openrail-e2e-node:local",
-  toolsImage: "openrail-e2e-tools:local",
-  certs: "openrail-e2e-certs",
-  caddyData: "openrail-e2e-caddy-data",
+  agent: "roundhouse-e2e-agent",
+  caddy: "roundhouse-e2e-caddy",
+  git: "roundhouse-e2e-git",
+  probe: "roundhouse-e2e-probe",
+  nodeImage: "roundhouse-e2e-node:local",
+  toolsImage: "roundhouse-e2e-tools:local",
+  certs: "roundhouse-e2e-certs",
+  caddyData: "roundhouse-e2e-caddy-data",
 };
 
 /** Agent data directory, on the engine host: the registry bind-mounts paths under it. */
-export const DATA_DIR = "/var/lib/openrail-e2e";
+export const DATA_DIR = "/var/lib/roundhouse-e2e";
 
 /** Pinned images the suite uses. */
 export const IMAGES = {
@@ -142,7 +142,7 @@ async function engineArch() {
  */
 export async function buildImages() {
   const arch = await engineArch();
-  const ctx = mkdtempSync(join(tmpdir(), "openrail-e2e-node-"));
+  const ctx = mkdtempSync(join(tmpdir(), "roundhouse-e2e-node-"));
   try {
     log("stack", `building the agent for linux/${arch}`);
     await run(
@@ -153,8 +153,8 @@ export async function buildImages() {
         "-ldflags",
         "-X main.version=0.0.0-e2e",
         "-o",
-        join(ctx, "openrail-agent"),
-        "./cmd/openrail-agent",
+        join(ctx, "roundhouse-agent"),
+        "./cmd/roundhouse-agent",
       ],
       {
         cwd: join(ROOT, "agent"),
@@ -247,7 +247,7 @@ export async function startControlPlane({ port }) {
   if (taken) {
     throw new Error(`port ${port} is already in use (a leftover wrangler?); set PHASE1_PORT`);
   }
-  const state = mkdtempSync(join(tmpdir(), "openrail-e2e-state-"));
+  const state = mkdtempSync(join(tmpdir(), "roundhouse-e2e-state-"));
   const masterKey = randomBytes(32).toString("base64");
   const varsFile = join(API_DIR, ".dev.vars.phase1");
   writeFileSync(varsFile, `MASTER_KEY=${masterKey}\nROLLOUT_TIMEOUT_S=${ROLLOUT_TIMEOUT_S}\n`);
@@ -431,7 +431,7 @@ export async function joinNode({ url, token, insecure }) {
     "--rm",
     ...agentMounts(),
     "-e",
-    "OPENRAIL_JOIN_TOKEN",
+    "ROUNDHOUSE_JOIN_TOKEN",
     NAMES.nodeImage,
     "join",
     "--url",
@@ -445,7 +445,7 @@ export async function joinNode({ url, token, insecure }) {
     DATA_DIR,
   ];
   if (insecure) args.push("--insecure");
-  const res = await docker(args, { env: { ...process.env, OPENRAIL_JOIN_TOKEN: token } });
+  const res = await docker(args, { env: { ...process.env, ROUNDHOUSE_JOIN_TOKEN: token } });
   return res.stderr + res.stdout;
 }
 
@@ -506,9 +506,9 @@ export async function dumpDiagnostics(opts = {}) {
       "ps",
       "-a",
       "--filter",
-      "label=openrail.managed=true",
+      "label=roundhouse.managed=true",
       "--format",
-      '{{.ID}} {{.Names}} {{.Image}} {{.Status}} {{.Label "openrail.deployment_id"}}',
+      '{{.ID}} {{.Names}} {{.Image}} {{.Status}} {{.Label "roundhouse.deployment_id"}}',
     ],
     { allowFail: true },
   );
@@ -533,12 +533,12 @@ export async function dumpDiagnostics(opts = {}) {
 
 /**
  * Whether a managed container or network belongs to a node rather than to
- * an agent integration test: tests label theirs `openrail.test` or give
+ * an agent integration test: tests label theirs `roundhouse.test` or give
  * them an `it…` namespace, nodes use their node ID (`node_…`), and Phase 1
  * agents none.
  *
- * @param {string} namespace - The `openrail.namespace` label.
- * @param {string} test - The `openrail.test` label.
+ * @param {string} namespace - The `roundhouse.namespace` label.
+ * @param {string} test - The `roundhouse.test` label.
  */
 function nodeOwned(namespace, test) {
   return !test && (!namespace || namespace.startsWith("node_"));
@@ -549,7 +549,7 @@ function nodeOwned(namespace, test) {
  * networks, volumes and the agent's data directory. Safe to run when
  * nothing exists, so it also runs before a suite to clear a crashed run.
  *
- * WARNING: this removes every node's `openrail.managed=true` containers on
+ * WARNING: this removes every node's `roundhouse.managed=true` containers on
  * the engine, not only the suite's node; don't point the suite at an engine
  * that runs a real node.
  *
@@ -560,7 +560,7 @@ export async function teardown() {
   // Control-plane state an earlier run could not delete while workerd still
   // held it open (Windows); a live one is locked and survives this.
   for (const name of readdirSync(tmpdir())) {
-    if (!name.startsWith("openrail-e2e-state-")) continue;
+    if (!name.startsWith("roundhouse-e2e-state-")) continue;
     try {
       rmSync(join(tmpdir(), name), { recursive: true, force: true });
     } catch {
@@ -574,9 +574,9 @@ export async function teardown() {
       "ps",
       "-aq",
       "--filter",
-      "label=openrail.managed=true",
+      "label=roundhouse.managed=true",
       "--format",
-      '{{.ID}}|{{.Label "openrail.namespace"}}|{{.Label "openrail.test"}}',
+      '{{.ID}}|{{.Label "roundhouse.namespace"}}|{{.Label "roundhouse.test"}}',
     ],
     { allowFail: true },
   );
@@ -593,9 +593,9 @@ export async function teardown() {
       "network",
       "ls",
       "--filter",
-      "label=openrail.managed=true",
+      "label=roundhouse.managed=true",
       "--format",
-      '{{.Name}}|{{.Label "openrail.namespace"}}|{{.Label "openrail.test"}}',
+      '{{.Name}}|{{.Label "roundhouse.namespace"}}|{{.Label "roundhouse.test"}}',
     ],
     { allowFail: true },
   );
@@ -604,11 +604,11 @@ export async function teardown() {
     .map((l) => l.trim().split("|"))
     .filter(([name, ns, test]) => name && nodeOwned(ns, test))
     .map(([name]) => name);
-  for (const net of [...new Set([...netNames, "openrail-build"])]) {
+  for (const net of [...new Set([...netNames, "roundhouse-build"])]) {
     await docker(["network", "rm", net], { allowFail: true });
   }
   if (process.env.PHASE1_KEEP_BUILD_CACHE !== "1") {
-    await docker(["volume", "rm", "-f", "openrail-buildkit"], { allowFail: true });
+    await docker(["volume", "rm", "-f", "roundhouse-buildkit"], { allowFail: true });
   }
   await docker(["volume", "rm", "-f", NAMES.certs, NAMES.caddyData], { allowFail: true });
   const tools = await docker(["image", "inspect", NAMES.toolsImage], { allowFail: true });

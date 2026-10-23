@@ -1,4 +1,4 @@
-# An OpenRail node for the Phase 1 end-to-end test: the agent binary plus
+# An Roundhouse node for the Phase 1 end-to-end test: the agent binary plus
 # what install.sh puts on a builder (git, CA certificates, the pinned
 # Railpack CLI). Caddy runs in its own container on the same host network,
 # as it runs as its own systemd service on a real node, so restarting the
@@ -26,6 +26,6 @@ RUN set -eu; \
 	rm "/tmp/${asset}"; \
 	railpack --version
 
-COPY openrail-agent entrypoint.sh /usr/local/bin/
-RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/openrail-agent
+COPY roundhouse-agent entrypoint.sh /usr/local/bin/
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/roundhouse-agent
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 const thisNode = "node_this"
@@ -74,10 +74,10 @@ func exists(d *fakeDocker, id string) bool {
 // asked to run, even with an empty desired state.
 func TestNamespaceLeavesOtherNodesAlone(t *testing.T) {
 	d := newFakeDocker()
-	foreign := plant(t, d, "other-node", "openrail-prj_x-env_x", map[string]string{
+	foreign := plant(t, d, "other-node", "roundhouse-prj_x-env_x", map[string]string{
 		LabelWorkloadID: "wl_foreign", LabelNamespace: "node_other", LabelSpecHash: strings.Repeat("1", 64),
 	})
-	stray := plant(t, d, "phase1-stray", "openrail-prj_x", map[string]string{
+	stray := plant(t, d, "phase1-stray", "roundhouse-prj_x", map[string]string{
 		LabelWorkloadID: "wl_stray", LabelSpecHash: strings.Repeat("2", 64),
 	})
 
@@ -110,7 +110,7 @@ func TestNamespaceLeavesOtherNodesAlone(t *testing.T) {
 // be removed; this pins down what the namespace fixes.
 func TestWithoutNamespaceStrayIsRemoved(t *testing.T) {
 	d := newFakeDocker()
-	stray := plant(t, d, "phase1-stray", "openrail-prj_x", map[string]string{
+	stray := plant(t, d, "phase1-stray", "roundhouse-prj_x", map[string]string{
 		LabelWorkloadID: "wl_stray", LabelSpecHash: strings.Repeat("2", 64),
 	})
 	h := newHarness(t, func(o *Options) { o.Docker = d })
@@ -129,14 +129,14 @@ func TestLegacyContainerIsAdoptedAndMigrated(t *testing.T) {
 	legacy := w
 	legacy.Network = protocol.ProjectNetworkName("prj_1")
 	legacy = rehash(legacy)
-	old := plant(t, d, "openrail-wl_a-old", legacy.Network, map[string]string{
+	old := plant(t, d, "roundhouse-wl_a-old", legacy.Network, map[string]string{
 		LabelWorkloadID: "wl_a", LabelSpecHash: legacy.SpecHash, LabelDeploymentID: "dep_a",
 		LabelServiceID: "svc_web", LabelProjectID: "prj_1", LabelEnvironmentID: "env_1",
 		LabelRoutes: `[{"hostname":"app.example.com","container_port":80}]`,
 	})
 	d.mu.Lock()
 	d.networks[legacy.Network] = docker.Network{Name: legacy.Network, Labels: map[string]string{LabelManaged: "true", LabelProjectID: "prj_1"}}
-	d.networks["openrail-prj_other"] = docker.Network{Name: "openrail-prj_other", Labels: map[string]string{LabelManaged: "true", LabelProjectID: "prj_other"}}
+	d.networks["roundhouse-prj_other"] = docker.Network{Name: "roundhouse-prj_other", Labels: map[string]string{LabelManaged: "true", LabelProjectID: "prj_other"}}
 	d.mu.Unlock()
 	defer func(was time.Duration) { networkGCInterval = was }(networkGCInterval)
 	networkGCInterval = 0
@@ -167,7 +167,7 @@ func TestLegacyContainerIsAdoptedAndMigrated(t *testing.T) {
 		_, err := d.InspectNetwork(context.Background(), legacy.Network)
 		return docker.IsNotFound(err)
 	})
-	if _, err := d.InspectNetwork(context.Background(), "openrail-prj_other"); err != nil {
+	if _, err := d.InspectNetwork(context.Background(), "roundhouse-prj_other"); err != nil {
 		t.Error("removed the project network of a project this node does not run")
 	}
 	if _, err := d.InspectNetwork(context.Background(), w.Network); err != nil {
@@ -185,7 +185,7 @@ func TestAdoptionSurvivesRestart(t *testing.T) {
 	d := newFakeDocker()
 	w := spec("wl_a", "svc_web")
 	w.Healthcheck = nil
-	old := plant(t, d, "openrail-wl_a-"+w.SpecHash[:12], w.Network, map[string]string{
+	old := plant(t, d, "roundhouse-wl_a-"+w.SpecHash[:12], w.Network, map[string]string{
 		LabelWorkloadID: "wl_a", LabelSpecHash: w.SpecHash, LabelDeploymentID: "dep_a",
 		LabelServiceID: "svc_web", LabelProjectID: "prj_1", LabelEnvironmentID: "env_1",
 	})
@@ -215,7 +215,7 @@ func TestAdoptionSurvivesRestart(t *testing.T) {
 // not this node's to remove.
 func TestUnadoptedLegacyContainerIsKept(t *testing.T) {
 	d := newFakeDocker()
-	legacy := plant(t, d, "openrail-wl_gone-x", "openrail-prj_1", map[string]string{
+	legacy := plant(t, d, "roundhouse-wl_gone-x", "roundhouse-prj_1", map[string]string{
 		LabelWorkloadID: "wl_gone", LabelSpecHash: strings.Repeat("3", 64),
 	})
 	h := nodeHarness(t, d, t.TempDir())

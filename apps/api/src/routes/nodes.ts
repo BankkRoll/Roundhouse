@@ -5,8 +5,8 @@
  * @module
  */
 import { createRoute, z } from "@hono/zod-openapi";
-import { nodeJoinTokens, nodes } from "@openrail/db";
-import { JOIN_TOKEN_TTL_MS, newId } from "@openrail/shared";
+import { nodeJoinTokens, nodes } from "@roundhouse/db";
+import { JOIN_TOKEN_TTL_MS, newId } from "@roundhouse/shared";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { clientIp, createRouter, originOf, requireWorkspace } from "../context";
 import { recordAudit } from "../lib/audit";

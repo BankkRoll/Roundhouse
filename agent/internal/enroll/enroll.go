@@ -30,10 +30,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/clock"
-	"github.com/BankkRoll/Open-Rail/agent/internal/config"
-	"github.com/BankkRoll/Open-Rail/agent/internal/facts"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/clock"
+	"github.com/BankkRoll/Roundhouse/agent/internal/config"
+	"github.com/BankkRoll/Roundhouse/agent/internal/facts"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // ErrAlreadyJoined is returned when the config already describes a joined

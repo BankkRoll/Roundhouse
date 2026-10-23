@@ -15,7 +15,7 @@
  * or the scheme changes. Signatures prove TS and Go agree on the envelope
  * byte-for-byte; the hashes prove they agree on canonical JSON.
  *
- * Run with `pnpm --filter @openrail/protocol gen:fixtures`.
+ * Run with `pnpm --filter @roundhouse/protocol gen:fixtures`.
  */
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -85,7 +85,7 @@ const fullWorkload = await withHash({
   deployment_id: "dep_01JAAAAAAAAAAAAAAAAAAAAAAA",
   replica: 0,
   image: `${localImageRepository(PROJECT, SERVICE)}@sha256:${"ab".repeat(32)}`,
-  registry_auth: { server: "127.0.0.1:5000", username: "openrail", password: "registry-secret" },
+  registry_auth: { server: "127.0.0.1:5000", username: "roundhouse", password: "registry-secret" },
   command: ["node", "server.js"],
   entrypoint: ["/sbin/tini", "--"],
   env: { PORT: "3000", DATABASE_URL: "postgres://db:5432/app", GREETING: "héllo 🚀" },
@@ -109,7 +109,7 @@ const fullWorkload = await withHash({
   resources: { cpu_millis: 500, memory_mb: 512, pids: 512 },
   restart: { policy: "on_failure", max_retries: 5 },
   network: NETWORK,
-  labels: { "openrail.service_name": "api", "com.example.team": "platform" },
+  labels: { "roundhouse.service_name": "api", "com.example.team": "platform" },
   drain_s: 30,
 });
 
@@ -179,7 +179,7 @@ const systemWorkload = await withHash({
   },
   resources: { cpu_millis: 1000, memory_mb: 256, pids: 256 },
   restart: { policy: "always", max_retries: 0 },
-  network: "openrail-system",
+  network: "roundhouse-system",
   labels: {},
   drain_s: 0,
 });
@@ -212,7 +212,7 @@ await writeSigned("signed-desired-state.json", {
     storage: {
       type: "s3",
       endpoint: "https://0123456789abcdef.r2.cloudflarestorage.com",
-      bucket: "openrail-registry",
+      bucket: "roundhouse-registry",
       region: "auto",
       access_key_id: "AKIAFIXTURE",
       secret_access_key: "fixture-secret-access-key",

@@ -22,7 +22,7 @@ const spec: WorkloadSpec = {
   healthcheck: null,
   resources: { cpu_millis: 100, memory_mb: 64, pids: 64 },
   restart: { policy: "always", max_retries: 0 },
-  network: "openrail-prj_1",
+  network: "roundhouse-prj_1",
   labels: {},
   drain_s: 5,
   spec_hash: "0".repeat(64),

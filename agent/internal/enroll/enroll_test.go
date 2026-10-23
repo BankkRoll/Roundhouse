@@ -15,9 +15,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/config"
-	"github.com/BankkRoll/Open-Rail/agent/internal/facts"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/config"
+	"github.com/BankkRoll/Roundhouse/agent/internal/facts"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // fakeJoin is a control plane whose join behaviour each test can change.

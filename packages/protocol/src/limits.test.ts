@@ -70,8 +70,8 @@ describe("formats", () => {
   it("gives every environment of a project its own network", async () => {
     const prod = await environmentNetworkName("prj_1", "env_prod");
     const staging = await environmentNetworkName("prj_1", "env_staging");
-    expect(prod).toBe("openrail-prj_1-env_prod");
-    expect(staging).toBe("openrail-prj_1-env_staging");
+    expect(prod).toBe("roundhouse-prj_1-env_prod");
+    expect(staging).toBe("roundhouse-prj_1-env_staging");
     expect(prod).not.toBe(staging);
   });
 
@@ -89,7 +89,7 @@ describe("formats", () => {
   });
 
   it("keeps the readable form up to the length limit", async () => {
-    const name = await environmentNetworkName(`prj_${"a".repeat(55)}`, `env_${"b".repeat(55)}`);
+    const name = await environmentNetworkName(`prj_${"a".repeat(54)}`, `env_${"b".repeat(54)}`);
     expect(name.length).toBe(MAX_NETWORK_NAME_LENGTH);
     expect(NETWORK_RE.test(name)).toBe(true);
     expect(name.startsWith(HASHED_NETWORK_PREFIX)).toBe(false);

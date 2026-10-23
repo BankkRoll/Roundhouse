@@ -15,7 +15,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 
 /**
  * Sets the tab title from the deepest route's `staticData.title` plus the workspace
- * name, e.g. "Servers · Nightjar Labs · OpenRail". Routes without a title (the landing
+ * name, e.g. "Servers · Nightjar Labs · Roundhouse". Routes without a title (the landing
  * page) manage their own.
  */
 function useDocumentTitle(): void {

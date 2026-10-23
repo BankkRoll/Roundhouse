@@ -8,7 +8,7 @@
 # The container joins the engine's host network, so the test process, the
 # registry it starts and sys_buildkitd's gateway all share one loopback, as
 # they do on a builder node. Works from Linux and from Git Bash on Windows
-# with Docker Desktop. Set OPENRAIL_IT_KEEP=1 to leave sys_buildkitd and the
+# with Docker Desktop. Set ROUNDHOUSE_IT_KEEP=1 to leave sys_buildkitd and the
 # registry running afterwards.
 
 set -euo pipefail
@@ -27,9 +27,9 @@ export MSYS_NO_PATHCONV=1
 docker run --rm --network host \
 	-v //var/run/docker.sock:/var/run/docker.sock \
 	-v "${repo_root}:/src" \
-	-v openrail-it-gomod:/go/pkg/mod \
-	-v openrail-it-gocache:/root/.cache/go-build \
-	-e OPENRAIL_IT_KEEP="${OPENRAIL_IT_KEEP:-}" \
+	-v roundhouse-it-gomod:/go/pkg/mod \
+	-v roundhouse-it-gocache:/root/.cache/go-build \
+	-e ROUNDHOUSE_IT_KEEP="${ROUNDHOUSE_IT_KEEP:-}" \
 	-e RAILPACK_VERSION="$RAILPACK_VERSION" \
 	-e RAILPACK_SHA256_AMD64="$RAILPACK_SHA256_AMD64" \
 	-e RAILPACK_SHA256_ARM64="$RAILPACK_SHA256_ARM64" \

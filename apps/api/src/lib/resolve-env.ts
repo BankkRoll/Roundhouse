@@ -22,12 +22,12 @@ import {
   type environments,
   serviceConfigs,
   services,
-} from "@openrail/db";
+} from "@roundhouse/db";
 import {
   type BuiltinVariable,
   type ResolveVariablesResult,
   resolveVariables,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { LIVE_DEPLOYMENT_STATUSES, privateDomain } from "./desired-state";
 import { loadEnvironmentVariables } from "./variables";
@@ -128,18 +128,18 @@ export async function resolveServiceEnvironment(
     const host = hostOf.get(s.id);
     builtins[s.slug] = {
       ...(port ? { PORT: String(port) } : {}),
-      ...(host ? { OPENRAIL_PUBLIC_DOMAIN: host } : {}),
-      OPENRAIL_PRIVATE_DOMAIN: privateDomain(s.slug, environment.slug),
-      OPENRAIL_ENVIRONMENT: environment.slug,
-      OPENRAIL_SERVICE_NAME: s.name,
+      ...(host ? { ROUNDHOUSE_PUBLIC_DOMAIN: host } : {}),
+      ROUNDHOUSE_PRIVATE_DOMAIN: privateDomain(s.slug, environment.slug),
+      ROUNDHOUSE_ENVIRONMENT: environment.slug,
+      ROUNDHOUSE_SERVICE_NAME: s.name,
     };
     if (s.id === serviceId) slug = s.slug;
   }
   if (!slug) return { ok: true, env: {} };
   const deployment = options.deployment ?? current;
   if (deployment) {
-    builtins[slug]!.OPENRAIL_DEPLOYMENT_ID = deployment.id;
-    if (deployment.commitSha) builtins[slug]!.OPENRAIL_GIT_COMMIT_SHA = deployment.commitSha;
+    builtins[slug]!.ROUNDHOUSE_DEPLOYMENT_ID = deployment.id;
+    if (deployment.commitSha) builtins[slug]!.ROUNDHOUSE_GIT_COMMIT_SHA = deployment.commitSha;
   }
   const variables = options.extra
     ? { ...vars.services, [slug]: { ...(vars.services[slug] ?? {}), ...options.extra } }

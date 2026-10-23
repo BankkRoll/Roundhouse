@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // gitTokenUser is the HTTP Basic user name for a GitHub App installation

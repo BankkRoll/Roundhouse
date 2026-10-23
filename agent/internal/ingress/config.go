@@ -37,7 +37,7 @@ import (
 	"strings"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // DefaultUpstreamRefresh is how long Caddy caches a route's upstream
@@ -100,7 +100,7 @@ type BuildOptions struct {
 }
 
 // Server is the name of the Caddy server the agent manages.
-const Server = "openrail"
+const Server = "roundhouse"
 
 // BuildConfig returns Caddy's JSON config for c, deterministically: equal
 // inputs give byte-identical output, so its hash detects changes.

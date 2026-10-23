@@ -27,9 +27,9 @@ Complete setup at `http://localhost:5173/dashboard`, create a token under
 **Servers → Add server**, then from the repo root:
 
 ```sh
-go run ./agent/cmd/openrail-agent join --url http://localhost:8787 \
+go run ./agent/cmd/roundhouse-agent join --url http://localhost:8787 \
   --token <token> --config ./.dev/agent.yaml
-go run ./agent/cmd/openrail-agent run --config ./.dev/agent.yaml
+go run ./agent/cmd/roundhouse-agent run --config ./.dev/agent.yaml
 ```
 
 `node e2e/agent-smoke.mjs` runs the same loop unattended.
@@ -43,7 +43,7 @@ pnpm lint && pnpm typecheck && pnpm test && pnpm build
 go vet ./agent/... ./packages/protocol/go/...
 go test -race ./agent/... ./packages/protocol/go/...
 node e2e/agent-smoke.mjs
-pnpm --filter @openrail/e2e test:browser
+pnpm --filter @roundhouse/e2e test:browser
 ```
 
 `pnpm format` applies Biome's formatting and safe fixes.
@@ -64,7 +64,7 @@ pnpm --filter @openrail/e2e test:browser
 
 ## Database migrations
 
-Edit `packages/db/src/schema`, run `pnpm --filter @openrail/db generate`, review
+Edit `packages/db/src/schema`, run `pnpm --filter @roundhouse/db generate`, review
 the SQL, and commit the schema, `.sql` file, and `meta/` snapshot together.
 Migrations must work with the previous control plane release: add columns as
 nullable or with defaults, and remove or rename only in a later release.
@@ -83,7 +83,8 @@ Maintainers cut agent releases by pushing an `agent-vX.Y.Z` tag; see
 
 ## Licensing
 
-The license is not chosen yet (AGPL-3.0 or Apache-2.0). By contributing you
-agree your contribution may be distributed under whichever is adopted.
+The project is licensed under [FSL-1.1-ALv2](LICENSE.md). By contributing you
+agree your contribution is distributed under that license, including its
+Apache-2.0 future license.
 
 Participation is governed by the [code of conduct](CODE_OF_CONDUCT.md).

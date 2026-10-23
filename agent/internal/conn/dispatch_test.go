@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/leaktest"
-	"github.com/BankkRoll/Open-Rail/agent/internal/state"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/leaktest"
+	"github.com/BankkRoll/Roundhouse/agent/internal/state"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // fakeHandler records dispatched messages and accepts desired states the

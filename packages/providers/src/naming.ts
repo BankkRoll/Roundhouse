@@ -11,7 +11,7 @@
  *
  * IMPORTANT: these keys live on users' cloud resources and must never
  * change, including when the code is renamed. They are the exact keys
- * `@openrail/hetzner` used.
+ * `@roundhouse/hetzner` used.
  *
  * Providers with key/value labels (Hetzner) store them as labels. Providers
  * with plain string tags store one tag per label through a {@link TagCodec},

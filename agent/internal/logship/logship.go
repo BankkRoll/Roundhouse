@@ -31,9 +31,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/agent/internal/atomicfile"
-	"github.com/BankkRoll/Open-Rail/agent/internal/docker"
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	"github.com/BankkRoll/Roundhouse/agent/internal/atomicfile"
+	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // Defaults applied when the corresponding [Options] field is zero.

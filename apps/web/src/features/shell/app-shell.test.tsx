@@ -1,5 +1,5 @@
-import { PRODUCT_NAME } from "@openrail/shared";
-import { THEME_STORAGE_KEY } from "@openrail/ui";
+import { PRODUCT_NAME } from "@roundhouse/shared";
+import { THEME_STORAGE_KEY } from "@roundhouse/ui";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { db, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";

@@ -12,14 +12,14 @@ describe("GitHub manifest submission", () => {
   it("posts the manifest to GitHub in a hidden form", () => {
     const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
     const form = submitGithubManifest(
-      { name: "OpenRail", default_events: ["push"] },
+      { name: "Roundhouse", default_events: ["push"] },
       "https://github.com/settings/apps/new?state=abc",
     );
     expect(form.method).toBe("post");
     expect(form.action).toBe("https://github.com/settings/apps/new?state=abc");
     const input = form.querySelector("input[name=manifest]") as HTMLInputElement;
     expect(input.type).toBe("hidden");
-    expect(JSON.parse(input.value)).toEqual({ name: "OpenRail", default_events: ["push"] });
+    expect(JSON.parse(input.value)).toEqual({ name: "Roundhouse", default_events: ["push"] });
     expect(submit).toHaveBeenCalledTimes(1);
   });
 

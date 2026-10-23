@@ -5,15 +5,15 @@
  *
  * @module
  */
-import { type Db, instanceSettings } from "@openrail/db";
-import { generateSigningKey, importSigningKey } from "@openrail/protocol";
+import { type Db, instanceSettings } from "@roundhouse/db";
+import { generateSigningKey, importSigningKey } from "@roundhouse/protocol";
 import {
   DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_TLS_MODE,
   MAX_LOG_RETENTION_DAYS,
   TLS_MODES,
   type TlsMode,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { seal, unseal } from "./crypto";

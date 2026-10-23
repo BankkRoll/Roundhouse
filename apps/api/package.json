@@ -1,20 +1,21 @@
 {
-  "name": "@openrail/api",
+  "name": "@roundhouse/api",
   "version": "0.0.0",
+  "license": "FSL-1.1-ALv2",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "pnpm --filter @openrail/web build && wrangler deploy && wrangler d1 migrations apply DB --remote",
+    "deploy": "pnpm --filter @roundhouse/web build && wrangler deploy && wrangler d1 migrations apply DB --remote",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "typecheck": "tsc -p .",
     "test": "vitest run"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",
-    "@openrail/db": "workspace:*",
-    "@openrail/protocol": "workspace:*",
-    "@openrail/shared": "workspace:*",
+    "@roundhouse/db": "workspace:*",
+    "@roundhouse/protocol": "workspace:*",
+    "@roundhouse/shared": "workspace:*",
     "better-auth": "^1.7.12",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",

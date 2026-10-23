@@ -3,7 +3,7 @@
  *
  * @module
  */
-import type { MeterRowProps } from "@openrail/ui";
+import type { MeterRowProps } from "@roundhouse/ui";
 import type { Node } from "../../lib/api/types";
 import { EMPTY, formatBytesPair, formatPercent, percentOf } from "../../lib/format";
 

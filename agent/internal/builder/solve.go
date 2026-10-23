@@ -15,7 +15,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	"github.com/tonistiigi/fsutil"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // solveKillGrace is how long a cancelled solve gets to wind down before the

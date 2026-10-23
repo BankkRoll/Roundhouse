@@ -1,4 +1,4 @@
-# openrail-agent
+# roundhouse-agent
 
 Runs on each server. Dials out to the control plane over WebSocket, reports
 heartbeats, runs the workloads the control plane's desired state lists, routes
@@ -8,28 +8,28 @@ nodes.
 ## Build
 
 ```sh
-go build -o bin/openrail-agent ./cmd/openrail-agent
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bin/openrail-agent-linux-arm64 ./cmd/openrail-agent
+go build -o bin/roundhouse-agent ./cmd/roundhouse-agent
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bin/roundhouse-agent-linux-arm64 ./cmd/roundhouse-agent
 ```
 
 ## Use
 
 ```sh
-openrail-agent join --url https://<control-plane> --token <token> [--name <name>] [--builder]
-openrail-agent run
-openrail-agent version
+roundhouse-agent join --url https://<control-plane> --token <token> [--name <name>] [--builder]
+roundhouse-agent run
+roundhouse-agent version
 ```
 
 On servers, use `install/install.sh`, which also sets up Docker and systemd.
 
-| Flag           | Purpose                                                        |
-| -------------- | -------------------------------------------------------------- |
-| `--config`     | Config path (default `/etc/openrail/agent.yaml`)               |
-| `--data-dir`   | Credential, identity key, state (default `/var/lib/openrail`)  |
-| `--token-file` | Read the join token from a file instead of argv                |
-| `--force`      | Re-join; the old registration is kept intact if the join fails |
-| `--builder`    | Make this node a builder: local registry and build jobs        |
-| `--insecure`   | Allow http/ws to a non-loopback host. Development only.        |
+| Flag           | Purpose                                                         |
+| -------------- | --------------------------------------------------------------- |
+| `--config`     | Config path (default `/etc/roundhouse/agent.yaml`)              |
+| `--data-dir`   | Credential, identity key, state (default `/var/lib/roundhouse`) |
+| `--token-file` | Read the join token from a file instead of argv                 |
+| `--force`      | Re-join; the old registration is kept intact if the join fails  |
+| `--builder`    | Make this node a builder: local registry and build jobs         |
+| `--insecure`   | Allow http/ws to a non-loopback host. Development only.         |
 
 ## Distribution
 
@@ -49,12 +49,12 @@ go vet ./...
 
 `run` converges Docker to the latest `desired_state` (`internal/runtime`):
 - **Reconcile** every 5 s, immediately on a new generation and on container
-  events. Containers labelled `openrail.managed=true` carry their workload,
+  events. Containers labelled `roundhouse.managed=true` carry their workload,
   deployment, service, project, spec hash, generation, routes and drain time,
   so an agent restart mid-rollout loses nothing. Until the first desired
   state after a start arrives, the agent only observes and never removes.
 - **Namespace.** Every container and network the agent creates is labelled
-  `openrail.namespace=<node ID>`, and the agent manages only those, so nodes
+  `roundhouse.namespace=<node ID>`, and the agent manages only those, so nodes
   sharing a Docker engine never touch each other's containers. A Phase 1
   container without the label is adopted once its workload ID is in this
   node's desired state, and stays managed until it is removed (adoptions are
@@ -74,7 +74,7 @@ go vet ./...
   `tcp`, or `none`, honouring `start_period_s`, `interval_s`, `timeout_s`
   and `retries` like Docker's `HEALTHCHECK`.
 - **Networks.** Each environment gets its own bridge network,
-  `openrail-<project_id>-<environment_id>` (hashed when too long), and its
+  `roundhouse-<project_id>-<environment_id>` (hashed when too long), and its
   replicas register their private domain there only: a container reaches its
   own environment's services by name and IP, and no other environment's.
   Networks no longer used are removed, including Phase 1's per-project
@@ -91,7 +91,7 @@ go vet ./...
 the desired routes and loads it through the admin API at `localhost:2019`,
 only when it changed, retrying with backoff while Caddy is down and reloading
 it if Caddy restarts. Upstream addresses are not in the config: each route
-resolves them (cached for 1 s) from `<hash>.upstreams.openrail.invalid`, a
+resolves them (cached for 1 s) from `<hash>.upstreams.roundhouse.invalid`, a
 name the agent's DNS server on `127.0.0.1:2021` answers with the route's
 healthy replicas. Swapping a route to new containers therefore never reloads
 Caddy, and never resets a connection; only a new or removed route, a port
@@ -161,7 +161,7 @@ into an image in the local registry and answers with `build_result`.
    image or its history.
 3. **Build.** BuildKit runs rootless as `sys_buildkitd`
    (`moby/buildkit:v0.34.1-rootless`, pinned by digest) on its own bridge
-   network `openrail-build`, with its cache in the `openrail-buildkit`
+   network `roundhouse-build`, with its cache in the `roundhouse-buildkit`
    volume, capped by BuildKit's GC and a periodic prune. It has no network
    listener: the agent reaches it with the BuildKit Go client over
    `buildctl dial-stdio`, run through the Docker exec API. Dockerfile builds
@@ -200,7 +200,7 @@ CLI. It works on Linux and from Git Bash on Windows with Docker Desktop
 (`-v //var/run/docker.sock:/var/run/docker.sock`, with `MSYS_NO_PATHCONV=1`).
 It uses `127.0.0.1:5055` for the registry and `5056` for the proxy, and
 removes `sys_buildkitd` and its network afterwards unless
-`OPENRAIL_IT_KEEP=1`.
+`ROUNDHOUSE_IT_KEEP=1`.
 
 ## Notes
 

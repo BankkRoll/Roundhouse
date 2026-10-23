@@ -27,9 +27,9 @@ let agentDir: string;
 let agentBin: string;
 
 test.beforeAll(() => {
-  agentDir = mkdtempSync(join(tmpdir(), "openrail-e2e-agent-"));
-  agentBin = join(agentDir, isWindows ? "openrail-agent.exe" : "openrail-agent");
-  const build = spawnSync("go", ["build", "-o", agentBin, "./agent/cmd/openrail-agent"], {
+  agentDir = mkdtempSync(join(tmpdir(), "roundhouse-e2e-agent-"));
+  agentBin = join(agentDir, isWindows ? "roundhouse-agent.exe" : "roundhouse-agent");
+  const build = spawnSync("go", ["build", "-o", agentBin, "./agent/cmd/roundhouse-agent"], {
     cwd: ROOT,
     stdio: "inherit",
   });

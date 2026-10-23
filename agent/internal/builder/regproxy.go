@@ -52,7 +52,7 @@ func startRegistryProxy(listenAddr, upstream string, repos []string, log *slog.L
 	_, _ = rand.Read(secret)
 	p := &registryProxy{
 		ln:       ln,
-		user:     "openrail-build",
+		user:     "roundhouse-build",
 		password: hex.EncodeToString(secret),
 		repos:    map[string]bool{},
 		upstream: &url.URL{Scheme: "http", Host: upstream},
@@ -128,7 +128,7 @@ func (p *registryProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	user, pass, ok := r.BasicAuth()
 	if !ok || subtle.ConstantTimeCompare([]byte(user), []byte(p.user)) != 1 ||
 		subtle.ConstantTimeCompare([]byte(pass), []byte(p.password)) != 1 {
-		w.Header().Set("WWW-Authenticate", `Basic realm="openrail-build"`)
+		w.Header().Set("WWW-Authenticate", `Basic realm="roundhouse-build"`)
 		http.Error(w, `{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}`, http.StatusUnauthorized)
 		return
 	}

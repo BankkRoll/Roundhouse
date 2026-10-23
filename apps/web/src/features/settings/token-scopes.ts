@@ -9,7 +9,7 @@ import {
   API_TOKEN_SCOPES,
   type ApiTokenPreset,
   type ApiTokenScope,
-} from "@openrail/shared";
+} from "@roundhouse/shared";
 
 /** What each scope lets a token do, in the words of the create dialog. */
 export const SCOPE_LABELS: Record<ApiTokenScope, string> = {

@@ -4,7 +4,7 @@
  *
  * @module
  */
-import { CANCELLABLE_DEPLOYMENT_STATUSES, ROLLBACK_SOURCE_STATUSES } from "@openrail/shared";
+import { CANCELLABLE_DEPLOYMENT_STATUSES, ROLLBACK_SOURCE_STATUSES } from "@roundhouse/shared";
 import type { Deployment } from "../../../lib/api/deploy-types";
 import { EMPTY, formatCommit, formatDuration } from "../../../lib/format";
 

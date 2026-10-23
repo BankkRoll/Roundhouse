@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	protocol "github.com/BankkRoll/Open-Rail/packages/protocol/go"
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // logFlushInterval is the longest a line waits before it is emitted.

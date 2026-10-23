@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BankkRoll/Open-Rail/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
 )
 
 func TestParseBaseURL(t *testing.T) {

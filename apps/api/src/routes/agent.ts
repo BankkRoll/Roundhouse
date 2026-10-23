@@ -9,9 +9,9 @@
  * @module
  */
 import { createRoute } from "@hono/zod-openapi";
-import { nodeJoinTokens, nodes } from "@openrail/db";
-import { JoinRequestSchema, JoinResponseSchema } from "@openrail/protocol";
-import { newId, PINNED_AGENT_VERSION } from "@openrail/shared";
+import { nodeJoinTokens, nodes } from "@roundhouse/db";
+import { JoinRequestSchema, JoinResponseSchema } from "@roundhouse/protocol";
+import { newId, PINNED_AGENT_VERSION } from "@roundhouse/shared";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import installScript from "../../../../install/install.sh";
 import { clientIp, createRouter, originOf, requireMasterKey } from "../context";

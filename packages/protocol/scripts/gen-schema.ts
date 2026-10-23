@@ -2,7 +2,7 @@
  * Emits JSON Schemas for every protocol message into `../schema`, so non-TS
  * consumers (the Go agent, third-party tooling) have a language-neutral spec.
  *
- * Run with `pnpm --filter @openrail/protocol gen:schema` after changing a schema.
+ * Run with `pnpm --filter @roundhouse/protocol gen:schema` after changing a schema.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

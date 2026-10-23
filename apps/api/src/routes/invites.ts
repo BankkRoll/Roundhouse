@@ -5,8 +5,8 @@
  * @module
  */
 import { createRoute, z } from "@hono/zod-openapi";
-import { type Db, invites, users, workspaceMembers, workspaces } from "@openrail/db";
-import { newId } from "@openrail/shared";
+import { type Db, invites, users, workspaceMembers, workspaces } from "@roundhouse/db";
+import { newId } from "@roundhouse/shared";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import {
   clientIp,
