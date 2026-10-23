@@ -188,6 +188,9 @@ test.describe
         "hel-1",
         "--config",
         config,
+        // The Linux default is /var/lib/roundhouse, which an unprivileged CI user can't create.
+        "--data-dir",
+        join(agentDir, "data"),
       ]);
       expect(join_.status, join_.stderr.toString()).toBe(0);
       agent = spawn(agentBin, ["run", "--config", config]);
