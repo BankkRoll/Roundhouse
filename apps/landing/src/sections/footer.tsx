@@ -116,7 +116,7 @@ function Wordmark() {
       {/* The mark's artwork spans 96–416 of its 512 grid; scale that span to the letter height. */}
       <g
         transform={`translate(0 ${-ink.ascent}) scale(${size / 320}) translate(-96 -96)`}
-        className="fill-background stroke-background"
+        className="fill-accent stroke-accent"
         data-testid="wordmark-mark"
       >
         <path d="M160 160 352 352M352 160 160 352" fill="none" strokeWidth="44" />
