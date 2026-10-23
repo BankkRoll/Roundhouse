@@ -258,7 +258,7 @@ function McpSection({ settings }: { settings: InstanceSettings }) {
               href={MCP_DOCS_URL}
               target="_blank"
               rel="noreferrer noopener"
-              className="text-accent-text underline-offset-4 hover:underline"
+              className="text-accent-text underline underline-offset-4"
             >
               How agents connect
             </a>
