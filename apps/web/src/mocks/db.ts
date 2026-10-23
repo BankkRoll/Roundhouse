@@ -43,7 +43,8 @@ export interface DbInvite extends Invite {
 }
 
 /** A stored audit row. `actor_name` is a fallback; handlers resolve names at read time. */
-export type DbAuditEntry = AuditLogEntry & { workspace_id: string };
+/** An audit entry; `workspace_id` is `null` for instance-level entries (ADR 0014). */
+export type DbAuditEntry = AuditLogEntry & { workspace_id: string | null };
 
 /**
  * The control-plane signing keys (ADR 0014 §13). Times are unix ms; `pins` maps a node
@@ -65,6 +66,11 @@ export interface MockDb {
   /** Value of the Worker's MASTER_KEY secret once configured. */
   masterKey: string;
   sessionUserId: string | null;
+  /**
+   * Whether the session is past the re-authentication window, so routes that need a
+   * fresh session answer 403 `reauth_required` until `POST /v1/auth/reauth`.
+   */
+  sessionStale: boolean;
   users: DbUser[];
   workspaces: Omit<Workspace, "role">[];
   memberships: DbMembership[];
@@ -218,6 +224,7 @@ function seed(): MockDb {
     setup: { needs_setup: false, master_key_configured: true },
     masterKey: MASTER_KEY,
     sessionUserId: USERS.owner.id,
+    sessionStale: false,
     users,
     workspaces: [
       { id: WORKSPACE_ID, name: "Acme", slug: "acme", created_at: now - 90 * 86_400_000 },

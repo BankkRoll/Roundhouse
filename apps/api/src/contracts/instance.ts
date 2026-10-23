@@ -7,11 +7,12 @@
  * @module
  */
 import { z } from "@hono/zod-openapi";
-import { body, CursorField, errors, json, LimitField, sessionAuth } from "../schemas";
+import { body, errors, json, sessionAuth } from "../schemas";
 import {
   AuditChainVerificationSchema,
   InstanceAdminSchema,
   InstanceAuditPageSchema,
+  InstanceAuditQuery,
   PutInstanceAdminBody,
 } from "../schemas/instance";
 import { defineRoute, session } from "./policy";
@@ -48,18 +49,25 @@ export const putInstanceAdmin = defineRoute(
   },
 );
 
-/** Instance-level audit entries (`workspace_id IS NULL`), newest first. */
+/**
+ * Instance-level audit entries (`workspace_id IS NULL`: setup, instance
+ * settings, admins, keys, the GitHub App, sign-ins and re-authentication),
+ * newest first, optionally filtered by action, actor and time.
+ */
 export const listInstanceAuditLogs = defineRoute(session("instance:manage"), {
   method: "get",
   path: "/v1/instance/audit-logs",
   tags: ["instance"],
   summary: "List instance audit logs",
   security: sessionAuth,
-  request: { query: z.object({ cursor: CursorField, limit: LimitField }) },
+  request: { query: InstanceAuditQuery },
   responses: { 200: json(InstanceAuditPageSchema), ...errors(400, 401, 403) },
 });
 
-/** Recomputes the whole audit chain and reports the first break. */
+/**
+ * Seals pending entries, then recomputes the whole audit chain and compares
+ * it with the checkpoints kept outside the database; reports the first break.
+ */
 export const verifyAuditChain = defineRoute(session("instance:manage"), {
   method: "get",
   path: "/v1/instance/audit-logs/verify",

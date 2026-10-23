@@ -493,6 +493,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         kind: "production",
         pr_number: null,
         source_branch: null,
+        protected: true,
         created_at: now - 7 * DAY,
       },
       {
@@ -503,6 +504,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         kind: "production",
         pr_number: null,
         source_branch: null,
+        protected: true,
         created_at: now - 14 * DAY,
       },
     ],
@@ -715,7 +717,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         slug: "roundhouse-acme",
         name: "Roundhouse (acme)",
         html_url: "https://github.com/apps/roundhouse-acme",
-        install_url: "https://github.com/apps/roundhouse-acme/installations/new?state=ins_state",
+        install_url: "https://github.com/apps/roundhouse-acme/installations/new",
       },
       installations: [
         {
@@ -724,6 +726,8 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
           account_login: "acme",
           account_type: "Organization",
           workspace_id: workspaceId,
+          verified: true,
+          claimed_at: now - 10 * DAY,
           created_at: now - 10 * DAY,
         },
       ],

@@ -14,7 +14,8 @@
  *   provisioning (`ProvisionWorkflow`), exported for their bindings
  * - `Cache-Control: no-store` on every API and auth response, and the
  *   two-factor gate in front of `/v1/*` mutations (ADR 0014)
- * - Custom-domain checks every minute (Cron Trigger), see `lib/domains/check.ts`
+ * - Custom-domain checks and audit-chain sealing every minute (Cron
+ *   Trigger), see `lib/domains/check.ts` and `durable/audit-chain.ts`
  * - The hourly retention job (Cron Trigger), see `lib/retention.ts`, and the
  *   cloud provider reconcile, see `lib/provisioning.ts`
  * - Static SPA assets (served by the platform for everything else)
@@ -26,6 +27,7 @@ import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import { authFor, createRouter, withDb } from "./context";
 import type { Env } from "./env";
+import { AUDIT_CHAIN_NAME } from "./lib/audit-chain";
 import { noStore } from "./lib/cache-control";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./lib/domains/check";
 import { ApiError, errorBody, errorCodeForStatus } from "./lib/errors";
@@ -167,6 +169,11 @@ export default {
   fetch: app.fetch,
   async scheduled(controller, env) {
     if (controller.cron === DOMAIN_CHECK_CRON) {
+      try {
+        await env.AUDIT_CHAIN.get(env.AUDIT_CHAIN.idFromName(AUDIT_CHAIN_NAME)).seal();
+      } catch (err) {
+        console.error("audit chain seal failed", err instanceof Error ? err.name : "error");
+      }
       try {
         const checks = await runDomainChecks(env, controller.scheduledTime);
         if (checks.checked) console.log("domain checks", JSON.stringify(checks));

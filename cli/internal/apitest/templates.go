@@ -151,7 +151,7 @@ func (f *Fake) createFromTemplate(w http.ResponseWriter, r *http.Request) {
 		return false
 	})
 	id := f.nextID("prj")
-	env := api.Environment{ID: f.nextID("env"), ProjectID: id, Name: "production", Slug: "production", Kind: "production", CreatedAt: Now}
+	env := api.Environment{ID: f.nextID("env"), ProjectID: id, Name: "production", Slug: "production", Kind: "production", Protected: true, CreatedAt: Now}
 	p := &api.ProjectDetail{
 		Project:      api.Project{ID: id, WorkspaceID: ws, Name: name, Slug: slug, CreatedAt: Now, UpdatedAt: Now},
 		Environments: []api.Environment{env}, Services: []api.Service{},

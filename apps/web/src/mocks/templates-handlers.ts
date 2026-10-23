@@ -504,6 +504,7 @@ export const templateHandlers = [
       kind: "production",
       pr_number: null,
       source_branch: null,
+      protected: true,
       created_at: now,
     };
     db.deploy.projects.push(project);

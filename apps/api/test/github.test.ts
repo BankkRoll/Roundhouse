@@ -564,9 +564,34 @@ describe("installation claims", () => {
   const CLIENT_ID = "Iv23liAbCdEfGh123456";
   const USER_TOKEN = "ghu_usertoken0123456789";
 
-  /** GitHub as seen by a user who can access `accessible` installations. */
-  function stubInstallFlow(accessible: number[] = [INSTALLATION_ID]) {
+  const GH_USER = { id: 4242, login: "mara-gh" };
+  const ORG = { id: 9001, login: "acme" };
+
+  /**
+   * GitHub as seen by a user who can access `accessible` installations and
+   * holds `orgRole` in the org they are on (or owns them, for `account`
+   * "user").
+   */
+  function stubInstallFlow(
+    accessible: number[] = [INSTALLATION_ID],
+    opts: { orgRole?: "admin" | "member" | null; account?: "org" | "user" | "other_user" } = {},
+  ) {
+    const orgRole = opts.orgRole === undefined ? "admin" : opts.orgRole;
+    const account =
+      opts.account === "user"
+        ? { id: GH_USER.id, login: GH_USER.login, type: "User" }
+        : opts.account === "other_user"
+          ? { id: 777, login: "someone-else", type: "User" }
+          : { id: ORG.id, login: ORG.login, type: "Organization" };
     stubGithub([
+      [/^GET https:\/\/api\.github\.com\/user$/, () => Response.json(GH_USER)],
+      [
+        /^GET https:\/\/api\.github\.com\/user\/memberships\/orgs\/acme$/,
+        () =>
+          orgRole
+            ? Response.json({ state: "active", role: orgRole, organization: ORG })
+            : Response.json({ message: "Not Found" }, { status: 404 }),
+      ],
       [
         /^POST https:\/\/github\.com\/login\/oauth\/access_token$/,
         (_req, body) =>
@@ -589,20 +614,21 @@ describe("installation claims", () => {
       ],
       [
         /^GET https:\/\/api\.github\.com\/app\/installations\/\d+$/,
-        (req) =>
-          Response.json({
-            id: Number(new URL(req.url).pathname.split("/").pop()),
-            account: { login: "acme", type: "Organization" },
-          }),
+        (req) => Response.json({ id: Number(new URL(req.url).pathname.split("/").pop()), account }),
       ],
     ]);
   }
 
   async function installState(owner: Client, workspaceId: string): Promise<string> {
-    const status = await owner.json<{ app: { install_url: string } }>(
-      `/v1/github/status?workspace_id=${workspaceId}`,
+    const res = await owner.json<{ install_url: string }>("/v1/github/claims", {
+      method: "POST",
+      json: { workspace_id: workspaceId },
+    });
+    if (res.status !== 200) throw new Error(`claim: ${res.status}`);
+    expect(res.body.install_url).toMatch(
+      /^https:\/\/github\.com\/apps\/roundhouse-cp-a1b2c3\/installations\/new\?state=/,
     );
-    return new URL(status.body.app.install_url).searchParams.get("state")!;
+    return new URL(res.body.install_url).searchParams.get("state")!;
   }
 
   function callback(c: Client, params: Record<string, string | number>) {
@@ -657,11 +683,22 @@ describe("installation claims", () => {
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("https://cp.test/settings/github?status=installed");
     const after = await owner.json<{
-      installations: { installation_id: number; workspace_id: string }[];
+      installations: { installation_id: number; workspace_id: string; verified: boolean }[];
     }>(`/v1/github/status?workspace_id=${workspaceId}`);
     expect(after.body.installations).toEqual([
-      expect.objectContaining({ installation_id: INSTALLATION_ID, workspace_id: workspaceId }),
+      expect.objectContaining({
+        installation_id: INSTALLATION_ID,
+        workspace_id: workspaceId,
+        verified: true,
+      }),
     ]);
+    const stored = await env.DB.prepare(
+      "SELECT account_id, claimed_by, claimed_at FROM github_installations",
+    ).first<{ account_id: number; claimed_by: string; claimed_at: number }>();
+    expect(stored).toMatchObject({ account_id: ORG.id, claimed_by: userId });
+    expect(stored!.claimed_at).toBeGreaterThan(0);
+    const membership = recorded.find((r) => r.url.endsWith("/user/memberships/orgs/acme"));
+    expect(membership?.authorization).toBe(`Bearer ${USER_TOKEN}`);
 
     const exchange = recorded.find((r) => r.url === "https://github.com/login/oauth/access_token");
     expect(exchange?.body).toEqual({
@@ -795,6 +832,138 @@ describe("installation claims", () => {
     expect(await rejections()).toEqual([]);
   });
 
+  it("refuses an org member who isn't an admin", async () => {
+    stubInstallFlow([INSTALLATION_ID], { orgRole: "member" });
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const res = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state: await installState(owner, workspaceId),
+      code: "good-code",
+    });
+    expect(res.headers.get("location")).toBe(
+      "https://cp.test/settings/github?error=not_account_admin",
+    );
+    expect(await installationCount()).toBe(0);
+    expect((await rejections()).map((r) => r.metadata.reason)).toEqual(["not_account_admin"]);
+    expect(recorded.some((r) => r.method === "DELETE")).toBe(true);
+  });
+
+  it("refuses a user outside the organization", async () => {
+    stubInstallFlow([INSTALLATION_ID], { orgRole: null });
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const res = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state: await installState(owner, workspaceId),
+      code: "good-code",
+    });
+    expect(res.headers.get("location")).toContain("error=not_account_admin");
+    expect(await installationCount()).toBe(0);
+  });
+
+  it("claims a personal account's installation only for that account's user", async () => {
+    stubInstallFlow([INSTALLATION_ID], { account: "user" });
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    const own = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state: await installState(owner, workspaceId),
+      code: "good-code",
+    });
+    expect(own.headers.get("location")).toContain("status=installed");
+    // No org membership lookup for a personal account.
+    expect(recorded.some((r) => r.url.includes("/memberships/"))).toBe(false);
+
+    stubInstallFlow([INSTALLATION_ID + 1], { account: "other_user" });
+    const other = await callback(owner, {
+      installation_id: INSTALLATION_ID + 1,
+      state: await installState(owner, workspaceId),
+      code: "good-code",
+    });
+    expect(other.headers.get("location")).toContain("error=not_account_admin");
+    expect(await installationCount()).toBe(1);
+  });
+
+  it("refuses an expired claim, and only starts claims for github:manage with an App", async () => {
+    stubInstallFlow();
+    const { owner, workspaceId } = await install();
+    const before = await owner.json<{ error: { code: string } }>("/v1/github/claims", {
+      method: "POST",
+      json: { workspace_id: workspaceId },
+    });
+    expect(before.status).toBe(409);
+    await seedApp();
+    const member = await addMember(owner, workspaceId, "m@example.com", "member");
+    expect(
+      (
+        await member.request("/v1/github/claims", {
+          method: "POST",
+          json: { workspace_id: workspaceId },
+        })
+      ).status,
+    ).toBe(403);
+    const state = await installState(owner, workspaceId);
+    const claims = await env.DB.prepare(
+      "SELECT workspace_id, consumed_at FROM github_claim_states",
+    ).all<{ workspace_id: string; consumed_at: number | null }>();
+    expect(claims.results).toEqual([{ workspace_id: workspaceId, consumed_at: null }]);
+    await env.DB.prepare("UPDATE github_claim_states SET expires_at = ?")
+      .bind(Date.now() - 1000)
+      .run();
+    const res = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state,
+      code: "good-code",
+    });
+    expect(res.headers.get("location")).toBe("https://cp.test/settings/github?error=link_expired");
+    expect(recorded).toEqual([]);
+  });
+
+  it("verifies a legacy claim when its workspace claims it again, and never takes another's", async () => {
+    stubInstallFlow();
+    const { owner, workspaceId } = await install();
+    await seedApp();
+    await env.DB.prepare(
+      "INSERT INTO github_installations (id, installation_id, account_login, account_type, workspace_id, claimed_at, created_at, updated_at) VALUES ('ghi_legacy', ?, 'acme', 'Organization', ?, 1, 0, 0)",
+    )
+      .bind(INSTALLATION_ID, workspaceId)
+      .run();
+    const legacy = await owner.json<{ installations: { verified: boolean }[] }>(
+      `/v1/github/status?workspace_id=${workspaceId}`,
+    );
+    expect(legacy.body.installations).toEqual([expect.objectContaining({ verified: false })]);
+    const again = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state: await installState(owner, workspaceId),
+      code: "good-code",
+    });
+    expect(again.headers.get("location")).toContain("status=installed");
+    const verified = await owner.json<{ installations: { id: string; verified: boolean }[] }>(
+      `/v1/github/status?workspace_id=${workspaceId}`,
+    );
+    expect(verified.body.installations).toEqual([
+      expect.objectContaining({ id: "ghi_legacy", verified: true }),
+    ]);
+
+    const other = await owner.json<{ id: string }>("/v1/workspaces", {
+      method: "POST",
+      json: { name: "Other" },
+    });
+    const taken = await callback(owner, {
+      installation_id: INSTALLATION_ID,
+      state: await installState(owner, other.body.id),
+      code: "good-code",
+    });
+    expect(taken.headers.get("location")).toBe(
+      "https://cp.test/settings/github?error=installation_claimed",
+    );
+    const row = await env.DB.prepare("SELECT workspace_id FROM github_installations").first<{
+      workspace_id: string;
+    }>();
+    expect(row?.workspace_id).toBe(workspaceId);
+  });
+
   it("refuses API tokens", async () => {
     stubInstallFlow();
     const { owner, workspaceId } = await install();
@@ -809,6 +978,48 @@ describe("installation claims", () => {
       { headers: { authorization: `Bearer ${body.secret}` }, redirect: "manual" },
     );
     expect(res.status).toBe(403);
+  });
+});
+
+describe("releasing installations", () => {
+  it("releases a claim for github:manage in the claiming workspace, and audits it", async () => {
+    const { owner, workspaceId, userId } = await install();
+    const ghi = await claimInstallation(workspaceId);
+    const other = await owner.json<{ id: string }>("/v1/workspaces", {
+      method: "POST",
+      json: { name: "Other" },
+    });
+    const wrong = await owner.request(
+      `/v1/github/installations/${ghi}?workspace_id=${other.body.id}`,
+      { method: "DELETE" },
+    );
+    expect(wrong.status).toBe(404);
+    const member = await addMember(owner, workspaceId, "m@example.com", "member");
+    const denied = await member.request(
+      `/v1/github/installations/${ghi}?workspace_id=${workspaceId}`,
+      { method: "DELETE" },
+    );
+    expect(denied.status).toBe(403);
+
+    const res = await owner.request(`/v1/github/installations/${ghi}?workspace_id=${workspaceId}`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(204);
+    const row = await env.DB.prepare(
+      "SELECT workspace_id, claimed_by, claimed_at FROM github_installations WHERE id = ?",
+    )
+      .bind(ghi)
+      .first();
+    expect(row).toEqual({ workspace_id: null, claimed_by: null, claimed_at: null });
+    const audit = await env.DB.prepare(
+      "SELECT workspace_id, actor_id, target_id FROM audit_logs WHERE action = 'github.installation_released'",
+    ).first();
+    expect(audit).toEqual({ workspace_id: workspaceId, actor_id: userId, target_id: ghi });
+    const again = await owner.request(
+      `/v1/github/installations/${ghi}?workspace_id=${workspaceId}`,
+      { method: "DELETE" },
+    );
+    expect(again.status).toBe(404);
   });
 });
 

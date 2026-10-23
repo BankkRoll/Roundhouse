@@ -60,6 +60,17 @@ const OUTCOMES: Record<string, { title: string; description: string; tone: Tone 
       "The GitHub account you signed in with can't access that installation. Sign in to GitHub as someone who can (an owner of the account or organization), then install again.",
     tone: "error",
   },
+  not_account_admin: {
+    title: "You don't administer that GitHub account",
+    description:
+      "Only the account itself, or an admin of the organization, can connect an installation to a workspace. Ask one of them to install the App from Platform settings.",
+    tone: "error",
+  },
+  link_expired: {
+    title: "This install link expired",
+    description: "Install links work for 10 minutes. Start a new install from Platform settings.",
+    tone: "error",
+  },
   link_used: {
     title: "This install link was already used",
     description:

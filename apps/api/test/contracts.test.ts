@@ -163,6 +163,19 @@ describe("ADR 0014 contracts", () => {
     }
   });
 
+  it("is served by the app, policy included, except what the api-auth stream still owes", () => {
+    // TODO(api-auth): serve getSecurityStatus and drop it from this list.
+    const pending = ["getSecurityStatus"];
+    const live = app.getOpenAPI31Document({ openapi: "3.1.0", info: { title: "t", version: "0" } });
+    for (const [name, route] of security) {
+      if (pending.includes(name)) continue;
+      const item = live.paths?.[route.path] as Record<string, Record<string, unknown>> | undefined;
+      const op = item?.[route.method];
+      expect(op, name).toBeDefined();
+      expect(op?.[POLICY_KEY], name).toEqual(policyOf(route));
+    }
+  });
+
   it("has no reveal route anywhere", () => {
     const all = [...routes, ...security];
     expect(all.filter(([, r]) => r.path.includes("reveal"))).toEqual([]);

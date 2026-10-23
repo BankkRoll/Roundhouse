@@ -13,6 +13,7 @@ import { createApiToken, listApiTokens, policyOf, revokeApiToken } from "../cont
 import { issueApiToken, toApiToken } from "../lib/api-tokens";
 import { auditInsert, recordAudit } from "../lib/audit";
 import { ApiError, notFound } from "../lib/errors";
+import { revalidateWorkspace } from "../lib/realtime";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -110,6 +111,7 @@ export const tokenRoutes = createRouter()
         metadata: { name: token.name },
         ip: clientIp(c),
       });
+      await revalidateWorkspace(db, c.env, workspaceId, { tokenIds: [tokenId] });
     }
     return c.body(null, 204);
   });

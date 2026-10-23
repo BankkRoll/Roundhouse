@@ -50,6 +50,23 @@ export function currentUser(): DbUser | null {
   return db.users.find((user) => user.id === db.sessionUserId) ?? null;
 }
 
+/**
+ * Mirrors the API's fresh-session guard: 403 `reauth_required` (with the
+ * `session_stale` hint) while {@link db}.sessionStale is set.
+ *
+ * @returns The refusal, or `null` when the session is fresh.
+ */
+export function requireFreshSession(): Response | null {
+  if (!db.sessionStale) return null;
+  return apiError(403, "reauth_required", "Confirm your password to continue", [
+    {
+      field: "session",
+      code: "session_stale",
+      message: "POST /v1/auth/reauth with your password, then retry",
+    },
+  ]);
+}
+
 /** Result of {@link requireWorkspace}. */
 export type Guard =
   | { ok: true; user: DbUser; membership: DbMembership }
@@ -87,7 +104,8 @@ let auditSequence = 0;
 
 /** Fields of an audit record written by a handler. */
 export interface AuditInput {
-  workspaceId: string;
+  /** `null` for instance-level entries. */
+  workspaceId: string | null;
   actorType: "user" | "node" | "system";
   actorId: string | null;
   action: AuditAction;

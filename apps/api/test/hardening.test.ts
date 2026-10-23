@@ -290,10 +290,11 @@ describe("access: checks go through resolveAccess with the project in scope", ()
     const path = `/v1/services/${s.serviceId}/variables?environment_id=${s.envId}`;
     const put = (c: typeof member) =>
       c.json(path, { method: "PUT", json: { set: [{ key: "MODE", value: "fast" }] } });
-    expect((await put(member)).status).toBe(200);
-    await env.DB.prepare("UPDATE environments SET protected = 1 WHERE id = ?").bind(s.envId).run();
+    // Production starts protected, and by default only project admins change its variables.
     expect((await put(member)).status).toBe(403);
     expect((await put(s.owner)).status).toBe(200);
+    await env.DB.prepare("UPDATE environments SET protected = 0 WHERE id = ?").bind(s.envId).run();
+    expect((await put(member)).status).toBe(200);
     // Reads aren't environment actions, so protection leaves them alone.
     expect((await member.json(path)).status).toBe(200);
   });
@@ -332,7 +333,8 @@ describe("access: checks go through resolveAccess with the project in scope", ()
     await env.DB.prepare("UPDATE workspaces SET member_default_project_role = 'none' WHERE id = ?")
       .bind(s.workspaceId)
       .run();
-    expect((await member.json(project)).status).toBe(403);
+    // A project the caller has no role on doesn't exist for them.
+    expect((await member.json(project)).status).toBe(404);
     const userId = await env.DB.prepare("SELECT id FROM users WHERE email = ?")
       .bind("m@example.com")
       .first<{ id: string }>();

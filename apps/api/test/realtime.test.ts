@@ -283,20 +283,20 @@ describe("realtime messages", () => {
     expect((await sock.closed).code).toBe(RoomCloseCode.policy);
   });
 
-  it("stops subscriptions once membership is revoked", async () => {
+  it("re-checks project access on every subscribe, not just membership", async () => {
     const { owner, workspaceId } = await install();
     const p = await createProject(owner, workspaceId);
-    const viewer = await addMember(owner, workspaceId, "v@example.com", "viewer");
-    const sock = await open(p.id, viewer);
-    const members = await owner.json<{ members: { id: string; email: string }[] }>(
-      `/v1/workspaces/${workspaceId}/members`,
-    );
-    const member = members.body.members.find((m) => m.email === "v@example.com")!;
-    await owner.request(`/v1/workspaces/${workspaceId}/members/${member.id}`, { method: "DELETE" });
+    const member = await addMember(owner, workspaceId, "m@example.com", "member");
+    const sock = await open(p.id, member);
+    // Changed behind the API's back, so no revalidation reaches the room.
+    await env.DB.prepare("UPDATE workspaces SET member_default_project_role = 'none' WHERE id = ?")
+      .bind(workspaceId)
+      .run();
     sock.ws.send(
       JSON.stringify({ type: "subscribe", topic: { kind: "build_logs", build_id: "bld_x" } }),
     );
     expect((await sock.closed).code).toBe(RoomCloseCode.forbidden);
+    expect(sock.messages).toContainEqual({ type: "access.revoked", reason: "project_access" });
   });
 });
 
@@ -421,5 +421,116 @@ describe("periodic re-check", () => {
     expect(await sock.closed).toMatchObject({ code: RoomCloseCode.notFound });
     await eventually(async () => ((await room(p.id).connectionCount()) === 0 ? true : undefined));
     expect(await runDurableObjectAlarm(room(p.id))).toBe(false);
+  });
+});
+
+describe("revocation on access change", () => {
+  async function userIdOf(owner: Client, workspaceId: string, email: string) {
+    const { body } = await owner.json<{
+      members: { id: string; user_id: string; email: string }[];
+    }>(`/v1/workspaces/${workspaceId}/members`);
+    return body.members.find((m) => m.email === email)!;
+  }
+
+  it("closes a removed member's sockets at once, saying why, and leaves others open", async () => {
+    const { owner, workspaceId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const viewer = await addMember(owner, workspaceId, "v@example.com", "viewer");
+    const gone = await open(p.id, viewer);
+    const staying = await open(p.id, owner);
+    const member = await userIdOf(owner, workspaceId, "v@example.com");
+    await owner.request(`/v1/workspaces/${workspaceId}/members/${member.id}`, { method: "DELETE" });
+    expect((await gone.closed).code).toBe(RoomCloseCode.forbidden);
+    expect(gone.messages).toContainEqual({ type: "access.revoked", reason: "membership" });
+    expect(await room(p.id).connectionCount()).toBe(1);
+    staying.ws.close();
+  });
+
+  it("closes a socket when a role change takes the project away", async () => {
+    const { owner, workspaceId } = await install();
+    const p = await createProject(owner, workspaceId);
+    await owner.request(`/v1/workspaces/${workspaceId}/access-settings`, {
+      method: "PATCH",
+      json: { viewer_default_project_role: "none" },
+    });
+    const member = await addMember(owner, workspaceId, "m@example.com", "member");
+    const sock = await open(p.id, member);
+    const m = await userIdOf(owner, workspaceId, "m@example.com");
+    await owner.request(`/v1/workspaces/${workspaceId}/members/${m.id}`, {
+      method: "PATCH",
+      json: { role: "viewer" },
+    });
+    expect((await sock.closed).code).toBe(RoomCloseCode.forbidden);
+    expect(sock.messages).toContainEqual({ type: "access.revoked", reason: "project_access" });
+  });
+
+  it("closes sockets when the workspace's default project role is lowered to none", async () => {
+    const { owner, workspaceId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const member = await addMember(owner, workspaceId, "m@example.com", "member");
+    const sock = await open(p.id, member);
+    const mine = await open(p.id, owner);
+    await owner.request(`/v1/workspaces/${workspaceId}/access-settings`, {
+      method: "PATCH",
+      json: { member_default_project_role: "none" },
+    });
+    expect((await sock.closed).code).toBe(RoomCloseCode.forbidden);
+    expect(await room(p.id).connectionCount()).toBe(1);
+    mine.ws.close();
+  });
+
+  it("closes a socket whose project grant is revoked, or whose team loses them", async () => {
+    const { owner, workspaceId } = await install();
+    const p = await createProject(owner, workspaceId);
+    await owner.request(`/v1/workspaces/${workspaceId}/access-settings`, {
+      method: "PATCH",
+      json: { member_default_project_role: "none" },
+    });
+    const member = await addMember(owner, workspaceId, "m@example.com", "member");
+    const m = await userIdOf(owner, workspaceId, "m@example.com");
+
+    const grant = await owner.json<{ id: string }>(`/v1/projects/${p.id}/access`, {
+      method: "PUT",
+      json: { principal: { type: "user", id: m.user_id }, role: "viewer" },
+    });
+    const direct = await open(p.id, member);
+    await owner.request(`/v1/projects/${p.id}/access/${grant.body.id}`, { method: "DELETE" });
+    expect((await direct.closed).code).toBe(RoomCloseCode.forbidden);
+    expect(direct.messages).toContainEqual({ type: "access.revoked", reason: "project_access" });
+
+    const team = await owner.json<{ id: string }>(`/v1/workspaces/${workspaceId}/teams`, {
+      method: "POST",
+      json: { name: "Ops", user_ids: [m.user_id] },
+    });
+    await owner.request(`/v1/projects/${p.id}/access`, {
+      method: "PUT",
+      json: { principal: { type: "team", id: team.body.id }, role: "developer" },
+    });
+    const viaTeam = await open(p.id, member);
+    await owner.request(`/v1/teams/${team.body.id}/members`, {
+      method: "PUT",
+      json: { user_ids: [] },
+    });
+    expect((await viaTeam.closed).code).toBe(RoomCloseCode.forbidden);
+  });
+
+  it("closes a revoked token's socket at once with 4401", async () => {
+    const { owner, workspaceId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const token = await createToken(owner, workspaceId, ["projects:read"]);
+    const sock = await open(p.id, token);
+    const browser = await open(p.id, owner);
+    await owner.request(`/v1/workspaces/${workspaceId}/tokens/${token.id}`, { method: "DELETE" });
+    expect((await sock.closed).code).toBe(RoomCloseCode.unauthorized);
+    expect(await room(p.id).connectionCount()).toBe(1);
+    browser.ws.close();
+  });
+
+  it("closes every socket of a deleted project at once with 4404", async () => {
+    const { owner, workspaceId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const sock = await open(p.id, owner);
+    await owner.request(`/v1/projects/${p.id}`, { method: "DELETE" });
+    expect((await sock.closed).code).toBe(RoomCloseCode.notFound);
   });
 });

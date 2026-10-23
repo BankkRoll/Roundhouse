@@ -59,6 +59,7 @@ import {
   invalid,
   notFound,
   recordAudit,
+  requireFreshSession,
   requireWorkspace,
   unauthorized,
 } from "./common";
@@ -891,6 +892,7 @@ export const deployHandlers = [
       kind: "production",
       pr_number: null,
       source_branch: null,
+      protected: true,
       created_at: now,
     });
     recordAudit({
@@ -1027,6 +1029,7 @@ export const deployHandlers = [
       kind: input.body.kind as Environment["kind"],
       pr_number: (input.body.pr_number as number | undefined) ?? null,
       source_branch: (input.body.source_branch as string | undefined) ?? null,
+      protected: false,
       created_at: Date.now(),
     };
     db.deploy.environments.push(environment);
@@ -1592,7 +1595,7 @@ export const deployHandlers = [
   http.patch(mswPath("updateInstanceSettings"), async ({ request, params }) => {
     const input = await validate("updateInstanceSettings", request, params);
     if (!input.ok) return input.response;
-    const denied = requireInstanceAdmin();
+    const denied = requireInstanceAdmin() ?? requireFreshSession();
     if (denied) return denied;
     const user = currentUser();
     if (input.body.apps_domain !== undefined)
@@ -1603,20 +1606,15 @@ export const deployHandlers = [
       db.deploy.instance.log_retention_days = input.body.log_retention_days as number;
     if (input.body.mcp_enabled !== undefined)
       db.deploy.instance.mcp_enabled = input.body.mcp_enabled as boolean;
-    // NOTE: Instances have no audit log of their own; like the API, the change is recorded
-    // in every workspace the caller owns.
-    const owned = db.memberships.filter((row) => row.user_id === user?.id && row.role === "owner");
-    for (const membership of owned) {
-      recordAudit({
-        workspaceId: membership.workspace_id,
-        actorType: "user",
-        actorId: user?.id ?? null,
-        action: "instance.settings_updated",
-        targetType: "instance",
-        targetId: "instance",
-        metadata: { ...input.body },
-      });
-    }
+    recordAudit({
+      workspaceId: null,
+      actorType: "user",
+      actorId: user?.id ?? null,
+      action: "instance.settings_updated",
+      targetType: "instance",
+      targetId: "instance",
+      metadata: { ...input.body },
+    });
     return HttpResponse.json(db.deploy.instance);
   }),
 
@@ -1705,7 +1703,7 @@ export const deployHandlers = [
         install_url: "https://github.com/apps/roundhouse-mock/installations/new",
       };
       recordAudit({
-        workspaceId: pending.workspace_id,
+        workspaceId: null,
         actorType: "user",
         actorId: user.id,
         action: "github.app_created",
@@ -1743,12 +1741,15 @@ export const deployHandlers = [
       if (!code) return reject("authorization_required");
       if (code === "invalid") return reject("authorization_failed");
       if (code === "denied") return reject("installation_not_accessible");
+      if (code === "not-admin") return reject("not_account_admin");
       db.deploy.github.installations.push({
         id: nextId("ghi"),
         installation_id: installationId,
         account_login: "new-account",
         account_type: "User",
         workspace_id: pending.workspace_id,
+        verified: true,
+        claimed_at: Date.now(),
         created_at: Date.now(),
       });
       recordAudit({
