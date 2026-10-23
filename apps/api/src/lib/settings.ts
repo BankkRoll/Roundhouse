@@ -1,12 +1,12 @@
 /**
  * Install-wide settings: the first-run setup lock and completion marker, the
- * control-plane signing key, the ingress settings (`apps_domain`,
+ * setting keys of the control-plane signing keys (handled by
+ * `./signing-keys`), the ingress settings (`apps_domain`,
  * `tls_mode`), log retention, and whether the MCP endpoint is enabled.
  *
  * @module
  */
 import { type Db, instanceSettings } from "@roundhouse/db";
-import { generateSigningKey, importSigningKey } from "@roundhouse/protocol";
 import {
   DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_TLS_MODE,
@@ -15,19 +15,16 @@ import {
   type TlsMode,
 } from "@roundhouse/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { z } from "zod";
-import {
-  type KeyEnv,
-  SealedSchema,
-  sealInstanceSecret,
-  unsealInstanceSecret,
-} from "./instance-secrets";
 
 /** Keys used in `instance_settings`. */
 export const SettingKey = {
   setupLock: "setup_lock",
   setupCompletedAt: "setup_completed_at",
   signingKey: "signing_key",
+  /** A scheduled successor of `signing_key` and its `not_before` (ADR 0014 §13). */
+  signingKeyNext: "signing_key_next",
+  /** Public half and retirement time of the key the latest rollover replaced. */
+  signingKeyRetired: "signing_key_retired",
   /** Parent domain of generated hostnames (a string); unset until an owner sets it. */
   appsDomain: "apps_domain",
   /** Ingress TLS mode (`TlsMode`); `DEFAULT_TLS_MODE` when unset. */
@@ -47,21 +44,6 @@ export const SettingKey = {
  * under a second, so a lock this old means the isolate died mid-setup.
  */
 export const SETUP_LOCK_TTL_MS = 120_000;
-
-const StoredSigningKeySchema = z.object({
-  kid: z.string(),
-  public_key: z.string(),
-  private_key: SealedSchema,
-});
-
-type StoredSigningKey = z.infer<typeof StoredSigningKeySchema>;
-
-/** The signing key ready for use. */
-export interface SigningKey {
-  kid: string;
-  publicKey: string;
-  privateKey: CryptoKey;
-}
 
 /**
  * Reads a setting.
@@ -128,60 +110,6 @@ export async function releaseSetupLock(db: Db, token: number): Promise<void> {
         sql`CAST(${instanceSettings.value} AS INTEGER) = ${token}`,
       ),
     );
-}
-
-/**
- * Generates and stores the control-plane signing key. The private half is
- * sealed under the master-derived KEK.
- *
- * @param db - Database client.
- * @param keys - The master keyring bindings (`c.env`).
- * @returns The new public key, base64.
- */
-export async function createSigningKey(db: Db, keys: KeyEnv): Promise<string> {
-  const pair = await generateSigningKey();
-  const kid = `k${Date.now().toString(36)}`;
-  const value: StoredSigningKey = {
-    kid,
-    public_key: pair.publicKey,
-    private_key: await sealInstanceSecret(keys, pair.privateKey, SettingKey.signingKey),
-  };
-  await db
-    .insert(instanceSettings)
-    .values({ key: SettingKey.signingKey, value })
-    .onConflictDoUpdate({ target: instanceSettings.key, set: { value } });
-  cached = undefined;
-  return pair.publicKey;
-}
-
-// PERF: Every join and every signed control frame needs the key. Caching it
-// skips a D1 read, an AES-GCM unseal, and a key import on each of them.
-let cached: Promise<SigningKey> | undefined;
-
-/**
- * Loads the signing key, caching it for the lifetime of the isolate.
- *
- * @param db - Database client.
- * @param keys - The master keyring bindings (`env`).
- * @returns The usable signing key.
- * @throws When setup hasn't created a key yet or the stored key is corrupt.
- */
-export function loadSigningKey(db: Db, keys: KeyEnv): Promise<SigningKey> {
-  cached ??= (async () => {
-    const raw = await getSetting<unknown>(db, SettingKey.signingKey);
-    if (raw === undefined) throw new Error("signing key not initialised; run setup first");
-    const stored = StoredSigningKeySchema.parse(raw);
-    const pkcs8 = await unsealInstanceSecret(keys, stored.private_key, SettingKey.signingKey);
-    return {
-      kid: stored.kid,
-      publicKey: stored.public_key,
-      privateKey: await importSigningKey(pkcs8),
-    };
-  })().catch((err) => {
-    cached = undefined;
-    throw err;
-  });
-  return cached;
 }
 
 // -----------------------------------------------------------------------------

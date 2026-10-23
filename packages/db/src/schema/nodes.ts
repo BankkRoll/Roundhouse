@@ -53,6 +53,13 @@ export const nodes = sqliteTable(
     /** `nodeEncryptionKeyId(encryption_public_key)`. */
     encryptionKeyId: text("encryption_key_id"),
     encryptionKeyRegisteredAt: timestamp("encryption_key_registered_at"),
+    /**
+     * Control-plane signing kids the agent accepts (ADR 0014 §13): the kid
+     * handed out at join, then `hello.pinned_kids`, plus successors announced
+     * to it since. Picks the key its frames are signed with during a
+     * rollover, and shows which nodes would need a re-join after one.
+     */
+    pinnedSigningKids: json<string[]>("pinned_signing_kids"),
     /** SHA-256 of the bearer credential the agent uses to connect. */
     credentialHash: text("credential_hash").notNull().unique(),
     status: text("status").$type<NodeStatus>().notNull().default("pending"),

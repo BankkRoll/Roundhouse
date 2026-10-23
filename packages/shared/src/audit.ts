@@ -93,6 +93,9 @@ export const AUDIT_ACTIONS = [
   "change_set.created",
   "change_set.applied",
   "change_set.discarded",
+  "key.rollover_scheduled",
+  "key.rollover_completed",
+  "key.rollover_cancelled",
 ] as const;
 
 /** An audited action name. */
@@ -117,6 +120,9 @@ export const INSTANCE_AUDIT_ACTIONS = [
   "instance.key_rotation_started",
   "instance.key_rotation_completed",
   "instance.key_rotation_failed",
+  "key.rollover_scheduled",
+  "key.rollover_completed",
+  "key.rollover_cancelled",
   "github.app_created",
   "auth.sign_in_succeeded",
   "auth.sign_in_failed",

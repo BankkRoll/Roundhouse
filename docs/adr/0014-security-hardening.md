@@ -808,7 +808,7 @@ deliberate operation:
   0600 key file.
 - `POST /v1/instance/signing-keys/rotate`:
   - Needs `instance:manage`, a fresh session and 2FA.
-  - Audits `instance.signing_key_rotation_started`.
+  - Audits `key.rollover_scheduled`.
   - Generates a key, announces it in `welcome` and in a signed
     `key_announce` frame to connected agents, and switches signing at
     `not_before` = now + 24 h.
@@ -822,6 +822,29 @@ deliberate operation:
 - `GET /v1/instance/signing-keys` reports the current kid, the announced kids
   and, per node, which kids it has pinned.
 - Gate: `SEALED_ENV_PROTOCOL_VERSION` (one gate for this whole ADR).
+
+As implemented (`lib/signing-keys.ts`, `routes/signing-keys.ts`,
+`agent/internal/conn/keys.go`, migration `0015`):
+- The successor lives in `instance_settings.signing_key_next` (private half
+  sealed like `signing_key`, listed in `INSTANCE_SECRET_FIELDS` so
+  `KeyRotationWorkflow` re-wraps it). `POST …/rotate` takes an optional
+  `delay_hours` (1–720, default 24) and audits `key.rollover_scheduled`.
+- Signing is chosen per connection from the kids the agent pins
+  (`hello.pinned_kids`, else `nodes.pinned_signing_kids`, recorded at join
+  and on every announcement): the successor once due and pinned, else the
+  current key, so an agent that missed the announcement keeps verifying and
+  catches up from the next `welcome`. Agents accept a successor up to five
+  minutes before `not_before` (clock error).
+- The overlap ends with `POST /v1/instance/signing-keys/complete` (after
+  `not_before`; 409 while nodes don't pin the successor unless `force`):
+  the successor becomes `signing_key`, the old private key is deleted and its
+  kid kept in `signing_key_retired`; audits `key.rollover_completed`.
+  `DELETE /v1/instance/signing-keys/next` withdraws a successor before
+  `not_before` (`key.rollover_cancelled`); agents drop it at their next
+  `welcome`, whose `next_keys` is always the full set.
+- Gate for the wire fields: `KEY_ROLLOVER_PROTOCOL_VERSION` (ADR 0015). Older
+  agents are signed with the current key until completion and are then
+  flagged for an upgrade and re-join.
 
 Owners: stream 1 (`lib/signing-keys.ts`, `routes/signing-keys.ts`) and
 stream 4 (`agent/internal/conn/keys.go`). These are the files 0013's row 2J

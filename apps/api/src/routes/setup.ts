@@ -12,13 +12,8 @@ import { recordAudit } from "../lib/audit";
 import { forwardCookies } from "../lib/cookies";
 import { constantTimeEqual, isValidMasterKey } from "../lib/crypto";
 import { ApiError } from "../lib/errors";
-import {
-  claimSetupLock,
-  createSigningKey,
-  isSetupComplete,
-  releaseSetupLock,
-  SettingKey,
-} from "../lib/settings";
+import { claimSetupLock, isSetupComplete, releaseSetupLock, SettingKey } from "../lib/settings";
+import { createSigningKey } from "../lib/signing-keys";
 import { createWorkspace } from "../lib/workspaces";
 import { body, errors, json } from "../schemas";
 

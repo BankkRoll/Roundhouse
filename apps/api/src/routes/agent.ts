@@ -19,7 +19,8 @@ import { recordAudit } from "../lib/audit";
 import { hashToken, randomToken } from "../lib/crypto";
 import { ApiError, errorBody } from "../lib/errors";
 import { isShellSafeOrigin, NODE_ID_HEADER } from "../lib/nodes";
-import { isSetupComplete, loadSigningKey } from "../lib/settings";
+import { isSetupComplete } from "../lib/settings";
+import { activeSigningKey, loadSigningKeys } from "../lib/signing-keys";
 import { body, errors, json } from "../schemas";
 
 const join = createRoute({
@@ -40,7 +41,9 @@ export const agentRoutes = createRouter()
     if (!(await isSetupComplete(db))) {
       throw new ApiError(503, "setup_incomplete", "Control plane setup is not complete");
     }
-    const signing = await loadSigningKey(db, c.env);
+    // During a rollover a new node gets the key frames are signed with now;
+    // the welcome then announces the successor if it isn't due yet.
+    const signing = activeSigningKey(await loadSigningKeys(db, c.env));
 
     // SECURITY: Consume the token in the same statement that checks it, so a
     // token can't be used twice even by concurrent joins.
@@ -70,6 +73,7 @@ export const agentRoutes = createRouter()
         // The address Cloudflare observed beats a self-reported one.
         publicIp: clientIp(c) ?? input.public_ip ?? null,
         identityPublicKey: input.public_key,
+        pinnedSigningKids: [signing.kid],
         ...(input.encryption_public_key
           ? {
               encryptionPublicKey: input.encryption_public_key,

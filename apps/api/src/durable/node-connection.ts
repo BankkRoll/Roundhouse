@@ -21,7 +21,11 @@
  *   `build_cancel`, never sending a frame or field to an agent whose
  *   protocol version predates it (workloads and builds need
  *   `SEALED_ENV_PROTOCOL_VERSION`), and giving credential-carrying frames at
- *   most `CREDENTIAL_FRAME_TTL_MS`.
+ *   most `CREDENTIAL_FRAME_TTL_MS`;
+ * - during a signing-key rollover (ADR 0014 §13), sign each frame with the
+ *   key the agent pins (`hello.pinned_kids`, else what D1 recorded) and
+ *   announce the successor in `welcome.next_keys` and `key_announce`,
+ *   recording the announced kids as pinned.
  *
  * Only the Worker can reach this object, and it authenticates the agent
  * before forwarding the upgrade, so the node ID header is trusted here.
@@ -52,6 +56,7 @@ import {
   carriesCredentials,
   type Heartbeat,
   type Hello,
+  KEY_ROLLOVER_PROTOCOL_VERSION,
   type LogLine,
   type Logs,
   MAX_AGENT_FRAME_BYTES,
@@ -87,7 +92,12 @@ import { buildDesiredState } from "../lib/desired-state";
 import { deploymentRedaction, logChunkKey, type StoredLogLine, toNdjson } from "../lib/logs";
 import { NODE_ID_HEADER } from "../lib/nodes";
 import { projectRoom } from "../lib/realtime";
-import { loadSigningKey } from "../lib/settings";
+import {
+  announcementsFor,
+  invalidateSigningKeys,
+  loadSigningKeys,
+  signingKeyFor,
+} from "../lib/signing-keys";
 
 /** Signed control frames expire quickly so a captured frame can't be replayed later. */
 const CONTROL_TTL_MS = 5 * 60 * 1000;
@@ -161,10 +171,21 @@ function liveStatus() {
   return sql<NodeStatus>`CASE WHEN ${inArray(nodes.status, AGENT_DRIVEN_STATUSES)} THEN 'online' ELSE ${nodes.status} END`;
 }
 
+/** Whether a hello carries `pinned_kids` the control plane should trust as current. */
+function reportsPins(hello: Hello): hello is Hello & { pinned_kids: string[] } {
+  return hello.protocol_version >= KEY_ROLLOVER_PROTOCOL_VERSION && !!hello.pinned_kids?.length;
+}
+
 interface Attachment {
   nodeId: string;
   helloReceived: boolean;
   protocolVersion: number;
+  /**
+   * Signing kids the agent accepts: from its hello, else as recorded in D1,
+   * plus successors announced on this connection. `null` when unknown (an
+   * agent that predates rollover pins the key it joined with).
+   */
+  pinnedKids: string[] | null;
   lastBeatAt: number;
   strikes: number;
   windowStart: number;
@@ -239,6 +260,7 @@ export class NodeConnection extends DurableObject<Env> {
       nodeId,
       helloReceived: false,
       protocolVersion: 0,
+      pinnedKids: null,
       lastBeatAt: 0,
       strikes: 0,
       windowStart: 0,
@@ -469,6 +491,28 @@ export class NodeConnection extends DurableObject<Env> {
   }
 
   /**
+   * Drops this isolate's cached signing keys and, when a successor is
+   * scheduled, announces it to the connected agent in a `key_announce` (if
+   * its protocol has rollover). Called after a rollover is scheduled,
+   * completed or cancelled.
+   *
+   * @returns Whether a `key_announce` was sent.
+   */
+  async refreshSigningKeys(): Promise<boolean> {
+    invalidateSigningKeys();
+    const ws = this.greetedSocket();
+    if (!ws) return false;
+    const attachment = ws.deserializeAttachment() as Attachment;
+    if (attachment.protocolVersion < KEY_ROLLOVER_PROTOCOL_VERSION) return false;
+    return this.send(ws, {
+      type: "key_announce",
+      ...this.header(attachment.nodeId, Date.now()),
+      // Filled in by `send` for the key the frame is signed with.
+      keys: [],
+    });
+  }
+
+  /**
    * Writes every buffered log line to R2 now. Called by the alarm, when a
    * buffer fills, and when the socket closes; exposed for tests.
    */
@@ -500,6 +544,7 @@ export class NodeConnection extends DurableObject<Env> {
         diskTotal: hello.hardware.disk_bytes,
         observedGeneration: hello.observed_generation,
         lastHeartbeatAt: new Date(now),
+        ...(reportsPins(hello) ? { pinnedSigningKids: hello.pinned_kids } : {}),
       })
       .where(and(eq(nodes.id, attachment.nodeId), isNull(nodes.deletedAt)))
       .returning({
@@ -507,8 +552,13 @@ export class NodeConnection extends DurableObject<Env> {
         workspaceId: nodes.workspaceId,
         identityPublicKey: nodes.identityPublicKey,
         encryptionPublicKey: nodes.encryptionPublicKey,
+        pinnedSigningKids: nodes.pinnedSigningKids,
       });
     if (!node) return ws.close(CloseCode.removed, "node removed");
+    ws.serializeAttachment({
+      ...(ws.deserializeAttachment() as Attachment),
+      pinnedKids: node.pinnedSigningKids ?? null,
+    } satisfies Attachment);
     // Registered before the desired state below is computed, so a node that
     // just gained a key gets its workloads in this very frame.
     if (
@@ -977,17 +1027,69 @@ export class NodeConnection extends DurableObject<Env> {
     return { id: newId("message"), node_id: nodeId, iat: now, exp: now + ttl };
   }
 
-  private async send(ws: WebSocket, message: ControlMessage): Promise<void> {
+  /**
+   * Signs a frame with the key this connection's agent pins and sends it.
+   * A `welcome` (to an agent with rollover) gets `next_keys`, and a
+   * `key_announce` its `keys`, for that key; a `key_announce` with
+   * nothing to announce isn't sent.
+   *
+   * @returns Whether the frame was sent.
+   */
+  private async send(ws: WebSocket, message: ControlMessage): Promise<boolean> {
     const masterKey = this.env.MASTER_KEY;
-    if (!masterKey) return ws.close(1011, "control plane misconfigured");
+    if (!masterKey) {
+      ws.close(1011, "control plane misconfigured");
+      return false;
+    }
+    const attachment = ws.deserializeAttachment() as Attachment;
+    const set = await loadSigningKeys(this.db, this.env);
+    const key = signingKeyFor(set, attachment.pinnedKids);
+    const announced =
+      attachment.protocolVersion >= KEY_ROLLOVER_PROTOCOL_VERSION
+        ? announcementsFor(set, key.kid)
+        : [];
+    let outgoing = message;
+    if (message.type === "welcome") {
+      const { next_keys: _, ...rest } = message;
+      outgoing = announced.length ? { ...rest, next_keys: announced } : rest;
+    } else if (message.type === "key_announce") {
+      if (!announced.length) return false;
+      outgoing = { ...message, keys: announced };
+    }
     // The agent rejects malformed or over-long-lived frames anyway; checking
     // here turns a silent agent-side rejection into a control-plane error.
-    const checked = ControlMessageSchema.parse(message);
-    const key = await loadSigningKey(this.db, this.env);
+    const checked = ControlMessageSchema.parse(outgoing);
     const frame = JSON.stringify(await signEnvelope(checked, key.privateKey, key.kid));
     if (frame.length > MAX_CONTROL_FRAME_BYTES) {
       throw new Error(`control frame of ${frame.length} bytes exceeds the agent's read limit`);
     }
     ws.send(frame);
+    if (checked.type === "welcome" || checked.type === "key_announce") {
+      await this.recordPins(ws, key.kid, announced);
+    }
+    return true;
+  }
+
+  /**
+   * Records the kids an agent pins after it was sent announcements under
+   * `signingKid`. There is no acknowledgement frame: an agent that failed to
+   * keep them says so in its next hello, which replaces this record.
+   */
+  private async recordPins(
+    ws: WebSocket,
+    signingKid: string,
+    announced: readonly { kid: string }[],
+  ): Promise<void> {
+    const attachment = ws.deserializeAttachment() as Attachment;
+    const before = attachment.pinnedKids ?? [];
+    const pins = [
+      ...new Set([...(before.length ? before : [signingKid]), ...announced.map((a) => a.kid)]),
+    ];
+    if (pins.length === before.length && pins.every((k) => before.includes(k))) return;
+    ws.serializeAttachment({ ...attachment, pinnedKids: pins } satisfies Attachment);
+    await this.db
+      .update(nodes)
+      .set({ pinnedSigningKids: pins })
+      .where(and(eq(nodes.id, attachment.nodeId), isNull(nodes.deletedAt)));
   }
 }

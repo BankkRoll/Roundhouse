@@ -54,6 +54,7 @@ import { providerRoutes } from "./routes/providers";
 import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
 import { serviceRoutes } from "./routes/services";
 import { setupRoutes } from "./routes/setup";
+import { signingKeyRoutes } from "./routes/signing-keys";
 import { templateRoutes } from "./routes/templates";
 import { tokenRoutes } from "./routes/tokens";
 import { variableRoutes } from "./routes/variables";
@@ -116,6 +117,7 @@ app
   .route("/", authSecurityRoutes)
   .route("/", instanceAdminRoutes)
   .route("/", keyRoutes)
+  .route("/", signingKeyRoutes)
   .route("/", providerRoutes)
   .route("/", templateRoutes)
   .route("/", mcpRoutes)
