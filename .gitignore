@@ -2,17 +2,17 @@ node_modules/
 dist/
 .turbo/
 .wrangler/
-.dev.vars
 *.log
 .DS_Store
 coverage/
 /agent/bin/
 /e2e/test-results/
 /e2e/playwright-report/
-.dev.vars.*
-!.dev.vars.example
-.dev/
+# Local secrets. Only the committed *.example templates are tracked.
+.dev.vars*
 .env*
+!*.example
+.dev/
 *.tsbuildinfo
 *.exe
 .vscode/
