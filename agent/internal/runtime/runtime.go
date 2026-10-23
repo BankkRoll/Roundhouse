@@ -1374,9 +1374,14 @@ func (r *Runtime) statusOf(s *wantSpec) protocol.WorkloadStatusReport {
 		rep.ExitCode = &code
 		rep.State = stoppedState(cur.exitCode, cur.oomKilled)
 		rep.Message = stopReason(cur)
+		// NOTE: startAsync counts a restart before the engine runs it, so
+		// while a start is in flight or not yet re-inspected, the exit seen
+		// is the previous run's: judging the policy on it would report
+		// giving up while the last allowed restart is still under way.
+		inFlight := cur.busy || !cur.settled()
 		if !cur.nextRestart.IsZero() {
 			rep.Message = strings.TrimPrefix(rep.Message+"; restarting after "+cur.backoff.String()+" back-off", "; ")
-		} else if shouldRestart(s.Restart, cur.restarts, cur.exitCode, cur.oomKilled) {
+		} else if inFlight || shouldRestart(s.Restart, cur.restarts, cur.exitCode, cur.oomKilled) {
 			rep.Message = strings.TrimPrefix(rep.Message+"; restarting", "; ")
 		} else if s.Restart.Policy == protocol.RestartOnFailure && rep.State == protocol.StateCrashed {
 			rep.Message = strings.TrimPrefix(fmt.Sprintf("%s; gave up after %d restarts", rep.Message, cur.restarts), "; ")
