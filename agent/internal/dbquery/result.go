@@ -91,9 +91,6 @@ func (s *resultSet) add(row []any) bool {
 	return true
 }
 
-// full reports whether add would refuse another row on count alone.
-func (s *resultSet) full() bool { return len(s.rows) >= s.maxRows }
-
 func (s *resultSet) notice(msg string) {
 	for _, n := range s.notices {
 		if n == msg {

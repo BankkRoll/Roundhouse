@@ -382,7 +382,6 @@ type progress struct {
 
 	mu      sync.Mutex
 	pending []protocol.UploadedPart
-	err     error
 }
 
 func (p *progress) add(ctx context.Context, part protocol.UploadedPart) {
