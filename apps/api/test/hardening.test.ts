@@ -298,6 +298,35 @@ describe("access: checks go through resolveAccess with the project in scope", ()
     expect((await member.json(path)).status).toBe(200);
   });
 
+  it("applies a protected environment's rules to deploys, rollbacks and cancels", async () => {
+    const s = await stage();
+    const member = await addMember(s.owner, s.workspaceId, "deployer@example.com", "member");
+    const deploy = (c: typeof member) =>
+      c.json(`/v1/services/${s.serviceId}/deployments?environment_id=${s.envId}`, {
+        method: "POST",
+        json: {},
+      });
+    const first = await deploy(s.owner);
+    expect(first.status).toBeLessThan(300);
+    const deployment = first.body as { id: string };
+
+    // The default rules still let deployers deploy; this environment allows project admins only.
+    const adminsOnly = { roles: [], userIds: [], teamIds: [] };
+    await env.DB.prepare(
+      "UPDATE environments SET protected = 1, protection_rules = ? WHERE id = ?",
+    )
+      .bind(
+        JSON.stringify({ deploy: adminsOnly, config: adminsOnly, variables: adminsOnly }),
+        s.envId,
+      )
+      .run();
+    expect((await deploy(member)).status).toBe(403);
+    const base = `/v1/deployments/${deployment.id}`;
+    expect((await member.json(`${base}/rollback`, { method: "POST" })).status).toBe(403);
+    expect((await member.json(`${base}/cancel`, { method: "POST" })).status).toBe(403);
+    expect((await deploy(s.owner)).status).toBeLessThan(300);
+  });
+
   it("uses project grants and the workspace's default project role", async () => {
     const s = await stage();
     const member = await addMember(s.owner, s.workspaceId, "m@example.com", "member");

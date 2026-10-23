@@ -84,6 +84,7 @@ export const deploymentRoutes = createRouter()
       c,
       serviceId,
       policyOf(createDeploymentRoute).action!,
+      environment_id,
     );
     await environmentOf(c, project.id, environment_id);
     const db = c.get("db");
