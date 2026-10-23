@@ -4101,6 +4101,9 @@
               "builder": {
                 "type": "boolean"
               },
+              "db_set_password": {
+                "type": "boolean"
+              },
               "docker": {
                 "type": "boolean"
               },
@@ -4108,6 +4111,9 @@
                 "type": "boolean"
               },
               "ingress": {
+                "type": "boolean"
+              },
+              "tcp_proxy": {
                 "type": "boolean"
               }
             },
@@ -13151,6 +13157,9 @@
                       "builder": {
                         "type": "boolean"
                       },
+                      "db_set_password": {
+                        "type": "boolean"
+                      },
                       "docker": {
                         "type": "boolean"
                       },
@@ -13158,6 +13167,9 @@
                         "type": "boolean"
                       },
                       "ingress": {
+                        "type": "boolean"
+                      },
+                      "tcp_proxy": {
                         "type": "boolean"
                       }
                     },
