@@ -15,6 +15,7 @@
 import type { Env } from "../env";
 import { claimDueBackups } from "./backups/schedule";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
+import { claimMigrationCleanups } from "./volume-migrations";
 import { claimVolumeDeletions } from "./volumes";
 
 /** The Cron Trigger expression of the minute tick; it must match `wrangler.jsonc`. */
@@ -48,6 +49,7 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
   },
   { name: "volume_deletions", run: claimVolumeDeletions },
   { name: "backup_policies", run: claimDueBackups },
+  { name: "migration_cleanups", run: claimMigrationCleanups },
 ];
 
 /**

@@ -122,6 +122,7 @@ import { type BackupJobFrameBody, onBackupFrame } from "./node/handlers/backups"
 import { MAX_QUERIES_PER_NODE, PendingQueries, UserQueryLimiter } from "./node/handlers/data";
 import { MetricOwners, onMetrics } from "./node/handlers/metrics";
 import { onVolumeStatus } from "./node/handlers/volumes";
+import { onMigrationVolumeReports } from "../lib/volume-migrations";
 
 /** Signed control frames expire quickly so a captured frame can't be replayed later. */
 const CONTROL_TTL_MS = 5 * 60 * 1000;
@@ -416,6 +417,7 @@ export class NodeConnection extends DurableObject<Env> {
       case "volume_status":
         if (attachment.protocolVersion < VOLUMES_PROTOCOL_VERSION) return;
         await onVolumeStatus(this.db, this.env, attachment.nodeId, message);
+        await onMigrationVolumeReports(this.env, this.db, attachment.nodeId, message.volumes);
         // The 60 s report doubles as the retry tick for read-only principals.
         this.provisionReadonlySoon(attachment.nodeId);
         return;
@@ -736,6 +738,7 @@ export class NodeConnection extends DurableObject<Env> {
         observedGeneration: hello.observed_generation,
         lastHeartbeatAt: new Date(now),
         ...(reportsPins(hello) ? { pinnedSigningKids: hello.pinned_kids } : {}),
+        ...(hello.volume_quota ? { volumeQuota: hello.volume_quota } : {}),
       })
       .where(and(eq(nodes.id, attachment.nodeId), isNull(nodes.deletedAt)))
       .returning({

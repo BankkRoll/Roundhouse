@@ -11,6 +11,7 @@ import type { BackupParams } from "./workflows/backup";
 import type { DeployParams } from "./workflows/deploy";
 import type { KeyRotationParams } from "./workflows/key-rotation";
 import type { ProvisionParams } from "./workflows/provision";
+import type { VolumeMigrationParams } from "./lib/volume-migrations";
 import type { RestoreParams } from "./workflows/restore";
 
 /** Worker bindings declared in `wrangler.jsonc`. */
@@ -81,6 +82,8 @@ export interface Env {
   BACKUP_WORKFLOW: Workflow<BackupParams>;
   /** Runs one restore per instance (instance ID = the `rst_…` restore ID), ADR 0004. */
   RESTORE_WORKFLOW: Workflow<RestoreParams>;
+  /** Runs one volume migration per instance (instance ID = the `mig_…` ID), ADR 0004. */
+  VOLUME_MIGRATION_WORKFLOW: Workflow<VolumeMigrationParams>;
   /**
    * Seconds a provisioned server gets to join, overriding `JOIN_TIMEOUT_MS`;
    * and seconds between join checks. For development and tests; unset in production.

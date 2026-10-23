@@ -29,6 +29,54 @@ export const READONLY_DB_USER = "roundhouse_ro";
 /** Variable holding the read-only principal's password, on every engine. */
 export const READONLY_PASSWORD_VARIABLE = "ROUNDHOUSE_RO_PASSWORD";
 
+/**
+ * Principals of a database whose password a rotation changes: the engine's
+ * admin, the application user (MySQL's `MYSQL_USER`) and the data
+ * browser's read-only user.
+ */
+export const DATABASE_PRINCIPALS = ["admin", "app", "readonly"] as const;
+
+/** A database principal; see {@link DATABASE_PRINCIPALS}. */
+export type DatabasePrincipal = (typeof DATABASE_PRINCIPALS)[number];
+
+/** Where a principal's name and password live among the service's variables. */
+export interface DatabasePrincipalVariables {
+  principal: DatabasePrincipal;
+  /** A fixed user name, or the variable holding it. */
+  username: { literal: string } | { variable: string };
+  /** The secret variable holding the password. */
+  passwordVariable: string;
+}
+
+/**
+ * The principals an engine's template creates, in the order a rotation
+ * changes them: the admin last, because it is the credential every other
+ * change connects with.
+ *
+ * @param engine - The engine.
+ * @returns One entry per principal.
+ * @example
+ * databasePrincipals("mysql").map((p) => p.principal); // ["readonly", "app", "admin"]
+ */
+export function databasePrincipals(engine: ServiceDatabaseEngine): DatabasePrincipalVariables[] {
+  const readonly: DatabasePrincipalVariables = {
+    principal: "readonly",
+    username: { literal: READONLY_DB_USER },
+    passwordVariable: READONLY_PASSWORD_VARIABLE,
+  };
+  const admin = databaseCredentialVariables(engine, "write");
+  const out: DatabasePrincipalVariables[] = [readonly];
+  if (engine === "mysql") {
+    out.push({
+      principal: "app",
+      username: { variable: "MYSQL_USER" },
+      passwordVariable: "MYSQL_PASSWORD",
+    });
+  }
+  out.push({ principal: "admin", ...admin });
+  return out;
+}
+
 /** Volume size a database starts with, in MiB. */
 export const DEFAULT_DATABASE_VOLUME_MB = 5120;
 

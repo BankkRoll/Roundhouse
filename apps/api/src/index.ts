@@ -12,7 +12,8 @@
  *   (`AuditChain`), and the deploy and key rotation workflows
  *   (`DeployWorkflow`, `KeyRotationWorkflow`), and one-click server
  *   provisioning (`ProvisionWorkflow`), and backups and restores
- *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), exported for their bindings
+ *   (`BackupWorkflow`, `RestoreWorkflow`) and volume moves
+ *   (`VolumeMigrationWorkflow`, ADR 0004), exported for their bindings
  * - `Cache-Control: no-store` on every API and auth response, and the
  *   two-factor gate in front of `/v1/*` mutations (ADR 0014)
  * - Service, project and node metrics (`routes/metrics.ts`, ADR 0008)
@@ -78,6 +79,7 @@ export { DeployWorkflow } from "./workflows/deploy";
 export { KeyRotationWorkflow } from "./workflows/key-rotation";
 export { ProvisionWorkflow } from "./workflows/provision";
 export { RestoreWorkflow } from "./workflows/restore";
+export { VolumeMigrationWorkflow } from "./workflows/volume-migration";
 
 /** Version of the REST API advertised in the OpenAPI document. */
 const API_VERSION = "0.1.0";

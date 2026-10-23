@@ -41,6 +41,7 @@ import {
 import { and, asc, desc, eq, inArray, isNull, lte, notInArray, or } from "drizzle-orm";
 import type { Env } from "../env";
 import { ApiError, conflict } from "./errors";
+import { hasTcpProxy } from "./tcp-proxies";
 
 /** A volume row. */
 export type VolumeRow = typeof volumes.$inferSelect;
@@ -119,7 +120,9 @@ export async function isVolumeService(
 
 /**
  * Refuses more than one replica for a volume service (ADR 0004,
- * "Placement affinity").
+ * "Placement affinity"), or for a service publishing a TCP port: one host
+ * port can be published once per node, and the allowlist follows one
+ * replica.
  *
  * @param db - Database client.
  * @param service - Its ID and database engine.
@@ -133,6 +136,13 @@ export async function assertSingleReplica(
 ): Promise<void> {
   if (replicas === undefined || replicas <= 1) return;
   if (await isVolumeService(db, service)) throw singleReplicaError();
+  if (await hasTcpProxy(db, service.id)) {
+    throw new ApiError(
+      422,
+      "volume_requires_single_replica",
+      "A service with a TCP proxy runs at most one replica; turn the proxy off first",
+    );
+  }
 }
 
 // -----------------------------------------------------------------------------

@@ -57,7 +57,12 @@
       "class_name": "ProvisionWorkflow"
     },
     { "name": "roundhouse-backup", "binding": "BACKUP_WORKFLOW", "class_name": "BackupWorkflow" },
-    { "name": "roundhouse-restore", "binding": "RESTORE_WORKFLOW", "class_name": "RestoreWorkflow" }
+    { "name": "roundhouse-restore", "binding": "RESTORE_WORKFLOW", "class_name": "RestoreWorkflow" },
+    {
+      "name": "roundhouse-volume-migration",
+      "binding": "VOLUME_MIGRATION_WORKFLOW",
+      "class_name": "VolumeMigrationWorkflow"
+    }
   ],
   // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
   // a small number like the docs' "1001" can collide with another project's

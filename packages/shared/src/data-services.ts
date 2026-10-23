@@ -37,6 +37,41 @@ export const LIVE_VOLUME_STATUSES: readonly VolumeStatusName[] = [
 /** How long a deleted volume can be undeleted before its data is removed. */
 export const VOLUME_DELETE_GRACE_MS = 72 * 60 * 60 * 1000;
 
+/**
+ * Where a running volume migration is (ADR 0004, "Volume migration between
+ * nodes"), in order: the target creates the volume, the service stops, the
+ * source copies out, the target copies in, the service starts on the target.
+ * `rolling_back` puts the service back on the source after a failure.
+ */
+export const VOLUME_MIGRATION_PHASES = [
+  "queued",
+  "preparing_target",
+  "stopping",
+  "copying_out",
+  "copying_in",
+  "starting",
+  "done",
+  "rolling_back",
+] as const;
+
+/** A migration phase; see {@link VOLUME_MIGRATION_PHASES}. */
+export type VolumeMigrationPhase = (typeof VOLUME_MIGRATION_PHASES)[number];
+
+/** How long a migration's leftover copy (and its snapshot backup) is kept. */
+export const VOLUME_MIGRATION_KEEP_MS = VOLUME_DELETE_GRACE_MS;
+
+/** Host ports the TCP proxy allocates from (ADR 0004, `tcp_proxy_port_range`). */
+export const TCP_PROXY_PORT_RANGE = { min: 20_000, max: 29_999 } as const;
+
+/** Most source CIDRs one TCP proxy admits; the protocol's `MAX_PUBLISH_CIDRS`. */
+export const MAX_TCP_PROXY_CIDRS = 64;
+
+/** A credential rotation's lifecycle. */
+export const CREDENTIAL_ROTATION_STATUSES = ["running", "succeeded", "failed"] as const;
+
+/** A rotation's status; see {@link CREDENTIAL_ROTATION_STATUSES}. */
+export type CredentialRotationStatus = (typeof CREDENTIAL_ROTATION_STATUSES)[number];
+
 /** What started a backup. */
 export const BACKUP_TRIGGERS = ["schedule", "manual", "pre_restore", "migration"] as const;
 

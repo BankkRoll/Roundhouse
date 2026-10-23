@@ -26,8 +26,8 @@ import { defineRoute, session } from "./policy";
 const [listNamespaces, listTables, describeTable, tableRows, rawStatement] = DbOpSchema.options;
 
 /**
- * An operation the API accepts: every `DbOp` except `provision_readonly`,
- * which only the control plane sends.
+ * An operation the API accepts: every `DbOp` except `provision_readonly`
+ * and `set_password`, which only the control plane sends.
  */
 export const QueryOpSchema = z
   .discriminatedUnion("type", [listNamespaces, listTables, describeTable, tableRows, rawStatement])
