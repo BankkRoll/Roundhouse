@@ -7,12 +7,15 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
+import { TotpSource } from "../two-factor.mjs";
 
 const ARTIFACTS = join(import.meta.dirname, ".artifacts");
 const session = JSON.parse(readFileSync(join(ARTIFACTS, "session.json"), "utf8")) as {
   email: string;
   password: string;
   workspaceId: string;
+  totpSecret: string;
+  totpLastStep: number;
 };
 const { projectId } = JSON.parse(readFileSync(join(ARTIFACTS, "ui.json"), "utf8")) as {
   projectId: string;
@@ -29,6 +32,10 @@ async function signIn(page: Page) {
   await page.getByLabel("Email").fill(session.email);
   await page.getByLabel("Password").fill(session.password);
   await page.getByRole("button", { name: /sign in|log in/i }).click();
+  const codes = new TotpSource(session.totpSecret);
+  codes.last = session.totpLastStep;
+  await page.getByLabel("Authentication code").fill(await codes.next());
+  await page.getByRole("button", { name: "Verify" }).click();
   await expect(page).not.toHaveURL(/\/login/);
 }
 

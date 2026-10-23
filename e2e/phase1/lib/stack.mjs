@@ -251,9 +251,15 @@ export async function startControlPlane({ port }) {
   const state = mkdtempSync(join(tmpdir(), "roundhouse-e2e-state-"));
   const masterKey = randomBytes(32).toString("base64");
   const varsFile = join(API_DIR, ".dev.vars.phase1");
+  // NOTE: Docker Desktop's node reaches the API at host.docker.internal while the
+  // harness uses 127.0.0.1, so no single PUBLIC_ORIGIN fits both; there the
+  // ROUNDHOUSE_DEV fallback (URLs follow the request) is used. Linux, as in CI,
+  // pins PUBLIC_ORIGIN.
+  const publicOrigin =
+    process.platform === "linux" ? `PUBLIC_ORIGIN=http://127.0.0.1:${port}\n` : "";
   writeFileSync(
     varsFile,
-    `MASTER_KEY=${masterKey}\nROLLOUT_TIMEOUT_S=${ROLLOUT_TIMEOUT_S}\nPUBLIC_ORIGIN=http://127.0.0.1:${port}\nROUNDHOUSE_DEV=1\n`,
+    `MASTER_KEY=${masterKey}\nROLLOUT_TIMEOUT_S=${ROLLOUT_TIMEOUT_S}\n${publicOrigin}ROUNDHOUSE_DEV=1\n`,
   );
   mkdirSync(ARTIFACTS, { recursive: true });
   const logFile = join(ARTIFACTS, "wrangler.log");

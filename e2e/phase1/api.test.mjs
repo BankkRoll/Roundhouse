@@ -257,7 +257,13 @@ describe("Phase 1 on the real stack", () => {
     });
     assert.equal(settings.apps_domain, APPS_DOMAIN);
     assert.equal(settings.tls_mode, "off");
-    writeArtifact("session.json", { ...OWNER, workspaceId: S.workspaceId });
+    // The dashboard spec signs in again and must use a TOTP step this run hasn't spent.
+    writeArtifact("session.json", {
+      ...OWNER,
+      workspaceId: S.workspaceId,
+      totpSecret: codes.secret,
+      totpLastStep: codes.last,
+    });
   });
 
   step("2. node: join as a builder and come online", async () => {
