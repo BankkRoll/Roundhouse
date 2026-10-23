@@ -15,12 +15,17 @@ import { join, resolve } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 import { E2E_MASTER_KEY } from "../constants.mjs";
+import { secretFromUri, TotpSource } from "../two-factor.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const SHOTS = join(import.meta.dirname, "..", "screenshots");
 const isWindows = process.platform === "win32";
 
 const OWNER = { name: "Mara Okafor", email: "mara@example.com", password: "correct horse battery" };
+
+/** The admin's authenticator and backup codes, set when setup enrolls them. */
+let codes: TotpSource | undefined;
+let backupCodes: string[] = [];
 
 let agent: ChildProcess | undefined;
 let agentDir: string;
@@ -112,6 +117,33 @@ test.describe
 
       await page.getByLabel("Master key").fill(E2E_MASTER_KEY);
       await page.getByRole("button", { name: "Create admin account" }).click();
+
+      await expect(
+        page.getByRole("heading", { name: "Turn on two-factor authentication" }),
+      ).toBeVisible();
+      await audit(page, "setup: two-factor");
+      await page.getByRole("button", { name: "Set up two-factor" }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByLabel("Password").fill(OWNER.password);
+      await dialog.getByRole("button", { name: "Continue" }).click();
+      await expect(
+        dialog.getByRole("img", { name: "QR code for your authenticator app" }),
+      ).toBeVisible();
+      await shot(page, "04a-setup-two-factor-qr");
+      await audit(page, "setup: scan the QR code");
+      const key = (await dialog.locator("p.select-all").textContent()) ?? "";
+      codes = new TotpSource(secretFromUri(`otpauth://totp/x?secret=${key.replace(/\s+/g, "")}`));
+      await dialog.getByLabel("Code from the app").fill(await codes.next());
+      await dialog.getByRole("button", { name: "Turn on" }).click();
+      const list = dialog.getByRole("list", { name: "Backup codes" });
+      await expect(list).toBeVisible();
+      backupCodes = (await list.getByRole("listitem").allTextContents()).map((c) => c.trim());
+      expect(backupCodes).toHaveLength(10);
+      await shot(page, "04b-setup-backup-codes");
+      await audit(page, "setup: backup codes");
+      await dialog.getByLabel("I've saved these codes somewhere safe").check();
+      await dialog.getByRole("button", { name: "Done" }).click();
+
       await expect(page.getByText(/add your first server|add a server/i).first()).toBeVisible();
       await expect(page.getByRole("tab", { name: "Linux server" })).toHaveAttribute(
         "aria-selected",
@@ -316,6 +348,7 @@ test.describe
       await page.getByLabel("Email").fill(OWNER.email);
       await page.getByLabel("Password").fill(OWNER.password);
       await page.getByRole("button", { name: /sign in|log in/i }).click();
+      await completeSecondFactor(page);
       await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
       await page.goto(`${origin}${workspacePath}/servers`);
       await page
@@ -401,5 +434,26 @@ async function signIn(page: Page) {
   await page.getByLabel("Email").fill(OWNER.email);
   await page.getByLabel("Password").fill(OWNER.password);
   await page.getByRole("button", { name: /sign in|log in/i }).click();
+  await completeSecondFactor(page);
   await expect(page).not.toHaveURL(/\/login/);
+}
+
+/**
+ * Answers the sign-in's two-factor step: an authenticator code while a fresh time
+ * step is free (each is accepted once), else a backup code, else waits for a step.
+ */
+async function completeSecondFactor(page: Page) {
+  const heading = page.getByRole("heading", { name: "Two-factor authentication" });
+  await expect(heading).toBeVisible();
+  if (!codes) throw new Error("setup did not enroll the admin in two-factor");
+  const totp = codes.tryNext();
+  if (totp === null && backupCodes.length > 0) {
+    await page.getByRole("button", { name: "Use a backup code" }).click();
+    await page.getByLabel("Backup code").fill(backupCodes.shift()!);
+  } else {
+    await page.getByLabel("Authentication code").fill(totp ?? (await codes.next()));
+  }
+  await audit(page, "sign-in: two-factor");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(heading).toBeHidden();
 }

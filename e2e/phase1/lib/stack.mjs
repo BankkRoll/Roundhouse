@@ -251,7 +251,10 @@ export async function startControlPlane({ port }) {
   const state = mkdtempSync(join(tmpdir(), "roundhouse-e2e-state-"));
   const masterKey = randomBytes(32).toString("base64");
   const varsFile = join(API_DIR, ".dev.vars.phase1");
-  writeFileSync(varsFile, `MASTER_KEY=${masterKey}\nROLLOUT_TIMEOUT_S=${ROLLOUT_TIMEOUT_S}\n`);
+  writeFileSync(
+    varsFile,
+    `MASTER_KEY=${masterKey}\nROLLOUT_TIMEOUT_S=${ROLLOUT_TIMEOUT_S}\nPUBLIC_ORIGIN=http://127.0.0.1:${port}\nROUNDHOUSE_DEV=1\n`,
+  );
   mkdirSync(ARTIFACTS, { recursive: true });
   const logFile = join(ARTIFACTS, "wrangler.log");
   const out = createWriteStream(logFile);

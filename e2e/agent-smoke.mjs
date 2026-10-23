@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { enrollTwoFactor } from "./two-factor.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const API_DIR = join(ROOT, "apps", "api");
@@ -87,7 +88,10 @@ function killAll() {
 try {
   const persist = join(work, "state");
   const masterKey = randomBytes(32).toString("base64");
-  writeFileSync(join(API_DIR, ".dev.vars.smoke"), `MASTER_KEY=${masterKey}\n`);
+  writeFileSync(
+    join(API_DIR, ".dev.vars.smoke"),
+    `MASTER_KEY=${masterKey}\nPUBLIC_ORIGIN=${BASE}\nROUNDHOUSE_DEV=1\n`,
+  );
 
   // NOTE: wrangler refuses to start without the directory its config names in
   // assets.directory (apps/web/dist), even though this test never loads it.
@@ -133,6 +137,11 @@ try {
     }),
   });
   const ws = setup.workspace_id;
+  log("turning on two-factor for the admin");
+  await enrollTwoFactor(
+    (path, body) => api(path, { method: "POST", body: JSON.stringify(body) }),
+    "smoke test password",
+  );
   const { token } = await api(`/v1/workspaces/${ws}/nodes/join-tokens`, { method: "POST" });
 
   log("building agent");

@@ -12,6 +12,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, describe, it } from "node:test";
+import { enrollTwoFactor } from "../two-factor.mjs";
 import { Api } from "./lib/api.mjs";
 import {
   containersWithLabel,
@@ -232,12 +233,20 @@ describe("Phase 1 on the real stack", () => {
     });
     S.workspaceId = setup.workspace_id;
 
+    log("step 1", "turning on two-factor for the admin");
+    const { codes } = await enrollTwoFactor((path, body) => api.post(path, body), OWNER.password);
+
     log("step 1", "signing out and back in through the auth API");
     await api.post("/api/auth/sign-out", {});
     api.cookies.clear();
     const anon = await api.request("GET", "/v1/me");
     assert.equal(anon.status, 401);
-    await api.post("/api/auth/sign-in/email", { email: OWNER.email, password: OWNER.password });
+    const challenge = await api.post("/api/auth/sign-in/email", {
+      email: OWNER.email,
+      password: OWNER.password,
+    });
+    assert.equal(challenge.twoFactorRedirect, true, "sign-in asks for the second factor");
+    await api.post("/api/auth/two-factor/verify-totp", { code: await codes.next() });
     const me = await api.get("/v1/me");
     assert.equal(me.user.email, OWNER.email);
 

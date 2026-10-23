@@ -18,7 +18,9 @@ const PORT = process.env.E2E_PORT ?? "8798";
 const isWindows = process.platform === "win32";
 
 rmSync(STATE, { recursive: true, force: true });
-writeFileSync(join(API_DIR, ".dev.vars.e2e"), `MASTER_KEY=${E2E_MASTER_KEY}\n`);
+// ROUNDHOUSE_DEV and no PUBLIC_ORIGIN: absolute URLs follow the request, since the
+// cloud-init test serves the dashboard under a second, https origin.
+writeFileSync(join(API_DIR, ".dev.vars.e2e"), `MASTER_KEY=${E2E_MASTER_KEY}\nROUNDHOUSE_DEV=1\n`);
 
 const opts = { cwd: API_DIR, stdio: "inherit", shell: isWindows };
 const migrate = spawnSync(
