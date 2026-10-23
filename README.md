@@ -7,17 +7,57 @@
 
 Roundhouse is a source-available, self-hosted platform for deploying applications, similar in spirit to Railway. The control plane runs on your own Cloudflare account; your workloads run on your own Linux servers.
 
+## Features
+
+| Feature                         | What it does                                                   | Status                                                       |
+| ------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
+| **Deploy**                      |                                                                |                                                              |
+| Services from Git               | Push to a branch, get a build and a deploy                     | Available                                                    |
+| Any language                    | Railpack detects the stack, or your Dockerfile is used         | Available                                                    |
+| Zero-downtime deploys           | Traffic moves only after the new container is healthy          | Available                                                    |
+| Rollbacks                       | Redeploy an earlier image, no rebuild                          | Available                                                    |
+| PR previews                     | An environment and URL per pull request                        | In progress                                                  |
+| Cron jobs                       | Run a service on a schedule                                    | In progress                                                  |
+| Cloud servers                   | Create servers on Hetzner, DigitalOcean, Vultr or Linode       | Available                                                    |
+| **Data**                        |                                                                |                                                              |
+| Databases                       | Postgres, MySQL, Valkey/Redis and MongoDB as services          | In progress                                                  |
+| Volumes                         | Persistent storage mounted into a service                      | In progress                                                  |
+| Backups                         | Scheduled database backups to R2 in your account               | In progress                                                  |
+| **Networking**                  |                                                                |                                                              |
+| Private networking              | WireGuard mesh; services reach each other at `.internal` names | Partial — single server today; cross-server mesh in progress |
+| Domains & HTTPS                 | A generated domain or your own, certificates by Caddy          | Available                                                    |
+| **Observability**               |                                                                |                                                              |
+| Logs                            | Build and runtime logs, streamed live                          | Available                                                    |
+| Metrics                         | CPU, memory and requests per service                           | In progress                                                  |
+| Servers & live usage            | Join a Linux box with one command, watch CPU, RAM and disk     | Available                                                    |
+| **Developer tools**             |                                                                |                                                              |
+| Project canvas & staged changes | See every service, stage changes, review, deploy               | Available                                                    |
+| Environments                    | Production plus staging or more, each with its own config      | Available                                                    |
+| Shared variables                | Define a value once, reference it from every service           | Available                                                    |
+| CLI                             | Deploy, tail logs and manage variables from a terminal         | Available                                                    |
+| Templates                       | Start from a ready-made stack                                  | Available                                                    |
+| MCP server                      | Coding agents act through a scoped API, with OAuth sign-in     | Available                                                    |
+| **Security**                    |                                                                |                                                              |
+| Signed control channel          | Agents dial out and verify every Ed25519-signed message        | Available                                                    |
+| Audit log                       | Who did what and when, hash-chained                            | Available                                                    |
+| Members & roles                 | Owner, admin, member and viewer across workspaces              | Available                                                    |
+
 ## Install
 
-1. Deploy the control plane (`apps/api`) to Cloudflare and set its secret:
+1. Deploy the control plane (`apps/api`) to your Cloudflare account and set
+   its secrets. The first deploy creates the D1 database, R2 bucket and
+   Durable Objects; there are no IDs to copy.
 
    ```sh
    pnpm install
    cd apps/api
-   npx wrangler d1 create roundhouse          # put the id in wrangler.jsonc
-   npx wrangler secret put MASTER_KEY       # openssl rand -base64 32
    pnpm run deploy
+   openssl rand -base64 32 | npx wrangler secret put MASTER_KEY   # keep a copy offline
+   npx wrangler secret put PUBLIC_ORIGIN                          # e.g. https://cp.example.com
    ```
+
+   Every setting, and how to rotate the master key, is in
+   [docs/configuration.md](docs/configuration.md).
 
 2. Open the Worker URL. The setup wizard asks for the master key and creates
    the admin account.
@@ -29,7 +69,18 @@ Roundhouse is a source-available, self-hosted platform for deploying application
    curl -fsSL https://<control-plane>/install.sh | sudo bash -s -- --token <token>
    ```
 
-   Tokens are single-use and expire after 15 minutes.
+   Tokens are single-use and expire after 15 minutes. Installer options are in
+   [install/README.md](install/README.md).
+
+4. Optionally, install the CLI on your workstation (Linux and macOS; Windows
+   from the [releases](https://github.com/BankkRoll/Roundhouse/releases)):
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BankkRoll/Roundhouse/main/install/install-cli.sh | sh
+   ```
+
+   It verifies the release signature and checksum; see
+   [cli/README.md](cli/README.md).
 
 ## Templates
 
@@ -51,16 +102,20 @@ Requires Node 22.19+, pnpm 10, Go 1.26.
 
 ```sh
 pnpm install
-pnpm setup:dev                                     # creates MASTER_KEY, migrates the local DB
+pnpm setup:dev                                     # writes apps/api/.dev.vars, migrates the local DB
 pnpm dev                                           # API :8787, dashboard :5173, site :5174
 ```
 
 ```sh
 pnpm lint && pnpm typecheck && pnpm test           # TypeScript
-go test ./agent/... ./packages/protocol/go/...     # Go
+go test ./agent/... ./cli/... ./packages/protocol/go/...  # Go
 node e2e/agent-smoke.mjs                           # control plane + real agent
-pnpm --filter @roundhouse/e2e test:browser           # browser end-to-end
+pnpm --filter @roundhouse/e2e test:browser         # browser end-to-end
 ```
+
+Development settings live in `apps/api/.dev.vars`, created from
+[`.dev.vars.example`](apps/api/.dev.vars.example); test knobs are listed in
+[docs/configuration.md](docs/configuration.md#development-and-tests).
 
 ## Layout
 
@@ -70,13 +125,15 @@ pnpm --filter @roundhouse/e2e test:browser           # browser end-to-end
 | `apps/web`          | Dashboard                              |
 | `apps/landing`      | Public site, published to GitHub Pages |
 | `agent`             | Node agent (Go)                        |
-| `install`           | Server install script and systemd unit |
+| `cli`               | `roundhouse` CLI (Go)                  |
+| `install`           | Node and CLI installers, systemd unit  |
 | `packages/protocol` | Control plane ↔ agent wire protocol    |
 | `packages/db`       | Database schema and migrations         |
 | `packages/shared`   | Constants, IDs, roles                  |
 | `packages/ui`       | Dashboard design system                |
 | `e2e`               | End-to-end tests                       |
-| `docs/adr`          | Architecture decisions                 |
+| `docs`              | Configuration reference, ADRs          |
+| `infra`             | Release signing                        |
 
 [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) ·
 [Code of conduct](CODE_OF_CONDUCT.md)
