@@ -222,9 +222,9 @@ describe("service settings", () => {
     expect(db.deploy.services.find((s) => s.id === SEED.web)?.deleted).toBe(true);
     const canvas = await screen.findByRole("group", { name: /Project canvas/ });
     await waitFor(() =>
-      expect(within(canvas).getByRole("button", { name: /^api,/ })).toBeInTheDocument(),
+      expect(within(canvas).getByRole("button", { name: /^api / })).toBeInTheDocument(),
     );
-    expect(within(canvas).queryByRole("button", { name: /^web,/ })).toBeNull();
+    expect(within(canvas).queryByRole("button", { name: /^web / })).toBeNull();
   });
 
   it("is read-only for viewers", async () => {

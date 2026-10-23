@@ -9,7 +9,7 @@ const STAGED_SECRET = "canvas-only-secret-Pq8Lm3Zx";
 async function openCanvas(path = PROJECT_PATH) {
   const app = renderApp(path);
   const canvas = await screen.findByRole("group", { name: /Project canvas/ });
-  await within(canvas).findByRole("button", { name: /^api,/ });
+  await within(canvas).findByRole("button", { name: /^api / });
   return { ...app, canvas };
 }
 
@@ -22,8 +22,8 @@ function latestApiConfig() {
 describe("project canvas", () => {
   it("draws every service as a labelled, focusable node with its status in words", async () => {
     const { canvas } = await openCanvas();
-    const web = within(canvas).getByRole("button", { name: /^web, app service/ });
-    await waitFor(() => expect(web).toHaveAccessibleName("web, app service, Active"));
+    const web = within(canvas).getByRole("button", { name: /^web / });
+    await waitFor(() => expect(web).toHaveAccessibleName("web web Active, app service"));
     expect(within(canvas).getAllByRole("button").length).toBeGreaterThanOrEqual(3);
     expect(screen.getByRole("list", { name: "Edge legend" })).toHaveTextContent("private network");
   });
@@ -31,7 +31,7 @@ describe("project canvas", () => {
   it("stages a config edit from the panel, reviews it and applies it with a deploy", async () => {
     const { canvas, user } = await openCanvas();
     const before = latestApiConfig().version;
-    await user.click(within(canvas).getByRole("button", { name: /^api,/ }));
+    await user.click(within(canvas).getByRole("button", { name: /^api / }));
     const panel = await screen.findByRole("complementary", { name: "api" });
     const replicas = await within(panel).findByLabelText("Replicas");
     await waitFor(() => expect(replicas).toHaveValue("2"));
@@ -64,7 +64,7 @@ describe("project canvas", () => {
 
   it("stages a secret only with confirmation and never shows its value", async () => {
     const { canvas, user } = await openCanvas();
-    await user.click(within(canvas).getByRole("button", { name: /^api,/ }));
+    await user.click(within(canvas).getByRole("button", { name: /^api / }));
     const panel = await screen.findByRole("complementary", { name: "api" });
     await user.type(within(panel).getByLabelText("Name"), "PAYMENTS_KEY");
     await user.type(within(panel).getByLabelText("Value"), STAGED_SECRET);
@@ -85,7 +85,7 @@ describe("project canvas", () => {
   it("moves a node with the arrow keys and saves the layout", async () => {
     const { canvas, user } = await openCanvas();
     within(canvas)
-      .getByRole("button", { name: /^worker,/ })
+      .getByRole("button", { name: /^worker / })
       .focus();
     await user.keyboard("{ArrowRight}{ArrowRight}");
     await waitFor(() => expect(db.changes.layouts[SEED.project]?.version).toBe(1), {
@@ -97,7 +97,7 @@ describe("project canvas", () => {
 
   it("refuses to apply a conflicted change until it is resolved", async () => {
     const { canvas, user } = await openCanvas();
-    await user.click(within(canvas).getByRole("button", { name: /^api,/ }));
+    await user.click(within(canvas).getByRole("button", { name: /^api / }));
     const panel = await screen.findByRole("complementary", { name: "api" });
     const replicas = await within(panel).findByLabelText("Replicas");
     await waitFor(() => expect(replicas).toHaveValue("2"));
@@ -128,13 +128,13 @@ describe("project canvas", () => {
 
   it("discards the draft after confirmation", async () => {
     const { canvas, user } = await openCanvas();
-    await user.click(within(canvas).getByRole("button", { name: /^web,/ }));
+    await user.click(within(canvas).getByRole("button", { name: /^web / }));
     const panel = await screen.findByRole("complementary", { name: "web" });
     await user.click(within(panel).getByRole("button", { name: "Stage deletion" }));
     const bar = await screen.findByRole("region", { name: "Staged changes" });
     await waitFor(() =>
       expect(
-        within(canvas).getByRole("button", { name: /^web,.*staged for deletion/ }),
+        within(canvas).getByRole("button", { name: /^web .*, staged for deletion$/ }),
       ).toBeInTheDocument(),
     );
     await user.click(within(bar).getByRole("button", { name: "Discard" }));
@@ -208,7 +208,7 @@ describe("project canvas", () => {
   it("lets viewers look but not edit", async () => {
     signInAs(USERS.viewer.id);
     const { canvas, user } = await openCanvas();
-    await user.click(within(canvas).getByRole("button", { name: /^api,/ }));
+    await user.click(within(canvas).getByRole("button", { name: /^api / }));
     const panel = await screen.findByRole("complementary", { name: "api" });
     expect(await within(panel).findByLabelText("Replicas")).toBeDisabled();
     expect(within(panel).queryByRole("button", { name: "Stage deletion" })).not.toBeInTheDocument();

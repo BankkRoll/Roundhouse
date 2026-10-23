@@ -45,8 +45,31 @@ const KIND_ICONS = { app: BoxIcon, database: DatabaseIcon, cron: TimerIcon } as 
 /** Pixels a pointer must travel before a press on a node becomes a drag. */
 const DRAG_THRESHOLD = 4;
 
+/** The badge shown on a node with staged operations, or null. */
+function nodeBadge(node: CanvasNode): string | null {
+  if (node.staged_ops <= 0) return null;
+  return node.staged === "create" ? "new" : String(node.staged_ops);
+}
+
+/** The status words in a node's bottom row. */
+function nodeStatusText(node: CanvasNode, view: ServiceView | undefined): string {
+  if (node.staged === "create") return "staged";
+  return view?.latest ? statusMeta(view.latest.status, "deployment").label : "not deployed";
+}
+
+/**
+ * A node's accessible name: its visible text in reading order, then what only sighted
+ * users can infer (the kind and the staged changes the badge counts).
+ *
+ * NOTE: The visible text leads, contiguous and unaltered, so speech-input users can
+ * activate a node by saying what they see (WCAG 2.5.3, Label in Name). The node's
+ * markup keeps a space between those parts: flex layout ignores it, but without it
+ * the text reads as one word ("webwebActive") to tools that check the match.
+ */
 function nodeLabel(node: CanvasNode, view: ServiceView | undefined): string {
-  const status = view?.latest ? statusMeta(view.latest.status, "deployment").label : "not deployed";
+  const visible = [node.name, nodeBadge(node), node.slug, nodeStatusText(node, view)]
+    .filter(Boolean)
+    .join(" ");
   const staged =
     node.staged === "create"
       ? "staged for creation"
@@ -55,9 +78,7 @@ function nodeLabel(node: CanvasNode, view: ServiceView | undefined): string {
         : node.staged_ops
           ? `${node.staged_ops} staged change${node.staged_ops === 1 ? "" : "s"}`
           : null;
-  return [node.name, `${node.kind} service`, node.staged === "create" ? null : status, staged]
-    .filter(Boolean)
-    .join(", ");
+  return [visible, `${node.kind} service`, staged].filter(Boolean).join(", ");
 }
 
 interface NodeProps {
@@ -83,6 +104,8 @@ const ServiceNode = memo(function ServiceNode({
 }: NodeProps) {
   const Icon = KIND_ICONS[node.kind] ?? BoxIcon;
   const status = view?.latest?.status;
+  const badge = nodeBadge(node);
+  const statusText = nodeStatusText(node, view);
   return (
     <button
       type="button"
@@ -115,30 +138,30 @@ const ServiceNode = memo(function ServiceNode({
           )}
         >
           {node.name}
-        </span>
-        {node.staged_ops > 0 ? (
+        </span>{" "}
+        {badge ? (
           <span
             aria-hidden="true"
             className="ml-auto inline-flex h-4.5 min-w-4.5 items-center justify-center rounded-sm bg-accent-subtle px-1 font-mono text-[10px] text-accent-text"
           >
-            {node.staged === "create" ? "new" : node.staged_ops}
+            {badge}
           </span>
         ) : null}
-      </span>
+      </span>{" "}
       <span
         className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground"
         aria-hidden="true"
       >
-        <span className="truncate font-mono">{node.slug}</span>
+        <span className="truncate font-mono">{node.slug}</span>{" "}
         {node.staged === "create" ? (
-          <span className="shrink-0 text-accent-text">staged</span>
+          <span className="shrink-0 text-accent-text">{statusText}</span>
         ) : status ? (
           <span className="flex shrink-0 items-center gap-1.5">
             <StatusDot status={status} kind="deployment" />
-            {statusMeta(status, "deployment").label}
+            {statusText}
           </span>
         ) : (
-          <span className="shrink-0">not deployed</span>
+          <span className="shrink-0">{statusText}</span>
         )}
       </span>
     </button>
