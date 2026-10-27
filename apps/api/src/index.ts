@@ -12,12 +12,15 @@
  *   (`AuditChain`), and the deploy and key rotation workflows
  *   (`DeployWorkflow`, `KeyRotationWorkflow`), and one-click server
  *   provisioning (`ProvisionWorkflow`), and backups and restores
- *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), exported for their bindings
+ *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), and certificate orders
+ *   (`CertificateWorkflow`, ADR 0009), exported for their bindings
+ * - The public ACME HTTP-01 responder (`routes/acme.ts`) and the Domains &
+ *   TLS settings (`routes/tls.ts`)
  * - `Cache-Control: no-store` on every API and auth response, and the
  *   two-factor gate in front of `/v1/*` mutations (ADR 0014)
  * - Service, project and node metrics (`routes/metrics.ts`, ADR 0008)
  * - The minute tick (Cron Trigger): audit-chain sealing (`durable/audit-chain.ts`),
- *   custom-domain checks, volume deletions and the other scheduled claimers,
+ *   custom-domain checks, certificate orders, volume deletions and the other scheduled claimers,
  *   see `lib/dispatch.ts`
  * - The hourly retention job (Cron Trigger), see `lib/retention.ts`, and the
  *   cloud provider reconcile, see `lib/provisioning.ts`
@@ -42,6 +45,7 @@ import { oauthConsentRoutes } from "./mcp/oauth/consent";
 import { oauthRoutes } from "./mcp/oauth/routes";
 import { mcpRoutes } from "./mcp/route";
 import { accessRoutes } from "./routes/access";
+import { acmeRoutes } from "./routes/acme";
 import { agentRoutes } from "./routes/agent";
 import { auditRoutes } from "./routes/audit";
 import { authSecurityRoutes } from "./routes/auth-security";
@@ -65,6 +69,7 @@ import { serviceRoutes } from "./routes/services";
 import { setupRoutes } from "./routes/setup";
 import { signingKeyRoutes } from "./routes/signing-keys";
 import { templateRoutes } from "./routes/templates";
+import { tlsRoutes } from "./routes/tls";
 import { tokenRoutes } from "./routes/tokens";
 import { variableRoutes } from "./routes/variables";
 import { workspaceRoutes } from "./routes/workspaces";
@@ -74,6 +79,7 @@ export { AuditChain } from "./durable/audit-chain";
 export { NodeConnection } from "./durable/node-connection";
 export { ProjectRoom } from "./durable/project-room";
 export { BackupWorkflow } from "./workflows/backup";
+export { CertificateWorkflow } from "./workflows/certificate";
 export { DeployWorkflow } from "./workflows/deploy";
 export { KeyRotationWorkflow } from "./workflows/key-rotation";
 export { ProvisionWorkflow } from "./workflows/provision";
@@ -121,9 +127,11 @@ app
   .route("/", changeRoutes)
   .route("/", databaseRoutes)
   .route("/", domainRoutes)
+  .route("/", acmeRoutes)
   .route("/", variableRoutes)
   .route("/", deploymentRoutes)
   .route("/", instanceRoutes)
+  .route("/", tlsRoutes)
   .route("/", githubRoutes)
   .route("/", tokenRoutes)
   .route("/", realtimeRoutes)

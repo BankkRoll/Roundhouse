@@ -12,6 +12,8 @@
  *   row; and backups and restores stuck far past their timeout, failed and
  *   their uploads aborted. See `./backups/schedule.ts`.
  * - Sign-in failure counters past their window and no longer locked.
+ * - ACME challenges past their expiry, left by an issuance attempt that
+ *   died before its cleanup step (ADR 0009).
  *
  * Every deletion runs in bounded batches with a per-run cap, so one run
  * stays well inside a Worker's limits however much has piled up; whatever is
@@ -20,6 +22,7 @@
  * @module
  */
 import {
+  acmeChallenges,
   consumedNonces,
   createDb,
   type Db,
@@ -102,6 +105,7 @@ export interface RetentionReport {
   stuckBackups: number;
   loginAttempts: number;
   githubClaims: number;
+  acmeChallenges: number;
 }
 
 function chunks<T>(items: readonly T[], size: number): T[][] {
@@ -243,6 +247,11 @@ export async function runRetention(
       githubClaimStates,
       githubClaimStates.id,
       lt(githubClaimStates.expiresAt, at(0)),
+    ),
+    acmeChallenges: await prune(
+      acmeChallenges,
+      acmeChallenges.token,
+      lt(acmeChallenges.expiresAt, at(0)),
     ),
   };
 }

@@ -22,13 +22,13 @@ import {
   CapabilitiesSchema,
   HOSTNAME_RE,
   IMAGE_REFERENCE_RE,
+  INGRESS_TLS_MODES,
+  type IngressTlsMode,
   isSafeGitRef,
   isSafeRelativePath,
   LABEL_KEY_RE,
   LOG_STREAMS,
   MAX_HOSTNAME_LENGTH,
-  TLS_MODES as PROTOCOL_TLS_MODES,
-  type TlsMode as ProtocolTlsMode,
   WORKLOAD_STATES,
 } from "@roundhouse/protocol";
 import {
@@ -54,6 +54,7 @@ import {
   HEALTHCHECK_TYPES,
   type HealthcheckConfig,
   MAX_API_TOKEN_TTL_DAYS,
+  MAX_HSTS_MAX_AGE_S,
   MAX_LOG_RETENTION_DAYS,
   type NetworkingConfig,
   NODE_STATUSES,
@@ -670,6 +671,63 @@ export const DnsRecordSchema = z
   })
   .openapi("DnsRecord");
 
+/** A custom domain's HSTS policy (ADR 0009); see `hstsProblems` in `@roundhouse/shared`. */
+export const DomainHstsSchema = z
+  .object({
+    enabled: z.boolean(),
+    /** Seconds. */
+    max_age: z.number().int().min(0).max(MAX_HSTS_MAX_AGE_S),
+    include_subdomains: z.boolean(),
+    /** Needs `include_subdomains`, a max-age of a year or more, and an apex hostname. */
+    preload: z.boolean(),
+  })
+  .openapi("DomainHsts");
+
+/** One ingress node's certificate state for a domain. */
+export const DomainTlsNodeSchema = z
+  .object({
+    node_id: z.string(),
+    name: z.string(),
+    /**
+     * `acme` mode: what the node's Caddy reported. `managed` mode:
+     * `issued` once the node confirmed loading the current certificate.
+     */
+    state: z.enum(["pending", "issued", "failed"]),
+    error: z.string().nullable(),
+  })
+  .openapi("DomainTlsNode");
+
+/** The certificate serving a domain, as reported by the nodes or issued by the control plane. */
+export const DomainTlsSchema = z
+  .object({
+    status: z.enum(DOMAIN_TLS_STATUSES),
+    /** E.g. Let's Encrypt's intermediate's name; `null` until issued. */
+    issuer: z.string().nullable(),
+    not_before: Millis.nullable(),
+    /** Expiry of the certificate in use; renewal starts well before it. */
+    not_after: Millis.nullable(),
+    /** Why issuance or loading failed, in words safe to show. */
+    error: z.string().nullable(),
+    updated_at: Millis.nullable(),
+    /** Per serving node. Empty in `internal` and `off` modes. */
+    nodes: z.array(DomainTlsNodeSchema),
+  })
+  .openapi("DomainTls");
+
+/** A server a domain's DNS may point at. */
+export const DomainRoutingNodeSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    public_ip: z.string().nullable(),
+    /**
+     * Whether it runs a replica of the service. Until nodes route to each
+     * other's replicas (ADR 0005 mesh), only these answer for the domain.
+     */
+    serves: z.boolean(),
+  })
+  .openapi("DomainRoutingNode");
+
 /** A hostname routed to a service. */
 export const DomainSchema = z
   .object({
@@ -692,6 +750,16 @@ export const DomainSchema = z
     records: z.array(DnsRecordSchema),
     /** Why the last check didn't pass, or a warning about records changed since. */
     error: z.string().nullable(),
+    /** `*.example.com`; refused until `managed` TLS can issue wildcards (ADR 0009). */
+    wildcard: z.boolean(),
+    /** The policy in effect: a custom domain's own, else the default. Sent only over HTTPS. */
+    hsts: DomainHstsSchema,
+    tls: DomainTlsSchema,
+    /**
+     * Ingress servers in the service's workspace. When some don't serve the
+     * service, `records` asks for A/AAAA records of the ones that do.
+     */
+    routing_nodes: z.array(DomainRoutingNodeSchema),
     last_checked_at: Millis.nullable(),
     /** `null` when no check is scheduled (failed domains wait for a manual check). */
     next_check_at: Millis.nullable(),
@@ -705,15 +773,16 @@ export const DomainSchema = z
 // -----------------------------------------------------------------------------
 
 /**
- * Ingress TLS mode. `@roundhouse/shared` and `@roundhouse/protocol` both define
- * the values; the two `satisfies` checks fail the build if they drift apart.
+ * Ingress TLS mode. `@roundhouse/shared` and `@roundhouse/protocol` (as
+ * `INGRESS_TLS_MODES`) both define the values; the two `satisfies` checks
+ * fail the build if they drift apart.
  */
 export const TlsModeSchema = z
-  .enum(TLS_MODES satisfies readonly ProtocolTlsMode[])
+  .enum(TLS_MODES satisfies readonly IngressTlsMode[])
   .openapi("TlsMode") satisfies z.ZodType<TlsMode>;
 
 // Checks the other direction: every protocol mode is a shared one.
-PROTOCOL_TLS_MODES satisfies readonly TlsMode[];
+INGRESS_TLS_MODES satisfies readonly TlsMode[];
 
 /** Install-wide settings an owner can change. */
 export const InstanceSettingsSchema = z
@@ -728,6 +797,8 @@ export const InstanceSettingsSchema = z
      * new installs; while off, `/mcp` answers 404 before authenticating.
      */
     mcp_enabled: z.boolean(),
+    /** Servers that run ingress, across workspaces; `acme` mode is for one. */
+    ingress_nodes: z.number().int(),
   })
   .openapi("InstanceSettings");
 

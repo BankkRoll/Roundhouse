@@ -12,8 +12,10 @@
  *
  * @module
  */
+import { createDb } from "@roundhouse/db";
 import type { Env } from "../env";
 import { claimDueBackups } from "./backups/schedule";
+import { claimDueCertificates, syncCertificates } from "./certificates/schedule";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
 import { claimVolumeDeletions } from "./volumes";
 
@@ -45,6 +47,15 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
   {
     name: "domain_checks",
     run: async (env, now) => (await runDomainChecks(env, now)).checked,
+  },
+  {
+    // After the domain checks, so a domain verified this tick gets its order now.
+    name: "certificates",
+    run: async (env, now) => {
+      const db = createDb(env.DB);
+      await syncCertificates(db, now);
+      return claimDueCertificates(env, db, now);
+    },
   },
   { name: "volume_deletions", run: claimVolumeDeletions },
   { name: "backup_policies", run: claimDueBackups },

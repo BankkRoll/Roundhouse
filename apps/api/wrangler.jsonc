@@ -57,7 +57,16 @@
       "class_name": "ProvisionWorkflow"
     },
     { "name": "roundhouse-backup", "binding": "BACKUP_WORKFLOW", "class_name": "BackupWorkflow" },
-    { "name": "roundhouse-restore", "binding": "RESTORE_WORKFLOW", "class_name": "RestoreWorkflow" }
+    {
+      "name": "roundhouse-restore",
+      "binding": "RESTORE_WORKFLOW",
+      "class_name": "RestoreWorkflow"
+    },
+    {
+      "name": "roundhouse-certificate",
+      "binding": "CERT_WORKFLOW",
+      "class_name": "CertificateWorkflow"
+    }
   ],
   // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
   // a small number like the docs' "1001" can collide with another project's
@@ -80,6 +89,13 @@
       "name": "MCP_LIMITER",
       "namespace_id": "730214593",
       "simple": { "limit": 60, "period": 60 }
+    },
+    {
+      // The public ACME HTTP-01 responder (ADR 0009), keyed by client IP:
+      // the ingress nodes proxying a CA's validation requests.
+      "name": "ACME_LIMITER",
+      "namespace_id": "730214594",
+      "simple": { "limit": 60, "period": 60 }
     }
   ],
   // Container and node metrics (ADR 0008). Reading them back needs the
@@ -89,7 +105,8 @@
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "roundhouse_metrics" }],
   // Hourly retention: expired log chunks (R2 and D1), GitHub delivery IDs,
   // join tokens, sessions, invites, verifications. See src/lib/retention.ts.
-  // Every minute: custom-domain DNS checks that are due (src/lib/domains/check.ts).
+  // Every minute: custom-domain DNS checks that are due (src/lib/domains/check.ts),
+  // and certificate orders and renewals in the managed TLS mode (src/lib/certificates).
   "triggers": { "crons": ["17 * * * *", "* * * * *"] },
   "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": true }],
   "observability": { "enabled": true }

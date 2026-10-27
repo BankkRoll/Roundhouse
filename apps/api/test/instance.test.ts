@@ -15,7 +15,13 @@ describe("instance settings", () => {
     const res = await owner.json("/v1/instance/settings");
     expect(res).toEqual({
       status: 200,
-      body: { apps_domain: null, tls_mode: "acme", log_retention_days: 7, mcp_enabled: false },
+      body: {
+        apps_domain: null,
+        tls_mode: "acme",
+        log_retention_days: 7,
+        mcp_enabled: false,
+        ingress_nodes: 0,
+      },
     });
   });
 
@@ -65,6 +71,7 @@ describe("instance settings", () => {
       tls_mode: "internal",
       log_retention_days: 7,
       mcp_enabled: false,
+      ingress_nodes: 2,
     });
     for (const agent of [a, b]) {
       await eventually(async () => {
@@ -91,6 +98,7 @@ describe("instance settings", () => {
       tls_mode: "internal",
       log_retention_days: 7,
       mcp_enabled: false,
+      ingress_nodes: 2,
     });
   });
 });

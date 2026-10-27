@@ -57,6 +57,18 @@ export const SettingKey = {
    * See `lib/backups/storage.ts`.
    */
   backupStorage: "backup_storage",
+  /**
+   * The CA the `managed` TLS mode orders from and the contact address
+   * (ADR 0009). See `lib/certificates/settings.ts`.
+   */
+  acme: "acme",
+  /** The control plane's ACME account: its URL and private key, sealed. */
+  acmeAccount: "acme_account",
+  /**
+   * Zone and API token (sealed) for DNS-01 in the apps domain's zone, so the
+   * apps wildcard and delegated custom wildcards can be issued.
+   */
+  cloudflareDns: "cloudflare_dns",
 } as const;
 
 /**

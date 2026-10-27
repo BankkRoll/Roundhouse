@@ -4,7 +4,7 @@
  * collide with a live route; request schemas enforce their cross-field rules.
  */
 import { OpenAPIHono, type RouteConfig } from "@hono/zod-openapi";
-import { TLS_MODES as PROTOCOL_TLS_MODES } from "@roundhouse/protocol";
+import { INGRESS_TLS_MODES } from "@roundhouse/protocol";
 import { ACTIONS, AUDIT_ACTIONS, TLS_MODES } from "@roundhouse/shared";
 import { describe, expect, it } from "vitest";
 import {
@@ -255,7 +255,7 @@ describe("phase 1 request schemas", () => {
   });
 
   it("keeps the shared and protocol TLS modes identical", () => {
-    expect([...TLS_MODES]).toEqual([...PROTOCOL_TLS_MODES]);
+    expect([...TLS_MODES].sort()).toEqual([...INGRESS_TLS_MODES].sort());
   });
 
   it("parses realtime messages in both directions", () => {

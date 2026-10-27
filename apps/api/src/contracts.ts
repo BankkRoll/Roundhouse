@@ -93,6 +93,7 @@ export * from "./contracts/params";
 export * from "./contracts/policy";
 export * from "./contracts/providers";
 export * from "./contracts/templates";
+export * from "./contracts/tls";
 export * from "./contracts/variables";
 
 // -----------------------------------------------------------------------------
@@ -589,7 +590,7 @@ export const updateInstanceSettings = defineRoute(
     summary: "Update instance settings",
     security: sessionOnlyAuth,
     request: body(InstanceSettingsPatchSchema),
-    responses: { 200: json(InstanceSettingsSchema), ...errors(400, 401, 403) },
+    responses: { 200: json(InstanceSettingsSchema), ...errors(400, 401, 403, 409, 422) },
   },
 );
 

@@ -9,7 +9,8 @@
     "deploy": "pnpm --filter @roundhouse/web build && wrangler deploy && wrangler d1 migrations apply DB --remote",
     "db:migrate:local": "node scripts/ensure-assets-dir.mjs && wrangler d1 migrations apply DB --local",
     "typecheck": "tsc -p .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:pebble": "vitest run -c vitest.node.config.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",
