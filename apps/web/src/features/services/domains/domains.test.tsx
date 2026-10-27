@@ -63,6 +63,35 @@ describe("domains", () => {
     );
   });
 
+  it("shows where a pending domain stands in its row, DNS → Ownership → Certificate → Active", async () => {
+    const { user } = await openDomains();
+    await user.click(screen.getByRole("button", { name: "Add domain" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a custom domain" });
+    await user.type(within(dialog).getByLabelText("Hostname"), "steps.example.com");
+    await user.click(within(dialog).getByRole("button", { name: "Add domain" }));
+    const records = await screen.findByRole("dialog", { name: "Create these DNS records" });
+    await user.click(within(records).getByRole("button", { name: "Done" }));
+
+    const list = screen.getByRole("list", { name: "Domain list" });
+    const row = within(list).getByRole("listitem", { name: "steps.example.com" });
+    const stepper = within(row).getByRole("list", { name: "Progress of steps.example.com" });
+    const steps = within(stepper).getAllByRole("listitem");
+    expect(steps.map((s) => s.textContent)).toEqual([
+      "DNS (in progress)",
+      "Ownership (not started)",
+      "Certificate (not started)",
+      "Active (not started)",
+    ]);
+    expect(steps[0]).toHaveAttribute("aria-current", "step");
+    expect(row).toHaveTextContent(/DNS: CNAME steps.example.com/);
+
+    await user.click(within(row).getByRole("button", { name: "Check now" }));
+    await waitFor(() =>
+      expect(within(row).getAllByRole("listitem")[1]).toHaveAttribute("aria-current", "step"),
+    );
+    expect(row).toHaveTextContent(/Ownership: TXT _roundhouse.steps.example.com/);
+  });
+
   it("validates the hostname before sending it and shows the API's refusals", async () => {
     const { user } = await openDomains();
     await user.click(screen.getByRole("button", { name: "Add domain" }));

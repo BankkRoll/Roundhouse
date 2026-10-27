@@ -59,6 +59,7 @@ import {
   HstsPanel,
   RoutingGuidance,
 } from "./domain-details";
+import { DomainStepper } from "./domain-steps";
 
 type Tone = "success" | "warning" | "danger" | "neutral" | "info";
 
@@ -290,7 +291,9 @@ function DomainRow({
           {domain.error}
         </p>
       ) : null}
-      {domain.tls.status === "failed" && domain.tls.error ? (
+      {custom && domain.status !== "active" ? <DomainStepper domain={domain} /> : null}
+      {/* A custom domain's stepper shows the certificate error at its Certificate step. */}
+      {!custom && domain.tls.status === "failed" && domain.tls.error ? (
         <p className="text-sm text-danger">{domain.tls.error}</p>
       ) : null}
       {showRecords ? (
@@ -305,6 +308,7 @@ function DomainRow({
           aria-label={`Details of ${domain.hostname}`}
           className="grid gap-5 border-l-2 border-border/70 pl-4 md:ml-7"
         >
+          {custom && domain.status === "active" ? <DomainStepper domain={domain} /> : null}
           <CertificateDetails domain={domain} />
           {showRecords ? null : <RoutingGuidance domain={domain} />}
           <HstsPanel domain={domain} canManage={canManage && custom} />
