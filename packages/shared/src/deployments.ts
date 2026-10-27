@@ -127,6 +127,10 @@ export const DEPLOYMENT_EVENT_TYPES = [
   "rollout_finished",
   "pre_deploy_started",
   "pre_deploy_finished",
+  "image_pushed",
+  "cf_rollout_started",
+  "cf_rollout_finished",
+  "routes_switched",
   "error",
 ] as const;
 

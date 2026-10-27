@@ -17,6 +17,7 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDotIcon,
+  CloudIcon,
   FileSearchIcon,
   HammerIcon,
   type LucideIcon,
@@ -56,6 +57,10 @@ const EVENT_ICONS: Record<DeploymentEvent["type"], { icon: LucideIcon; tone: str
   rollout_finished: { icon: CircleCheckIcon, tone: "text-success" },
   pre_deploy_started: { icon: TerminalIcon, tone: "text-info" },
   pre_deploy_finished: { icon: TerminalIcon, tone: "text-success" },
+  image_pushed: { icon: HammerIcon, tone: "text-success" },
+  cf_rollout_started: { icon: CloudIcon, tone: "text-info" },
+  cf_rollout_finished: { icon: CloudIcon, tone: "text-success" },
+  routes_switched: { icon: RouteIcon, tone: "text-accent-text" },
   error: { icon: CircleAlertIcon, tone: "text-danger" },
 };
 

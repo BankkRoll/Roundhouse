@@ -143,6 +143,10 @@ const VERBS: Record<AuditAction, string> = {
   "cron.run_cancelled": "cancelled a cron run",
   "cron.paused": "paused a cron job",
   "cron.resumed": "resumed a cron job",
+  "shell.opened": "opened a shell",
+  "shell.closed": "closed a shell",
+  "shell.terminated": "terminated a shell session",
+  "service.provider_changed": "moved a service to another runtime",
 };
 
 /**

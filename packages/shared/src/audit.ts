@@ -133,6 +133,10 @@ export const AUDIT_ACTIONS = [
   "cron.run_cancelled",
   "cron.paused",
   "cron.resumed",
+  "shell.opened",
+  "shell.closed",
+  "shell.terminated",
+  "service.provider_changed",
 ] as const;
 
 /** An audited action name. */
