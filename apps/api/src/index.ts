@@ -58,6 +58,7 @@ import { dataBrowserRoutes } from "./routes/data-browser";
 import { databaseRoutes } from "./routes/databases";
 import { deploymentRoutes } from "./routes/deployments";
 import { domainRoutes } from "./routes/domains";
+import { environmentRoutes } from "./routes/environments";
 import { githubRoutes } from "./routes/github";
 import { instanceRoutes } from "./routes/instance";
 import { instanceAdminRoutes } from "./routes/instance-admin";
@@ -128,6 +129,7 @@ app
   .route("/", auditRoutes)
   .route("/", agentRoutes)
   .route("/", projectRoutes)
+  .route("/", environmentRoutes)
   .route("/", serviceRoutes)
   .route("/", metricsRoutes)
   .route("/", dataBrowserRoutes)

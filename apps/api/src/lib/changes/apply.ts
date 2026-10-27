@@ -99,6 +99,7 @@ import {
   domainPort,
   removeCustomDomain,
 } from "../domains/manage";
+import { promotionSource } from "../environments";
 import { ApiError, conflict, type ErrorDetail, isUniqueViolation } from "../errors";
 import { assertSourceInstallation } from "../github";
 import {
@@ -337,6 +338,13 @@ export async function checkDrift(
         if (!domain) found = deleted(null);
         break;
       }
+      case "deployment.promote": {
+        const source = await db.query.deployments.findFirst({
+          where: eq(deployments.id, op.from_deployment_id),
+        });
+        if (source?.status !== "active" || source.image !== op.image) found = deleted(null);
+        break;
+      }
     }
     if (found) drift.conflicts.set(row.id, found);
     else if (row.status === "conflicted") drift.cleared.push(row.id);
@@ -347,6 +355,8 @@ export async function checkDrift(
 // -----------------------------------------------------------------------------
 // The post-apply model
 // -----------------------------------------------------------------------------
+
+type DeploymentRow = typeof deployments.$inferSelect;
 
 interface PlannedCreate {
   row: StagedRow;
@@ -410,6 +420,8 @@ interface Plan {
   vars: PlannedVariable[];
   volumes: PlannedVolume[];
   domains: PlannedDomain[];
+  /** `deployment.promote` ops: the image each deploys, from its source deployment. */
+  promotions: { row: StagedRow; serviceId: string; source: DeploymentRow }[];
   /** Nodes holding a volume the apply changed, whose desired state must be refreshed. */
   nodeIds: Set<string>;
   /** Final slug of every service that exists after the apply, by ID. */
@@ -507,6 +519,7 @@ async function buildPlan(
     vars: [],
     volumes: [],
     domains: [],
+    promotions: [],
     nodeIds: new Set(),
     slugOf: new Map(live.map((s) => [s.id, s.slug])),
     affected: [],
@@ -720,6 +733,28 @@ async function buildPlan(
   if (refusals.length) {
     const first = refusals[0]!;
     throw new ApiError(400, first.code as never, `${first.field}: ${first.message}`, refusals);
+  }
+
+  // Promotions run another environment's exact image (ADR 0007).
+  for (const row of pending) {
+    if (row.op.type !== "deployment.promote") continue;
+    const op = row.op;
+    if (deleted.has(op.service_id) || !byId.has(op.service_id)) {
+      if (options.strict) throw conflict("The service to promote no longer exists");
+      continue;
+    }
+    try {
+      const source = await promotionSource(db, {
+        projectId: project.id,
+        serviceId: op.service_id,
+        targetEnvironmentId: environment.id,
+        fromDeploymentId: op.from_deployment_id,
+      });
+      if (source.image !== op.image) throw conflict("The deployment to promote changed image");
+      plan.promotions.push({ row, serviceId: op.service_id, source });
+    } catch (err) {
+      if (options.strict || !(err instanceof ApiError)) throw err;
+    }
   }
 
   // Which services the set redeploys. A new volume is only mounted by a new deployment.
@@ -1355,6 +1390,9 @@ export async function applySet(
         await appliedRow(db, d.row);
       }
     }
+    for (const p of plan.promotions) {
+      await appliedRow(db, p.row, { from_deployment_id: p.source.id });
+    }
 
     const [done] = await db
       .update(changeSets)
@@ -1453,6 +1491,47 @@ async function finish(
 
   const deploymentIds: string[] = [];
   const skipped: ApplyResult["skipped"] = [];
+  const promoted = new Set<string>();
+  for (const p of plan.promotions) {
+    promoted.add(p.serviceId);
+    try {
+      const row = await createDeployment(lifecycle, {
+        projectId: project.id,
+        serviceId: p.serviceId,
+        environmentId: environment.id,
+        trigger: "promote",
+        triggeredBy: caller.user.id,
+        origin: originOf(c),
+        promoteOf: p.source,
+      });
+      await db.batch([
+        db.update(deployments).set({ changeSetId: set.id }).where(eq(deployments.id, row.id)),
+        auditInsert(db, {
+          workspaceId: project.workspaceId,
+          ...caller.actor,
+          action: "deployment.created",
+          targetType: "deployment",
+          targetId: row.id,
+          metadata: {
+            service_id: p.serviceId,
+            environment_id: environment.id,
+            trigger: "promote",
+            promoted_from: p.source.id,
+            image: p.source.image,
+            change_set_id: set.id,
+            ...options.auditMetadata,
+          },
+          ip: clientIp(c),
+        }),
+      ]);
+      deploymentIds.push(row.id);
+    } catch (err) {
+      skipped.push({
+        service_id: p.serviceId,
+        reason: err instanceof ApiError ? err.message : "Could not start the deploy pipeline",
+      });
+    }
+  }
   if (options.deploy === "affected") {
     const idOf = new Map([...plan.slugOf].map(([id, slug]) => [slug, id]));
     const kinds = new Map<string, string>([
@@ -1462,6 +1541,8 @@ async function finish(
     // Databases first, so the services that reference them start after them.
     const order = plan.affected
       .map((a) => idOf.get(a.slug)!)
+      // A promoted service already got its deployment, with the promoted image.
+      .filter((id) => !promoted.has(id))
       .sort((a, b) => Number(kinds.get(b) === "database") - Number(kinds.get(a) === "database"));
     for (const serviceId of order) {
       try {

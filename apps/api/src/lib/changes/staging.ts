@@ -23,6 +23,7 @@ import type { z } from "@hono/zod-openapi";
 import {
   changeSets,
   type Db,
+  deployments,
   domains,
   type StagedBase,
   type StagedConflict,
@@ -35,6 +36,7 @@ import {
   classifyVariable,
   stageOp as coalesce,
   configDiff,
+  type DeploymentPromoteOp,
   type DiffEntry,
   decideVariableTier,
   defaultServiceConfig,
@@ -58,6 +60,7 @@ import { auditInsert } from "../audit";
 import type { KeyEnv, Sealed } from "../crypto";
 import { databaseCreateOp } from "../databases";
 import { assertHostnameFree, assertServesTraffic, checkCustomHostname } from "../domains/manage";
+import { promotionSource } from "../environments";
 import { ApiError, type ErrorCode, notFound } from "../errors";
 import { mergeConfig, slugFor, specOf } from "../projects";
 import type { Caller } from "../scope";
@@ -84,6 +87,12 @@ import {
 
 /** An op as a validated staging request carries it. */
 export type StagedOpRequest = z.output<typeof StagedOpInputSchema>;
+
+/**
+ * What can be staged: a client's op, or a promotion the promote route
+ * builds (ADR 0007), which clients can't stage themselves.
+ */
+export type StageInput = StagedOpRequest | DeploymentPromoteOp;
 
 /** What staging needs to know about where and who. */
 export interface StagingContext {
@@ -338,12 +347,44 @@ async function prepare(
   ctx: StagingContext,
   entries: readonly StagedEntry[],
   rows: readonly StagedRow[],
-  input: StagedOpRequest,
+  input: StageInput,
 ): Promise<Prepared> {
   const { db, project, environment } = ctx;
   const rowOf = (key: string) => rows.find((r) => r.targetKey === key && r.status !== "applied");
 
   switch (input.type) {
+    case "deployment.promote": {
+      await liveService(db, project.id, input.service_id);
+      const source = await promotionSource(db, {
+        projectId: project.id,
+        serviceId: input.service_id,
+        targetEnvironmentId: environment.id,
+        fromDeploymentId: input.from_deployment_id,
+      });
+      const [current] = await db
+        .select({ image: deployments.image })
+        .from(deployments)
+        .where(
+          and(
+            eq(deployments.serviceId, input.service_id),
+            eq(deployments.environmentId, environment.id),
+            eq(deployments.status, "active"),
+          ),
+        )
+        .limit(1);
+      return {
+        op: {
+          type: "deployment.promote",
+          service_id: input.service_id,
+          from_deployment_id: source.id,
+          from_environment_id: source.environmentId,
+          image: source.image!,
+        },
+        base: {},
+        diff: [{ path: "/image", before: current?.image ?? null, after: source.image }],
+      };
+    }
+
     case "service.create": {
       const { type, ref, name, slug, kind, icon, source, config, database } = input;
       if (database) {
@@ -755,7 +796,7 @@ async function withRetry<T>(
 export async function stageIntoSet(
   ctx: StagingContext,
   set: ChangeSetRow,
-  input: StagedOpRequest,
+  input: StageInput,
   expectedRevision?: number,
 ): Promise<ChangeSetRow> {
   authorizeStaging(ctx.caller, input);

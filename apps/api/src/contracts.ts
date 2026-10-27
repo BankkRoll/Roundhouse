@@ -86,6 +86,7 @@ export * from "./contracts/cron";
 export * from "./contracts/data-browser";
 export * from "./contracts/databases";
 export * from "./contracts/domains";
+export * from "./contracts/environments";
 export * from "./contracts/instance";
 export * from "./contracts/keys";
 export * from "./contracts/metrics";
@@ -242,10 +243,29 @@ export const CreateEnvironmentBody = z
     pr_number: z.number().int().positive().optional(),
     source_branch: z.string().min(1).max(255).optional(),
     /**
-     * Copy the latest config of every service and every variable from this
-     * environment. Without it, services start from defaults with no variables.
+     * @deprecated Use `clone.from_environment_id`; kept as its alias for one
+     * release. Copies configs and every variable.
      */
     copy_from_environment_id: z.string().optional(),
+    /**
+     * Copy another environment (ADR 0007). Without it, services start from
+     * defaults with no variables (databases get fresh credentials either way).
+     */
+    clone: z
+      .object({
+        from_environment_id: z.string(),
+        /** Database credentials are never copied: each environment gets fresh ones. */
+        variables: z.enum(["all", "non_secret", "none"]).default("all"),
+        /** `latest_backup` restores each database from the source's latest dump. */
+        volumes: z.enum(["empty", "latest_backup"]).default("empty"),
+        /** Services to copy; every live service by default. */
+        services: z.array(z.string()).max(100).optional(),
+      })
+      .optional(),
+  })
+  .refine((b) => !(b.clone && b.copy_from_environment_id), {
+    message: "give clone or copy_from_environment_id, not both",
+    path: ["clone"],
   })
   .openapi("CreateEnvironment");
 
@@ -263,16 +283,22 @@ export const listEnvironments = defineRoute(session("projects:read"), {
   },
 });
 
-/** Creates an environment. Audited as a project update with `environment_id` in metadata. */
-export const createEnvironment = defineRoute(session("projects:manage", ["project.updated"]), {
-  method: "post",
-  path: "/v1/projects/{projectId}/environments",
-  tags: ["environments"],
-  summary: "Create an environment",
-  security: sessionAuth,
-  request: { params: ProjectParams, ...body(CreateEnvironmentBody) },
-  responses: { 201: json(EnvironmentSchema, "Created"), ...errors(400, 401, 403, 404, 409) },
-});
+/**
+ * Creates an environment, blank or cloned (ADR 0007). Never a production
+ * one: a project has exactly one, created with it.
+ */
+export const createEnvironment = defineRoute(
+  session("environments:manage", ["environment.created", "environment.cloned"]),
+  {
+    method: "post",
+    path: "/v1/projects/{projectId}/environments",
+    tags: ["environments"],
+    summary: "Create an environment",
+    security: sessionAuth,
+    request: { params: ProjectParams, ...body(CreateEnvironmentBody) },
+    responses: { 201: json(EnvironmentSchema, "Created"), ...errors(400, 401, 403, 404, 409) },
+  },
+);
 
 // -----------------------------------------------------------------------------
 // Services

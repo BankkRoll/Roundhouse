@@ -314,6 +314,12 @@ export interface CreateDeploymentInput {
   commit?: DeployParams["commit"];
   /** Rollbacks: the deployment whose image and config version to reuse. */
   rollbackOf?: DeploymentRow;
+  /**
+   * Promotions (ADR 0007): another environment's deployment whose image, by
+   * digest, runs here with this environment's latest config. Its build is
+   * linked for traceability, never rerun.
+   */
+  promoteOf?: DeploymentRow;
 }
 
 /**
@@ -372,7 +378,11 @@ export async function createDeployment(
       serviceId: input.serviceId,
       environmentId: input.environmentId,
       configVersion: config.version,
-      image: source?.image ?? (config.source.type === "image" ? config.source.image : null),
+      image:
+        input.promoteOf?.image ??
+        source?.image ??
+        (config.source.type === "image" ? config.source.image : null),
+      buildId: input.promoteOf?.buildId ?? null,
       status: "queued",
       trigger: input.trigger,
       triggeredBy: input.triggeredBy,

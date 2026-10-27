@@ -5,7 +5,7 @@
  *
  * Steps:
  * 1. `snapshot`: load the deployment and its exact config version; resolve
- *    the image (image source, rollback) or the commit to build (git).
+ *    the image (image source, rollback, promotion) or the commit to build (git).
  * 2. `resolve-variables`: resolve the service's variables, references and
  *    built-ins with `resolveServiceEnvironment` (the same resolver the
  *    variables API uses, so the two cannot disagree) and freeze them on the
@@ -652,6 +652,18 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       if (!d.image) return fail("The deployment rolled back to has no image");
       if (d.image.startsWith(`${REGISTRY_LISTEN}/`)) {
         plan.registryNodeId = await this.builderOf(db, d.rollbackOf);
+      }
+      return { kind: "ok", plan };
+    }
+    if (d.trigger === "promote") {
+      // ADR 0007: the promoted image runs as built, never rebuilt here.
+      if (!d.image) return fail("The promoted deployment has no image");
+      if (d.image.startsWith(`${REGISTRY_LISTEN}/`)) {
+        const build = d.buildId
+          ? await db.query.builds.findFirst({ where: eq(builds.id, d.buildId) })
+          : undefined;
+        if (!build?.nodeId) return fail("The promoted image's build is gone");
+        plan.registryNodeId = build.nodeId;
       }
       return { kind: "ok", plan };
     }
