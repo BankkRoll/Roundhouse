@@ -25,7 +25,7 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | Volumes                         | Persistent storage mounted into a service                      | Available                                                    |
 | Backups                         | Scheduled database backups to R2 in your account               | Available                                                    |
 | **Networking**                  |                                                                |                                                              |
-| Private networking              | WireGuard mesh; services reach each other at `.internal` names | Partial — single server today; cross-server mesh in progress |
+| Private networking              | WireGuard mesh; services reach each other at `.internal` names | Available                                                    |
 | Domains & HTTPS                 | A generated domain or your own, certificates by Caddy          | Available                                                    |
 | **Observability**               |                                                                |                                                              |
 | Logs                            | Build and runtime logs, streamed live                          | Available                                                    |
