@@ -97,6 +97,7 @@ export function toApiConfig(c: Row<typeof serviceConfigs>) {
     healthcheck: c.healthcheck ?? null,
     networking: c.networking,
     placement: c.placement,
+    cron: c.cron ?? null,
   };
 }
 

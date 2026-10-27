@@ -335,6 +335,7 @@ describe("tools/list", () => {
       "list_databases",
       "list_backups",
       "get_metrics",
+      "list_cron_runs",
       "list_templates",
       "deploy_template",
     ]);
@@ -791,6 +792,87 @@ describe("tool registry", () => {
         expect(t.scopes.some((s) => s.endsWith(":manage") || s.endsWith(":create"))).toBe(false);
       }
     }
+  });
+});
+
+describe("cron tools", () => {
+  it("lists a cron service's runs read-only, newest first, with paging and access checks", async () => {
+    const { owner, workspaceId } = await install();
+    const project = await createProject(owner, workspaceId);
+    const envId = project.environments[0]!.id;
+    const created = await owner.json<{ service: { id: string } }>(
+      `/v1/projects/${project.id}/services`,
+      {
+        method: "POST",
+        json: {
+          name: "nightly",
+          kind: "cron",
+          source: { type: "image", image: "busybox:1.37" },
+          config: { cron: { schedule: "@daily" } },
+        },
+      },
+    );
+    const serviceId = created.body.service.id;
+    for (const [id, status] of [
+      ["crn_01", "succeeded"],
+      ["crn_02", "failed"],
+      ["crn_03", "missed"],
+    ] as const) {
+      await env.DB.prepare(
+        `INSERT INTO cron_runs (id, service_id, environment_id, trigger, scheduled_for, attempt,
+           status, created_at, updated_at) VALUES (?1, ?2, ?3, 'schedule', ?5, 1, ?4, 1, 1)`,
+      )
+        .bind(id, serviceId, envId, status, Number(id.slice(-1)) * 60_000)
+        .run();
+    }
+    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.read));
+    const page = await tool<{
+      environment_id: string;
+      runs: { id: string; status: string }[];
+      next_cursor: string | null;
+    }>(client, "list_cron_runs", { service_id: serviceId, limit: 2 });
+    expect(page.isError).toBe(false);
+    expect(page.body.environment_id).toBe(envId);
+    expect(page.body.runs.map((r) => r.id)).toEqual(["crn_03", "crn_02"]);
+    const rest = await tool<{ runs: { id: string }[]; next_cursor: string | null }>(
+      client,
+      "list_cron_runs",
+      { service_id: serviceId, cursor: page.body.next_cursor },
+    );
+    expect(rest.body).toEqual({
+      environment_id: envId,
+      runs: [expect.objectContaining({ id: "crn_01" })],
+      next_cursor: null,
+    });
+    const failed = await tool<{ runs: { id: string }[] }>(client, "list_cron_runs", {
+      service_id: serviceId,
+      status: "failed",
+    });
+    expect(failed.body.runs.map((r) => r.id)).toEqual(["crn_02"]);
+    expect(MCP_TOOLS.find((t) => t.name === "list_cron_runs")!.annotations.readOnlyHint).toBe(true);
+
+    const elsewhere = await owner.json<{ id: string }>("/v1/workspaces", {
+      method: "POST",
+      json: { name: "Elsewhere" },
+    });
+    const foreign = await createProject(owner, elsewhere.body.id);
+    const foreignService = await owner.json<{ service: { id: string } }>(
+      `/v1/projects/${foreign.id}/services`,
+      {
+        method: "POST",
+        json: {
+          name: "other",
+          kind: "cron",
+          source: { type: "image", image: "busybox:1.37" },
+          config: { cron: { schedule: "@daily" } },
+        },
+      },
+    );
+    const hidden = await tool<{ error: { status: number } }>(client, "list_cron_runs", {
+      service_id: foreignService.body.service.id,
+    });
+    expect(hidden.body.error.status).toBe(404);
+    await client.close();
   });
 });
 

@@ -51,6 +51,10 @@ export type ErrorCode =
   | "volume_shrink_unsupported"
   | "node_offline"
   | "query_timeout"
+  | "invalid_schedule"
+  | "cron_schedule_required"
+  | "cron_has_no_endpoint"
+  | "run_in_progress"
   | "internal";
 
 /**

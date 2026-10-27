@@ -114,6 +114,9 @@ export const domainRoutes = createRouter()
     );
     const env = await environmentOf(c, project.id, body.environment_id);
     const db = c.get("db");
+    if (service.kind === "cron") {
+      throw new ApiError(422, "cron_has_no_endpoint", "A cron service serves no traffic");
+    }
 
     const hostname = normalizeHostname(body.hostname);
     if (!hostname) {
