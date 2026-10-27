@@ -19,6 +19,7 @@ import {
   createProject,
   createService,
   GIT_SERVICE,
+  IMAGE_SERVICE,
   stage,
   waitForStatus,
 } from "./pipeline-helpers";
@@ -331,6 +332,7 @@ describe("tools/list", () => {
       "stage_config_change",
       "list_changes",
       "apply_changes",
+      "list_domains",
       "list_nodes",
       "list_databases",
       "list_backups",
@@ -350,6 +352,7 @@ describe("tools/list", () => {
       "read_logs",
       "list_variables",
       "list_changes",
+      "list_domains",
     ]) {
       expect(byName.get(name)!.annotations?.readOnlyHint).toBe(true);
     }
@@ -862,6 +865,87 @@ describe("data tools", () => {
     });
     expect(res.body.error.status).toBe(404);
     expect(MCP_TOOLS.some((t) => /query|sql/.test(t.name))).toBe(false);
+    await client.close();
+  });
+});
+
+describe("list_domains", () => {
+  it("returns what REST lists, filtered by environment, read-only", async () => {
+    const { owner, workspaceId } = await install();
+    const ingress = await owner.json("/v1/instance/settings", {
+      method: "PATCH",
+      json: { apps_domain: "apps.example.com", tls_mode: "off" },
+    });
+    expect(ingress.status).toBe(200);
+    const project = await createProject(owner, workspaceId);
+    const svc = await createService(owner, project.id, {
+      ...IMAGE_SERVICE,
+      config: { networking: { generated_domain: true } },
+    });
+    const [production, other] = project.environments;
+    const rest = await owner.json<{ domains: { hostname: string }[] }>(
+      `/v1/services/${svc.service.id}/domains`,
+    );
+    expect(rest.body.domains.length).toBeGreaterThan(0);
+
+    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.read));
+    const all = await tool<{ domains: unknown[] }>(client, "list_domains", {
+      service_id: svc.service.id,
+    });
+    expect(all.isError).toBe(false);
+    expect(all.body).toEqual(rest.body);
+    expect(all.body.domains[0]).toEqual(
+      expect.objectContaining({
+        type: "generated",
+        hsts: expect.objectContaining({ enabled: true }),
+        tls: expect.objectContaining({ status: expect.any(String), nodes: expect.any(Array) }),
+        routing_nodes: expect.any(Array),
+      }),
+    );
+
+    const inProduction = await tool<{ domains: unknown[] }>(client, "list_domains", {
+      service_id: svc.service.id,
+      environment_id: production!.id,
+    });
+    expect(inProduction.body.domains).toEqual(all.body.domains);
+    if (other) {
+      const elsewhere = await tool<{ domains: unknown[] }>(client, "list_domains", {
+        service_id: svc.service.id,
+        environment_id: other.id,
+      });
+      expect(elsewhere.body.domains).toEqual([]);
+    }
+    const missing = await tool<{ error: { status: number } }>(client, "list_domains", {
+      service_id: svc.service.id,
+      environment_id: "env_missing",
+    });
+    expect(missing.body.error.status).toBe(404);
+    expect(MCP_TOOLS.filter((t) => t.name.includes("domain")).map((t) => t.name)).toEqual([
+      "list_domains",
+    ]);
+    await client.close();
+  });
+
+  it("checks the same scope and access as REST", async () => {
+    const { owner, workspaceId } = await install();
+    const project = await createProject(owner, workspaceId);
+    const svc = await createService(owner, project.id);
+    const res = await rpc(callBody("list_domains", { service_id: svc.service.id }), {
+      authorization: `Bearer ${await mint(owner, workspaceId, ["workspace:read"])}`,
+    });
+    expect(res.status).toBe(403);
+    expect(res.headers.get("www-authenticate")).toContain('scope="services:read"');
+
+    const other = await owner.json<{ id: string }>("/v1/workspaces", {
+      method: "POST",
+      json: { name: "Elsewhere" },
+    });
+    const foreign = await createService(owner, (await createProject(owner, other.body.id)).id);
+    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.read));
+    const out = await tool<{ error: { status: number } }>(client, "list_domains", {
+      service_id: foreign.service.id,
+    });
+    expect(out.body.error.status).toBe(404);
     await client.close();
   });
 });

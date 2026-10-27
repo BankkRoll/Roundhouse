@@ -9,9 +9,12 @@
  * changes stage into change sets instead of writing (ADR 0006), see
  * `./change-tools`.
  *
+ * Domains are listed read-only (`list_domains`); adding, changing (HSTS,
+ * preload consent) and removing them need a human.
+ *
  * Deliberately absent: reading secret values (there is no API for it),
- * deleting anything, the shell, database access, domains, node, token and
- * member management. Those need a human in the dashboard.
+ * deleting anything, the shell, database access, domain mutations, node,
+ * token and member management. Those need a human in the dashboard.
  *
  * @module
  */
@@ -53,6 +56,7 @@ import {
   getProjectSummary,
   getService,
   listDeployments as listDeploymentsRoute,
+  listDomains as listDomainsRoute,
   listProjectSummaries,
   listServiceVariables,
   listSharedVariables,
@@ -66,6 +70,7 @@ import {
   IllegalTransitionError,
   cancelDeployment as stopDeployment,
 } from "../lib/deployments";
+import { presentDomains, serviceDomains } from "../lib/domains/present";
 import { ApiError, conflict, notFound } from "../lib/errors";
 import { readLogPage } from "../lib/logs";
 import { toApiNode } from "../lib/nodes";
@@ -730,6 +735,34 @@ const resolveVariablesTool = defineTool({
 });
 
 // -----------------------------------------------------------------------------
+// Domains
+// -----------------------------------------------------------------------------
+
+const listDomainsTool = defineTool({
+  name: "list_domains",
+  title: "List domains",
+  description:
+    "Lists a service's domains (generated and custom) with their DNS records to create, " +
+    "verification and certificate state, HSTS policy and the servers DNS may point at. " +
+    "Read-only: adding, changing or removing domains needs a human in the dashboard or CLI.",
+  input: z.object({
+    service_id: Id("Service"),
+    environment_id: Id("Environment")
+      .optional()
+      .describe("Environment ID (from get_project). Omit for every environment."),
+  }),
+  scopes: [scopeOf(listDomainsRoute)],
+  annotations: READ,
+  async run({ c }, input) {
+    const { project } = await serviceScope(c, input.service_id, policyOf(listDomainsRoute).action!);
+    if (input.environment_id) await environmentOf(c, project.id, input.environment_id);
+    const db = c.get("db");
+    const rows = await serviceDomains(db, input.service_id, input.environment_id);
+    return { domains: await presentDomains(db, project.workspaceId, rows) };
+  },
+});
+
+// -----------------------------------------------------------------------------
 // Servers
 // -----------------------------------------------------------------------------
 
@@ -773,6 +806,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   listVariablesTool,
   resolveVariablesTool,
   ...CHANGE_TOOLS,
+  listDomainsTool,
   listNodesTool,
   ...DATA_TOOLS,
   listTemplatesTool,
