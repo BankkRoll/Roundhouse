@@ -809,8 +809,11 @@ func welcomeVersion(m *protocol.Welcome) int {
 
 func desiredStateVersion(m *protocol.DesiredState) int {
 	v := protocol.MinProtocolVersion
-	if m.Volumes != nil || m.Mesh != nil {
+	if m.Volumes != nil {
 		v = max(v, protocol.VolumesProtocolVersion)
+	}
+	if m.Mesh != nil || usesMeshFeatures(m.Workloads) {
+		v = max(v, protocol.MeshProtocolVersion)
 	}
 	if m.Ingress != nil || m.Certificates != nil || m.TLSMode == protocol.TLSManaged || usesCertsFeatures(m.Workloads) {
 		v = max(v, protocol.CertsProtocolVersion)
@@ -846,4 +849,16 @@ func (s *session) data(gate int, typ, msgID string, fn func(DataHandler)) {
 	}
 	s.Logger.Debug("received data-plane frame", "type", typ, "msg_id", msgID)
 	fn(s.Data)
+}
+
+// usesMeshFeatures reports whether any workload is a route workload or has
+// a mesh IP or private DNS, which only a [protocol.MeshProtocolVersion]
+// control plane sends.
+func usesMeshFeatures(ws []protocol.WorkloadSpec) bool {
+	for _, w := range ws {
+		if w.Kind == protocol.WorkloadRouteOnly || w.MeshIP != "" || w.PrivateDNS != nil {
+			return true
+		}
+	}
+	return false
 }

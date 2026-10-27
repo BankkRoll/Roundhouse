@@ -108,6 +108,24 @@ running keep their routes until their first probe result, and a Caddy
 already running the wanted config is not reloaded. See ADR 0003, "Ingress
 swaps without reloads".
 
+**Mesh** (`internal/mesh`, `internal/netpol`; ADR 0005): with
+`desired_state.mesh` set, the agent creates `wg0` (the kernel module, else
+embedded wireguard-go on `/dev/net/tun`; `mesh.mode` in the config forces one
+or turns the mesh off) and configures it through wgctrl with the peers and
+the preshared keys sealed to the node. The private key lives in
+`<data-dir>/wireguard.key` (0600) and never leaves the node; rotations follow
+`rotate_key` / `activate_epoch`. Each replica's mesh IP is NATed 1:1 to its
+bridge IP, and the `inet roundhouse` nftables table, replaced atomically,
+admits cross-node traffic only within an environment (checked on both nodes)
+plus ingress from node addresses to routed ports, and marks what it admits so
+Docker's forward drops let it through (a `DOCKER-USER` rule on the iptables
+backend; `bridge-accept-fwmark` on the nftables one). Containers with
+`private_dns` resolve `<service>.<environment>.<project>.internal` through the
+agent on the node's `rh-dns0` address, which answers only local containers
+and only names of their own environment, and forwards other names to the
+host's resolvers. `mesh_status` goes out every 30 s and on change; mesh
+failures never stop local workloads.
+
 **Logs** (`internal/logship`): every service container's stdout and stderr is
 followed, batched into `logs` frames (≤ 500 lines, ≤ 64 KiB, lines cut at
 16 KiB, flushed every second) and, while disconnected, kept in a 16 MiB
@@ -140,7 +158,11 @@ They include the properties the agent promises end to end: two environments
 of one project cannot reach each other by IP or private domain
 (`TestEnvironmentsAreIsolated`), and 200 back-to-back route swaps under
 request loops lose or reset no request and never reload Caddy
-(`TestSwapsNeverReloadCaddy`).
+(`TestSwapsNeverReloadCaddy`). `TestMeshTwoNodes` runs the real agent on two
+`docker:29-dind` nodes (kernel and userspace WireGuard) against a fake
+control plane: an environment reaches its replica on the other node by
+private name, another environment gets NXDOMAIN and no route, and a node's
+ingress address reaches only routed ports.
 
 ## Builder
 

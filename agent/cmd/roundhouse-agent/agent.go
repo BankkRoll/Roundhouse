@@ -25,6 +25,7 @@ import (
 	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
 	"github.com/BankkRoll/Roundhouse/agent/internal/jobs"
 	"github.com/BankkRoll/Roundhouse/agent/internal/logship"
+	"github.com/BankkRoll/Roundhouse/agent/internal/mesh"
 	"github.com/BankkRoll/Roundhouse/agent/internal/metrics"
 	agentruntime "github.com/BankkRoll/Roundhouse/agent/internal/runtime"
 	"github.com/BankkRoll/Roundhouse/agent/internal/volumes"
@@ -63,6 +64,8 @@ type agent struct {
 	firewall *firewall.Rules
 	// certs holds the control plane's certificates (managed TLS mode).
 	certs *certs.Store
+	// mesh runs the WireGuard mesh (ADR 0005).
+	mesh *mesh.Manager
 	// tlsStatus reports Caddy's on-demand certificates.
 	tlsStatus *certs.Tracker
 }
@@ -133,6 +136,10 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	if err != nil {
 		return nil, fmt.Errorf("volumes: %w", err)
 	}
+	a.mesh, err = newMesh(cfg, client, dc, encryption, dataDir, log)
+	if err != nil {
+		return nil, err
+	}
 	a.runtime = agentruntime.New(agentruntime.Options{
 		Docker:     dc,
 		Ingress:    a.ingress,
@@ -149,6 +156,7 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 			return protocol.OpenWorkloadEnv(encryption, cfg.NodeID, generation, w)
 		},
 		SecretsDir: secretsDir(dataDir),
+		Mesh:       meshHooks{a.mesh},
 		OnNetwork: func(ctx context.Context, n docker.Network) {
 			if iface := n.BridgeInterface(); iface != "" {
 				_ = a.firewall.Protect(ctx, iface)
@@ -236,6 +244,9 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	})
 	client.MetricsInterval = a.metrics.SetInterval
 	client.OnPeerProtocol = func(v int) {
+		if v >= protocol.MeshProtocolVersion {
+			a.mesh.Connected()
+		}
 		if v >= protocol.VolumesProtocolVersion {
 			a.volumes.Connected()
 		}
@@ -378,6 +389,7 @@ func (a *agent) run(ctx context.Context) error {
 	a.volumes.Start(ctx)
 	goRun("volumes", a.volumes.Run)
 	goRun("runtime", a.runtime.Run)
+	goRun("mesh", a.mesh.Run)
 	goRun("data", a.data.Run)
 	goRun("backups", a.backups.Run)
 	goRun("ingress", a.ingress.Run)
@@ -447,7 +459,9 @@ type handler struct{ a *agent }
 func (h handler) HasDesiredState() bool { return h.a.runtime.HasDesiredState() }
 
 func (h handler) ApplyDesiredState(m *protocol.DesiredState) bool {
-	if h.a.refusal != "" && (len(m.Workloads) > 0 || m.Registry != nil) {
+	// SECURITY: a mesh config carries preshared keys, refused over plaintext
+	// like the credentials of workloads and the registry.
+	if h.a.refusal != "" && (len(m.Workloads) > 0 || m.Registry != nil || m.Mesh != nil) {
 		h.a.log.Error("not applying desired state", "generation", m.Generation, "reason", h.a.refusal)
 		go h.a.reportRefused(m.Workloads)
 		return false
@@ -458,6 +472,7 @@ func (h handler) ApplyDesiredState(m *protocol.DesiredState) bool {
 	if !h.a.runtime.Apply(m) {
 		return false
 	}
+	h.a.mesh.Apply(m.Generation, m.Mesh)
 	h.a.certs.SetManifest(m.Certificates)
 	return true
 }

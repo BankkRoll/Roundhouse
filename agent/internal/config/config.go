@@ -65,6 +65,8 @@ type Config struct {
 	Ingress IngressConfig `yaml:"ingress,omitempty"`
 	// Jobs configures cron and pre-deploy job runs.
 	Jobs JobsConfig `yaml:"jobs,omitempty"`
+	// Mesh configures the WireGuard mesh (ADR 0005).
+	Mesh MeshConfig `yaml:"mesh,omitempty"`
 }
 
 // IngressConfig is the ingress section of the config (ADR 0009).
@@ -209,6 +211,9 @@ func (c Config) Validate() error {
 	if n := c.Jobs.MaxConcurrent; n < 0 || n > MaxJobsMaxConcurrent {
 		errs = append(errs, fmt.Errorf("jobs.max_concurrent must be 1 to %d (0 or absent means %d)",
 			MaxJobsMaxConcurrent, DefaultJobsMaxConcurrent))
+	}
+	if err := c.Mesh.validate(); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }
