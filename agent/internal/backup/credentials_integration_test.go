@@ -47,7 +47,8 @@ func (h *pgHarness) start(workload, image string, env ...string) string {
 }
 
 // exec runs cmd in container with env and returns its trimmed stdout and
-// whether it exited 0.
+// whether it exited 0. A failure's output includes stderr, where the
+// clients write why.
 func (h *pgHarness) exec(container string, env []string, cmd ...string) (string, bool) {
 	h.t.Helper()
 	var out, errb bytes.Buffer
@@ -57,7 +58,10 @@ func (h *pgHarness) exec(container string, env []string, cmd ...string) (string,
 	if err != nil {
 		h.t.Fatalf("exec %q: %v", cmd, err)
 	}
-	return strings.TrimSpace(out.String()), code == 0
+	if code != 0 {
+		return strings.TrimSpace(out.String() + "\n" + errb.String()), false
+	}
+	return strings.TrimSpace(out.String()), true
 }
 
 // login checks that user signs in over TCP with good and reads want, and

@@ -82,10 +82,13 @@ func (w *dockerWorkloads) WaitHealthy(ctx context.Context, id string) error {
 
 // readyProbe succeeds once the engine's real server answers. The images'
 // init-time servers listen only on a socket (Postgres, MySQL) or run
-// without access control (MongoDB), so neither passes.
+// without access control (MongoDB), so neither passes. Only MongoDB's
+// Unauthorized (13) means the real server: the init-time one, shutting
+// down, fails the command too (ShutdownInProgress), and the server that
+// replaces it is not listening yet.
 const readyProbe = `if command -v pg_isready >/dev/null; then exec pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 elif command -v mysqladmin >/dev/null; then exec mysqladmin ping -h 127.0.0.1 --silent
-else mongosh --quiet --norc --eval 'try { db.adminCommand({listDatabases: 1}); print("open") } catch (e) { print("auth") }' | grep -q auth
+else mongosh --quiet --norc --eval 'try { db.adminCommand({listDatabases: 1}); print("open") } catch (e) { print(e.code === 13 ? "auth" : "other") }' | grep -qx auth
 fi`
 
 // dirVolumes serves volumes as directories under root.

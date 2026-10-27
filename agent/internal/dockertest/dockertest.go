@@ -121,6 +121,13 @@ func Run(t testing.TB, c *docker.Client, name string, spec docker.ContainerCreat
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = c.RemoveContainer(context.Background(), id) })
+	// Registered after the removal so it runs first, while the container
+	// still exists; on CI its output is the only trace of why it misbehaved.
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("logs of %s (%s):\n%s", name, spec.Image, Logs(c, id, logTail))
+		}
+	})
 	if err := c.StartContainer(ctx, id); err != nil {
 		t.Fatal(err)
 	}
@@ -165,4 +172,35 @@ func Eventually(t testing.TB, timeout time.Duration, what string, cond func() bo
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// logTail is how much of a container's output a failing test prints.
+const logTail = 8 << 10
+
+// Logs returns up to the last n bytes of a container's stdout and stderr,
+// interleaved, or a note saying why they could not be read.
+func Logs(c *docker.Client, id string, n int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rc, err := c.ContainerLogs(ctx, id, docker.LogsOptions{Timestamps: true})
+	if err != nil {
+		return "(logs unavailable: " + err.Error() + ")"
+	}
+	defer rc.Close()
+	var out []byte
+	d := docker.NewDemuxer(rc)
+	for {
+		_, p, err := d.Next()
+		if err != nil {
+			break
+		}
+		out = append(out, p...)
+		if len(out) > 2*n {
+			out = append(out[:0], out[len(out)-n:]...)
+		}
+	}
+	if len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return string(out)
 }
