@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
 // daemonEngine is an in-memory Engine API for the daemon lifecycle: one
@@ -203,6 +205,35 @@ func TestOneDaemonPerProject(t *testing.T) {
 	}
 	if DaemonName("prj_01JABC") != "sys_buildkitd-prj_01jabc" || daemonVolume("prj_01JABC") != "roundhouse-buildkit-prj_01jabc" {
 		t.Fatal("names must use the lowercased project ID")
+	}
+}
+
+// Pull request builds run in the project's separate preview daemon, with
+// a state volume (and so a cache) of their own (ADR 0014 section 14).
+func TestPreviewBuildsUseTheirOwnDaemonAndCache(t *testing.T) {
+	job := validJob()
+	if got := daemonKey(&job); got != "prj_A" {
+		t.Fatalf("daemon key %q for a regular build", got)
+	}
+	job.Isolation = protocol.BuildIsolationPreview
+	preview := daemonKey(&job)
+	if preview != "prj_A-preview" {
+		t.Fatalf("daemon key %q for a preview build", preview)
+	}
+
+	e := &daemonEngine{}
+	d := startDaemonEngine(t, e)
+	build(t, d, "prj_A")
+	build(t, d, preview)
+	if got, want := e.running(), []string{DaemonName("prj_A"), DaemonName(preview)}; !slices.Equal(got, want) {
+		t.Fatalf("running %v, want %v", got, want)
+	}
+	if daemonVolume(preview) == daemonVolume("prj_A") || !e.volumes[daemonVolume(preview)] {
+		t.Fatalf("preview volume %q must exist and differ from the project's", daemonVolume(preview))
+	}
+	mounts, _ := json.Marshal(e.containers[DaemonName(preview)].host["Mounts"])
+	if strings.Contains(string(mounts), `"Source":"`+daemonVolume("prj_A")+`"`) {
+		t.Fatalf("preview daemon mounts the project's cache: %s", mounts)
 	}
 }
 

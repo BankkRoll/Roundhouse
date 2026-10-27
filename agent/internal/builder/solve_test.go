@@ -43,6 +43,37 @@ func TestSolveSpecs(t *testing.T) {
 	}
 }
 
+// The fetch token of a pull request build is for git alone: it reaches
+// neither the frontend attributes nor the BuildKit secrets a RUN step can
+// mount (ADR 0014 section 14).
+func TestFetchTokenNeverReachesTheBuild(t *testing.T) {
+	const token = "test-fetch-credential-0001"
+	job := validJob()
+	job.Isolation = protocol.BuildIsolationPreview
+	job.CacheKey = protocol.BuildCacheKeyFor(job.ProjectID, job.ServiceID, job.Isolation)
+	job.Source.Token = token
+	job.Source.Ref = "refs/pull/7/head"
+	paths := buildPaths{context: "/w/src", dockerfileDir: "/w/src", dockerfileName: "Dockerfile"}
+	specs := []solveSpec{dockerfileSolve(&job, paths, nil)}
+	job.Builder = protocol.BuilderRailpack
+	specs = append(specs, railpackSolve(&job, paths, "/w/plan", RailpackFrontendImage, nil))
+	for _, spec := range specs {
+		for k, v := range spec.attrs {
+			if strings.Contains(k, token) || strings.Contains(v, token) {
+				t.Fatalf("%s: token in frontend attr %s", spec.frontend, k)
+			}
+		}
+		for k, v := range spec.secrets {
+			if strings.Contains(string(v), token) {
+				t.Fatalf("%s: token in BuildKit secret %s", spec.frontend, k)
+			}
+		}
+		if spec.attrs["build-arg:cache-key"] != "" && spec.attrs["build-arg:cache-key"] != "prj_A.svc_B.preview" {
+			t.Fatalf("%s: cache key %q", spec.frontend, spec.attrs["build-arg:cache-key"])
+		}
+	}
+}
+
 // A build arg marked secret never becomes a Dockerfile build arg, which
 // would record its value in the image history; it is a BuildKit secret.
 func TestDockerfileSecretArgs(t *testing.T) {

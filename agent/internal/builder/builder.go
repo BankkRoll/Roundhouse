@@ -274,7 +274,7 @@ func (b *builder) build(ctx context.Context, job *protocol.BuildJob, secrets map
 	var daemonName string
 	go func() {
 		var err error
-		daemonName, err = b.daemon.ensure(ensureCtx, job.ProjectID)
+		daemonName, err = b.daemon.ensure(ensureCtx, daemonKey(job))
 		ensured <- err
 	}()
 	var ensureErr error
@@ -288,7 +288,7 @@ func (b *builder) build(ctx context.Context, job *protocol.BuildJob, secrets map
 	defer func() {
 		cancelEnsure()
 		_ = waitEnsure()
-		b.daemon.release(job.ProjectID)
+		b.daemon.release(daemonKey(job))
 	}()
 
 	src := filepath.Join(work, "src")
@@ -387,13 +387,13 @@ func (b *builder) build(ctx context.Context, job *protocol.BuildJob, secrets map
 	}
 	defer client.Close()
 
-	if time.Since(b.lastPrune[job.ProjectID]) > b.opts.PruneInterval {
+	if time.Since(b.lastPrune[daemonKey(job)]) > b.opts.PruneInterval {
 		pctx, pcancel := context.WithTimeout(ctx, 2*time.Minute)
 		if err := b.daemon.prune(pctx, client); err != nil && ctx.Err() == nil {
 			b.log.Warn("BuildKit cache prune failed", "error", err)
 		}
 		pcancel()
-		b.lastPrune[job.ProjectID] = time.Now()
+		b.lastPrune[daemonKey(job)] = time.Now()
 	}
 
 	dgst, err := solve(ctx, client, spec, logs)
