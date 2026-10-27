@@ -90,7 +90,20 @@ func newHarness(t *testing.T, tweaks ...func(*runtime.Options)) *harness {
 		http: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}},
 	}
 	h.network = protocol.EnvironmentNetworkName(h.project, h.env)
-	t.Cleanup(func() { dockertest.RemoveLabelled(c, runtime.LabelNamespace+"="+ns) })
+	// NOTE: registered first, so it runs last: networks can only go once
+	// the runtime's containers on them are gone, and the cleanups that
+	// remove networks earlier fail while they are not. It removes this
+	// test's networks, made by the test or by the runtime under test.
+	t.Cleanup(func() {
+		dockertest.RemoveLabelled(c, runtime.LabelNamespace+"="+ns)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_ = c.RemoveNetwork(ctx, h.network)
+		nets, _ := c.ListNetworks(ctx, runtime.LabelNamespace+"="+ns)
+		for _, n := range nets {
+			_ = c.RemoveNetwork(ctx, n.ID)
+		}
+	})
 	// Created up front (the runtime adopts it) so the test can join it.
 	dockertest.Network(t, c, h.network, map[string]string{runtime.LabelManaged: "true"})
 	dockertest.Attach(t, c, h.network)
