@@ -86,6 +86,8 @@ type SealedRestoreSecrets struct {
 type SealedDBCredential struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// NewPassword is set only for a set_password op: the password it sets.
+	NewPassword string `json:"new_password,omitempty"`
 }
 
 // SealedCertKey is the plaintext of [CertUpsert].KeySealed.
@@ -189,6 +191,12 @@ func OpenDBCredential(priv *ecdh.PrivateKey, nodeID string, q *DBQuery) (SealedD
 	}
 	if s.Username == "" || len(s.Username) > 256 || s.Password == "" || len(s.Password) > 4096 {
 		return SealedDBCredential{}, fmt.Errorf("db query %s: invalid credential", q.RequestID)
+	}
+	if s.NewPassword != "" && !dbPasswordRE.MatchString(s.NewPassword) {
+		return SealedDBCredential{}, fmt.Errorf("db query %s: invalid new password", q.RequestID)
+	}
+	if (s.NewPassword != "") != (q.Op.Type == DBOpSetPassword) {
+		return SealedDBCredential{}, fmt.Errorf("db query %s: a new password goes with set_password exactly", q.RequestID)
 	}
 	return s, nil
 }

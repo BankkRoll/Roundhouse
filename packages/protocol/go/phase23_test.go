@@ -428,3 +428,57 @@ func TestVerifyRejectsSelfAnnouncedKID(t *testing.T) {
 		}
 	}
 }
+
+// TestSetPasswordOp checks the credential-rotation op: admin mode only, a
+// user name, and a new password that travels in the sealed box exactly
+// when the op is set_password.
+func TestSetPasswordOp(t *testing.T) {
+	f, node, _ := loadBoxFixture(t)
+	q := signedPayload[*DBQuery](t, "signed-db-query.json")
+	q.Mode, q.Op = "write", DBOp{Type: DBOpSetPassword, User: "roundhouse_ro"}
+	if err := q.Validate(); err != nil {
+		t.Fatalf("valid set_password refused: %v", err)
+	}
+	for name, op := range map[string]DBOp{
+		"no user":  {Type: DBOpSetPassword},
+		"bad user": {Type: DBOpSetPassword, User: "ro'; DROP ROLE x; --"},
+	} {
+		bad := *q
+		bad.Op = op
+		if bad.Validate() == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	reader := *q
+	reader.Mode = "read"
+	if reader.Validate() == nil {
+		t.Error("set_password as the reader accepted")
+	}
+
+	seal := func(body string) SealedBox {
+		t.Helper()
+		box, err := SealBox(node.PublicKey(), []byte(body), BoxPurposeDBCredential, DBCredentialAAD(f.NodeID, q.RequestID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return *box
+	}
+	const pw = "Qm9yZGVyLXJlYWR5LXBhc3N3b3JkLWJhc2U2NHVybA"
+	q.CredentialSealed = seal(`{"username":"postgres","password":"old","new_password":"` + pw + `"}`)
+	if cred, err := OpenDBCredential(node, f.NodeID, q); err != nil || cred.NewPassword != pw {
+		t.Errorf("credential %+v, %v", cred, err)
+	}
+	q.CredentialSealed = seal(`{"username":"postgres","password":"old"}`)
+	if _, err := OpenDBCredential(node, f.NodeID, q); err == nil {
+		t.Error("set_password without a new password opened")
+	}
+	q.CredentialSealed = seal(`{"username":"postgres","password":"old","new_password":"it's'; --"}`)
+	if _, err := OpenDBCredential(node, f.NodeID, q); err == nil {
+		t.Error("a new password needing quoting opened")
+	}
+	read := signedPayload[*DBQuery](t, "signed-db-query.json")
+	read.CredentialSealed = seal(`{"username":"roundhouse_ro","password":"p","new_password":"` + pw + `"}`)
+	if _, err := OpenDBCredential(node, f.NodeID, read); err == nil {
+		t.Error("a new password opened for a read query")
+	}
+}
