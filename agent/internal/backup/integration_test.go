@@ -69,8 +69,7 @@ func (w *dockerWorkloads) WaitHealthy(ctx context.Context, id string) error {
 	for {
 		cid, running, _ := w.Container(id)
 		if running {
-			code, err := w.c.RunExec(ctx, cid, docker.ExecRun{Cmd: []string{"sh", "-c",
-				`pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"`}})
+			code, err := w.c.RunExec(ctx, cid, docker.ExecRun{Cmd: []string{"sh", "-c", readyProbe}})
 			if err == nil && code == 0 {
 				return nil
 			}
@@ -80,6 +79,14 @@ func (w *dockerWorkloads) WaitHealthy(ctx context.Context, id string) error {
 		}
 	}
 }
+
+// readyProbe succeeds once the engine's real server answers. The images'
+// init-time servers listen only on a socket (Postgres, MySQL) or run
+// without access control (MongoDB), so neither passes.
+const readyProbe = `if command -v pg_isready >/dev/null; then exec pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+elif command -v mysqladmin >/dev/null; then exec mysqladmin ping -h 127.0.0.1 --silent
+else mongosh --quiet --norc --eval 'try { db.adminCommand({listDatabases: 1}); print("open") } catch (e) { print("auth") }' | grep -q auth
+fi`
 
 // dirVolumes serves volumes as directories under root.
 type dirVolumes struct{ root string }
