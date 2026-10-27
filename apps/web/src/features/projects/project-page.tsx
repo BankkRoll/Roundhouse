@@ -5,10 +5,10 @@ import { BoxesIcon, ListIcon, NetworkIcon, PlusIcon, SettingsIcon } from "lucide
 import { PageHeader } from "../../components/page-header";
 import { errorMessage } from "../../lib/api/client";
 import type { Service } from "../../lib/api/deploy-types";
-import { usePermissions } from "../../lib/permissions";
 import { useNow } from "../../lib/use-now";
 import { useDraft } from "../../queries/changes";
 import { useDeploy } from "../../queries/deployments";
+import { useEnvironmentGate } from "../access/environment-gate";
 import { CanvasView } from "../canvas/canvas-view";
 import { useShellActions } from "../shell/shell-actions";
 import { ProjectPresence } from "./presence";
@@ -32,7 +32,7 @@ export function ProjectPage({
   projectId: string;
 }) {
   const { project, environment, envParam } = useProjectEnvironment(projectId);
-  const { can } = usePermissions(workspaceId);
+  const { can } = useEnvironmentGate(workspaceId, projectId, environment);
   const { openNewService } = useShellActions();
   const deploy = useDeploy();
   const now = useNow(15_000);
@@ -97,18 +97,16 @@ export function ProjectPage({
                 ]}
               />
             ) : null}
-            {can("projects:manage") ? (
-              <Button asChild variant="secondary">
-                <Link
-                  to="/w/$workspaceId/p/$projectId/settings"
-                  params={{ workspaceId, projectId }}
-                  search={{ env: envParam }}
-                >
-                  <SettingsIcon />
-                  Settings
-                </Link>
-              </Button>
-            ) : null}
+            <Button asChild variant="secondary">
+              <Link
+                to="/w/$workspaceId/p/$projectId/settings"
+                params={{ workspaceId, projectId }}
+                search={{ env: envParam }}
+              >
+                <SettingsIcon />
+                Settings
+              </Link>
+            </Button>
             {newService}
           </>
         }
