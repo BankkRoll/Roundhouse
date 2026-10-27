@@ -10,7 +10,8 @@
  * `./change-tools`.
  *
  * Domains are listed read-only (`list_domains`); adding, changing (HSTS,
- * preload consent) and removing them need a human.
+ * preload consent) and removing them need a human. The private network
+ * between servers is read-only too (`get_mesh`).
  *
  * Deliberately absent: reading secret values (there is no API for it),
  * deleting anything, the shell, database access, domain mutations, node,
@@ -95,6 +96,7 @@ import { listVariables, projectKey, type VariableTarget } from "../lib/variables
 import { CHANGE_TOOLS } from "./change-tools";
 import { CRON_TOOLS } from "./cron-tools";
 import { DATA_TOOLS } from "./data-tools";
+import { MESH_TOOLS } from "./mesh-tools";
 import { deployTemplateTool, listTemplatesTool } from "./template-tools";
 
 // -----------------------------------------------------------------------------
@@ -809,6 +811,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   ...CHANGE_TOOLS,
   listDomainsTool,
   listNodesTool,
+  ...MESH_TOOLS,
   ...DATA_TOOLS,
   ...CRON_TOOLS,
   listTemplatesTool,

@@ -13,7 +13,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { API_TOKEN_PRESETS } from "@roundhouse/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MCP_TOOLS } from "../src/mcp/tools";
-import { addMember, type Client as Browser, install, ORIGIN } from "./helpers";
+import { addMember, type Client as Browser, install, joinNode, ORIGIN } from "./helpers";
 import {
   COMMIT_SHA,
   createProject,
@@ -335,6 +335,7 @@ describe("tools/list", () => {
       "apply_changes",
       "list_domains",
       "list_nodes",
+      "get_mesh",
       "list_databases",
       "list_backups",
       "get_metrics",
@@ -958,6 +959,117 @@ describe("cron tools", () => {
       service_id: foreignService.body.service.id,
     });
     expect(hidden.body.error.status).toBe(404);
+    await client.close();
+  });
+});
+
+describe("mesh tool", () => {
+  /** Marks a joined node as a meshed, reporting agent, as its mesh_status would. */
+  async function meshNode(id: string, index: number, fields: Record<string, unknown> = {}) {
+    const values = {
+      protocol_version: 5,
+      mesh_index: index,
+      wg_pubkey: `wg-public-key-${index}`,
+      mesh_mode: "kernel",
+      mesh_nat: "public",
+      mesh_endpoint: `203.0.113.${index}:51820`,
+      mesh_listen_port: 51820,
+      mesh_docker_firewall: "iptables",
+      mesh_accept_fwmark: 1,
+      mesh_ready: 1,
+      mesh_status_at: Date.now(),
+      ...fields,
+    };
+    const columns = Object.keys(values);
+    await env.DB.prepare(
+      `UPDATE nodes SET ${columns.map((c, i) => `${c} = ?${i + 1}`).join(", ")} WHERE id = ?${columns.length + 1}`,
+    )
+      .bind(...Object.values(values), id)
+      .run();
+  }
+
+  it("summarises the mesh read-only, with the route's scope and workspace check", async () => {
+    const { owner, workspaceId } = await install();
+    const a = await joinNode(owner, workspaceId, { name: "hel-1", hostname: "hel-1" });
+    const b = await joinNode(owner, workspaceId, {
+      name: "nbg-1",
+      hostname: "nbg-1",
+      public_key: "QmJ5dGVzLW9mLWEtc2Vjb25kLW5vZGUta2V5LTAwMDA=",
+    });
+    const c = await joinNode(owner, workspaceId, {
+      name: "old-1",
+      hostname: "old-1",
+      public_key: "Qnl0ZXMtb2YtYS10aGlyZC1ub2RlLWtleS0wMDAwMDA=",
+    });
+    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.read));
+
+    const off = await tool<{ enabled: boolean; summary: { joined: number }; pairs: unknown[] }>(
+      client,
+      "get_mesh",
+    );
+    expect(off.isError).toBe(false);
+    expect(off.body).toMatchObject({ enabled: false, summary: { joined: 0 }, pairs: [] });
+
+    await env.DB.prepare(
+      "INSERT OR REPLACE INTO instance_settings (key, value, created_at, updated_at) VALUES ('mesh_enabled', 'true', ?1, ?1)",
+    )
+      .bind(Date.now())
+      .run();
+    await meshNode(a.node_id, 1);
+    await meshNode(b.node_id, 2, {
+      mesh_ready: 0,
+      mesh_error: "docker drops marked packets",
+      mesh_docker_firewall: "nftables",
+      mesh_accept_fwmark: 0,
+    });
+
+    const on = await tool<{
+      enabled: boolean;
+      supernet: string;
+      summary: Record<string, number>;
+      servers: Record<string, unknown>[];
+      pairs: { servers: string[]; path: string; relay: string | null }[];
+    }>(client, "get_mesh", { workspace_id: workspaceId });
+    expect(on.isError).toBe(false);
+    expect(on.body.enabled).toBe(true);
+    expect(on.body.supernet).toBe("10.200.0.0/16");
+    expect(on.body.summary).toEqual({
+      servers: 3,
+      joined: 2,
+      ready: 1,
+      direct: 0,
+      relayed: 0,
+      down: 1,
+    });
+    const byName = new Map(on.body.servers.map((s) => [s.name, s]));
+    expect(byName.get("hel-1")).toMatchObject({
+      joined: true,
+      address: "10.200.1.1",
+      mode: "kernel",
+      nat: "public",
+      ready: true,
+    });
+    expect(byName.get("nbg-1")).toMatchObject({
+      ready: false,
+      error: "docker drops marked packets",
+      docker_firewall: "nftables",
+      accept_fwmark: false,
+    });
+    expect(byName.get("old-1")).toMatchObject({ id: c.node_id, joined: false, address: null });
+    expect(on.body.pairs).toEqual([expect.objectContaining({ path: "down", relay: null })]);
+    expect([...on.body.pairs[0]!.servers].sort()).toEqual(["hel-1", "nbg-1"]);
+    expect(on.text).not.toContain("wg-public-key");
+    expect(MCP_TOOLS.find((t) => t.name === "get_mesh")!.annotations.readOnlyHint).toBe(true);
+    expect(MCP_TOOLS.find((t) => t.name === "get_mesh")!.scopes).toEqual(["nodes:read"]);
+
+    const elsewhere = await owner.json<{ id: string }>("/v1/workspaces", {
+      method: "POST",
+      json: { name: "Elsewhere" },
+    });
+    const hidden = await tool<{ error: { status: number } }>(client, "get_mesh", {
+      workspace_id: elsewhere.body.id,
+    });
+    expect(hidden.isError).toBe(true);
     await client.close();
   });
 });
