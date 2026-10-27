@@ -9,9 +9,13 @@ describe("service health", () => {
     const service = db.deploy.services.find((s) => s.id === SEED.web)!;
     service.health = "degraded";
     service.health_reason = "node_offline";
-    renderApp(servicePath(SEED.web, "settings"));
+    service.health_node = { id: "node_hel1", name: "hel-1" };
+    const { user } = renderApp(servicePath(SEED.web, "settings"));
     const badge = await screen.findByText("Degraded");
-    expect(badge).toHaveAttribute("title", expect.stringMatching(/server is offline/));
+    expect(badge).toHaveAccessibleDescription(/^Server hel-1 went offline./);
+    await user.tab();
+    while (document.activeElement !== badge) await user.tab();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/hel-1 reconnects/);
   });
 
   it("shows no badge for a healthy service", async () => {

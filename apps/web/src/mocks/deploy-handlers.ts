@@ -809,6 +809,26 @@ export function announceDeployment(row: DbDeployment) {
 }
 
 /**
+ * Sets a service's health and announces it like the API does when a server goes offline,
+ * comes back, or is drained by force or resumed (`service.updated`).
+ *
+ * @param serviceId - The service.
+ * @param health - Its new health; `health_node` names the server it waits on.
+ * @returns The service as announced, or `undefined` when it doesn't exist.
+ */
+export function announceServiceHealth(
+  serviceId: string,
+  health: Pick<Service, "health" | "health_reason" | "health_node">,
+): Service | undefined {
+  const row = db.deploy.services.find((service) => service.id === serviceId && !service.deleted);
+  if (!row) return undefined;
+  Object.assign(row, health);
+  const service = stripService(row);
+  broadcastRealtime(row.project_id, { type: "service.updated", service });
+  return service;
+}
+
+/**
  * Records what a viewer's canvas shows and fans the presence list out, like the API's
  * `ProjectRoom` (which also rate-limits and batches; the mock answers each update).
  */
@@ -1409,6 +1429,7 @@ export const deployHandlers = [
       icon: (input.body.icon as string | undefined) ?? null,
       health: "ok",
       health_reason: null,
+      health_node: null,
       created_at: now,
       updated_at: now,
     };
