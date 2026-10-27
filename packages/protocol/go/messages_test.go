@@ -591,14 +591,17 @@ func TestLocalImageRepository(t *testing.T) {
 // TestProtocolVersions pins the ADR 0015 plan; messages.test.ts and
 // phase23.test.ts pin the TypeScript constants to the same values.
 func TestProtocolVersions(t *testing.T) {
-	if ProtocolVersion != 7 || MinProtocolVersion != 3 {
-		t.Errorf("versions %d..%d, want 3..7", MinProtocolVersion, ProtocolVersion)
+	if ProtocolVersion != 8 || MinProtocolVersion != 3 {
+		t.Errorf("versions %d..%d, want 3..8", MinProtocolVersion, ProtocolVersion)
 	}
 	if PreviewBuildsProtocolVersion != 7 {
 		t.Errorf("preview builds gate %d, want 7", PreviewBuildsProtocolVersion)
 	}
 	if ExecProtocolVersion != 7 || ImagePushProtocolVersion != 7 {
 		t.Errorf("gates exec=%d image_push=%d, want 7", ExecProtocolVersion, ImagePushProtocolVersion)
+	}
+	if PITRProtocolVersion != 8 {
+		t.Errorf("pitr gate %d, want 8", PITRProtocolVersion)
 	}
 	for name, v := range map[string]int{
 		"mesh": MeshProtocolVersion, "volumes": VolumesProtocolVersion, "backups": BackupsProtocolVersion,

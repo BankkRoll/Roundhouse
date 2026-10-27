@@ -66,7 +66,7 @@ constraints (ranges, formats, sizes) live in each type's `Validate()`.
 ### Versions
 
 The control plane accepts `MIN_PROTOCOL_VERSION` through `PROTOCOL_VERSION`
-(today 3 through 7). A `hello` below the minimum is closed with code 4002
+(today 3 through 8). A `hello` below the minimum is closed with code 4002
 (`agent_outdated`). ADR 0013 planned one version per phase; sealed
 environments took 4 first, so each phase moved up by one (ADR 0015):
 
@@ -78,6 +78,7 @@ environments took 4 first, so each phase moved up by one (ADR 0015):
 | 5       | 2        | `MESH_`, `VOLUMES_`, `BACKUPS_`, `DB_QUERY_`, `KEY_ROLLOVER_` (`MeshProtocolVersion`, …)             | mesh, route workloads, volumes and mounts, `exec` probes, `stop_first`, publish, backup/restore/copy, `db_query`, `task` logs, `volume_status`, key rollover                                                                                     |
 | 6       | 3        | `JOBS_`, `METRICS_`, `CERTS_` (`JobsProtocolVersion`, …)                                             | `job_*`, `metrics`, `cert_*`, wildcard routes, `hsts`, `desired_state.ingress` and `certificates`, `managed` TLS                                                                                                                                 |
 | 7       | 3, 4     | `PREVIEW_BUILDS_`, `EXEC_`, `IMAGE_PUSH_` (`PreviewBuildsProtocolVersion`, `ExecProtocolVersion`, …) | `build_job.isolation` (preview builds, ADR 0007), `exec_open`, `exec_input` (sealed keystrokes), `exec_resize`, `exec_close`, `exec_opened`, `exec_output`, `exec_exit`, `image_push` (sealed login), `image_push_result`; edge gateway reserved |
+| 8       | data     | `PITR_` (`PITRProtocolVersion`)                                                                      | `base` backups and `backup_result.wal_start`, `desired_state.volumes[].wal_archive`, `wal_archive`, `wal_archive_ack` (sealed upload URLs), `restore_job.pitr`, `wal_fetch_request`, `wal_fetch` (sealed download URLs) (ADR 0004)               |
 
 `MIN_PROTOCOL_VERSION` rises to N−1 with each phase's release, not with
 its contracts. Bump `PROTOCOL_VERSION`, in both `src/versions.ts` and
@@ -114,7 +115,8 @@ TTL applies.
 Every secret a Phase 2–3 frame carries travels in a sealed box with its own
 purpose and AAD helper (`src/box.ts`, `go/boxes.go`): `job-env`
 (`jobEnvAad`), `mesh-psks`, `registry-upstream`, `backup-parts` (presigned
-part URLs), `restore` (download URL and age identity), `db-credential`, and
-`cert-key`. Frames that always carry one are listed in
+part URLs), `restore` (download URL and age identity), `db-credential`, `cert-key`,
+`exec-input`, `image-push`, `wal-upload` (WAL upload URLs) and `wal-fetch`
+(WAL download URLs). Frames that always carry one are listed in
 `CREDENTIAL_FRAME_TYPES`; `desired_state` also counts with sealed mesh PSKs
 or a proxy registry upstream, and `cert_sync` with any upsert.

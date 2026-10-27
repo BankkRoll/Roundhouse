@@ -87,6 +87,12 @@ import {
 } from "./limits";
 import { HelloMeshSchema, MeshConfigSchema, MeshKeySchema, MeshStatusSchema } from "./mesh";
 import { MAX_METRICS_INTERVAL_MS, MetricsSchema, MIN_METRICS_INTERVAL_MS } from "./metrics";
+import {
+  WalArchiveAckSchema,
+  WalArchiveSchema,
+  WalFetchRequestSchema,
+  WalFetchSchema,
+} from "./pitr";
 import { KeyAnnounceSchema, SigningKeyAnnouncementsSchema } from "./signing-keys";
 import {
   BUILD_ISOLATIONS,
@@ -492,6 +498,8 @@ export const AgentFrameSchema = z.discriminatedUnion("type", [
   ExecOutputSchema,
   ExecExitSchema,
   ImagePushResultSchema,
+  WalArchiveSchema,
+  WalFetchRequestSchema,
 ]);
 
 /** Every frame an agent may send. */
@@ -756,6 +764,8 @@ export const ControlMessageSchema = z.discriminatedUnion("type", [
   ExecResizeSchema,
   ExecCloseSchema,
   ImagePushSchema,
+  WalArchiveAckSchema,
+  WalFetchSchema,
 ]);
 
 /** Any payload the control plane may sign and send. */
@@ -781,6 +791,8 @@ export const CREDENTIAL_FRAME_TYPES = [
   "exec_resize",
   "exec_close",
   "image_push",
+  "wal_archive_ack",
+  "wal_fetch",
 ] as const;
 
 /**

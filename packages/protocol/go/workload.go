@@ -272,6 +272,9 @@ type VolumeSpec struct {
 	ServiceID     string `json:"service_id"`
 	// Owner is "uid:gid" for a fresh data directory; nil uses the image's user.
 	Owner *string `json:"owner"`
+	// WALArchive asks the agent to ship the volume's WAL spool. From
+	// [PITRProtocolVersion].
+	WALArchive *WALArchiveSpec `json:"wal_archive,omitempty"`
 }
 
 func (v *VolumeSpec) validate() error {
@@ -284,6 +287,9 @@ func (v *VolumeSpec) validate() error {
 	}
 	if v.Owner != nil && !uidGidRE.MatchString(*v.Owner) {
 		return errors.New("owner: expected uid:gid")
+	}
+	if v.WALArchive != nil && (!idRE.MatchString(v.WALArchive.StreamID) || !ageRecipientRE.MatchString(v.WALArchive.AgeRecipient)) {
+		return errors.New("wal_archive: invalid stream_id or age_recipient")
 	}
 	return nil
 }

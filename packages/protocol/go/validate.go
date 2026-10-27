@@ -42,7 +42,7 @@ func CarriesCredentials(msg ControlMessage) bool {
 	// SECURITY: ADR 0014 §15 gives every shell frame the credential TTL, not
 	// only exec_input with its sealed keystrokes, so a captured frame can't
 	// be replayed into a later session.
-	case *ExecOpen, *ExecInput, *ExecResize, *ExecClose, *ImagePush:
+	case *ExecOpen, *ExecInput, *ExecResize, *ExecClose, *ImagePush, *WALArchiveAck, *WALFetch:
 		return true
 	}
 	return false

@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"desired_state\",\"id\":\"msg_fixture_pitr\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":4102444800000,\"generation\":30,\"workloads\":[],\"tls_mode\":\"acme\",\"apps_domain\":null,\"registry\":null,\"volumes\":[{\"id\":\"vol_01JDDDDDDDDDDDDDDDDDDDDDDD\",\"size_mb\":5120,\"project_id\":\"prj_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"environment_id\":\"env_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"service_id\":\"svc_01JDDDDDDDDDDDDDDDDDDDDDDD\",\"owner\":null,\"wal_archive\":{\"stream_id\":\"wal_01JNNNNNNNNNNNNNNNNNNNNNNN\",\"age_recipient\":\"age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\"}}]}",
+    "sig": "XqTt2tdhpgTA+ALDSPI+tJKy7ntytuHj52bARH93EZDSpSU0yZJT1ThLP2WuzYWXrdK7IVK+C13SuRX5GZ2HDA=="
+  }
+}

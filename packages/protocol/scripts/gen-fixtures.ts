@@ -20,6 +20,10 @@
  *   `signed-exec-input.json` (sealed keystrokes), `signed-exec-resize.json`,
  *   `signed-exec-close.json` and `signed-image-push.json` (sealed registry
  *   login);
+ * - Protocol 8 (ADR 0004): `signed-desired-state-pitr.json` (a volume
+ *   with `wal_archive`), `signed-backup-job-base.json`,
+ *   `signed-restore-job-base.json` (with `pitr`),
+ *   `signed-wal-archive-ack.json` and `signed-wal-fetch.json` (sealed URLs);
  * - `formats.json`: expected results of the hand-written format helpers.
  *
  * The signing key comes from a fixed seed and Ed25519 signatures are
@@ -72,6 +76,8 @@ import {
   toBase64,
   type WorkloadSpec,
   WorkloadSpecSchema,
+  walFetchAad,
+  walUploadAad,
   workloadEnvAad,
   x25519PublicKey,
 } from "../src/index";
@@ -930,6 +936,117 @@ await writeSigned("signed-image-push.json", {
     imagePushAad(NODE_ID, PUSH_ID),
   ),
   timeout_s: 1800,
+});
+
+// Protocol 8 (ADR 0004): base backups, WAL archiving and point-in-time restores.
+const WAL_STREAM = "wal_01JNNNNNNNNNNNNNNNNNNNNNNN";
+const PITR_GENERATION = 30;
+await writeSigned("signed-desired-state-pitr.json", {
+  type: "desired_state",
+  id: "msg_fixture_pitr",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: FAR_FUTURE,
+  generation: PITR_GENERATION,
+  workloads: [],
+  tls_mode: "acme",
+  apps_domain: null,
+  registry: null,
+  volumes: [
+    {
+      id: VOLUME,
+      size_mb: 5120,
+      project_id: PROJECT,
+      environment_id: ENVIRONMENT,
+      service_id: DB_SERVICE,
+      owner: null,
+      wal_archive: { stream_id: WAL_STREAM, age_recipient: AGE_RECIPIENT },
+    },
+  ],
+});
+
+await writeSigned("signed-backup-job-base.json", {
+  type: "backup_job",
+  id: "msg_fixture_backup_job_base",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  backup_id: BACKUP_ID,
+  method: "base",
+  engine: "postgres",
+  workload_id: DB_WORKLOAD,
+  volume_id: VOLUME,
+  quiesce: "none",
+  databases: null,
+  age_recipient: AGE_RECIPIENT,
+  part_size_bytes: 16 * 1024 * 1024,
+  parts_sealed: await partsBox(1, 1),
+  timeout_s: 3600,
+});
+
+const PITR_RESTORE_ID = "rst_01JNNNNNNNNNNNNNNNNNNNNNNN";
+await writeSigned("signed-restore-job-base.json", {
+  type: "restore_job",
+  id: "msg_fixture_restore_job_base",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  restore_id: PITR_RESTORE_ID,
+  method: "base",
+  engine: "postgres",
+  workload_id: DB_WORKLOAD,
+  volume_id: VOLUME,
+  backup_id: BACKUP_ID,
+  sha256: "ef".repeat(32),
+  size_bytes: 33_554_432,
+  secrets_sealed: await restoreBox(PITR_RESTORE_ID),
+  timeout_s: 3600,
+  pitr: { target_time: IAT + 3_600_000, wal_files: 3, wal_end: "000000010000000000000004" },
+});
+
+const walUrl = (name: string, method: string) =>
+  `https://0123456789abcdef.r2.cloudflarestorage.com/roundhouse-backups/wal/${WAL_STREAM}/${name}.zst.age?X-Amz-Method=${method}&X-Amz-Signature=${"2".repeat(64)}`;
+await writeSigned("signed-wal-archive-ack.json", {
+  type: "wal_archive_ack",
+  id: "msg_fixture_wal_archive_ack",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  volume_id: VOLUME,
+  stream_id: WAL_STREAM,
+  acked: ["000000010000000000000002", "000000010000000000000002.00000028.backup"],
+  uploads_sealed: await seal(
+    JSON.stringify({
+      uploads: [
+        { name: "000000010000000000000003", url: walUrl("000000010000000000000003", "PUT") },
+        { name: "00000002.history", url: walUrl("00000002.history", "PUT") },
+      ],
+    }),
+    "wal-upload",
+    walUploadAad(NODE_ID, WAL_STREAM),
+  ),
+});
+
+await writeSigned("signed-wal-fetch.json", {
+  type: "wal_fetch",
+  id: "msg_fixture_wal_fetch",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  restore_id: PITR_RESTORE_ID,
+  files_sealed: await seal(
+    JSON.stringify({
+      files: ["000000010000000000000003", "000000010000000000000004"].map((name, i) => ({
+        index: i + 1,
+        name,
+        url: walUrl(name, "GET"),
+        sha256: "ab".repeat(32),
+        size: 4096 + i,
+      })),
+    }),
+    "wal-fetch",
+    walFetchAad(NODE_ID, PITR_RESTORE_ID),
+  ),
 });
 
 // A workload with every Phase 3 route field, for the spec-hash cases.

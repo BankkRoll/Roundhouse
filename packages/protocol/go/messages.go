@@ -9,10 +9,12 @@ import "slices"
 // (ADR 0014); version 5 is Phase 2 (mesh, volumes, backups, queries,
 // signing-key rollover) and version 6 Phase 3 (jobs, metrics,
 // certificates); version 7 adds [BuildJob].Isolation (ADR 0007, ADR 0014
-// section 14) and Phase 4 (web shell exec frames, image push). ADR 0015
+// section 14) and Phase 4 (web shell exec frames, image push); version 8
+// adds base backups, WAL archiving and point-in-time restores (ADR 0004,
+// [PITRProtocolVersion]). ADR 0015
 // records why phases sit one above ADR 0013's plan. See PROTOCOL_VERSION in
 // versions.ts.
-const ProtocolVersion = 7
+const ProtocolVersion = 8
 
 // MinProtocolVersion is the oldest version the control plane accepts. ADR
 // 0013 raises it with each phase's release, not with its contracts.

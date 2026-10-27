@@ -67,6 +67,8 @@ export const BOX_PURPOSES = [
   "cert-key",
   "exec-input",
   "image-push",
+  "wal-upload",
+  "wal-fetch",
 ] as const;
 
 /** A box purpose; see {@link BOX_PURPOSES}. */

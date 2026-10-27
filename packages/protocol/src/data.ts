@@ -10,7 +10,9 @@
  *
  * Gates: `VOLUMES_PROTOCOL_VERSION` (`volume_delete`, `volume_status`),
  * `BACKUPS_PROTOCOL_VERSION` (backup, restore, copy), and
- * `DB_QUERY_PROTOCOL_VERSION` (`db_query`).
+ * `DB_QUERY_PROTOCOL_VERSION` (`db_query`), and `PITR_PROTOCOL_VERSION`
+ * (`base` backups, `restore_job.pitr`, `backup_result.wal_start`; the WAL
+ * frames are in `./pitr`).
  *
  * @module
  */
@@ -40,11 +42,13 @@ import {
   MAX_DB_QUERY_TIMEOUT_MS,
   MAX_DB_STATEMENT_BYTES,
   MAX_MESSAGE_BYTES,
+  MAX_PITR_WAL_FILES,
   MAX_VOLUMES_PER_NODE,
   MIN_BACKUP_PART_BYTES,
   REQUEST_ID_RE,
   Sha256Hex,
   utf8ByteLength,
+  WAL_SEGMENT_RE,
 } from "./limits";
 
 // -----------------------------------------------------------------------------
@@ -57,8 +61,13 @@ export const DATABASE_ENGINES = ["postgres", "mysql", "redis", "mongodb"] as con
 /** A database engine; see {@link DATABASE_ENGINES}. */
 export type DatabaseEngine = (typeof DATABASE_ENGINES)[number];
 
-/** `dump` runs the engine's own tool in the container; `snapshot` tars the volume. */
-export const BACKUP_METHODS = ["dump", "snapshot"] as const;
+/**
+ * `dump` runs the engine's tool in the container; `snapshot` tars the
+ * volume; `base` (Postgres, from `PITR_PROTOCOL_VERSION`) is a
+ * `pg_basebackup` that WAL archived after it replays onto, for
+ * point-in-time recovery.
+ */
+export const BACKUP_METHODS = ["dump", "snapshot", "base"] as const;
 
 /** A backup method; see {@link BACKUP_METHODS}. */
 export type BackupMethod = (typeof BACKUP_METHODS)[number];
@@ -132,7 +141,17 @@ function checkBackupSource(
       path: ["engine"],
     });
   }
+  if (j.method === "base" && (j.engine !== "postgres" || !j.workload_id)) {
+    ctx.addIssue({
+      code: "custom",
+      message: "base backups are of Postgres and need workload_id",
+      path: ["engine"],
+    });
+  }
 }
+
+/** A WAL segment's name, `TTTTTTTTXXXXXXXXYYYYYYYY`. */
+export const WalSegmentName = z.string().regex(WAL_SEGMENT_RE, "expected a WAL segment name");
 
 /**
  * Backs up a volume to a multipart object: source → RHBK1 → zstd → age →
@@ -163,15 +182,19 @@ export const BackupJobSchema = z
   })
   .superRefine((j, ctx) => {
     checkBackupSource(j, ctx);
-    if (j.method === "snapshot" && j.databases !== null) {
+    if (j.method !== "dump" && j.databases !== null) {
       ctx.addIssue({
         code: "custom",
         message: "snapshots back up the whole volume",
         path: ["databases"],
       });
     }
-    if (j.method === "dump" && j.quiesce !== "none") {
-      ctx.addIssue({ code: "custom", message: "dumps are never quiesced", path: ["quiesce"] });
+    if (j.method !== "snapshot" && j.quiesce !== "none") {
+      ctx.addIssue({
+        code: "custom",
+        message: "only snapshots are quiesced",
+        path: ["quiesce"],
+      });
     }
     if (j.quiesce === "stop" && !j.workload_id) {
       ctx.addIssue({ code: "custom", message: "quiesce needs workload_id", path: ["workload_id"] });
@@ -206,6 +229,35 @@ const RestoreFields = {
   timeout_s: TimeoutS,
 };
 
+/**
+ * How a `base` restore recovers: replaying `wal_files` archived WAL files,
+ * fetched with `wal_fetch_request`, up to `target_time`.
+ */
+export const PitrRecoverySchema = z
+  .object({
+    /** Unix ms to stop at; `null` stops as soon as the base backup is consistent. */
+    target_time: z.number().int().positive().nullable(),
+    /** WAL files to fetch, indexed from 0; history files first, then segments in order. */
+    wal_files: z.number().int().min(0).max(MAX_PITR_WAL_FILES),
+    /**
+     * The last segment fetched. Replay must reach it when recovery ends
+     * without meeting `target_time` (no commit after it), or the restore
+     * fails rather than stop early at a gap.
+     */
+    wal_end: WalSegmentName.nullable(),
+  })
+  .refine((p) => (p.wal_files === 0) === (p.wal_end === null), {
+    message: "wal_end is set exactly when WAL is fetched",
+    path: ["wal_end"],
+  })
+  .refine((p) => p.target_time === null || p.wal_end !== null, {
+    message: "a target time needs WAL to replay",
+    path: ["target_time"],
+  });
+
+/** How a `base` restore recovers. */
+export type PitrRecovery = z.infer<typeof PitrRecoverySchema>;
+
 /** Restores a backup into a volume; answered by `restore_result`. Always credential-bearing. */
 export const RestoreJobSchema = z
   .object({
@@ -214,8 +266,15 @@ export const RestoreJobSchema = z
     restore_id: IdString,
     ...BackupSourceFields,
     ...RestoreFields,
+    /** Exactly with `method: "base"`. Sent from `PITR_PROTOCOL_VERSION`. */
+    pitr: PitrRecoverySchema.optional(),
   })
-  .superRefine(checkBackupSource)
+  .superRefine((j, ctx) => {
+    checkBackupSource(j, ctx);
+    if ((j.method === "base") !== (j.pitr !== undefined)) {
+      ctx.addIssue({ code: "custom", message: "pitr goes with base exactly", path: ["pitr"] });
+    }
+  })
   .refine(isShortLived, SHORT_LIVED_ISSUE);
 
 /** Restores a backup into a volume. */
@@ -442,6 +501,12 @@ export const BackupResultSchema = z
     bytes_stored: Count.optional(),
     /** SHA-256 of the stored (encrypted) bytes. */
     sha256: Sha256Hex.optional(),
+    /**
+     * A successful `base` backup: the WAL segment its replay starts from
+     * (`START WAL LOCATION` of its `backup_label`). From
+     * `PITR_PROTOCOL_VERSION`.
+     */
+    wal_start: WalSegmentName.optional(),
     /** Present exactly when not `ok`, e.g. `backup_too_large`. */
     error: ErrorText.optional(),
     duration_ms: Count,
@@ -451,7 +516,7 @@ export const BackupResultSchema = z
       const stats = [r.part_count, r.bytes_raw, r.bytes_stored, r.sha256];
       return r.ok
         ? stats.every((v) => v !== undefined) && r.error === undefined
-        : stats.every((v) => v === undefined) && r.error !== undefined;
+        : stats.every((v) => v === undefined) && r.wal_start === undefined && r.error !== undefined;
     },
     { message: "a successful result has its stats and no error; a failed one, only an error" },
   );

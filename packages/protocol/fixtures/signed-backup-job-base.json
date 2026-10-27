@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"backup_job\",\"id\":\"msg_fixture_backup_job_base\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":1700000060000,\"backup_id\":\"bak_01JGGGGGGGGGGGGGGGGGGGGGGG\",\"method\":\"base\",\"engine\":\"postgres\",\"workload_id\":\"wl_01JDDDDDDDDDDDDDDDDDDDDDDD\",\"volume_id\":\"vol_01JDDDDDDDDDDDDDDDDDDDDDDD\",\"quiesce\":\"none\",\"databases\":null,\"age_recipient\":\"age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\",\"part_size_bytes\":16777216,\"parts_sealed\":{\"v\":1,\"kid\":\"f35e5616160a30bf\",\"epk\":\"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=\",\"ct\":\"2rlRPSjgQDY7aVJxXCzRWoDE7BsaRcWxQZooYSozAGWsG3mSrMlkxzMb5wNu+nnwSqUBPJN7TTBvpJuifPLzSKztIO66ekxPo7Yfe3yxwjTFEkW4bbSIgRm54gqQMKfL/qVOmXopL2h6XRLRcGYUBem7hsiQlJdE6uHaHCwqaPHtTWzwdTNBjRxzm50RKk0RHmRJyZbHaLAwUfTay3wONP1qDQovSqmHWZj25AkzvH+elm1vXZP2Ist697eKjEpmOxqfbwXh1kyo/M+wrcC2sMQIzFTS14I9/qQHdHN9LTrVJDTdWDFx0NUQW+lVAgJaBuGVVeMckb4WPemv1+q5/FM1kA4v/w5bc16vnyrngE07ZdHG9I0FghHMX9k9\"},\"timeout_s\":3600}",
+    "sig": "KfrT/UqPGZLgDFDaQw5wRxoiM4lm8sfB4fCRCBlcKOIeiIf4YMNnww02ECL5lzTc6Sa2g8dj98Q1TldPancvCQ=="
+  }
+}

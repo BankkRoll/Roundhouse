@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"wal_archive_ack\",\"id\":\"msg_fixture_wal_archive_ack\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":1700000060000,\"volume_id\":\"vol_01JDDDDDDDDDDDDDDDDDDDDDDD\",\"stream_id\":\"wal_01JNNNNNNNNNNNNNNNNNNNNNNN\",\"acked\":[\"000000010000000000000002\",\"000000010000000000000002.00000028.backup\"],\"uploads_sealed\":{\"v\":1,\"kid\":\"f35e5616160a30bf\",\"epk\":\"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=\",\"ct\":\"R4rFyNQj7Mt+gEEYgzu5J3UTqvCTU4lGvAbjbVnzHu4KD4nxWbEgNpj6EpWyMY2y/wYUbHKzgWJpDQ3ymk10B8oMQyT1CZhoMI7j9QuzUfBnfT4Inmt87c19wDX64O4E3/SlvrDYf1gMeWAHk7JIwqbzwUT+yczBUso3ToGFBHET4HA/LNYEuCOJewJrcvePhaOZPyNxXOYZZ2yEff7AACEfXsBxEgXw4w53GoZEnAyA94lpBJ+YoCVyw6lD5eJwZk5tI2M1MMgRYC0ux+TdsyTDL6iEoK9BMEMtgxjLtYDUe6AoasPsnwfHe1gTlyoMlRdrNPupRn8bC8l3K5OQ3OT0HiMKtGXC6BFcW4AlXPzf/hXVy3C+KJ40VdO+4i+/9bkJwjH95pe7TwPrS7Al3UDA5q9YbFv4Whk9bFGOUtZnn//8xHtcojTZyQp3PKAYjz3HIHmQjZVMQTHqSBnDPIovsG//tZa6vBUtvbbyxCyQtNk2hrVmPvclvlkNbz5hu4Kt4U612nwL8zJ2WhSpC8M23nQ61S1BAgYob2J62/vVZiVkKGflOgKZhyB74b23zqJinQBR5a1wik2t1TRucNg+FXWW1r8Gj92UdPd+sDTC3tubAl7AhI1JFm/E3kBSjb+sfc/Y8qqtSKFFE49NlM50ziC7XgzL4CAuL9XAcRiNpUqR4uXJlM9tjTlzAMBe8sDOOt9GfzhE773E3iEUh/Yw6/4A9O/3C/Iy4JWLWYG/0fWTQmBBUIGhVg==\"}}",
+    "sig": "fDbzGYofePcg/vx8POLbGDl4KJasclFlrCztwer4qcR06C0BjPKJW59nbyISmMq8IsKOok4StwWjzZEwDXYCBw=="
+  }
+}

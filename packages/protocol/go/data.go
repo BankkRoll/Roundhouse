@@ -27,10 +27,12 @@ func (e DatabaseEngine) valid() bool {
 type BackupMethod string
 
 // Backup methods: dump runs the engine's tool in the container; snapshot
-// tars the volume.
+// tars the volume; base (Postgres, from [PITRProtocolVersion]) is a
+// pg_basebackup that archived WAL replays onto.
 const (
 	BackupDump     BackupMethod = "dump"
 	BackupSnapshot BackupMethod = "snapshot"
+	BackupBase     BackupMethod = "base"
 )
 
 // VolumeQuotaMode is how the node enforces a volume's quota.
@@ -107,6 +109,10 @@ func (s *BackupSource) validate() error {
 		if s.Engine != "" && !s.Engine.valid() {
 			return fmt.Errorf("engine: invalid %q", s.Engine)
 		}
+	case BackupBase:
+		if s.Engine != EnginePostgres || s.WorkloadID == "" {
+			return errors.New("base backups are of Postgres and need workload_id")
+		}
 	default:
 		return fmt.Errorf("method: invalid %q", s.Method)
 	}
@@ -158,6 +164,9 @@ func (m *BackupJob) Validate() error {
 		}
 	default:
 		return fmt.Errorf("quiesce: invalid %q", m.Quiesce)
+	}
+	if m.Method != BackupSnapshot && m.Quiesce != "none" {
+		return errors.New("quiesce: only snapshots are quiesced")
 	}
 	if m.Databases != nil {
 		if m.Method != BackupDump {
@@ -253,6 +262,8 @@ type RestoreJob struct {
 	RestoreID string `json:"restore_id"`
 	BackupSource
 	RestoreTarget
+	// PITR is set exactly with [BackupBase]. From [PITRProtocolVersion].
+	PITR *PITRRecovery `json:"pitr,omitempty"`
 }
 
 func (*RestoreJob) controlMessage() {}
@@ -270,6 +281,14 @@ func (m *RestoreJob) Validate() error {
 	}
 	if err := m.RestoreTarget.validate(); err != nil {
 		return err
+	}
+	if (m.Method == BackupBase) != (m.PITR != nil) {
+		return errors.New("pitr: goes with base exactly")
+	}
+	if m.PITR != nil {
+		if err := m.PITR.validate(); err != nil {
+			return err
+		}
 	}
 	return validateShortLived(m)
 }
@@ -583,7 +602,10 @@ type BackupResult struct {
 	BytesRaw    *int64 `json:"bytes_raw,omitempty"`
 	BytesStored *int64 `json:"bytes_stored,omitempty"`
 	// SHA256 is the hex digest of the stored (encrypted) bytes.
-	SHA256     string `json:"sha256,omitempty"`
+	SHA256 string `json:"sha256,omitempty"`
+	// WALStart is a successful base backup's first WAL segment (START WAL
+	// LOCATION of its backup_label). From [PITRProtocolVersion].
+	WALStart   string `json:"wal_start,omitempty"`
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"duration_ms"`
 }
@@ -603,6 +625,9 @@ func (m *BackupResult) Validate() error {
 	if stats && (*m.PartCount < 1 || *m.PartCount > MaxBackupParts || *m.BytesRaw < 0 || *m.BytesStored < 0 ||
 		!sha256HexRE.MatchString(m.SHA256)) {
 		return errors.New("backup_result: invalid stats")
+	}
+	if m.WALStart != "" && (!m.OK || !walSegmentRE.MatchString(m.WALStart)) {
+		return errors.New("backup_result: wal_start is a successful result's WAL segment")
 	}
 	return nil
 }

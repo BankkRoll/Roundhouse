@@ -37,6 +37,8 @@ const (
 	BoxPurposeCertKey          BoxPurpose = "cert-key"
 	BoxPurposeExecInput        BoxPurpose = "exec-input"
 	BoxPurposeImagePush        BoxPurpose = "image-push"
+	BoxPurposeWALUpload        BoxPurpose = "wal-upload"
+	BoxPurposeWALFetch         BoxPurpose = "wal-fetch"
 )
 
 // ErrBoxWrongKey means a box was sealed to another encryption key than the

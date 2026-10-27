@@ -823,6 +823,24 @@
                     "type": "null"
                   }
                 ]
+              },
+              "wal_archive": {
+                "type": "object",
+                "properties": {
+                  "stream_id": {
+                    "type": "string",
+                    "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+                  },
+                  "age_recipient": {
+                    "type": "string",
+                    "pattern": "^age1[02-9ac-hj-np-z]{58}$"
+                  }
+                },
+                "required": [
+                  "stream_id",
+                  "age_recipient"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -1513,7 +1531,8 @@
           "type": "string",
           "enum": [
             "dump",
-            "snapshot"
+            "snapshot",
+            "base"
           ]
         },
         "engine": {
@@ -1717,7 +1736,8 @@
           "type": "string",
           "enum": [
             "dump",
-            "snapshot"
+            "snapshot",
+            "base"
           ]
         },
         "engine": {
@@ -1783,6 +1803,45 @@
           "type": "integer",
           "minimum": 60,
           "maximum": 43200
+        },
+        "pitr": {
+          "type": "object",
+          "properties": {
+            "target_time": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "wal_files": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "wal_end": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9A-F]{24}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "target_time",
+            "wal_files",
+            "wal_end"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -3345,6 +3404,155 @@
         "platform",
         "credential_sealed",
         "timeout_s"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "wal_archive_ack"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "volume_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "stream_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "acked": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?:[0-9A-F]{24}(?:\\.[0-9A-F]{8}\\.backup|\\.partial)?|[0-9A-F]{8}\\.history)$"
+          }
+        },
+        "uploads_sealed": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "number",
+              "const": 1
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "epk": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{43}=$"
+            },
+            "ct": {
+              "type": "string",
+              "maxLength": 524288,
+              "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+            }
+          },
+          "required": [
+            "v",
+            "kid",
+            "epk",
+            "ct"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "volume_id",
+        "stream_id",
+        "acked"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "wal_fetch"
+        },
+        "id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "restore_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "files_sealed": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "number",
+              "const": 1
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "epk": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{43}=$"
+            },
+            "ct": {
+              "type": "string",
+              "maxLength": 524288,
+              "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+            }
+          },
+          "required": [
+            "v",
+            "kid",
+            "epk",
+            "ct"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "node_id",
+        "iat",
+        "exp",
+        "restore_id",
+        "files_sealed"
       ],
       "additionalProperties": false
     }

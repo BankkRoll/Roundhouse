@@ -61,6 +61,9 @@ describe("shared fixtures", () => {
     ["exec-exit-error.json", AgentFrameSchema],
     ["image-push-result-ok.json", AgentFrameSchema],
     ["image-push-result-failed.json", AgentFrameSchema],
+    ["backup-result-base.json", AgentFrameSchema],
+    ["wal-archive.json", AgentFrameSchema],
+    ["wal-fetch-request.json", AgentFrameSchema],
     ["join-request.json", JoinRequestSchema],
     ["join-response.json", JoinResponseSchema],
   ] as const)("%s matches its schema", (file, schema) => {
@@ -91,6 +94,11 @@ describe("shared fixtures", () => {
     ["signed-exec-resize.json", "exec_resize"],
     ["signed-exec-close.json", "exec_close"],
     ["signed-image-push.json", "image_push"],
+    ["signed-desired-state-pitr.json", "desired_state"],
+    ["signed-backup-job-base.json", "backup_job"],
+    ["signed-restore-job-base.json", "restore_job"],
+    ["signed-wal-archive-ack.json", "wal_archive_ack"],
+    ["signed-wal-fetch.json", "wal_fetch"],
   ])("verifies the checked-in %s", async (file, type) => {
     const f = fixture(file) as SignedFixture;
     const result = await verifyEnvelope(

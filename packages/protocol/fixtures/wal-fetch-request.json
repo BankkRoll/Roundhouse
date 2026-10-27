@@ -1,0 +1,6 @@
+{
+  "type": "wal_fetch_request",
+  "restore_id": "rst_01JNNNNNNNNNNNNNNNNNNNNNNN",
+  "from": 1,
+  "count": 32
+}

@@ -15,6 +15,7 @@
  * | 5       | 2          | mesh, volumes, backups, `db_query`, signing-key rollover |
  * | 6       | 3          | jobs, metrics, certificates                              |
  * | 7       | 3, 4       | preview build isolation; exec (web shell), image push    |
+ * | 8       | data       | WAL archiving, `base` backups, point-in-time restores    |
  *
  * @module
  */
@@ -45,12 +46,16 @@
  *   `image_push`/`image_push_result`. The edge gateway (ADR 0011) has no
  *   frames yet: Workers VPC is in beta and needs a live account to design
  *   against.
+ * - Version 8 (ADR 0004 data follow-ups): `base` backups, WAL archiving
+ *   (`desired_state.volumes[].wal_archive`, `wal_archive`, `wal_archive_ack`)
+ *   and point-in-time restores (`restore_job.pitr`, `wal_fetch_request`,
+ *   `wal_fetch`). See {@link PITR_PROTOCOL_VERSION}.
  *
  * Every field or frame added after version 4 is optional on the wire or a new
  * frame type, so agents from {@link MIN_PROTOCOL_VERSION} up keep working:
  * the control plane sends each only at or above its gate.
  */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 /**
  * Oldest `hello.protocol_version` the control plane accepts. An older
@@ -159,3 +164,12 @@ export const EXEC_PROTOCOL_VERSION = 7;
  * a git build with no such builder fails with `builder_outdated`.
  */
 export const IMAGE_PUSH_PROTOCOL_VERSION = 7;
+
+/**
+ * First protocol version whose agents take `base` backups, ship WAL
+ * (`desired_state.volumes[].wal_archive`, `wal_archive`, `wal_archive_ack`)
+ * and run point-in-time restores (`restore_job.pitr`, `wal_fetch_request`,
+ * `wal_fetch`) (ADR 0004). Point-in-time recovery is offered only for a
+ * database whose volume is on such a node.
+ */
+export const PITR_PROTOCOL_VERSION = 8;

@@ -306,6 +306,24 @@ export const MAX_IMAGE_PUSH_TIMEOUT_S = 3600;
 /** Shortest `image_push.timeout_s`. */
 export const MIN_IMAGE_PUSH_TIMEOUT_S = 60;
 
+/** Most WAL files one `wal_archive` reports as archived. */
+export const MAX_WAL_ARCHIVED_PER_FRAME = 64;
+
+/** Most WAL files one `wal_archive` asks upload URLs for, and one `wal_archive_ack` carries. */
+export const MAX_WAL_UPLOADS_PER_FRAME = 32;
+
+/** Most WAL files one `wal_fetch` carries download URLs for. */
+export const MAX_WAL_FETCH_PER_FRAME = 32;
+
+/** Most WAL files one point-in-time restore replays. */
+export const MAX_PITR_WAL_FILES = 100_000;
+
+/**
+ * Largest WAL file the agent ships, raw: Postgres's largest
+ * `wal_segment_size` (1 GiB). Stored sizes add age and zstd framing.
+ */
+export const MAX_WAL_FILE_BYTES = 1024 * 1024 * 1024;
+
 // -----------------------------------------------------------------------------
 // Formats
 // -----------------------------------------------------------------------------
@@ -433,6 +451,18 @@ export const ETAG_RE = /^[\x21-\x7e]{1,256}$/;
 
 /** Presigned object-storage URL. Plain `http` is for the fake S3 in tests. */
 export const PRESIGNED_URL_RE = /^https?:\/\/[^\s/?#]+\/[^\s]*$/;
+
+/**
+ * A file Postgres hands `archive_command`: a WAL segment
+ * (`TTTTTTTTXXXXXXXXYYYYYYYY`), a timeline's last partial segment
+ * (`….partial`), a backup history file (`….XXXXXXXX.backup`) or a timeline
+ * history file (`TTTTTTTT.history`). Never a path.
+ */
+export const WAL_FILE_RE =
+  /^(?:[0-9A-F]{24}(?:\.[0-9A-F]{8}\.backup|\.partial)?|[0-9A-F]{8}\.history)$/;
+
+/** A full WAL segment's name, without a suffix. */
+export const WAL_SEGMENT_RE = /^[0-9A-F]{24}$/;
 
 /** Absolute container path a volume may be mounted at; see {@link isSafeMountPath}. */
 export const MOUNT_PATH_RE = /^\/[A-Za-z0-9._@%+=:,/-]*$/;

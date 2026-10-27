@@ -1,0 +1,11 @@
+{
+  "type": "backup_result",
+  "backup_id": "bak_01JGGGGGGGGGGGGGGGGGGGGGGG",
+  "ok": true,
+  "part_count": 1,
+  "bytes_raw": 52428800,
+  "bytes_stored": 6291456,
+  "sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "wal_start": "000000010000000000000002",
+  "duration_ms": 9120
+}

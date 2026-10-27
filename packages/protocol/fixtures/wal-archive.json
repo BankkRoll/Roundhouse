@@ -1,0 +1,22 @@
+{
+  "type": "wal_archive",
+  "volume_id": "vol_01JDDDDDDDDDDDDDDDDDDDDDDD",
+  "stream_id": "wal_01JNNNNNNNNNNNNNNNNNNNNNNN",
+  "archived": [
+    {
+      "name": "000000010000000000000002",
+      "size_raw": 16777216,
+      "size_stored": 41213,
+      "sha256": "abababababababababababababababababababababababababababababababab",
+      "archived_at": 1700000060000
+    },
+    {
+      "name": "000000010000000000000002.00000028.backup",
+      "size_raw": 341,
+      "size_stored": 512,
+      "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "archived_at": 1700000061000
+    }
+  ],
+  "pending": ["000000010000000000000003", "00000002.history"]
+}

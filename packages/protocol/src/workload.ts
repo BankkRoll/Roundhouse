@@ -11,6 +11,7 @@
 import { z } from "zod";
 import { SealedBoxSchema } from "./box";
 import {
+  AGE_RECIPIENT_RE,
   BCRYPT_RE,
   boundedString,
   CidrString,
@@ -823,6 +824,21 @@ export const VolumeSpecSchema = z.object({
     .string()
     .regex(/^(0|[1-9][0-9]{0,9}):(0|[1-9][0-9]{0,9})$/, "expected uid:gid")
     .nullable(),
+  /**
+   * Continuous WAL archiving (ADR 0004, point-in-time recovery): the agent
+   * ships the files Postgres's `archive_command` spools into the volume
+   * (`WAL_SPOOL_DIR`) to object storage, compressed and encrypted to
+   * `age_recipient`, with `wal_archive` frames. Sent from
+   * `PITR_PROTOCOL_VERSION`.
+   */
+  wal_archive: z
+    .object({
+      /** The stream the files belong to; a restore in place starts a new one. */
+      stream_id: IdString,
+      /** The project's age recipient, as for backups. */
+      age_recipient: z.string().regex(AGE_RECIPIENT_RE, "expected an age recipient"),
+    })
+    .optional(),
 });
 
 /** A volume the node holds. */

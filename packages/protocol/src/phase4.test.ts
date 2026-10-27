@@ -48,7 +48,7 @@ describe("Phase 4 version gates", () => {
   it("puts the web shell and image push at 7", () => {
     expect(EXEC_PROTOCOL_VERSION).toBe(7);
     expect(IMAGE_PUSH_PROTOCOL_VERSION).toBe(7);
-    expect(PROTOCOL_VERSION).toBe(7);
+    expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(7);
   });
 });
 

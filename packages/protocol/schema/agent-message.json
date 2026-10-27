@@ -909,6 +909,10 @@
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
         },
+        "wal_start": {
+          "type": "string",
+          "pattern": "^[0-9A-F]{24}$"
+        },
         "error": {
           "type": "string",
           "minLength": 1
@@ -1416,6 +1420,109 @@
         "type",
         "push_id",
         "ok"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "wal_archive"
+        },
+        "volume_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "stream_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "archived": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^(?:[0-9A-F]{24}(?:\\.[0-9A-F]{8}\\.backup|\\.partial)?|[0-9A-F]{8}\\.history)$"
+              },
+              "size_raw": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 1073741824
+              },
+              "size_stored": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "archived_at": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "name",
+              "size_raw",
+              "size_stored",
+              "sha256",
+              "archived_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "pending": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?:[0-9A-F]{24}(?:\\.[0-9A-F]{8}\\.backup|\\.partial)?|[0-9A-F]{8}\\.history)$"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "volume_id",
+        "stream_id",
+        "archived",
+        "pending"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "wal_fetch_request"
+        },
+        "restore_id": {
+          "type": "string",
+          "pattern": "^[a-z]{1,8}_[0-9A-Za-z_]{1,64}$"
+        },
+        "from": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 99999
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        }
+      },
+      "required": [
+        "type",
+        "restore_id",
+        "from",
+        "count"
       ],
       "additionalProperties": false
     }

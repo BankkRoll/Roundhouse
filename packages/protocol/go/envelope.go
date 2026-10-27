@@ -194,6 +194,10 @@ func DecodeControlMessage(data []byte) (ControlMessage, error) {
 		msg = &ExecClose{}
 	case TypeImagePush:
 		msg = &ImagePush{}
+	case TypeWALArchiveAck:
+		msg = &WALArchiveAck{}
+	case TypeWALFetch:
+		msg = &WALFetch{}
 	default:
 		return nil, fmt.Errorf("unknown control message type %q", probe.Type)
 	}
@@ -266,6 +270,10 @@ func DecodeAgentMessage(data []byte) (AgentMessage, error) {
 		msg = &ExecExit{}
 	case TypeImagePushResult:
 		msg = &ImagePushResult{}
+	case TypeWALArchive:
+		msg = &WALArchive{}
+	case TypeWALFetchRequest:
+		msg = &WALFetchRequest{}
 	default:
 		return nil, fmt.Errorf("unknown agent message type %q", probe.Type)
 	}
