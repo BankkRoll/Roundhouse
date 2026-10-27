@@ -9,6 +9,9 @@
  *   `VOLUMES_PROTOCOL_VERSION` it also lists every live volume pinned to the
  *   node (ADR 0004), and a volume service's workload mounts its volume,
  *   stops before it is replaced, and a database gets its `exec` probe.
+ *   A volume being migrated is also listed on its target node, and its
+ *   service runs nowhere until the copy is done; a service with a TCP proxy
+ *   publishes its port on nodes that enforce the allowlist.
  * - {@link refreshNodes}: bumps nodes' `desired_generation` and asks their
  *   Durable Objects to push the new state.
  * - {@link sealDeploymentEnv}/{@link openDeploymentEnv} and the build
@@ -26,6 +29,7 @@ import {
   projects,
   serviceConfigs,
   services,
+  volumeMigrations,
   volumes,
 } from "@roundhouse/db";
 import {
@@ -57,12 +61,24 @@ import {
   type ServiceConfigSpec,
   type ServiceDatabaseEngine,
 } from "@roundhouse/shared";
-import { and, asc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import type { NodeConnection } from "../durable/node-connection";
 import { type KeyEnv, type Sealed, sealWith, unsealWith } from "./crypto";
 import { deploymentBuildAadV2, deploymentEnvAadV2 } from "./keyring";
 import { getIngressSettings } from "./settings";
+import { publishHostIp, tcpProxiesFor } from "./tcp-proxies";
 import { deploymentEnvAad, projectKey } from "./variables";
+
+/**
+ * Migration phases in which the target node holds the volume before it is
+ * pinned there: it creates it, then receives the copy.
+ */
+export const MIGRATION_TARGET_PHASES = [
+  "preparing_target",
+  "stopping",
+  "copying_out",
+  "copying_in",
+] as const;
 
 /** Which deployment a sealed input belongs to; every part is in its AAD. */
 export interface DeploymentRef {
@@ -280,6 +296,33 @@ export interface WorkloadInput {
   volume?: { id: string; mountPath: string };
   /** A database service: its engine's `exec` probe replaces the configured one. */
   database?: { engine: ServiceDatabaseEngine; version: string | null };
+  /**
+   * A TCP proxy (ADR 0004): the container port published on the node's
+   * `host_port`, admitting only `allowedCidrs`.
+   */
+  publish?: { containerPort: number; hostPort: number; allowedCidrs: string[] };
+}
+
+/**
+ * The replica's ports: the configured port, plus a TCP proxy's port when it
+ * differs, with the proxy's `publish` on whichever entry it names, dual
+ * stack when its allowlist has an IPv6 source.
+ *
+ * @param port - `networking.port`, or `null`.
+ * @param publish - The proxy, if any.
+ * @returns `WorkloadSpec.ports`.
+ */
+export function workloadPorts(
+  port: number | null,
+  publish: WorkloadInput["publish"],
+): WorkloadSpec["ports"] {
+  const ports: WorkloadSpec["ports"] = port ? [{ container_port: port, protocol: "http" }] : [];
+  if (!publish) return ports;
+  const binding = { host_port: publish.hostPort, host_ip: publishHostIp(publish.allowedCidrs) };
+  const existing = ports.find((p) => p.container_port === publish.containerPort);
+  if (existing) existing.publish = binding;
+  else ports.push({ container_port: publish.containerPort, protocol: "tcp", publish: binding });
+  return ports;
 }
 
 /** Probe timings of a database's `exec` health check (ADR 0004, "Service and config"). */
@@ -335,7 +378,8 @@ export async function workloadSpec(w: WorkloadInput): Promise<WorkloadSpec> {
       ? { command: ["/bin/sh", "-c", w.config.deploy.start_command] }
       : {}),
     env_sealed: w.envSealed,
-    ports: port ? [{ container_port: port, protocol: "http" }] : [],
+    ports: workloadPorts(port, w.publish),
+    ...(w.publish ? { publish_allowed_cidrs: w.publish.allowedCidrs } : {}),
     routes: port ? w.hostnames.map((hostname) => ({ hostname, container_port: port })) : [],
     healthcheck: workloadHealthcheck(w),
     resources: {
@@ -457,10 +501,31 @@ export async function buildDesiredState(
         .orderBy(asc(volumes.id))
         .limit(MAX_VOLUMES_PER_NODE)
     : [];
+  // A volume moving here is created (and copied into) before it is pinned
+  // here; it keeps its ID, and its service runs nowhere meanwhile.
+  const incoming = holdsVolumes
+    ? (
+        await db
+          .select({ volume: volumes })
+          .from(volumeMigrations)
+          .innerJoin(volumes, eq(volumes.id, volumeMigrations.volumeId))
+          .where(
+            and(
+              eq(volumeMigrations.targetNodeId, nodeId),
+              eq(volumeMigrations.status, "running"),
+              inArray(volumeMigrations.phase, [...MIGRATION_TARGET_PHASES]),
+              inArray(volumes.status, [...LIVE_VOLUME_STATUSES]),
+              or(isNull(volumes.nodeId), ne(volumes.nodeId, nodeId)),
+            ),
+          )
+          .orderBy(asc(volumes.id))
+          .limit(MAX_VOLUMES_PER_NODE)
+      ).map((r) => r.volume)
+    : [];
   if (holdsVolumes) {
     // Every volume the node holds, including those of services scaled to
     // zero: the agent reports an unlisted one as orphaned but never deletes it.
-    body.volumes = nodeVolumes.map(
+    body.volumes = [...nodeVolumes, ...incoming].slice(0, MAX_VOLUMES_PER_NODE).map(
       (v): VolumeSpec => ({
         id: v.id,
         size_mb: v.sizeMb,
@@ -561,6 +626,7 @@ export async function buildDesiredState(
     for (const v of held) volumeServices.add(`${v.serviceId}:${v.environmentId}`);
   }
   const mountOf = new Map(nodeVolumes.map((v) => [`${v.serviceId}:${v.environmentId}`, v]));
+  const proxies = node.capabilities?.tcp_proxy ? await tcpProxiesFor(db, pairs) : new Map();
 
   for (const r of rows) {
     const d = r.deployment;
@@ -570,6 +636,10 @@ export async function buildDesiredState(
     // SECURITY: a volume service never runs without its volume, or a
     // database would initialise a fresh, empty data directory.
     if (!volume && (r.databaseEngine || volumeServices.has(pair))) continue;
+    // SECURITY: a migrating volume is being copied; a running service would
+    // write after the snapshot and those writes would be lost on the target.
+    if (volume?.status === "migrating") continue;
+    const proxy = proxies.get(pair);
     const key = await projectKey(db, keys, r.projectId);
     const payload = await openDeploymentEnv(key, d.envSealed as Sealed, {
       workspaceId: r.workspaceId,
@@ -601,6 +671,15 @@ export async function buildDesiredState(
         ...(volume ? { volume: { id: volume.id, mountPath: volume.mountPath } } : {}),
         ...(r.databaseEngine
           ? { database: { engine: r.databaseEngine, version: r.databaseVersion } }
+          : {}),
+        ...(proxy
+          ? {
+              publish: {
+                containerPort: proxy.containerPort,
+                hostPort: proxy.publicPort,
+                allowedCidrs: proxy.allowedCidrs,
+              },
+            }
           : {}),
       }),
     );

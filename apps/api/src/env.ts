@@ -7,6 +7,7 @@
 import type { AuditChain } from "./durable/audit-chain";
 import type { NodeConnection } from "./durable/node-connection";
 import type { ProjectRoom } from "./durable/project-room";
+import type { VolumeMigrationParams } from "./lib/volume-migrations";
 import type { BackupParams } from "./workflows/backup";
 import type { DeployParams } from "./workflows/deploy";
 import type { KeyRotationParams } from "./workflows/key-rotation";
@@ -81,6 +82,8 @@ export interface Env {
   BACKUP_WORKFLOW: Workflow<BackupParams>;
   /** Runs one restore per instance (instance ID = the `rst_…` restore ID), ADR 0004. */
   RESTORE_WORKFLOW: Workflow<RestoreParams>;
+  /** Runs one volume migration per instance (instance ID = the `mig_…` ID), ADR 0004. */
+  VOLUME_MIGRATION_WORKFLOW: Workflow<VolumeMigrationParams>;
   /**
    * Seconds a provisioned server gets to join, overriding `JOIN_TIMEOUT_MS`;
    * and seconds between join checks. For development and tests; unset in production.

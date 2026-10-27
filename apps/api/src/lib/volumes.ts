@@ -25,6 +25,7 @@ import {
   nodes,
   placements,
   type services,
+  volumeMigrations,
   volumes,
 } from "@roundhouse/db";
 import type { VolumeState } from "@roundhouse/protocol";
@@ -41,6 +42,7 @@ import {
 import { and, asc, desc, eq, inArray, isNull, lte, notInArray, or } from "drizzle-orm";
 import type { Env } from "../env";
 import { ApiError, conflict } from "./errors";
+import { hasTcpProxy } from "./tcp-proxies";
 
 /** A volume row. */
 export type VolumeRow = typeof volumes.$inferSelect;
@@ -119,7 +121,9 @@ export async function isVolumeService(
 
 /**
  * Refuses more than one replica for a volume service (ADR 0004,
- * "Placement affinity").
+ * "Placement affinity"), or for a service publishing a TCP port: one host
+ * port can be published once per node, and the allowlist follows one
+ * replica.
  *
  * @param db - Database client.
  * @param service - Its ID and database engine.
@@ -133,6 +137,13 @@ export async function assertSingleReplica(
 ): Promise<void> {
   if (replicas === undefined || replicas <= 1) return;
   if (await isVolumeService(db, service)) throw singleReplicaError();
+  if (await hasTcpProxy(db, service.id)) {
+    throw new ApiError(
+      422,
+      "volume_requires_single_replica",
+      "A service with a TCP proxy runs at most one replica; turn the proxy off first",
+    );
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -251,6 +262,7 @@ export async function resizeVolume(db: Db, volume: VolumeRow, sizeMb: number): P
   if (!(LIVE_VOLUME_STATUSES as readonly string[]).includes(volume.status)) {
     throw conflict(`The volume is ${volume.status.replace(/_/g, " ")}`);
   }
+  await assertNotMoving(db, volume);
   if (sizeMb < volume.sizeMb) {
     throw new ApiError(
       422,
@@ -265,6 +277,31 @@ export async function resizeVolume(db: Db, volume: VolumeRow, sizeMb: number): P
     .returning();
   if (!row) throw conflict("The volume changed at the same time; reload and retry");
   return row;
+}
+
+/**
+ * Refuses a change to a volume that is moving to another node: its service
+ * is stopped for the copy, and the copy was sized and placed for the volume
+ * as it was.
+ *
+ * @param db - Database client.
+ * @param volume - The volume.
+ * @throws {ApiError} 409 while a migration is queued or running.
+ */
+export async function assertNotMoving(db: Db, volume: VolumeRow): Promise<void> {
+  const [moving] = await db
+    .select({ id: volumeMigrations.id })
+    .from(volumeMigrations)
+    .where(
+      and(
+        eq(volumeMigrations.volumeId, volume.id),
+        inArray(volumeMigrations.status, ["queued", "running"]),
+      ),
+    )
+    .limit(1);
+  if (moving || volume.status === "migrating") {
+    throw conflict("The volume is moving to another server; wait for the move to end");
+  }
 }
 
 /**
@@ -309,6 +346,7 @@ export async function deleteVolume(
   if (!(LIVE_VOLUME_STATUSES as readonly string[]).includes(volume.status)) {
     throw conflict(`The volume is ${volume.status.replace(/_/g, " ")}`);
   }
+  await assertNotMoving(db, volume);
   if (await volumeInUse(db, volume)) {
     throw conflict("The service still runs here; scale it to 0 or delete it first");
   }

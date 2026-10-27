@@ -6,7 +6,9 @@
  * - `backup_progress`: records uploaded parts (`backup_parts`) for
  *   `CompleteMultipartUpload`;
  * - `backup_result` / `restore_result`: records the agent's outcome and
- *   wakes the waiting workflow, which reads it back from D1.
+ *   wakes the waiting workflow, which reads it back from D1. A volume
+ *   migration's copy-out is a backup (`trigger: migration`) and its copy-in
+ *   answers with the migration ID as `restore_id`; both wake the migration.
  *
  * SECURITY: every frame is checked against the row's `node_id`, so an agent
  * can only report on (or get URLs for) backups and restores sent to it.
@@ -23,17 +25,27 @@ import type {
   BackupResult,
   RestoreJob,
   RestoreResult,
+  VolumeCopyIn,
+  VolumeCopyOut,
 } from "@roundhouse/protocol";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Env } from "../../../env";
 import { scrubError, sealPartUrls, wakeBackupWorkflow } from "../../../lib/backups/backups";
 import { RESTORE_EVENT, wakeRestoreWorkflow } from "../../../lib/backups/restores";
 import { loadBackupStorage } from "../../../lib/backups/storage";
+import { onMigrationCopyIn, wakeMigrationOfBackup } from "../../../lib/volume-migrations";
 
 type Header = "id" | "node_id" | "iat" | "exp";
 
-/** Body of a `backup_job` or `restore_job`; the Durable Object adds the signed header. */
-export type BackupJobFrameBody = Omit<BackupJob, Header> | Omit<RestoreJob, Header>;
+/**
+ * Body of a `backup_job`, `restore_job`, `volume_copy_out` or
+ * `volume_copy_in`; the Durable Object adds the signed header.
+ */
+export type BackupJobFrameBody =
+  | Omit<BackupJob, Header>
+  | Omit<RestoreJob, Header>
+  | Omit<VolumeCopyOut, Header>
+  | Omit<VolumeCopyIn, Header>;
 
 /** Body of a `backup_parts` frame; the Durable Object adds the signed header. */
 export type BackupPartsBody = Omit<BackupParts, Header>;
@@ -166,9 +178,8 @@ async function onBackupResult(ctx: BackupFrameContext, frame: BackupResult) {
       .set({ error: scrubError(frame.error ?? "backup failed"), updatedAt: now })
       .where(answered);
   }
-  // NOTE: a migration's copy-out is answered with the same frames; its
-  // workflow belongs to the volume migration stream and re-reads the row.
-  if (backup.trigger !== "migration") await wakeBackupWorkflow(ctx.env, backup.id);
+  if (backup.trigger === "migration") await wakeMigrationOfBackup(ctx.env, ctx.db, backup.id);
+  else await wakeBackupWorkflow(ctx.env, backup.id);
 }
 
 async function onRestoreResult(ctx: BackupFrameContext, frame: RestoreResult) {
@@ -189,5 +200,9 @@ async function onRestoreResult(ctx: BackupFrameContext, frame: RestoreResult) {
       ),
     )
     .returning({ id: restores.id });
-  if (row) await wakeRestoreWorkflow(ctx.env, row.id, RESTORE_EVENT);
+  if (row) {
+    await wakeRestoreWorkflow(ctx.env, row.id, RESTORE_EVENT);
+    return;
+  }
+  await onMigrationCopyIn(ctx.env, ctx.db, ctx.nodeId, frame);
 }
