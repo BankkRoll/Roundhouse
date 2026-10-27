@@ -143,6 +143,8 @@ const VERBS: Record<AuditAction, string> = {
   "cron.run_cancelled": "cancelled a cron run",
   "cron.paused": "paused a cron job",
   "cron.resumed": "resumed a cron job",
+  "node.mesh_joined": "joined the private network",
+  "node.mesh_key_rotated": "rotated the mesh key of",
 };
 
 /**

@@ -21,6 +21,7 @@ import { type ChangesDb, emptyChanges } from "./changes-db";
 import { type CronDb, emptyCron, seedCron } from "./cron-db";
 import { type DataDb, emptyData, seedData } from "./data-db";
 import { type DeployDb, emptyDeploy, seedDeploy } from "./deploy-db";
+import { emptyMesh, type MeshDb } from "./mesh-db";
 import { emptyProviders, type ProvidersDb } from "./providers-db";
 import { type SecurityDb, seedSecurity } from "./security-db";
 
@@ -92,6 +93,8 @@ export interface MockDb {
   data: DataDb;
   /** Cron schedule state, runs and their output. */
   cron: CronDb;
+  /** Each server's mesh state and the pairs between servers. */
+  mesh: MeshDb;
   /** Two-factor, sessions and lockouts. */
   security: SecurityDb;
   /** Teams, project grants, protection rules and default project roles. */
@@ -290,6 +293,7 @@ function seed(): MockDb {
     deploy,
     data: seedData(deploy, now),
     cron: seedCron(deploy, now),
+    mesh: emptyMesh(),
     providers: emptyProviders(),
     changes: emptyChanges(),
     security: seedSecurity(USERS.owner.id, now),
@@ -335,6 +339,7 @@ export function seedFreshInstall(masterKeyConfigured = true): void {
     deploy: emptyDeploy(),
     data: emptyData(),
     cron: emptyCron(),
+    mesh: emptyMesh(),
     access: emptyAccess(),
   };
 }

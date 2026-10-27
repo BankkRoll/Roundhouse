@@ -18,8 +18,10 @@ import { ConfirmDialog } from "../../../components/confirm-dialog";
 import { errorMessage, isApiError } from "../../../lib/api/client";
 import type { Domain } from "../../../lib/api/deploy-types";
 import type { DomainHsts, DomainTls } from "../../../lib/api/domains-client";
+import type { Mesh } from "../../../lib/api/mesh-client";
 import { formatRelativeTime, formatTimestamp, formatUntil } from "../../../lib/format";
 import { useUpdateDomain } from "../../../queries/domains";
+import { meshRoutedNodes } from "../../servers/mesh-format";
 
 type Tone = "success" | "warning" | "danger" | "neutral" | "info";
 
@@ -186,32 +188,54 @@ export function CertificateDetails({ domain }: { domain: Domain }) {
 
 /**
  * Which of the workspace's servers answer for a domain, and what that means for its DNS.
- * Until servers route to each other's replicas, only those running the service do.
+ * Servers running a replica always do. With the private network up, so does every
+ * server that reaches one of them over it, and DNS may point at any of those. Without
+ * it each server routes only to replicas running on it.
  *
- * @param props - The domain.
+ * @param props - The domain, and the workspace's mesh when the caller can read it.
  * @returns The guidance.
  */
-export function RoutingGuidance({ domain }: { domain: Domain }) {
+export function RoutingGuidance({ domain, mesh = null }: { domain: Domain; mesh?: Mesh | null }) {
   const nodes = domain.routing_nodes;
   const serving = nodes.filter((node) => node.serves);
+  const routed = mesh
+    ? meshRoutedNodes(
+        mesh,
+        serving.map((node) => node.id),
+      )
+    : new Set<string>();
+  const answering = serving.length + nodes.filter((node) => routed.has(node.id)).length;
   let message: string;
   if (nodes.length === 0) {
     message = "This workspace has no servers taking traffic yet. Add one before pointing DNS here.";
   } else if (serving.length === 0) {
     message =
       "Not deployed yet: no server runs this service, so nothing answers for this hostname until a deployment is live.";
-  } else if (serving.length < nodes.length) {
-    message =
-      `Runs on ${serving.length} of ${nodes.length} servers. Every ingress server takes ` +
-      "traffic, but each routes this hostname only to replicas running on it. Until servers " +
-      "route to each other's replicas (the WireGuard mesh, not built yet), only servers " +
-      "running a replica of this service answer for the domain; DNS must point at those. " +
-      "Update the records if the service moves to other servers.";
-  } else {
+  } else if (serving.length === nodes.length) {
     message =
       nodes.length === 1
         ? "Served by this workspace's server."
         : `Served by all ${nodes.length} of this workspace's servers.`;
+  } else if (answering === nodes.length) {
+    message =
+      `Runs on ${serving.length} of ${nodes.length} servers, and all ${nodes.length} answer for ` +
+      "it: the others route to a replica over the private network. DNS may point at any or " +
+      "all of them.";
+  } else if (answering > serving.length) {
+    message =
+      `Runs on ${serving.length} of ${nodes.length} servers, and ${answering - serving.length} ` +
+      `more route to it over the private network, so ${answering} answer for it. DNS must ` +
+      "point at those; the rest can't reach a replica over the private network yet (see " +
+      "Servers → Network).";
+  } else {
+    message =
+      `Runs on ${serving.length} of ${nodes.length} servers. Every ingress server takes ` +
+      "traffic, but without the private network each routes this hostname only to " +
+      "replicas running on it, so only servers running a replica of this service answer " +
+      "for the domain; DNS must point at those. Update the records if the service moves " +
+      (mesh?.enabled
+        ? "to other servers. The others can't reach a replica over the private network yet (see Servers → Network)."
+        : "to other servers, or turn on the private network so any server can answer.");
   }
   return (
     <div className="grid gap-1.5">
@@ -229,8 +253,12 @@ export function RoutingGuidance({ domain }: { domain: Domain }) {
               <span className="font-mono text-xs text-muted-foreground">
                 {node.public_ip ?? "no public IP"}
               </span>
-              <Badge tone={node.serves ? "success" : "neutral"}>
-                {node.serves ? "Serves" : "Not running here"}
+              <Badge tone={node.serves || routed.has(node.id) ? "success" : "neutral"}>
+                {node.serves
+                  ? "Serves"
+                  : routed.has(node.id)
+                    ? "Serves over the mesh"
+                    : "Not running here"}
               </Badge>
             </li>
           ))}

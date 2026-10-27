@@ -40,7 +40,9 @@ import { ErrorState } from "../../../components/error-state";
 import { errorMessage } from "../../../lib/api/client";
 import type { Domain } from "../../../lib/api/deploy-types";
 import type { DnsRecord } from "../../../lib/api/domains-client";
+import type { Mesh } from "../../../lib/api/mesh-client";
 import { formatRelativeTime } from "../../../lib/format";
+import { usePermissions } from "../../../lib/permissions";
 import {
   isInProgress,
   useAddDomain,
@@ -48,6 +50,7 @@ import {
   useRemoveDomain,
   useServiceDomains,
 } from "../../../queries/domains";
+import { useMesh } from "../../../queries/mesh";
 import { useServiceConfig } from "../../../queries/services";
 import { useEnvironmentGate } from "../../access/environment-gate";
 import { useProjectEnvironment } from "../../projects/use-project-environment";
@@ -176,10 +179,13 @@ export function DnsRecordsTable({ records }: { records: DnsRecord[] }) {
 function DomainRow({
   domain,
   canManage,
+  mesh,
   onRemove,
 }: {
   domain: Domain;
   canManage: boolean;
+  /** The workspace's mesh, for which servers route to replicas elsewhere; `null` when unknown. */
+  mesh: Mesh | null;
   onRemove: (domain: Domain) => void;
 }) {
   const check = useCheckDomain();
@@ -298,7 +304,7 @@ function DomainRow({
       ) : null}
       {showRecords ? (
         <>
-          <RoutingGuidance domain={domain} />
+          <RoutingGuidance domain={domain} mesh={mesh} />
           <DnsRecordsTable records={domain.records} />
         </>
       ) : null}
@@ -310,7 +316,7 @@ function DomainRow({
         >
           {custom && domain.status === "active" ? <DomainStepper domain={domain} /> : null}
           <CertificateDetails domain={domain} />
-          {showRecords ? null : <RoutingGuidance domain={domain} />}
+          {showRecords ? null : <RoutingGuidance domain={domain} mesh={mesh} />}
           <HstsPanel domain={domain} canManage={canManage && custom} />
         </section>
       ) : null}
@@ -325,6 +331,7 @@ function AddDomainDialog({
   environmentId,
   environmentName,
   listed,
+  mesh,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -333,6 +340,7 @@ function AddDomainDialog({
   environmentName: string;
   /** The polled list, so the records step shows live states. */
   listed: readonly Domain[] | undefined;
+  mesh: Mesh | null;
 }) {
   const add = useAddDomain(serviceId);
   const check = useCheckDomain();
@@ -393,7 +401,7 @@ function AddDomainDialog({
                 <span className="text-xs text-muted-foreground">{current.error}</span>
               ) : null}
             </div>
-            <RoutingGuidance domain={current} />
+            <RoutingGuidance domain={current} mesh={mesh} />
             <DnsRecordsTable records={current.records} />
             {check.isError ? (
               <p role="alert" className="text-sm text-danger">
@@ -489,6 +497,8 @@ export function DomainsSection({ workspaceId, projectId, serviceId }: ServicePag
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<Domain | null>(null);
   const noPort = config.data?.networking.port === null;
+  const { can } = usePermissions(workspaceId);
+  const mesh = useMesh(workspaceId, can("nodes:read")).data ?? null;
 
   return (
     <SettingsSection
@@ -529,6 +539,7 @@ export function DomainsSection({ workspaceId, projectId, serviceId }: ServicePag
               key={domain.id}
               domain={domain}
               canManage={canManage}
+              mesh={mesh}
               onRemove={setRemoving}
             />
           ))}
@@ -542,6 +553,7 @@ export function DomainsSection({ workspaceId, projectId, serviceId }: ServicePag
           environmentId={environment.id}
           environmentName={environment.name}
           listed={domains.data}
+          mesh={mesh}
         />
       ) : null}
       <ConfirmDialog

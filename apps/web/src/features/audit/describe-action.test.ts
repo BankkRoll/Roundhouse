@@ -28,6 +28,23 @@ describe("describeAction", () => {
     expect(result).toEqual({ verb: "removed server", target: "hel-1", icon: ServerIcon });
   });
 
+  it("describes a server joining the private network and its key rotations", () => {
+    expect(describeAction(makeAuditEntry({ action: "node.mesh_joined" }))).toEqual({
+      verb: "joined the private network",
+      target: null,
+      icon: ServerIcon,
+    });
+    expect(
+      describeAction(
+        makeAuditEntry({
+          ...byOwner,
+          action: "node.mesh_key_rotated",
+          metadata: { name: "hel-1" },
+        }),
+      ),
+    ).toEqual({ verb: "rotated the mesh key of", target: "hel-1", icon: ServerIcon });
+  });
+
   it("uses the invitee email for invites", () => {
     const result = describeAction(
       makeAuditEntry({

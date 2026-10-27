@@ -42,6 +42,7 @@ import {
 import { useMe } from "../../queries/me";
 import { BackupStorageSection } from "./backup-storage-section";
 import { submitGithubManifest } from "./github-manifest";
+import { NetworkSection } from "./network-section";
 import { SettingsFrame } from "./settings-frame";
 import { SigningKeysSection } from "./signing-keys-section";
 
@@ -407,7 +408,8 @@ function GithubSection({
 }
 
 /**
- * Install-wide settings: how long logs are kept, whether the MCP endpoint is on, and the control-plane signing key and its
+ * Install-wide settings: how long logs are kept, whether the MCP endpoint is on, the
+ * private network between servers and its address range, and the control-plane signing key and its
  * rollover (instance admins), and the GitHub App with its installations. Owners can
  * create the App through GitHub's manifest flow; anyone who manages projects can install
  * it.
@@ -445,6 +447,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
             <>
               <LogRetentionForm settings={settings.data} />
               <McpSection settings={settings.data} />
+              <NetworkSection settings={settings.data} />
               <BackupStorageSection />
               <SigningKeysSection />
             </>
@@ -453,7 +456,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
           <EmptyState
             icon={<ShieldIcon />}
             title="Instance settings are for owners"
-            description="Log retention, MCP, backup storage and signing keys apply to the whole instance, so only workspace owners can change them."
+            description="Log retention, MCP, the private network, backup storage and signing keys apply to the whole instance, so only workspace owners can change them."
           />
         )}
         {github.isPending ? (

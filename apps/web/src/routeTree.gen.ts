@@ -38,6 +38,7 @@ import { Route as AppWWorkspaceIdPreferencesAccessibilityRouteImport } from './r
 import { Route as AppWWorkspaceIdPreferencesShortcutsRouteImport } from './routes/_app/w/$workspaceId/preferences/shortcuts'
 import { Route as AppWWorkspaceIdServersIndexRouteImport } from './routes/_app/w/$workspaceId/servers/index'
 import { Route as AppWWorkspaceIdServersNodeIdRouteImport } from './routes/_app/w/$workspaceId/servers/$nodeId'
+import { Route as AppWWorkspaceIdServersNetworkRouteImport } from './routes/_app/w/$workspaceId/servers/network'
 import { Route as AppWWorkspaceIdTeamsIndexRouteImport } from './routes/_app/w/$workspaceId/teams/index'
 import { Route as AppWWorkspaceIdTeamsTeamIdRouteImport } from './routes/_app/w/$workspaceId/teams/$teamId'
 import { Route as AppWWorkspaceIdTemplatesIndexRouteImport } from './routes/_app/w/$workspaceId/templates/index'
@@ -213,6 +214,12 @@ const AppWWorkspaceIdServersNodeIdRoute =
     path: '/servers/$nodeId',
     getParentRoute: () => AppWWorkspaceIdRouteRoute,
   } as any)
+const AppWWorkspaceIdServersNetworkRoute =
+  AppWWorkspaceIdServersNetworkRouteImport.update({
+    id: '/servers/network',
+    path: '/servers/network',
+    getParentRoute: () => AppWWorkspaceIdRouteRoute,
+  } as any)
 const AppWWorkspaceIdTeamsIndexRoute =
   AppWWorkspaceIdTeamsIndexRouteImport.update({
     id: '/teams/',
@@ -361,6 +368,7 @@ export interface FileRoutesByFullPath {
   '/w/$workspaceId/preferences/accessibility': typeof AppWWorkspaceIdPreferencesAccessibilityRoute
   '/w/$workspaceId/preferences/shortcuts': typeof AppWWorkspaceIdPreferencesShortcutsRoute
   '/w/$workspaceId/servers/$nodeId': typeof AppWWorkspaceIdServersNodeIdRoute
+  '/w/$workspaceId/servers/network': typeof AppWWorkspaceIdServersNetworkRoute
   '/w/$workspaceId/teams/$teamId': typeof AppWWorkspaceIdTeamsTeamIdRoute
   '/w/$workspaceId/templates/$templateId': typeof AppWWorkspaceIdTemplatesTemplateIdRoute
   '/w/$workspaceId/preferences/': typeof AppWWorkspaceIdPreferencesIndexRoute
@@ -409,6 +417,7 @@ export interface FileRoutesByTo {
   '/w/$workspaceId/preferences/accessibility': typeof AppWWorkspaceIdPreferencesAccessibilityRoute
   '/w/$workspaceId/preferences/shortcuts': typeof AppWWorkspaceIdPreferencesShortcutsRoute
   '/w/$workspaceId/servers/$nodeId': typeof AppWWorkspaceIdServersNodeIdRoute
+  '/w/$workspaceId/servers/network': typeof AppWWorkspaceIdServersNetworkRoute
   '/w/$workspaceId/teams/$teamId': typeof AppWWorkspaceIdTeamsTeamIdRoute
   '/w/$workspaceId/templates/$templateId': typeof AppWWorkspaceIdTemplatesTemplateIdRoute
   '/w/$workspaceId/preferences': typeof AppWWorkspaceIdPreferencesIndexRoute
@@ -460,6 +469,7 @@ export interface FileRoutesById {
   '/_app/w/$workspaceId/preferences/accessibility': typeof AppWWorkspaceIdPreferencesAccessibilityRoute
   '/_app/w/$workspaceId/preferences/shortcuts': typeof AppWWorkspaceIdPreferencesShortcutsRoute
   '/_app/w/$workspaceId/servers/$nodeId': typeof AppWWorkspaceIdServersNodeIdRoute
+  '/_app/w/$workspaceId/servers/network': typeof AppWWorkspaceIdServersNetworkRoute
   '/_app/w/$workspaceId/teams/$teamId': typeof AppWWorkspaceIdTeamsTeamIdRoute
   '/_app/w/$workspaceId/templates/$templateId': typeof AppWWorkspaceIdTemplatesTemplateIdRoute
   '/_app/w/$workspaceId/preferences/': typeof AppWWorkspaceIdPreferencesIndexRoute
@@ -512,6 +522,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/preferences/accessibility'
     | '/w/$workspaceId/preferences/shortcuts'
     | '/w/$workspaceId/servers/$nodeId'
+    | '/w/$workspaceId/servers/network'
     | '/w/$workspaceId/teams/$teamId'
     | '/w/$workspaceId/templates/$templateId'
     | '/w/$workspaceId/preferences/'
@@ -560,6 +571,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/preferences/accessibility'
     | '/w/$workspaceId/preferences/shortcuts'
     | '/w/$workspaceId/servers/$nodeId'
+    | '/w/$workspaceId/servers/network'
     | '/w/$workspaceId/teams/$teamId'
     | '/w/$workspaceId/templates/$templateId'
     | '/w/$workspaceId/preferences'
@@ -610,6 +622,7 @@ export interface FileRouteTypes {
     | '/_app/w/$workspaceId/preferences/accessibility'
     | '/_app/w/$workspaceId/preferences/shortcuts'
     | '/_app/w/$workspaceId/servers/$nodeId'
+    | '/_app/w/$workspaceId/servers/network'
     | '/_app/w/$workspaceId/teams/$teamId'
     | '/_app/w/$workspaceId/templates/$templateId'
     | '/_app/w/$workspaceId/preferences/'
@@ -847,6 +860,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWWorkspaceIdServersNodeIdRouteImport
       parentRoute: typeof AppWWorkspaceIdRouteRoute
     }
+    '/_app/w/$workspaceId/servers/network': {
+      id: '/_app/w/$workspaceId/servers/network'
+      path: '/servers/network'
+      fullPath: '/w/$workspaceId/servers/network'
+      preLoaderRoute: typeof AppWWorkspaceIdServersNetworkRouteImport
+      parentRoute: typeof AppWWorkspaceIdRouteRoute
+    }
     '/_app/w/$workspaceId/teams/': {
       id: '/_app/w/$workspaceId/teams/'
       path: '/teams'
@@ -1079,6 +1099,7 @@ interface AppWWorkspaceIdRouteRouteChildren {
   AppWWorkspaceIdPreferencesAccessibilityRoute: typeof AppWWorkspaceIdPreferencesAccessibilityRoute
   AppWWorkspaceIdPreferencesShortcutsRoute: typeof AppWWorkspaceIdPreferencesShortcutsRoute
   AppWWorkspaceIdServersNodeIdRoute: typeof AppWWorkspaceIdServersNodeIdRoute
+  AppWWorkspaceIdServersNetworkRoute: typeof AppWWorkspaceIdServersNetworkRoute
   AppWWorkspaceIdTeamsTeamIdRoute: typeof AppWWorkspaceIdTeamsTeamIdRoute
   AppWWorkspaceIdTemplatesTemplateIdRoute: typeof AppWWorkspaceIdTemplatesTemplateIdRoute
   AppWWorkspaceIdPreferencesIndexRoute: typeof AppWWorkspaceIdPreferencesIndexRoute
@@ -1108,6 +1129,7 @@ const AppWWorkspaceIdRouteRouteChildren: AppWWorkspaceIdRouteRouteChildren = {
   AppWWorkspaceIdPreferencesShortcutsRoute:
     AppWWorkspaceIdPreferencesShortcutsRoute,
   AppWWorkspaceIdServersNodeIdRoute: AppWWorkspaceIdServersNodeIdRoute,
+  AppWWorkspaceIdServersNetworkRoute: AppWWorkspaceIdServersNetworkRoute,
   AppWWorkspaceIdTeamsTeamIdRoute: AppWWorkspaceIdTeamsTeamIdRoute,
   AppWWorkspaceIdTemplatesTemplateIdRoute:
     AppWWorkspaceIdTemplatesTemplateIdRoute,

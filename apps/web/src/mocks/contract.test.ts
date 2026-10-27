@@ -48,6 +48,8 @@ import {
 import { SEED } from "./deploy-db";
 import { realtimeSubscriptions, sentRealtimeMessages } from "./deploy-handlers";
 import { handlers } from "./handlers";
+import { MESH_SEED } from "./mesh-db";
+import { seedMeshNetwork } from "./mesh-handlers";
 import { MOCK_BACKUP_CODES, MOCK_TOTP_CODE } from "./security-db";
 
 // -----------------------------------------------------------------------------
@@ -98,6 +100,7 @@ const ROUTE_MODULES = [
   "auth-security",
   "cron",
   "access",
+  "mesh",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -535,6 +538,72 @@ describe("MSW mocks match the API contract", () => {
       as("admin");
       expect((await call("DELETE", `${WS}/nodes/node_nope`)).status).toBe(404);
       expect((await call("DELETE", `${WS}/nodes/node_hel1`)).status).toBe(204);
+    });
+  });
+
+  it("mesh: read, rotate a key, and the supernet lock", async () => {
+    await fresh(async () => {
+      expect(await call("GET", `${WS}/mesh`)).toMatchObject({
+        status: 200,
+        body: { enabled: false, supernet: "10.200.0.0/16", pairs: [] },
+      });
+      expect(
+        (await call("POST", `${WS}/nodes/${MESH_SEED.hel}/mesh/rotate-key`)).body,
+      ).toMatchObject({ error: { code: "mesh_not_joined" } });
+      expect(
+        await call("PATCH", "/v1/instance/settings", { mesh_supernet: "10.42.0.0/16" }),
+      ).toMatchObject({ status: 200, body: { mesh_supernet: "10.42.0.0/16" } });
+      expect(
+        (await call("PATCH", "/v1/instance/settings", { mesh_supernet: "172.17.0.0/16" })).status,
+      ).toBe(400);
+      expect(
+        await call("PATCH", "/v1/instance/settings", {
+          mesh_enabled: true,
+          mesh_supernet: "10.200.0.0/16",
+        }),
+      ).toMatchObject({ status: 200, body: { mesh_enabled: true, mesh_supernet_locked: false } });
+
+      seedMeshNetwork();
+      const mesh = await call("GET", `${WS}/mesh`);
+      const body = mesh.body as {
+        nodes: { id: string; relay: boolean; mesh_index: number | null }[];
+        pairs: { path: string }[];
+      };
+      expect(body.nodes.find((node) => node.id === MESH_SEED.hel)?.relay).toBe(true);
+      expect(body.nodes.find((node) => node.id === MESH_SEED.pending)?.mesh_index).toBeNull();
+      expect(body.pairs.map((pair) => pair.path)).toContain("relayed");
+      expect(await call("GET", "/v1/instance/settings")).toMatchObject({
+        body: { mesh_supernet_locked: true },
+      });
+      expect(
+        await call("PATCH", "/v1/instance/settings", { mesh_supernet: "10.42.0.0/16" }),
+      ).toMatchObject({ status: 409, body: { error: { code: "mesh_supernet_locked" } } });
+
+      as("member");
+      expect((await call("GET", `${WS}/mesh`)).status).toBe(200);
+      expect((await call("POST", `${WS}/nodes/${MESH_SEED.hel}/mesh/rotate-key`)).status).toBe(403);
+      as("admin");
+      expect((await call("POST", `${WS}/nodes/node_nope/mesh/rotate-key`)).status).toBe(404);
+      expect(
+        (await call("POST", `${WS}/nodes/${MESH_SEED.pending}/mesh/rotate-key`)).body,
+      ).toMatchObject({ error: { code: "mesh_not_joined" } });
+      expect(await call("POST", `${WS}/nodes/${MESH_SEED.nbg}/mesh/rotate-key`)).toMatchObject({
+        status: 202,
+        body: { id: MESH_SEED.nbg, rotating: true },
+      });
+      expect(db.audit.at(-1)).toMatchObject({
+        action: "node.mesh_key_rotated",
+        target_id: MESH_SEED.nbg,
+        metadata: { name: "nbg-1" },
+      });
+      expect(await call("POST", `${WS}/nodes/${MESH_SEED.hel}/mesh/rotate-key`)).toMatchObject({
+        status: 409,
+        body: { error: { code: "mesh_rotation_in_progress" } },
+      });
+      expect((await call("GET", `${OTHER_WS}/mesh`)).status).toBe(404);
+      as(null);
+      expect((await call("GET", `${WS}/mesh`)).status).toBe(401);
+      expect((await call("POST", `${WS}/nodes/${MESH_SEED.hel}/mesh/rotate-key`)).status).toBe(401);
     });
   });
 

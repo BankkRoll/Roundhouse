@@ -29,6 +29,7 @@ import { usePermissions } from "../../lib/permissions";
 import { useNow } from "../../lib/use-now";
 import { forgetNode, useDeleteNode, useNode } from "../../queries/nodes";
 import { COST_ESTIMATE_NOTE, formatCostEstimate } from "./cost-estimate";
+import { MeshSection } from "./mesh-section";
 import { nodeMeterRows, nodeSubtitle } from "./node-metrics";
 import { managedProvider, ProviderBadges } from "./provider-badge";
 
@@ -120,7 +121,8 @@ function removeErrorMessage(error: unknown, provider: string | undefined): strin
 }
 
 /**
- * Detail view for one server: usage, hardware facts, capabilities and removal.
+ * Detail view for one server: usage, hardware facts, capabilities, its place in the
+ * private network, and removal.
  *
  * @param props - Workspace and node ids.
  * @returns The page.
@@ -257,6 +259,12 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
             )}
           </div>
         </section>
+        <MeshSection
+          workspaceId={workspaceId}
+          nodeId={data.id}
+          canManage={can("nodes:manage")}
+          now={now}
+        />
       </div>
 
       <ConfirmDialog

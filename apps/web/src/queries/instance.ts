@@ -14,6 +14,7 @@ import {
   tlsApi,
 } from "../lib/api/tls-client";
 import { queryKeys } from "./keys";
+import { invalidateMeshes } from "./mesh";
 
 /**
  * Reads install-wide settings (apps domain, TLS mode, log retention). Owners only.
@@ -38,8 +39,11 @@ export function useUpdateInstanceSettings() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: InstanceSettingsPatch) => deployApi.updateInstanceSettings(body),
-    onSuccess: (settings) => {
+    onSuccess: (settings, body) => {
       queryClient.setQueryData(queryKeys.instanceSettings, settings);
+      if (body.mesh_enabled !== undefined || body.mesh_supernet !== undefined) {
+        invalidateMeshes(queryClient);
+      }
       // NOTE: Domains & TLS reads the same fields, and its form compares against them;
       // patching first keeps it from looking unsaved until the refetch lands.
       queryClient.setQueryData<InstanceDomainSettings>(queryKeys.instanceDomains, (previous) =>

@@ -17,6 +17,7 @@ import {
 } from "./cost-estimate";
 import { fleetHeadline, summarizeFleet } from "./node-metrics";
 import { ServerGrid, ServerGridSkeleton } from "./server-grid";
+import { ServersNav } from "./servers-nav";
 
 /** The workspace's estimated monthly cloud spend, one figure per currency. */
 function CostSummary({ totals }: { totals: CostTotal[] }) {
@@ -65,6 +66,7 @@ export function ServersPage({ workspaceId }: { workspaceId: string }) {
         subline={nodes.data ? fleetHeadline(summarizeFleet(nodes.data)) : undefined}
         actions={addButton}
       />
+      <ServersNav workspaceId={workspaceId} />
       {nodes.isPending ? (
         <ServerGridSkeleton />
       ) : nodes.isError ? (

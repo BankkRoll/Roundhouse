@@ -846,7 +846,8 @@ export function createConfigs(
 
 /**
  * The instance settings as the API reads them: the stored values plus the ingress
- * server count, written back so tests can read `db.deploy.instance` directly.
+ * server count and whether the mesh supernet is locked, written back so tests can read
+ * `db.deploy.instance` directly.
  *
  * @returns The settings.
  */
@@ -854,6 +855,9 @@ export function instanceSettings(): InstanceSettings {
   const instance = db.deploy.instance;
   // NOTE: Mock nodes never opt out of ingress, so every server counts.
   instance.ingress_nodes = db.nodes.length;
+  instance.mesh_supernet_locked = Object.values(db.mesh.nodes).some(
+    (node) => node.mesh_index !== null,
+  );
   return instance;
 }
 
@@ -1883,7 +1887,20 @@ export const deployHandlers = [
         `This install has ${before.ingress_nodes} ingress servers. With acme each one orders its own certificates and a validation reaching another server fails; use managed instead.`,
       );
     }
+    if (
+      body.mesh_supernet !== undefined &&
+      body.mesh_supernet !== before.mesh_supernet &&
+      before.mesh_supernet_locked
+    ) {
+      return apiError(
+        409,
+        "mesh_supernet_locked",
+        "Servers have joined the mesh with addresses from the current supernet; it can no longer change.",
+      );
+    }
     const instance = db.deploy.instance;
+    if (body.mesh_enabled !== undefined) instance.mesh_enabled = body.mesh_enabled;
+    if (body.mesh_supernet !== undefined) instance.mesh_supernet = body.mesh_supernet;
     if (body.apps_domain !== undefined) instance.apps_domain = body.apps_domain ?? null;
     if (body.tls_mode !== undefined) instance.tls_mode = body.tls_mode;
     if (body.log_retention_days !== undefined)

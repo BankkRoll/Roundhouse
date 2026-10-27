@@ -714,6 +714,9 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
       log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
       mcp_enabled: false,
       ingress_nodes: 0,
+      mesh_enabled: false,
+      mesh_supernet: "10.200.0.0/16",
+      mesh_supernet_locked: false,
     },
     tls: seedTls(),
     github: {
@@ -853,6 +856,9 @@ export function emptyDeploy(): DeployDb {
       log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
       mcp_enabled: false,
       ingress_nodes: 0,
+      mesh_enabled: false,
+      mesh_supernet: "10.200.0.0/16",
+      mesh_supernet_locked: false,
     },
     tls: seedTls(),
     github: {

@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { db, signInAs, USERS } from "../../../mocks/db";
+import { seedMeshNetwork } from "../../../mocks/mesh-handlers";
 import { SEED, servicePath } from "../../../test/phase1";
 import { renderApp } from "../../../test/render";
 
@@ -134,6 +135,33 @@ describe("domains", () => {
     expect(table).toHaveTextContent("_roundhouse.shop.test");
   });
 
+  it("counts servers that reach a replica over the private network as answering", async () => {
+    seedMeshNetwork();
+    const { user, list } = await openDomains();
+    const row = within(list).getByRole("listitem", {
+      name: "web-production-x7k2.apps.example.com",
+    });
+    await user.click(within(row).getByRole("button", { name: "Details" }));
+    const details = within(row).getByRole("region", {
+      name: "Details of web-production-x7k2.apps.example.com",
+    });
+    expect(
+      await within(details).findByText(
+        /Runs on 1 of 6 servers, and 3 more route to it over the private network, so 4 answer/,
+      ),
+    ).toBeInTheDocument();
+    const servers = within(details).getByRole("list", { name: "Servers" });
+    const entry = (name: string) =>
+      within(servers)
+        .getAllByRole("listitem")
+        .find((item) => item.textContent?.includes(name))!;
+    expect(entry("hel-1")).toHaveTextContent("Serves");
+    expect(entry("nbg-1")).toHaveTextContent("Serves over the mesh");
+    expect(entry("lab-1")).toHaveTextContent("Serves over the mesh");
+    expect(entry("office-1")).toHaveTextContent("Not running here");
+    expect(entry("fsn-1")).toHaveTextContent("Not running here");
+  });
+
   it("shows the certificate, the servers that answer, and changes HSTS with a typed preload confirmation", async () => {
     const { user } = await openDomains();
     await user.click(screen.getByRole("button", { name: "Add domain" }));
@@ -153,7 +181,9 @@ describe("domains", () => {
     expect(
       within(details).getByRole("list", { name: "Certificate on each server" }),
     ).toHaveTextContent("hel-1");
-    expect(within(details).getByText(/the WireGuard mesh, not built yet/)).toBeInTheDocument();
+    expect(
+      within(details).getByText(/without the private network each routes this hostname/),
+    ).toBeInTheDocument();
 
     const hsts = within(details).getByRole("form", { name: "HSTS for ready.example.com" });
     await user.click(within(hsts).getByLabelText(/includeSubDomains/));

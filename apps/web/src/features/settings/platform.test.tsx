@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { external } from "../../lib/external";
 import { db, PASSWORD, SIGNING_KID, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
 import { apiError } from "../../mocks/handlers";
+import { seedMeshNetwork } from "../../mocks/mesh-handlers";
 import { server } from "../../mocks/server";
 import { renderApp } from "../../test/render";
 import { githubPostUrl, submitGithubManifest } from "./github-manifest";
@@ -64,6 +65,57 @@ describe("platform settings", () => {
     await user.click(toggle);
     expect(await screen.findByText("MCP disabled")).toBeInTheDocument();
     expect(db.deploy.instance.mcp_enabled).toBe(false);
+  });
+
+  it("turns the private network on, and asks before turning it off", async () => {
+    const { user } = renderApp(PLATFORM);
+    const toggle = await screen.findByRole("switch", { name: "Private network between servers" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    await user.click(toggle);
+    expect(await screen.findByText("Private network on")).toBeInTheDocument();
+    expect(db.deploy.instance.mesh_enabled).toBe(true);
+    expect(db.audit.at(-1)).toMatchObject({
+      action: "instance.settings_updated",
+      metadata: { mesh_enabled: true },
+    });
+
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    await user.click(toggle);
+    const dialog = await screen.findByRole("dialog", { name: "Turn off the private network?" });
+    expect(dialog).toHaveTextContent(
+      "Services on different servers can no longer reach each other",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Turn off" }));
+    expect(await screen.findByText("Private network off")).toBeInTheDocument();
+    expect(db.deploy.instance.mesh_enabled).toBe(false);
+  });
+
+  it("changes the network range until a server joins, then shows it fixed", async () => {
+    const { user, unmount } = renderApp(PLATFORM);
+    const field = await screen.findByLabelText("Address range");
+    expect(field).toHaveValue("10.200.0.0/16");
+    await user.clear(field);
+    await user.type(field, "172.17.0.0/16");
+    await user.click(
+      screen.getAllByRole("button", { name: "Save" }).find((b) => !b.hasAttribute("disabled"))!,
+    );
+    expect(
+      await screen.findByText("Enter a /16 under 10.0.0.0/8, like 10.200.0.0/16."),
+    ).toBeInTheDocument();
+    await user.clear(field);
+    await user.type(field, "10.42.0.0/16");
+    await user.click(
+      screen.getAllByRole("button", { name: "Save" }).find((b) => !b.hasAttribute("disabled"))!,
+    );
+    expect(await screen.findByText("Network range saved")).toBeInTheDocument();
+    expect(db.deploy.instance.mesh_supernet).toBe("10.42.0.0/16");
+    unmount();
+
+    seedMeshNetwork();
+    renderApp(PLATFORM);
+    const locked = await screen.findByLabelText("Address range");
+    expect(locked).toHaveAttribute("readonly");
+    expect(screen.getByText(/Fixed: servers have joined the mesh/)).toBeInTheDocument();
   });
 
   it("explains a refused MCP toggle that needs a fresh sign-in", async () => {
