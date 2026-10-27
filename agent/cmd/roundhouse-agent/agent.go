@@ -57,6 +57,9 @@ type agent struct {
 	builder bool
 	// firewall keeps containers away from the cloud metadata endpoint.
 	firewall *firewall.Rules
+	// tcpProxy records whether this node enforces the TCP proxy's source
+	// allowlist, and so publishes ports (hello's capabilities.tcp_proxy).
+	tcpProxy bool
 }
 
 // newAgent wires the agent's components. encryption is the node's X25519
@@ -101,6 +104,8 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	if err != nil {
 		return nil, fmt.Errorf("volumes: %w", err)
 	}
+	publish := tcpProxyFirewall(log.With("component", "firewall"))
+	a.tcpProxy = publish != nil
 	a.runtime = agentruntime.New(agentruntime.Options{
 		Docker:     dc,
 		Ingress:    a.ingress,
@@ -132,6 +137,7 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 		},
 		Volumes: a.volumes,
 		Exec:    dc,
+		Publish: publish,
 	})
 
 	var b builder.Builder
@@ -210,6 +216,23 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	})
 	client.Data = a.data
 	return a, nil
+}
+
+// tcpProxyFirewall returns the TCP proxy's allowlist enforcement, or nil
+// when this host can't provide it; the runtime then refuses every workload
+// that publishes a port, and hello does not advertise the TCP proxy.
+func tcpProxyFirewall(log *slog.Logger) agentruntime.PublishFirewall {
+	if goruntime.GOOS != "linux" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	p := firewall.NewPublisher(nil, log)
+	if err := p.Probe(ctx); err != nil {
+		log.Info("TCP proxy unavailable: workloads that publish a port will be refused", "reason", err)
+		return nil
+	}
+	return p
 }
 
 // volumesRoot is the configured volumes root, or the default: the node
