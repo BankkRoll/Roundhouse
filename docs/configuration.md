@@ -143,6 +143,28 @@ server routes a hostname only to replicas running on it. DNS for a custom
 domain must point at servers that run the service; the dashboard and
 `roundhouse domain` list exactly those when some servers don't.
 
+### Web shell
+
+The web shell (ADR 0012) has no setting. Its limits are fixed:
+- **Who.** Project admins (`shell:open`) with two-factor authentication on,
+  from a browser session that signed in or re-authenticated in the last 10
+  minutes. An API token with the `shell:open` scope works for a creator who
+  meets the same bar, but never in a protected environment. OAuth (MCP)
+  tokens never do, and MCP has no shell tool.
+- **Limits.** 4 sessions per server, 15 minutes without input, 8 hours in
+  total. The session ends when the terminal disconnects; there is no resume.
+- **Revocation.** Removing a member, changing their role, team or grants,
+  revoking their token or session, signing out, turning off 2FA or
+  protecting the environment ends their open shells at once; every session
+  is also re-checked each minute.
+- **Records.** Each session is in the audit log (`shell.opened`,
+  `shell.closed`, `shell.terminated`) and under
+  `GET /v1/workspaces/{id}/shell-sessions`: who, which replica, when, how it
+  ended and byte counts. Only the program's name is kept, never its
+  arguments, and terminal input and output are never logged or stored.
+  ADR 0012's session recording (asciicast to R2, age-encrypted) isn't
+  implemented yet.
+
 ### Rotating the master key
 
 Rotation keeps the install readable throughout (ADR 0014 "Rotation"):

@@ -4,7 +4,8 @@
  * the database is the source of truth and the dashboard refetches on
  * reconnect, so a lost message must never fail the operation that sent it.
  * Writers that change who may see a project also ask its room to re-check
- * open sockets ({@link revalidateProjects}).
+ * open sockets ({@link revalidateProjects}), which also re-checks the
+ * project's open web shells (`./shell`).
  *
  * @module
  */
@@ -13,6 +14,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { RevalidateFilter } from "../durable/project-room";
 import type { RealtimeServerMessage } from "../schemas";
 import type { ApiDeploymentWithoutProject } from "./serialize";
+import { revalidateShellSessions, type ShellEnv } from "./shell";
 
 /**
  * A message as callers hand it to {@link publish}: a deployment may come
@@ -67,17 +69,18 @@ export async function publish(
 
 /**
  * Asks the rooms of `projectIds` to re-check their sockets now (ADR 0014
- * "Realtime"), after a change to who may see them has committed. Best
- * effort like {@link publish}: the rooms' periodic re-check still bounds a
- * missed call to a minute.
+ * "Realtime"), and the nodes running the projects' open web shells to
+ * re-check those (ADR 0014 §15), after a change to who may see them has
+ * committed. Best effort like {@link publish}: the periodic re-checks still
+ * bound a missed call to a minute.
  *
  * @param env - Worker bindings.
- * @param projectIds - Projects whose rooms to re-check.
+ * @param projectIds - Projects whose rooms and shells to re-check.
  * @param filter - Only these users' or tokens' sockets; every socket when omitted.
- * @returns Sockets closed across the rooms.
+ * @returns Sockets closed across the rooms (shells not counted).
  */
 export async function revalidateProjects(
-  env: RoomEnv,
+  env: RoomEnv & ShellEnv,
   projectIds: readonly string[],
   filter: RevalidateFilter = {},
 ): Promise<number> {
@@ -89,6 +92,7 @@ export async function revalidateProjects(
     if (r.status === "fulfilled") closed += r.value;
     else console.warn("realtime revalidate failed", r.reason);
   }
+  await revalidateShellSessions(env, { ...filter, projectIds });
   return closed;
 }
 
@@ -105,7 +109,7 @@ export async function revalidateProjects(
  */
 export async function revalidateWorkspace(
   db: Db,
-  env: RoomEnv,
+  env: RoomEnv & ShellEnv,
   workspaceId: string,
   filter: RevalidateFilter = {},
 ): Promise<number> {

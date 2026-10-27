@@ -39,7 +39,10 @@
  * - during a signing-key rollover (ADR 0014 §13), sign each frame with the
  *   key the agent pins (`hello.pinned_kids`, else what D1 recorded) and
  *   announce the successor in `welcome.next_keys` and `key_announce`,
- *   recording the announced kids as pinned.
+ *   recording the announced kids as pinned;
+ * - relay web shell sessions between terminal sockets and the agent
+ *   (`exec_*`, ADR 0012), with their logic in `./node/shell.ts`: shell
+ *   sockets carry the `shell` tag, and every agent-socket path skips them.
  *
  * Only the Worker can reach this object, and it authenticates the agent
  * before forwarding the upgrade, so the node ID header is trusted here.
@@ -73,6 +76,7 @@ import {
   CREDENTIAL_FRAME_TTL_MS,
   carriesCredentials,
   DB_QUERY_PROTOCOL_VERSION,
+  EXEC_PROTOCOL_VERSION,
   type Heartbeat,
   type Hello,
   JOBS_PROTOCOL_VERSION,
@@ -135,6 +139,7 @@ import { MAX_QUERIES_PER_NODE, PendingQueries, UserQueryLimiter } from "./node/h
 import { jobLogOwner, onJobStatus } from "./node/handlers/jobs";
 import { MetricOwners, onMetrics } from "./node/handlers/metrics";
 import { onVolumeStatus } from "./node/handlers/volumes";
+import { isShellUpgrade, ShellRelay, type ShellSocketFilter } from "./node/shell";
 
 /** Signed control frames expire quickly so a captured frame can't be replayed later. */
 const CONTROL_TTL_MS = 5 * 60 * 1000;
@@ -190,6 +195,11 @@ export const FRAME_RATE_LIMITS = {
   cert_status: 32,
   /** A few per run (pulling, running, terminal), re-sent for every run after a reconnect. */
   job_status: 32,
+  /** One per session open; at most `MAX_EXEC_SESSIONS_PER_NODE` run at once. */
+  exec_opened: 8,
+  /** `MAX_EXEC_SESSIONS_PER_NODE` sessions × `MAX_EXEC_OUTPUT_FRAMES_PER_SECOND`, plus headroom. */
+  exec_output: 320,
+  exec_exit: 8,
   other: 64,
 } as const;
 
@@ -323,20 +333,35 @@ export class NodeConnection extends DurableObject<Env> {
   private queryLimiter = new UserQueryLimiter();
   /** Volumes whose read-only principal is being created, or was last tried, and when. */
   private readonlyAttempts = new Map<string, number>();
+  private shell: ShellRelay;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = createDb(env.DB);
     this.metricOwners = new MetricOwners(this.db);
+    this.shell = new ShellRelay({
+      ctx,
+      db: this.db,
+      agent: () => {
+        const ws = this.greetedSocket();
+        return ws
+          ? { ws, protocolVersion: (ws.deserializeAttachment() as Attachment).protocolVersion }
+          : undefined;
+      },
+      send: (ws, message) => this.send(ws, message),
+    });
   }
 
   override async fetch(request: Request): Promise<Response> {
+    if (isShellUpgrade(request, NODE_ID_HEADER)) return this.shell.accept(request);
     const nodeId = request.headers.get(NODE_ID_HEADER);
     if (!nodeId) return new Response("missing node id", { status: 400 });
 
-    for (const ws of this.ctx.getWebSockets()) {
+    for (const ws of this.agentSockets()) {
       ws.close(CloseCode.replaced, "superseded by a newer connection");
     }
+    // The old connection's exec processes are gone or unreachable.
+    await this.shell.endAll();
 
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
@@ -359,6 +384,7 @@ export class NodeConnection extends DurableObject<Env> {
   }
 
   override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    if (this.shell.owns(ws)) return this.shell.onClientMessage(ws, raw);
     const attachment = ws.deserializeAttachment() as Attachment;
     const size = typeof raw === "string" ? raw.length : raw.byteLength;
     if (size > MAX_AGENT_FRAME_BYTES) return ws.close(CloseCode.tooBig, "frame too large");
@@ -511,6 +537,13 @@ export class NodeConnection extends DurableObject<Env> {
           );
         }
         return;
+      // Web shell (ADR 0012): `./node/shell.ts`.
+      case "exec_opened":
+      case "exec_output":
+      case "exec_exit":
+        if (attachment.protocolVersion < EXEC_PROTOCOL_VERSION) return;
+        await this.shell.onAgentFrame(message);
+        return;
       default:
         // Validated Phase 2–3 frames whose handlers land with their streams.
         return;
@@ -518,6 +551,7 @@ export class NodeConnection extends DurableObject<Env> {
   }
 
   override async webSocketClose(ws: WebSocket, code: number): Promise<void> {
+    if (this.shell.owns(ws)) return this.shell.onClientClose(ws);
     // Reconnects are common; let the alarm decide whether the node is really gone.
     // 1005/1006/1015 are reserved for "no status" situations and can't be sent.
     const sendable =
@@ -530,26 +564,32 @@ export class NodeConnection extends DurableObject<Env> {
     } catch {
       // Already closed by the runtime's automatic close reply.
     }
+    await this.endShellsIfAgentGone(ws);
     await this.flushLogs();
   }
 
   override async webSocketError(ws: WebSocket): Promise<void> {
+    if (this.shell.owns(ws)) return this.shell.onClientClose(ws);
     ws.close(1011, "error");
+    await this.endShellsIfAgentGone(ws);
   }
 
   override async alarm(): Promise<void> {
     // The alarm doubles as the log flush timer, so buffered lines go out
     // whichever deadline it fired for.
     await this.flushLogs();
+    // The alarm also carries shell deadlines (idle, duration, re-check).
+    await this.shell.onAlarm();
     const lastSeen = (await this.ctx.storage.get<number>("last_seen")) ?? 0;
     const silentFor = Date.now() - lastSeen;
     if (silentFor < OFFLINE_AFTER_MS) {
-      await this.ctx.storage.setAlarm(lastSeen + OFFLINE_AFTER_MS);
+      await this.setAlarm(lastSeen + OFFLINE_AFTER_MS);
       return;
     }
     const nodeId = (await this.ctx.storage.get<string>("node_id")) ?? null;
     if (!nodeId) return;
-    for (const ws of this.ctx.getWebSockets()) ws.close(CloseCode.policy, "heartbeat timeout");
+    for (const ws of this.agentSockets()) ws.close(CloseCode.policy, "heartbeat timeout");
+    await this.shell.endAll();
 
     const [node] = await this.db
       .update(nodes)
@@ -585,8 +625,44 @@ export class NodeConnection extends DurableObject<Env> {
    * @param reason - Short reason sent in the close frame.
    */
   async disconnect(reason: string): Promise<void> {
-    for (const ws of this.ctx.getWebSockets()) ws.close(CloseCode.removed, reason);
+    for (const ws of this.agentSockets()) ws.close(CloseCode.removed, reason);
+    await this.shell.endAll();
     await this.ctx.storage.deleteAll();
+  }
+
+  /**
+   * Re-checks open shell sessions now and ends those whose access lapsed
+   * (`exec_close { reason: "revoked" }`, close 4403). Called after access
+   * changes through `revalidateShellSessions` (`lib/shell.ts`).
+   *
+   * @param filter - Which sessions; every open session when empty.
+   * @returns Sessions ended.
+   */
+  async revalidateShells(filter: ShellSocketFilter = {}): Promise<number> {
+    return this.shell.revalidate(filter);
+  }
+
+  /**
+   * Ends one open shell session at someone's request.
+   *
+   * @param sessionId - `shl_…`.
+   * @param actor - Who terminated it.
+   * @returns Whether a live session was ended.
+   */
+  async terminateShell(
+    sessionId: string,
+    actor: { actorType: "user" | "token"; actorId: string },
+  ): Promise<boolean> {
+    return this.shell.terminate(sessionId, actor);
+  }
+
+  /**
+   * Open shell sessions on this node, for tests and diagnostics.
+   *
+   * @returns How many.
+   */
+  async shellCount(): Promise<number> {
+    return this.shell.count();
   }
 
   /**
@@ -881,7 +957,7 @@ export class NodeConnection extends DurableObject<Env> {
     }
 
     await this.ctx.storage.put({ node_id: attachment.nodeId, last_seen: now });
-    await this.ctx.storage.setAlarm(now + OFFLINE_AFTER_MS);
+    await this.setAlarm(now + OFFLINE_AFTER_MS);
 
     await this.send(ws, {
       type: "welcome",
@@ -957,7 +1033,7 @@ export class NodeConnection extends DurableObject<Env> {
       .where(and(eq(nodes.id, nodeId), isNull(nodes.deletedAt)))
       .returning({ workspaceId: nodes.workspaceId });
     await this.ctx.storage.put("last_seen", now);
-    await this.ctx.storage.setAlarm(now + OFFLINE_AFTER_MS);
+    await this.setAlarm(now + OFFLINE_AFTER_MS);
 
     if (!node) return;
     try {
@@ -1183,9 +1259,32 @@ export class NodeConnection extends DurableObject<Env> {
   }
 
   private greetedSocket(): WebSocket | undefined {
-    return this.ctx
-      .getWebSockets()
-      .find((ws) => (ws.deserializeAttachment() as Attachment).helloReceived);
+    return this.agentSockets().find(
+      (ws) => (ws.deserializeAttachment() as Attachment).helloReceived,
+    );
+  }
+
+  /** The agent's sockets (normally one): every socket but the shell terminals. */
+  private agentSockets(): WebSocket[] {
+    return this.ctx.getWebSockets().filter((ws) => !this.shell.owns(ws));
+  }
+
+  /**
+   * Sets the alarm for the offline check, unless a shell session is due
+   * sooner: heartbeats must not push its idle, duration or re-check
+   * deadline back.
+   */
+  private async setAlarm(at: number): Promise<void> {
+    const shellDue = this.shell.nextDeadline();
+    await this.ctx.storage.setAlarm(shellDue === null ? at : Math.min(at, shellDue));
+  }
+
+  /** Ends every shell once the agent connection that ran them is gone. */
+  private async endShellsIfAgentGone(closed: WebSocket): Promise<void> {
+    const other = this.agentSockets().some(
+      (ws) => ws !== closed && (ws.deserializeAttachment() as Attachment).helloReceived,
+    );
+    if (!other) await this.shell.endAll();
   }
 
   /**

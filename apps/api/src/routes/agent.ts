@@ -20,6 +20,7 @@ import { hashToken, randomToken } from "../lib/crypto";
 import { ApiError, errorBody } from "../lib/errors";
 import { isShellSafeOrigin, NODE_ID_HEADER } from "../lib/nodes";
 import { isSetupComplete } from "../lib/settings";
+import { SHELL_SESSION_HEADER } from "../lib/shell";
 import { activeSigningKey, loadSigningKeys } from "../lib/signing-keys";
 import { body, errors, json } from "../schemas";
 
@@ -139,6 +140,8 @@ export const agentRoutes = createRouter()
     const headers = new Headers(c.req.raw.headers);
     headers.set(NODE_ID_HEADER, nodeId);
     headers.delete("authorization");
+    // SECURITY: Only the shell route may hand the Durable Object a session.
+    headers.delete(SHELL_SESSION_HEADER);
     const stub = c.env.NODE_CONNECTION.get(c.env.NODE_CONNECTION.idFromName(nodeId));
     return stub.fetch(new Request(c.req.raw, { headers }));
   })

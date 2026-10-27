@@ -18,6 +18,7 @@ import { claimDueBackups } from "./backups/schedule";
 import { claimDueCertificates, syncCertificates } from "./certificates/schedule";
 import { claimDueCronRuns } from "./cron/schedule";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
+import { expireLostShellSessions } from "./shell";
 import { claimMigrationCleanups } from "./volume-migrations";
 import { claimVolumeDeletions } from "./volumes";
 
@@ -63,6 +64,7 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
   { name: "backup_policies", run: claimDueBackups },
   { name: "migration_cleanups", run: claimMigrationCleanups },
   { name: "cron", run: claimDueCronRuns },
+  { name: "lost_shell_sessions", run: expireLostShellSessions },
 ];
 
 /**

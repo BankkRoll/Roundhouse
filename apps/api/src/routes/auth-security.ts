@@ -48,6 +48,7 @@ import {
   recordLoginFailure,
   retryAfterSeconds,
 } from "../lib/lockout";
+import { revalidateShellSessions } from "../lib/shell";
 import { twoFactorState, verifySecondFactor } from "../lib/two-factor";
 import { twoFactorRequirement } from "../lib/two-factor-gate";
 
@@ -250,6 +251,7 @@ export const authSecurityRoutes = createRouter()
       metadata: { scope: "one", current: target === sessionId },
       ip: clientIp(c),
     });
+    await revalidateShellSessions(c.env, { authSessionIds: [target] });
     return c.body(null, 204);
   })
   .openapi(revokeOtherSessions, async (c) => {
@@ -270,6 +272,7 @@ export const authSecurityRoutes = createRouter()
         metadata: { scope: "others", count: deleted.length },
         ip: clientIp(c),
       });
+      await revalidateShellSessions(c.env, { authSessionIds: deleted.map((d) => d.id) });
     }
     return c.json({ revoked: deleted.length }, 200);
   })
@@ -331,5 +334,6 @@ export const authSecurityRoutes = createRouter()
         ip: clientIp(c),
       }),
     ]);
+    await revalidateShellSessions(c.env, { userIds: [userId] });
     return c.body(null, 204);
   });

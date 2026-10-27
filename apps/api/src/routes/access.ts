@@ -64,6 +64,7 @@ import { auditInsert } from "../lib/audit";
 import { ApiError, conflict, type ErrorDetail, isUniqueViolation, notFound } from "../lib/errors";
 import { revalidateProjects, revalidateWorkspace } from "../lib/realtime";
 import { projectScope } from "../lib/scope";
+import { revalidateShellSessions } from "../lib/shell";
 
 type TeamRow = typeof teams.$inferSelect;
 type ApiRule = { roles: ProtectionRule["roles"]; user_ids: string[]; team_ids: string[] };
@@ -806,5 +807,7 @@ export const accessRoutes = createRouter()
         ip: clientIp(c),
       }),
     ]);
+    // An API token's shell must close once its environment is protected.
+    await revalidateShellSessions(c.env, { projectIds: [project.id] });
     return c.json(toApiProtection(updated[0]!), 200);
   });

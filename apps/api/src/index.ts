@@ -8,6 +8,8 @@
  *   authorization server: discovery under `/.well-known/`, `/oauth/*`, and
  *   the consent routes under `/v1/oauth/*` (`mcp/oauth/`)
  * - Agent join/connect endpoints and the install script
+ * - The web shell socket, relayed by each node's `NodeConnection`
+ *   (`routes/shell.ts`, ADR 0012)
  * - The project realtime socket (`ProjectRoom`), the audit chain sealer
  *   (`AuditChain`), and the deploy and key rotation workflows
  *   (`DeployWorkflow`, `KeyRotationWorkflow`), and one-click server
@@ -42,6 +44,7 @@ import { ApiError, errorBody, errorCodeForStatus } from "./lib/errors";
 import { rateLimitSecrets, sameOriginMutations } from "./lib/guards";
 import { reconcileProviders } from "./lib/provisioning";
 import { runRetention } from "./lib/retention";
+import { SHELL_PATH } from "./lib/shell";
 import { twoFactorGate } from "./lib/two-factor-gate";
 import { oauthConsentRoutes } from "./mcp/oauth/consent";
 import { oauthRoutes } from "./mcp/oauth/routes";
@@ -70,6 +73,7 @@ import { providerRoutes } from "./routes/providers";
 import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
 import { serviceRoutes } from "./routes/services";
 import { setupRoutes } from "./routes/setup";
+import { shellRoutes, withShellRevocation } from "./routes/shell";
 import { signingKeyRoutes } from "./routes/signing-keys";
 import { templateRoutes } from "./routes/templates";
 import { tlsRoutes } from "./routes/tls";
@@ -104,7 +108,9 @@ const headers = secureHeaders();
 // upgrade, gets them.
 app.use("*", (c, next) =>
   c.req.header("upgrade")?.toLowerCase() === "websocket" &&
-  (AGENT_CONNECT_PATH.test(c.req.path) || REALTIME_PATH.test(c.req.path))
+  (AGENT_CONNECT_PATH.test(c.req.path) ||
+    REALTIME_PATH.test(c.req.path) ||
+    SHELL_PATH.test(c.req.path))
     ? next()
     : headers(c, next),
 );
@@ -116,7 +122,9 @@ app.use("*", rateLimitSecrets);
 app.use("/v1/*", sameOriginMutations);
 app.use("/v1/*", twoFactorGate);
 
-app.on(["GET", "POST"], "/api/auth/*", async (c) => (await authFor(c)).handler(c.req.raw));
+app.on(["GET", "POST"], "/api/auth/*", async (c) =>
+  withShellRevocation(c, async () => (await authFor(c)).handler(c.req.raw)),
+);
 
 app
   .route("/", setupRoutes)
@@ -140,6 +148,7 @@ app
   .route("/", githubRoutes)
   .route("/", tokenRoutes)
   .route("/", realtimeRoutes)
+  .route("/", shellRoutes)
   .route("/", accessRoutes)
   .route("/", authSecurityRoutes)
   .route("/", instanceAdminRoutes)
