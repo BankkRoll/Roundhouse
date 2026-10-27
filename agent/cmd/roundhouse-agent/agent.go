@@ -160,6 +160,9 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 		OpenEnv: func(generation int64, w *protocol.WorkloadSpec) error {
 			return protocol.OpenWorkloadEnv(encryption, cfg.NodeID, generation, w)
 		},
+		OpenRegistryUpstream: func(generation int64, u *protocol.RegistryUpstream) (string, error) {
+			return protocol.OpenRegistryUpstream(encryption, cfg.NodeID, generation, u)
+		},
 		SecretsDir: secretsDir(dataDir),
 		Mesh:       meshHooks{a.mesh},
 		OnNetwork: func(ctx context.Context, n docker.Network) {
@@ -219,7 +222,9 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 		OpenEnv: func(runID string, w *protocol.WorkloadSpec) error {
 			return protocol.OpenJobEnv(encryption, cfg.NodeID, runID, w)
 		},
-		Network: a.runtime.EnsureNetwork,
+		PrivateDNS: a.mesh.PrivateDNS,
+		MeshRuns:   meshHooks{a.mesh}.SetJobs,
+		Network:    a.runtime.EnsureNetwork,
 		// SECURITY: two nodes can share one Docker engine; each removes
 		// only its own orphaned job containers.
 		Namespace:     cfg.NodeID,
@@ -495,6 +500,11 @@ func (h handler) ApplyDesiredState(m *protocol.DesiredState) bool {
 	if !h.a.runtime.Apply(m) {
 		return false
 	}
+	var sources *[]string
+	if m.Ingress != nil {
+		sources = m.Ingress.AllowedSources
+	}
+	h.a.mesh.SetAllowedSources(sources)
 	h.a.mesh.Apply(m.Generation, m.Mesh)
 	h.a.certs.SetManifest(m.Certificates)
 	return true

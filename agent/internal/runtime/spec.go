@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"maps"
+	"net/netip"
 	"slices"
 	"strconv"
 
@@ -42,6 +43,12 @@ type wantSpec struct {
 	hostPorts map[string][]docker.PortBinding
 	// binds are host bind mounts; system workloads only.
 	binds []string
+	// files are written on the host before the container is created;
+	// system workloads only.
+	files []hostFile
+	// bindAddr, when valid, is a host address a port is published on,
+	// which must be up before the container is created.
+	bindAddr netip.Addr
 	// mounts are the bind mounts of the workload's volumes, resolved just
 	// before the container is created.
 	mounts []docker.Mount

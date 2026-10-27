@@ -16,6 +16,19 @@ type fakeMesh struct {
 	addr     string
 	pending  bool
 	replicas []MeshReplica
+	proxy    RegistryProxy
+}
+
+func (m *fakeMesh) SetRegistryProxy(p RegistryProxy) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.proxy = p
+}
+
+func (m *fakeMesh) registryProxy() RegistryProxy {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.proxy
 }
 
 func (m *fakeMesh) PrivateDNS() (string, bool) {

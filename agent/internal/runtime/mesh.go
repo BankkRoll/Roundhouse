@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"strconv"
@@ -18,6 +19,9 @@ type MeshHooks interface {
 	// SetReplicas receives the local replicas that have a mesh IP whenever
 	// they change, so NAT, isolation and DNS follow container IPs.
 	SetReplicas(rs []MeshReplica)
+	// SetRegistryProxy receives the running proxy registry, the zero value
+	// for none, so it alone may reach its upstream over the mesh.
+	SetRegistryProxy(p RegistryProxy)
 }
 
 // MeshReplica is a running container with a mesh IP.
@@ -149,4 +153,55 @@ func (r *Runtime) meshReplicas(specs []*wantSpec) []MeshReplica {
 // the specs the reconciler converges containers and networks for.
 func withoutRoutes(specs []*wantSpec) []*wantSpec {
 	return slices.DeleteFunc(specs, func(s *wantSpec) bool { return s.Kind == protocol.WorkloadRouteOnly })
+}
+
+// RegistryProxy is a running proxy registry container and the peer
+// registry it pulls through over the mesh.
+type RegistryProxy struct {
+	// BridgeIP is the container's address on [SystemNetwork].
+	BridgeIP netip.Addr
+	Upstream netip.AddrPort
+}
+
+// registryProxy returns the running proxy registry of specs, the zero
+// value when there is none. Caller holds r.mu.
+func (r *Runtime) registryProxy(specs []*wantSpec) RegistryProxy {
+	plan := r.registry.Load()
+	if plan == nil || plan.mode() != protocol.RegistryProxy || plan.blocked != "" {
+		return RegistryProxy{}
+	}
+	for _, s := range specs {
+		if s.ID != RegistryWorkloadID {
+			continue
+		}
+		inst := r.current(s)
+		if inst == nil || !inst.running {
+			return RegistryProxy{}
+		}
+		bridge, err := netip.ParseAddr(inst.ips[SystemNetwork])
+		if err != nil {
+			return RegistryProxy{}
+		}
+		return RegistryProxy{BridgeIP: bridge, Upstream: plan.upstream}
+	}
+	return RegistryProxy{}
+}
+
+// hasAddress reports whether a host interface carries a.
+func (r *Runtime) hasAddress(a netip.Addr) bool {
+	if r.opts.HasAddress != nil {
+		return r.opts.HasAddress(a)
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, n := range addrs {
+		if p, ok := n.(*net.IPNet); ok {
+			if ip, ok := netip.AddrFromSlice(p.IP); ok && ip.Unmap() == a {
+				return true
+			}
+		}
+	}
+	return false
 }

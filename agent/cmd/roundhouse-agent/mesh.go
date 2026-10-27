@@ -11,6 +11,7 @@ import (
 	"github.com/BankkRoll/Roundhouse/agent/internal/conn"
 	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
 	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
+	"github.com/BankkRoll/Roundhouse/agent/internal/jobs"
 	"github.com/BankkRoll/Roundhouse/agent/internal/mesh"
 	agentruntime "github.com/BankkRoll/Roundhouse/agent/internal/runtime"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
@@ -58,10 +59,27 @@ type meshHooks struct{ m *mesh.Manager }
 func (h meshHooks) PrivateDNS() (string, bool) { return h.m.PrivateDNS() }
 
 // SetReplicas hands the local replicas with mesh IPs to the mesh.
-func (h meshHooks) SetReplicas(rs []agentruntime.MeshReplica) {
+func (h meshHooks) SetReplicas(rs []agentruntime.MeshReplica) { h.m.SetReplicas(meshReplicas(rs)) }
+
+// SetJobs hands the running job containers with mesh IPs to the mesh. A
+// running job counts as healthy: it has no health check.
+func (h meshHooks) SetJobs(rs []jobs.MeshRun) {
+	out := make([]mesh.Replica, len(rs))
+	for i, r := range rs {
+		out[i] = mesh.Replica{MeshIP: r.MeshIP, BridgeIP: r.BridgeIP, Healthy: true}
+	}
+	h.m.SetJobs(out)
+}
+
+// SetRegistryProxy hands the running proxy registry to the mesh.
+func (h meshHooks) SetRegistryProxy(p agentruntime.RegistryProxy) {
+	h.m.SetRegistryProxy(mesh.RegistryProxy{BridgeIP: p.BridgeIP, Upstream: p.Upstream})
+}
+
+func meshReplicas(rs []agentruntime.MeshReplica) []mesh.Replica {
 	out := make([]mesh.Replica, len(rs))
 	for i, r := range rs {
 		out[i] = mesh.Replica{MeshIP: r.MeshIP, BridgeIP: r.BridgeIP, Healthy: r.Healthy}
 	}
-	h.m.SetReplicas(out)
+	return out
 }

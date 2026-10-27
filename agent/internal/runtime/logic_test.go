@@ -268,7 +268,7 @@ func TestLabelsRoundTrip(t *testing.T) {
 		m.routes[1].PathPrefix != "/v1" || m.serviceID != "svc_web" || m.network != w.Network {
 		t.Fatalf("meta %+v", m)
 	}
-	sys := registrySpec(&protocol.RegistryConfig{Storage: protocol.RegistryStorage{Type: protocol.StorageFilesystem}}, "/data", 1)
+	sys := registrySpec(&registryPlan{cfg: &protocol.RegistryConfig{Storage: protocol.RegistryStorage{Type: protocol.StorageFilesystem}}}, "/data", 1)
 	if l := containerLabels(sys); l[LabelDeploymentID] != "" || l[LabelKind] != "system" {
 		t.Fatalf("system labels %v", l)
 	}
@@ -387,7 +387,7 @@ func TestPrivateDomainAliases(t *testing.T) {
 	if !strings.Contains(loser.note, "claimed by another service") {
 		t.Fatalf("note %q", loser.note)
 	}
-	sys := registrySpec(&protocol.RegistryConfig{Storage: protocol.RegistryStorage{Type: protocol.StorageFilesystem}}, "/d", 1)
+	sys := registrySpec(&registryPlan{cfg: &protocol.RegistryConfig{Storage: protocol.RegistryStorage{Type: protocol.StorageFilesystem}}}, "/d", 1)
 	sys.Labels[LabelPrivateDomain] = "registry.system.internal"
 	if a := networkAliases(sys); a != nil {
 		t.Fatalf("system workload aliases %v", a)

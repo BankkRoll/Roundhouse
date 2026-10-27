@@ -44,9 +44,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
@@ -152,6 +154,14 @@ type Options struct {
 	// as its status message. Nil runs workloads with the Env they carry,
 	// which only tests do: Env never comes off the wire.
 	OpenEnv func(generation int64, w *protocol.WorkloadSpec) error
+	// OpenRegistryUpstream opens a proxy registry's upstream password for
+	// the generation of the desired state carrying it
+	// ([protocol.OpenRegistryUpstream] with the node's key). Nil refuses
+	// proxy registries.
+	OpenRegistryUpstream func(generation int64, u *protocol.RegistryUpstream) (string, error)
+	// HasAddress reports whether a host interface carries addr, which a
+	// port published on it needs; nil asks the host.
+	HasAddress func(addr netip.Addr) bool
 	// Mesh connects the runtime to the WireGuard mesh (ADR 0005); nil
 	// creates every container without private DNS.
 	Mesh MeshHooks
@@ -199,6 +209,9 @@ type Runtime struct {
 	// blocked holds, by workload ID, why a workload of desired may not
 	// start: its environment did not open, or [admit] refused it.
 	blocked map[string]string
+	// registry is desired's registry plan, nil for no registry. Passes
+	// read it without r.mu, so it is replaced, never changed.
+	registry atomic.Pointer[registryPlan]
 	// conflictsLogged holds the route conflicts already logged, so each is
 	// logged once rather than on every pass.
 	conflictsLogged map[routeKey]bool
@@ -357,12 +370,21 @@ func (r *Runtime) Apply(ds *protocol.DesiredState) bool {
 			r.log.Error("not starting workload", "workload_id", w.ID, "generation", ds.Generation, "reason", reason)
 		}
 	}
+	plan := planRegistry(ds, r.opts.OpenRegistryUpstream)
+	if plan != nil {
+		for _, why := range []string{plan.blocked, plan.meshBlocked} {
+			if why != "" {
+				r.log.Error("not starting the registry", "generation", ds.Generation, "reason", why)
+			}
+		}
+	}
 	r.mu.Lock()
 	if r.desired != nil && ds.Generation <= r.desired.Generation {
 		r.mu.Unlock()
 		return false
 	}
 	r.desired, r.blocked = ds, blocked
+	r.registry.Store(plan)
 	r.mu.Unlock()
 	r.poke()
 	return true
@@ -561,12 +583,15 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 	cfg := r.ingressConfig(ds, specs, conflicts, routes)
 	r.collectSecretDirs(specs)
 	var replicas []MeshReplica
+	var proxy RegistryProxy
 	if r.opts.Mesh != nil {
 		replicas = r.meshReplicas(specs)
+		proxy = r.registryProxy(specs)
 	}
 	r.mu.Unlock()
 	if r.opts.Mesh != nil {
 		r.opts.Mesh.SetReplicas(replicas)
+		r.opts.Mesh.SetRegistryProxy(proxy)
 	}
 
 	// Zero-downtime order: routes leave the old containers before their
@@ -604,8 +629,10 @@ func (r *Runtime) wantSpecs(ds *protocol.DesiredState) []*wantSpec {
 			exclusive: publishes(w),
 		})
 	}
-	if ds.Registry != nil {
-		specs = append(specs, registrySpec(ds.Registry, r.opts.DataDir, ds.Generation))
+	// NOTE: the plan may be a newer desired state's than ds, briefly; the
+	// next pass agrees again.
+	if plan := r.registry.Load(); plan != nil {
+		specs = append(specs, registrySpecs(plan, r.opts.DataDir, ds.Generation)...)
 	}
 	return specs
 }
@@ -747,6 +774,10 @@ func (r *Runtime) reconcileWorkload(s *wantSpec, wanted map[string]*wantSpec, no
 		if r.usePrivateDNS(s) {
 			ws.phase, ws.message = protocol.StatePending, privateDNSWait
 			return time.Second
+		}
+		if s.bindAddr.IsValid() && !r.hasAddress(s.bindAddr) {
+			ws.phase, ws.message = protocol.StatePending, fmt.Sprintf("waiting for %s on this node (the mesh)", s.bindAddr)
+			return 2 * time.Second
 		}
 		ws.busy = true
 		ws.volumes = mountedVolumes(&s.WorkloadSpec)
@@ -1127,6 +1158,9 @@ func (r *Runtime) createContainer(ctx context.Context, s *wantSpec) error {
 	secrets, err := r.writeSecretFiles(s)
 	if err != nil {
 		return fmt.Errorf("secret files: %w", err)
+	}
+	if err := writeHostFiles(s.files); err != nil {
+		return fmt.Errorf("write %s's files: %w", s.ID, err)
 	}
 	name := containerName(s)
 	id, err := r.d.CreateContainer(ctx, name, r.containerCreate(s, secrets))

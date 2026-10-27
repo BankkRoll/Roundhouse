@@ -126,7 +126,7 @@ func (f *fakeDocker) CreateContainer(_ context.Context, name string, spec docker
 				if c.state.Running && c.spec.HostConfig.PortBindings != nil {
 					for _, other := range c.spec.HostConfig.PortBindings {
 						for _, ob := range other {
-							if ob.HostPort == b.HostPort {
+							if ob.HostPort == b.HostPort && (ob.HostIP == b.HostIP || ob.HostIP == "" || b.HostIP == "") {
 								return "", &docker.Error{Status: 500, Message: "port is already allocated"}
 							}
 						}
