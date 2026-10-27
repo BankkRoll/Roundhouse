@@ -1,6 +1,7 @@
 /**
  * Install-wide settings: ingress (`apps_domain`, `tls_mode`), log
- * retention, and whether the MCP endpoint is enabled (`mcp_enabled`). Only
+ * retention, whether the MCP endpoint is enabled (`mcp_enabled`), and web
+ * shell recording (`shell_recording`, `shell_recording_retention_days`). Only
  * instance admins may read or change them, and only from a browser session.
  * An ingress change re-sends desired state to every node so Caddy picks it up.
  *
@@ -45,6 +46,7 @@ import {
   getLogRetentionDays,
   getMcpEnabled,
   getMeshSettings,
+  getShellRecordingSettings,
   putSetting,
   SettingKey,
 } from "../lib/settings";
@@ -80,19 +82,23 @@ async function meshJoined(db: Db): Promise<boolean> {
 }
 
 async function readSettings(db: Db) {
-  const [ingress, logRetentionDays, mcpEnabled, ingressNodes, mesh, locked] = await Promise.all([
-    getIngressSettings(db),
-    getLogRetentionDays(db),
-    getMcpEnabled(db),
-    countIngressNodes(db),
-    getMeshSettings(db),
-    meshJoined(db),
-  ]);
+  const [ingress, logRetentionDays, mcpEnabled, shellRecording, ingressNodes, mesh, locked] =
+    await Promise.all([
+      getIngressSettings(db),
+      getLogRetentionDays(db),
+      getMcpEnabled(db),
+      getShellRecordingSettings(db),
+      countIngressNodes(db),
+      getMeshSettings(db),
+      meshJoined(db),
+    ]);
   return {
     apps_domain: ingress.appsDomain,
     tls_mode: ingress.tlsMode,
     log_retention_days: logRetentionDays,
     mcp_enabled: mcpEnabled,
+    shell_recording: shellRecording.mode,
+    shell_recording_retention_days: shellRecording.retentionDays,
     ingress_nodes: ingressNodes,
     mesh_enabled: mesh.enabled,
     mesh_supernet: mesh.supernet,
@@ -166,6 +172,14 @@ export const instanceRoutes = createRouter()
     }
     if (body.mcp_enabled !== undefined) {
       statements.push(putSetting(db, SettingKey.mcpEnabled, body.mcp_enabled));
+    }
+    if (body.shell_recording !== undefined) {
+      statements.push(putSetting(db, SettingKey.shellRecording, body.shell_recording));
+    }
+    if (body.shell_recording_retention_days !== undefined) {
+      statements.push(
+        putSetting(db, SettingKey.shellRecordingRetentionDays, body.shell_recording_retention_days),
+      );
     }
     if (body.tls_mode !== undefined) {
       statements.push(putSetting(db, SettingKey.tlsMode, body.tls_mode));

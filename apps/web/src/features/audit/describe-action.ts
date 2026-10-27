@@ -155,6 +155,11 @@ const VERBS: Record<AuditAction, string> = {
   "service.recovered": "marked recovered",
   "node.mesh_joined": "joined the private network",
   "node.mesh_key_rotated": "rotated the mesh key of",
+  "shell.opened": "opened a shell",
+  "shell.closed": "closed a shell",
+  "shell.terminated": "terminated a shell session",
+  "shell.recording_viewed": "played back a shell recording",
+  "service.provider_changed": "moved a service to another runtime",
 };
 
 /**

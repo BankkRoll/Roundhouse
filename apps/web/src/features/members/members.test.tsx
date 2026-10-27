@@ -175,6 +175,38 @@ describe("member management", () => {
     expect(await screen.findByText("frank@example.com")).toBeInTheDocument();
   });
 
+  it("asks for the password before creating an invite with a stale session, then retries", async () => {
+    db.sessionStale = true;
+    const { user } = await renderAs("owner");
+    await user.click(await screen.findByRole("button", { name: "Invite member" }));
+    const dialog = await screen.findByRole("dialog", { name: "Invite a member" });
+    await user.type(within(dialog).getByLabelText("Email"), "frank@example.com");
+    await user.click(within(dialog).getByRole("button", { name: "Create invite" }));
+    const reauth = await screen.findByRole("dialog", { name: "Confirm it's you" });
+    expect(db.invites.some((i) => i.email === "frank@example.com")).toBe(false);
+    await user.type(within(reauth).getByLabelText("Password"), PASSWORD);
+    await user.click(within(reauth).getByRole("button", { name: "Confirm" }));
+    expect(
+      await within(await screen.findByRole("dialog", { name: "Invite a member" })).findByText(
+        /\/invite#token=inv_\w+$/,
+      ),
+    ).toBeInTheDocument();
+    expect(db.invites.filter((i) => i.email === "frank@example.com")).toHaveLength(1);
+  });
+
+  it("creates no invite when the password prompt is cancelled", async () => {
+    db.sessionStale = true;
+    const { user } = await renderAs("owner");
+    await user.click(await screen.findByRole("button", { name: "Invite member" }));
+    const dialog = await screen.findByRole("dialog", { name: "Invite a member" });
+    await user.type(within(dialog).getByLabelText("Email"), "frank@example.com");
+    await user.click(within(dialog).getByRole("button", { name: "Create invite" }));
+    const reauth = await screen.findByRole("dialog", { name: "Confirm it's you" });
+    await user.click(within(reauth).getByRole("button", { name: "Cancel" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(/password/i);
+    expect(db.invites.some((i) => i.email === "frank@example.com")).toBe(false);
+  });
+
   it("shows API errors in the invite dialog, such as inviting an existing member", async () => {
     const { user } = await renderAs("admin");
     await user.click(await screen.findByRole("button", { name: "Invite member" }));

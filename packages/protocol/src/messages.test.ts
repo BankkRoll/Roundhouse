@@ -99,8 +99,8 @@ function buildJob(overrides: Record<string, unknown> = {}) {
 }
 
 describe("protocol version", () => {
-  it("follows ADR 0015: Phase 3 is version 6, still accepting version 3", () => {
-    expect(PROTOCOL_VERSION).toBe(6);
+  it("follows ADR 0015: Phase 4 is version 7, still accepting version 3", () => {
+    expect(PROTOCOL_VERSION).toBe(7);
     expect(MIN_PROTOCOL_VERSION).toBe(3);
   });
 

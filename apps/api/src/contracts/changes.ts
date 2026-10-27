@@ -728,6 +728,7 @@ export const applyChangeSet = defineRoute(
     "change_set.applied",
     "service.created",
     "service.updated",
+    "service.provider_changed",
     "service.deleted",
     "variables.updated",
     "deployment.created",

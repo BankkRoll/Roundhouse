@@ -2,15 +2,18 @@ import { describe, expect, it } from "vitest";
 import { parseDotenv } from "./dotenv";
 import {
   applySuggestion,
+  buildTimeRefusal,
   EMPTY_DRAFT,
   errorsFromDetails,
   lockedTier,
   mapApiError,
   mergeRows,
+  normalizeChange,
   type ReferenceCatalog,
   referenceContext,
   referenceSuggestions,
   stageDelete,
+  stageFlags,
   stageSet,
   toPutBody,
   unstage,
@@ -143,6 +146,74 @@ describe("staging", () => {
     );
     expect(draft.set.size + draft.remove.size).toBe(0);
     expect(unstage(stageDelete(EMPTY_DRAFT, "A", true), "A").remove.size).toBe(0);
+  });
+
+  it("stages flag changes without a value, and drops them when toggled back", () => {
+    const secret = saved[1]!;
+    expect(normalizeChange({ isSecret: true, availableAtBuild: false }, secret)).toBeNull();
+    expect(normalizeChange({ isSecret: true, availableAtBuild: true }, secret)).toEqual({
+      availableAtBuild: true,
+    });
+    let draft = stageFlags(EMPTY_DRAFT, "S", secret, { availableAtBuild: true });
+    draft = stageFlags(draft, "S", secret, { mountAsFile: true });
+    const row = mergeRows(saved, draft).find((r) => r.key === "S")!;
+    expect(row).toMatchObject({
+      value: null,
+      fingerprint: "0a1b2c3d",
+      availableAtBuild: true,
+      mountAsFile: true,
+      change: "changed",
+    });
+    expect(toPutBody(draft).body.set).toEqual([
+      { key: "S", available_at_build: true, mount_as_file: true },
+    ]);
+    draft = stageFlags(draft, "S", secret, { availableAtBuild: false });
+    draft = stageFlags(draft, "S", secret, { mountAsFile: false });
+    expect(draft.set.size).toBe(0);
+
+    const withValue = stageFlags(
+      stageSet(EMPTY_DRAFT, "A", { value: "2", isSecret: false }),
+      "A",
+      saved[0],
+      { availableAtBuild: true },
+    );
+    expect(toPutBody(withValue).body.set).toEqual([
+      { key: "A", value: "2", tier: "plain", available_at_build: true },
+    ]);
+  });
+
+  it("predicts the API's build-time refusals", () => {
+    const context = {
+      slug: "web",
+      shared: [{ key: "TOKEN", tier: "secret" as const, value: null }],
+    };
+    const rows = mergeRows(saved, EMPTY_DRAFT);
+    expect(buildTimeRefusal("PATH", { value: "/bin", isSecret: false }, rows, context)).toMatch(
+      /reserved/,
+    );
+    expect(buildTimeRefusal("LD_PRELOAD", { value: null, isSecret: true }, rows, context)).toMatch(
+      /reserved/,
+    );
+    expect(buildTimeRefusal("X", { value: ref("S}}"), isSecret: false }, rows, context)).toMatch(
+      /RUN --mount=type=secret,id=X/,
+    );
+    expect(
+      buildTimeRefusal("X", { value: ref("shared.TOKEN}}"), isSecret: false }, rows, context),
+    ).toMatch(/references a secret/);
+    expect(buildTimeRefusal("X", { value: ref("S}}"), isSecret: true }, rows, context)).toBeNull();
+    expect(buildTimeRefusal("X", { value: ref("A}}"), isSecret: false }, rows, context)).toBeNull();
+  });
+
+  it("ties build-time refusals in error details to the build switch", () => {
+    expect(
+      errorsFromDetails([
+        { field: "A", code: "build_arg_secret", message: "refs a secret" },
+        { field: "PATH", code: "reserved_name", message: "reserved" },
+      ]),
+    ).toMatchObject({
+      A: { field: "available_at_build", message: "refs a secret" },
+      PATH: { field: "available_at_build" },
+    });
   });
 
   it("maps API errors back to keys", () => {

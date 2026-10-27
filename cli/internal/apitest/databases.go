@@ -339,7 +339,7 @@ func (f *Fake) newVolume(projectID, envID, serviceID, mount string, sizeMB int64
 // removed. Must hold f.mu.
 func (f *Fake) volumeOf(serviceID, envID string) *api.Volume {
 	for _, v := range f.dataState().volumes {
-		if v.ServiceID == serviceID && v.EnvironmentID == envID && v.Status != "deleted" {
+		if v.ServiceID == serviceID && v.EnvironmentID == envID && v.Status != "deleted" && v.Status != "abandoned" {
 			return v
 		}
 	}
@@ -873,6 +873,10 @@ func (f *Fake) restoreBackup(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "invalid_request", "in_place restores into the backup's environment")
 		return
 	}
+	if in.TargetNodeID != "" && in.Mode != api.RestoreInPlace {
+		apiError(w, http.StatusBadRequest, "invalid_request", "target_node_id applies to in_place restores only")
+		return
+	}
 	if in.Mode == api.RestoreNewService {
 		f.restoreNewService(w, b, s, in)
 		return
@@ -893,6 +897,14 @@ func (f *Fake) restoreBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	rst := &api.Restore{ID: f.nextID("rst"), BackupID: b.ID, Mode: in.Mode, TargetServiceID: &s.ID, TargetEnvironmentID: &b.EnvironmentID,
 		Status: "queued", RequestedBy: str(f.user.ID), CreatedAt: Now}
+	if in.TargetNodeID != "" {
+		if f.recoverVolume(w, s, b, in.TargetNodeID) {
+			rst.TargetNodeID = &in.TargetNodeID
+			d.restores = append(d.restores, rst)
+			writeJSON(w, http.StatusAccepted, rst)
+		}
+		return
+	}
 	if !in.SkipSafetyBackup {
 		safety := &api.Backup{ID: f.nextID("bak"), ProjectID: b.ProjectID, ServiceID: s.ID, EnvironmentID: b.EnvironmentID,
 			Trigger: "pre_restore", Method: b.Method, Status: api.BackupQueued, CreatedAt: Now}

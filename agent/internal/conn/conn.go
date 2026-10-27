@@ -144,6 +144,28 @@ type JobHandler interface {
 	CancelJob(m *protocol.JobCancel)
 }
 
+// ExecHandler receives the web shell frames (ADR 0012). Every one reaches it
+// only after [protocol.VerifyEnvelope] has checked its 60 s lifetime. Its
+// methods are called from the connection's read loop and must return
+// quickly.
+type ExecHandler interface {
+	OpenExec(m *protocol.ExecOpen)
+	ExecInput(m *protocol.ExecInput)
+	ResizeExec(m *protocol.ExecResize)
+	CloseExec(m *protocol.ExecClose)
+	// Disconnected is called when the control connection ends: a session
+	// can't outlive the only channel that relays it.
+	Disconnected()
+}
+
+// ImagePushHandler receives image_push (ADR 0011), which is
+// credential-bearing and reaches it only after [protocol.VerifyEnvelope]
+// has checked its 60 s lifetime. PushImage is called from the connection's
+// read loop and must return quickly.
+type ImagePushHandler interface {
+	PushImage(m *protocol.ImagePush)
+}
+
 // Client is a long-lived connection to the control plane. Configure the
 // exported fields, then call [Client.Run].
 type Client struct {
@@ -182,6 +204,10 @@ type Client struct {
 	Certs CertHandler
 	// Jobs receives job_run and job_cancel; nil drops them.
 	Jobs JobHandler
+	// Exec receives the web shell frames; nil drops them.
+	Exec ExecHandler
+	// Images receives image_push; nil drops it.
+	Images ImagePushHandler
 	// OnPeerProtocol is called with the control plane's protocol version
 	// each time [Client.PeerProtocolVersion] rises. It must not block.
 	OnPeerProtocol func(version int)
@@ -358,6 +384,9 @@ func (c *Client) session(ctx context.Context) (connected bool, err error) {
 	<-closed
 	if c.MetricsInterval != nil {
 		c.MetricsInterval(0)
+	}
+	if c.Exec != nil {
+		c.Exec.Disconnected()
 	}
 	return true, errors.Join(readErr, <-writeErr)
 }
@@ -690,7 +719,41 @@ func (s *session) apply(kid string, msg protocol.ControlMessage) {
 		}
 		s.Logger.Info("received job cancel", "msg_id", m.ID, "run_id", m.RunID)
 		s.Jobs.CancelJob(m)
+	// SECURITY: shell frames are logged by type and session only; input and
+	// output never reach a log (ADR 0014 §15).
+	case *protocol.ExecOpen:
+		s.exec(m.Type, m.ID, func(h ExecHandler) {
+			s.Logger.Info("received exec open", "msg_id", m.ID, "session_id", m.SessionID, "workload_id", m.WorkloadID)
+			h.OpenExec(m)
+		})
+	case *protocol.ExecInput:
+		s.exec(m.Type, m.ID, func(h ExecHandler) { h.ExecInput(m) })
+	case *protocol.ExecResize:
+		s.exec(m.Type, m.ID, func(h ExecHandler) { h.ResizeExec(m) })
+	case *protocol.ExecClose:
+		s.exec(m.Type, m.ID, func(h ExecHandler) {
+			s.Logger.Info("received exec close", "msg_id", m.ID, "session_id", m.SessionID, "reason", m.Reason)
+			h.CloseExec(m)
+		})
+	case *protocol.ImagePush:
+		s.raisePeer(protocol.ImagePushProtocolVersion)
+		if s.Images == nil {
+			s.Logger.Warn("dropping control frame", "reason", "no_handler", "type", m.Type, "msg_id", m.ID, "push_id", m.PushID)
+			return
+		}
+		s.Logger.Info("received image push", "msg_id", m.ID, "push_id", m.PushID, "target", m.Target)
+		s.Images.PushImage(m)
 	}
+}
+
+// exec dispatches a web shell frame.
+func (s *session) exec(typ, msgID string, fn func(ExecHandler)) {
+	s.raisePeer(protocol.ExecProtocolVersion)
+	if s.Exec == nil {
+		s.Logger.Warn("dropping control frame", "reason", "no_handler", "type", typ, "msg_id", msgID)
+		return
+	}
+	fn(s.Exec)
 }
 
 func (s *session) applyDesiredState(m *protocol.DesiredState) {

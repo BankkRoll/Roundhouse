@@ -19,6 +19,7 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | PR previews                     | An environment and URL per pull request                        | In progress                                                  |
 | Cron jobs                       | Run a service on a schedule                                    | Available                                                    |
 | Cloud servers                   | Create servers on Hetzner, DigitalOcean, Vultr or Linode       | Available                                                    |
+| Cloudflare Containers           | Run a stateless HTTP service on Cloudflare instead of servers  | Preview — tested against a fake API; needs live verification |
 | **Data**                        |                                                                |                                                              |
 | Databases                       | Postgres, MySQL, Valkey/Redis and MongoDB as services          | Available                                                    |
 | Volumes                         | Persistent storage mounted into a service                      | Available                                                    |
@@ -35,6 +36,7 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | Environments                    | Production plus staging or more, each with its own config      | Available                                                    |
 | Shared variables                | Define a value once, reference it from every service           | Available                                                    |
 | CLI                             | Deploy, tail logs and manage variables from a terminal         | Available                                                    |
+| Web shell                       | A terminal in a running container, from the dashboard or CLI   | Available                                                    |
 | Templates                       | Start from a ready-made stack                                  | Available                                                    |
 | MCP server                      | Coding agents act through a scoped API, with OAuth sign-in     | Available                                                    |
 | **Security**                    |                                                                |                                                              |
@@ -103,6 +105,9 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 - **Rotating `MASTER_KEY`** signs everyone out. Keep the old key in
   `MASTER_KEYS_PREVIOUS` until the key rotation has finished; two-factor
   secrets are re-encrypted under the new key with everything else.
+- **Signing-key compromise**: if the control plane's signing key may have
+  leaked, every node must re-join; follow
+  [docs/runbooks/emergency-rejoin.md](docs/runbooks/emergency-rejoin.md).
 
 ## Templates
 
@@ -154,7 +159,7 @@ Development settings live in `apps/api/.dev.vars`, created from
 | `packages/shared`   | Constants, IDs, roles                  |
 | `packages/ui`       | Dashboard design system                |
 | `e2e`               | End-to-end tests                       |
-| `docs`              | Configuration reference, ADRs          |
+| `docs`              | Configuration, ADRs, runbooks          |
 | `infra`             | Release signing                        |
 
 [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) ·

@@ -208,11 +208,26 @@ export function useProjectAccess(projectId: string, enabled = true) {
   });
 }
 
+/**
+ * Reads the names behind a project's access settings, for callers who can read the
+ * project but maybe not the workspace's members.
+ *
+ * @param projectId - Project id.
+ * @returns The query.
+ */
+export function useProjectDirectory(projectId: string) {
+  return useQuery({
+    queryKey: queryKeys.projectDirectory(projectId),
+    queryFn: ({ signal }) => accessApi.getProjectDirectory(projectId, signal),
+  });
+}
+
 function useInvalidateProjectAccess(workspaceId: string, projectId: string) {
   const queryClient = useQueryClient();
   return () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.projectAccess(projectId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.projectDirectory(projectId) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.effectiveAccess(workspaceId) }),
     ]);
 }
@@ -277,6 +292,7 @@ export function usePutProtection(workspaceId: string, projectId: string, environ
     onSuccess: (protection) => {
       queryClient.setQueryData(queryKeys.protection(environmentId), protection);
       return Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectDirectory(projectId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.effectiveAccess(workspaceId) }),
         // NOTE: The project detail carries each environment's `protected` flag.
         queryClient.invalidateQueries({ queryKey: queryKeys.project(projectId), exact: true }),

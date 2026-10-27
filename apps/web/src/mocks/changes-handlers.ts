@@ -1067,6 +1067,8 @@ function applySet(
         Object.assign(existing, {
           value: change.value ?? "",
           tier: op.staged_tier,
+          available_at_build: op.available_at_build ?? existing.available_at_build,
+          mount_as_file: op.mount_as_file ?? existing.mount_as_file,
           version: existing.version + 1,
           updated_at: now,
           updated_by: scope.userId,

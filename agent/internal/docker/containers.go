@@ -57,6 +57,10 @@ type HostConfig struct {
 	// sets it for workloads; integration tests use it for netfilter and
 	// filesystem checks.
 	Privileged bool `json:"Privileged,omitempty"`
+	// PidMode "host" shares the host's PID namespace. The agent never sets
+	// it for workloads; integration tests use it to signal engine processes
+	// by host PID, as an agent on the host does.
+	PidMode string `json:"PidMode,omitempty"`
 }
 
 // Mount types.
@@ -180,6 +184,12 @@ type ContainerConfig struct {
 	User string `json:"User"`
 }
 
+// InspectHostConfig is the subset of an inspected container's host config
+// the agent checks before it execs into the container.
+type InspectHostConfig struct {
+	Privileged bool `json:"Privileged"`
+}
+
 // MountPoint is one mount of an inspected container.
 type MountPoint struct {
 	Type string `json:"Type"`
@@ -205,13 +215,14 @@ type NetworkSettings struct {
 type ContainerInfo struct {
 	ID string `json:"Id"`
 	// Name has a leading "/".
-	Name            string          `json:"Name"`
-	Created         time.Time       `json:"Created"`
-	Image           string          `json:"Image"`
-	State           ContainerState  `json:"State"`
-	Config          ContainerConfig `json:"Config"`
-	NetworkSettings NetworkSettings `json:"NetworkSettings"`
-	Mounts          []MountPoint    `json:"Mounts"`
+	Name            string            `json:"Name"`
+	Created         time.Time         `json:"Created"`
+	Image           string            `json:"Image"`
+	State           ContainerState    `json:"State"`
+	Config          ContainerConfig   `json:"Config"`
+	HostConfig      InspectHostConfig `json:"HostConfig"`
+	NetworkSettings NetworkSettings   `json:"NetworkSettings"`
+	Mounts          []MountPoint      `json:"Mounts"`
 }
 
 // InspectContainer returns a container's details. It fails with an error

@@ -31,6 +31,7 @@ import { CREDENTIAL_ROUTES, PHASE1_ROUTES } from "../../../api/src/contracts";
 import { RealtimeServerMessageSchema } from "../../../api/src/schemas";
 import { ACCESS_SEED } from "./access-db";
 import { requireApprovalIn } from "./changes-handlers";
+import { REFUSED_CLOUDFLARE_TOKEN, resetCloudflareMock } from "./cloudflare-handlers";
 import { CRON_SEED } from "./cron-db";
 import { DATA_SEED } from "./data-db";
 import {
@@ -51,6 +52,7 @@ import { handlers } from "./handlers";
 import { MESH_SEED } from "./mesh-db";
 import { seedMeshNetwork } from "./mesh-handlers";
 import { MOCK_BACKUP_CODES, MOCK_TOTP_CODE } from "./security-db";
+import { addRecordedShellSession, resetShellMock, shellMock } from "./shell-handlers";
 
 // -----------------------------------------------------------------------------
 // API route definitions, read from the API source
@@ -63,7 +65,7 @@ interface ZodLike {
 interface RouteConfig {
   method: string;
   path: string;
-  responses: Record<string, { content?: { "application/json"?: { schema: ZodLike } } }>;
+  responses: Record<string, { content?: Record<string, { schema: ZodLike } | undefined> }>;
 }
 
 interface ApiRoute {
@@ -102,6 +104,8 @@ const ROUTE_MODULES = [
   "access",
   "mesh",
   "registry",
+  "shell",
+  "cloudflare",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -214,7 +218,11 @@ async function call(
   lastLocation = response.headers.get("location");
   const text = await response.text();
   responseTexts.push(text);
-  const parsed: unknown = text ? JSON.parse(text) : undefined;
+  // NOTE: A few routes answer in another media type (a shell recording is asciicast
+  // text); their body is checked as text against that type's schema.
+  const mediaType = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+  const textual = mediaType !== "" && mediaType !== "application/json";
+  const parsed: unknown = textual ? text : text ? JSON.parse(text) : undefined;
   if (BETTER_AUTH_PATHS.has(url.pathname)) {
     exercised.add(`${method} ${url.pathname}`);
     return { status: response.status, body: parsed };
@@ -236,7 +244,7 @@ async function call(
     failures.push(`${label}: status not declared by the API (declares ${statuses})`);
     return { status: response.status, body: parsed };
   }
-  const schema = declared.content?.["application/json"]?.schema;
+  const schema = declared.content?.[textual ? mediaType : "application/json"]?.schema;
   if (schema) {
     const result = schema.safeParse(parsed);
     if (!result.success) {
@@ -452,6 +460,15 @@ describe("MSW mocks match the API contract", () => {
       expect(
         await call("POST", `${WS}/invites`, { email: "CARA@example.com", role: "viewer" }),
       ).toMatchObject({ status: 409, body: { error: { code: "conflict" } } });
+      db.sessionStale = true;
+      expect(
+        await call("POST", `${WS}/invites`, { email: "frank@example.com", role: "viewer" }),
+      ).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required", details: [{ code: "session_stale" }] } },
+      });
+      expect((await call("GET", `${WS}/invites`)).status).toBe(200);
+      db.sessionStale = false;
       expect(
         await call("POST", `${WS}/invites`, { email: "Frank@Example.com", role: "viewer" }),
       ).toMatchObject({ status: 201, body: { invite: { email: "frank@example.com" } } });
@@ -529,6 +546,12 @@ describe("MSW mocks match the API contract", () => {
       expect(expires_at - before).toBeLessThanOrEqual(JOIN_TOKEN_TTL_MS + 1000);
       expect(install_command).toMatch(/\| sudo bash -s -- --token njt_/);
       expect((await call("POST", `${OTHER_WS}/nodes/join-tokens`)).status).toBe(404);
+      db.sessionStale = true;
+      expect(await call("POST", `${WS}/nodes/join-tokens`)).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.sessionStale = false;
 
       as("member");
       expect((await call("POST", `${WS}/nodes/join-tokens`)).status).toBe(403);
@@ -1200,6 +1223,97 @@ describe("MSW mocks match the API contract", () => {
       as(null);
       expect((await call("GET", `${V}${env}`)).status).toBe(401);
       expect((await call("PUT", `${V}${env}`, { set: [] })).status).toBe(401);
+    });
+  });
+
+  it("variables: build-time and file flags, flags-only writes and build refusals", async () => {
+    await fresh(async () => {
+      const V = `/v1/services/${SEED.web}/variables?environment_id=${SEED.production}`;
+      const row = (key: string) =>
+        db.deploy.variables.find((v) => v.owner_id === SEED.web && v.key === key);
+      const before = { ...row("SESSION_SECRET")! };
+
+      const flagsOnly = await call("PUT", V, {
+        set: [{ key: "SESSION_SECRET", available_at_build: true, mount_as_file: true }],
+      });
+      expect(flagsOnly.status).toBe(200);
+      expect(
+        (flagsOnly.body as { variables: { key: string }[] }).variables.find(
+          (v) => v.key === "SESSION_SECRET",
+        ),
+      ).toMatchObject({
+        tier: "secret",
+        value: null,
+        available_at_build: true,
+        mount_as_file: true,
+        version: before.version + 1,
+      });
+      expect(row("SESSION_SECRET")).toMatchObject({ value: before.value, tier: "secret" });
+      expect((await call("GET", V)).body as { variables: { key: string }[] }).toMatchObject({
+        variables: expect.arrayContaining([
+          expect.objectContaining({ key: "SESSION_SECRET", available_at_build: true }),
+        ]),
+      });
+      expect(
+        (await call("PUT", V, { set: [{ key: "SESSION_SECRET", mount_as_file: false }] })).status,
+      ).toBe(200);
+      expect(row("SESSION_SECRET")).toMatchObject({
+        available_at_build: true,
+        mount_as_file: false,
+      });
+
+      expect(
+        await call("PUT", V, { set: [{ key: "NOPE", available_at_build: true }] }),
+      ).toMatchObject({ status: 400, body: { error: { code: "value_required" } } });
+      expect(
+        await call("PUT", V, { set: [{ key: "PATH", value: "/bin", available_at_build: true }] }),
+      ).toMatchObject({
+        status: 400,
+        body: {
+          error: { code: "invalid_request", details: [{ field: "PATH", code: "reserved_name" }] },
+        },
+      });
+      expect(row("PATH")).toBeUndefined();
+
+      expect(
+        await call("PUT", V, {
+          set: [{ key: "DB_ARG", value: `\${{DATABASE_URL}}`, available_at_build: true }],
+        }),
+      ).toMatchObject({
+        status: 400,
+        body: {
+          error: {
+            code: "build_arg_secret",
+            details: [
+              {
+                field: "DB_ARG",
+                message: expect.stringContaining("RUN --mount=type=secret,id=DB_ARG"),
+              },
+            ],
+          },
+        },
+      });
+      expect(
+        await call("PUT", V, {
+          set: [
+            {
+              key: "DB_ARG",
+              value: `\${{DATABASE_URL}}`,
+              available_at_build: true,
+              tier: "secret",
+            },
+          ],
+          confirm_write_only: true,
+        }),
+      ).toMatchObject({ status: 200 });
+      expect(
+        (await call("PUT", V, { set: [{ key: "NODE_ENV", available_at_build: true }] })).status,
+      ).toBe(200);
+      expect(
+        await call("PUT", V, {
+          set: [{ key: "DB_ARG", tier: "plain", value: `\${{DATABASE_URL}}` }],
+        }),
+      ).toMatchObject({ status: 400, body: { error: { code: "build_arg_secret" } } });
     });
   });
 
@@ -3435,6 +3549,56 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
+  it("recovery: in place onto another node once the volume's node is lost", async () => {
+    await fresh(async () => {
+      db.nodes.push({
+        ...makeNode({ id: "node_nbg1", name: "nbg-1", hostname: "nbg-1.example.com" }),
+        workspace_id: WORKSPACE_ID,
+      });
+      const recover = (body: Record<string, unknown> = {}) =>
+        call("POST", `/v1/backups/${DATA_SEED.scheduledBackup}/restore`, {
+          mode: "in_place",
+          confirm: DATA_SEED.databaseSlug,
+          target_node_id: "node_nbg1",
+          ...body,
+        });
+      expect(await recover()).toMatchObject({
+        status: 409,
+        body: { error: { message: expect.stringMatching(/Move the volume instead/) } },
+      });
+      expect((await recover({ mode: "new_service" })).status).toBe(400);
+      const home = db.nodes.find((n) => n.id === "node_hel1")!;
+      home.status = "offline";
+      expect((await recover({ target_node_id: "node_nope" })).status).toBe(404);
+      expect(await recover({ target_node_id: "node_fsn1" })).toMatchObject({
+        status: 422,
+        body: { error: { code: "migration_target_ineligible" } },
+      });
+      as("member");
+      expect((await recover()).status).toBe(403);
+      as("owner");
+      db.data.knobs.reauthRequired = true;
+      expect((await recover()).status).toBe(403);
+      db.data.knobs.reauthRequired = false;
+
+      const started = await recover();
+      expect(started).toMatchObject({
+        status: 202,
+        body: { mode: "in_place", target_node_id: "node_nbg1", safety_backup_id: null },
+      });
+      expect(db.data.volumes.find((v) => v.id === DATA_SEED.volume)?.status).toBe("abandoned");
+      const volume = await call(
+        "GET",
+        `/v1/services/${DATA_SEED.database}/volume?environment_id=${SEED.production}`,
+      );
+      expect(volume.body).toMatchObject({ node_id: "node_nbg1", status: "pending" });
+      expect(db.audit.at(-1)).toMatchObject({
+        action: "restore.started",
+        metadata: { recovery: { lost_node_id: "node_hel1", target_node_id: "node_nbg1" } },
+      });
+    });
+  });
+
   it("volume moves: targets, typed slug, fresh session, phases to done or rolled back", async () => {
     await fresh(async () => {
       db.nodes.push({
@@ -4015,6 +4179,32 @@ describe("MSW mocks match the API contract", () => {
         (await call("PUT", protection, { protected: true, require_approval: "yes" })).status,
       ).toBe(400);
 
+      const directory = `/v1/projects/${SEED.project}/directory`;
+      const named = await call("GET", directory);
+      expect(named.status).toBe(200);
+      const listed = named.body as {
+        users: { id: string; email: string | null; project_member: boolean }[];
+        teams: { id: string; name: string }[];
+      };
+      expect(listed.teams).toEqual([{ id: teamId, name: "Operations" }]);
+      expect(listed.users.find((u) => u.id === USERS.member.id)).toMatchObject({
+        email: USERS.member.email,
+        project_member: true,
+      });
+      expect((await call("GET", "/v1/projects/prj_nope/directory")).status).toBe(404);
+
+      as("member");
+      expect(
+        ((await call("GET", directory)).body as { users: { email: string | null }[] }).users.every(
+          (u) => u.email !== null,
+        ),
+      ).toBe(true);
+      as("viewer");
+      expect(
+        ((await call("GET", directory)).body as { users: { email: string | null }[] }).users.every(
+          (u) => u.email === null,
+        ),
+      ).toBe(true);
       as("member");
       expect((await call("GET", access)).status).toBe(403);
       const selfGrant = { principal: { type: "user", id: USERS.member.id }, role: "developer" };
@@ -4031,6 +4221,10 @@ describe("MSW mocks match the API contract", () => {
       db.access.grants = [];
       expect((await call("GET", protection)).status).toBe(404);
       expect((await call("GET", access)).status).toBe(404);
+      expect((await call("GET", directory)).status).toBe(404);
+      as(null);
+      expect((await call("GET", directory)).status).toBe(401);
+      as("viewer");
 
       as("owner");
       const regrant = await call("PUT", access, selfGrant);
@@ -4185,6 +4379,131 @@ describe("MSW mocks match the API contract", () => {
       as("viewer");
       expect((await call("DELETE", `${WS}/members/mem_viewer`)).status).toBe(204);
       db.sessionStale = false;
+    });
+  });
+
+  it("shell: targets with their gate, plain HTTP on the socket, sessions and terminate", async () => {
+    await fresh(async () => {
+      resetShellMock();
+      const targets = `/v1/services/${SEED.web}/shell-targets?environment_id=${SEED.production}`;
+      expect(await call("GET", targets)).toMatchObject({
+        status: 200,
+        body: { gate: { allowed: false, reason: "two_factor_required" } },
+      });
+      db.security.twoFactor[USERS.owner.id] = { backupCodes: [] };
+      expect(await call("GET", targets)).toMatchObject({
+        status: 200,
+        body: { gate: { allowed: true, reason: null }, targets: [{ replica: 0 }, { replica: 1 }] },
+      });
+      expect((await call("GET", `/v1/services/${SEED.web}/shell-targets`)).status).toBe(400);
+      expect((await call("GET", `/v1/workloads/wl_${SEED.webActive}_0/shell`)).status).toBe(426);
+
+      const now = Date.now();
+      shellMock.rows.push({
+        id: "shl_1",
+        project_id: SEED.project,
+        environment_id: SEED.production,
+        service_id: SEED.web,
+        workload_id: `wl_${SEED.webActive}_0`,
+        deployment_id: SEED.webActive,
+        replica: 0,
+        node_id: "node_hel1",
+        user_id: USERS.owner.id,
+        token_id: null,
+        command: "/bin/sh",
+        container_user: "node",
+        started_at: now,
+        opened_at: now,
+        ended_at: null,
+        end_reason: null,
+        exit_code: null,
+        bytes_in: 0,
+        bytes_out: 0,
+        recording: "recording",
+        recording_parts: 0,
+      });
+      expect(await call("GET", `${WS}/shell-sessions?project_id=${SEED.project}`)).toMatchObject({
+        status: 200,
+        body: { sessions: [{ id: "shl_1" }], next_cursor: null },
+      });
+      expect(await call("POST", "/v1/shell-sessions/shl_1/terminate")).toMatchObject({
+        status: 200,
+        body: { id: "shl_1", end_reason: "terminated" },
+      });
+      expect((await call("POST", "/v1/shell-sessions/shl_1/terminate")).status).toBe(409);
+      expect((await call("POST", "/v1/shell-sessions/shl_nope/terminate")).status).toBe(404);
+      expect((await call("GET", "/v1/shell-sessions/shl_1/recording")).status).toBe(404);
+      const cast = `${JSON.stringify({ version: 2, width: 80, height: 24 })}\n[0.1,"o","hi"]\n`;
+      addRecordedShellSession({ ...shellMock.rows[0]!, id: "shl_2" }, cast);
+      expect(await call("GET", "/v1/shell-sessions/shl_2/recording")).toMatchObject({
+        status: 200,
+        body: cast,
+      });
+      expect((await call("GET", "/v1/shell-sessions/shl_nope/recording")).status).toBe(404);
+      db.sessionStale = true;
+      expect(await call("GET", "/v1/shell-sessions/shl_2/recording")).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.sessionStale = false;
+      as("viewer");
+      expect((await call("GET", `${WS}/shell-sessions`)).status).toBe(403);
+      expect((await call("GET", "/v1/shell-sessions/shl_2/recording")).status).toBe(403);
+    });
+  });
+
+  it("cloudflare: a write-only token, verification, and a service's provider status", async () => {
+    await fresh(async () => {
+      resetCloudflareMock();
+      const I = "/v1/instance/cloudflare";
+      const account = {
+        account_id: "0123456789abcdef0123456789abcdef",
+        api_token: "cf-token-0123456789abcdef",
+      };
+      expect(await call("GET", I)).toMatchObject({ status: 200, body: { configured: false } });
+      expect((await call("POST", `${I}/verify`)).status).toBe(409);
+      expect((await call("PUT", I, { account_id: "nope", api_token: "x" })).status).toBe(400);
+      db.sessionStale = true;
+      expect(await call("PUT", I, account)).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.sessionStale = false;
+      expect(
+        (await call("PUT", I, { ...account, api_token: REFUSED_CLOUDFLARE_TOKEN })).status,
+      ).toBe(422);
+      const saved = await call("PUT", I, { ...account, apps_domain_proxied: true });
+      expect(saved).toMatchObject({
+        status: 200,
+        body: { configured: true, token_hint: "cdef", apps_domain_proxied: true },
+      });
+      expect(JSON.stringify(saved.body)).not.toContain(account.api_token);
+      expect(await call("POST", `${I}/verify`)).toMatchObject({ status: 200, body: { ok: true } });
+
+      const S = `/v1/services/${SEED.web}/cloudflare`;
+      expect(await call("GET", `${S}?environment_id=${SEED.production}`)).toMatchObject({
+        status: 200,
+        body: { provider: "nodes", configured: true, eligibility: [], warnings: [], runtime: null },
+      });
+      expect((await call("GET", S)).status).toBe(400);
+      expect((await call("GET", `/v1/services/svc_nope/cloudflare?environment_id=x`)).status).toBe(
+        404,
+      );
+
+      const latest = db.deploy.configs
+        .filter((c) => c.service_id === SEED.web && c.environment_id === SEED.production)
+        .sort((a, b) => b.version - a.version)[0]!;
+      const nodes = latest.placement;
+      latest.placement = {
+        ...nodes,
+        provider: "cloudflare",
+        cloudflare: { max_instances: 2, sleep_after: "10m" },
+      } as typeof nodes;
+      expect((await call("DELETE", I)).status).toBe(409);
+      latest.placement = nodes;
+      expect(await call("DELETE", I)).toMatchObject({ status: 200, body: { configured: false } });
+      as("admin");
+      expect((await call("GET", I)).status).toBe(403);
     });
   });
 

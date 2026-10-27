@@ -14,6 +14,10 @@
  * - Sign-in failure counters past their window and no longer locked.
  * - ACME challenges past their expiry, left by an issuance attempt that
  *   died before its cleanup step (ADR 0009).
+ * - Web shell recordings of sessions that ended more than
+ *   `shell_recording_retention_days` ago (ADR 0012): the R2 parts first,
+ *   then the row's recording columns; the session row itself stays, as
+ *   audit metadata. See `./shell-recording.ts`.
  *
  * Every deletion runs in bounded batches with a per-run cap, so one run
  * stays well inside a Worker's limits however much has piled up; whatever is
@@ -41,7 +45,8 @@ import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { Env } from "../env";
 import { runBackupMaintenance } from "./backups/schedule";
 import type { KeyEnv } from "./keyring";
-import { getLogRetentionDays } from "./settings";
+import { getLogRetentionDays, getShellRecordingSettings } from "./settings";
+import { pruneShellRecordings } from "./shell-recording";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -106,6 +111,8 @@ export interface RetentionReport {
   loginAttempts: number;
   githubClaims: number;
   acmeChallenges: number;
+  /** Shell sessions whose recording was deleted. */
+  shellRecordings: number;
 }
 
 function chunks<T>(items: readonly T[], size: number): T[][] {
@@ -208,6 +215,7 @@ export async function runRetention(
 ): Promise<RetentionReport> {
   const db = createDb(env.DB);
   const logDays = await getLogRetentionDays(db);
+  const shellRecording = await getShellRecordingSettings(db);
   const at = (ms: number) => new Date(now - ms);
   const prune = (table: SQLiteTable, key: SQLiteColumn, where: SQL) =>
     pruneRows(db, limits, table, key, where);
@@ -252,6 +260,12 @@ export async function runRetention(
       acmeChallenges,
       acmeChallenges.token,
       lt(acmeChallenges.expiresAt, at(0)),
+    ),
+    shellRecordings: await pruneShellRecordings(
+      db,
+      env.LOGS,
+      at(shellRecording.retentionDays * DAY_MS),
+      limits.maxBatches,
     ),
   };
 }

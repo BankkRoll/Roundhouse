@@ -35,6 +35,8 @@ const (
 	BoxPurposeRestore          BoxPurpose = "restore"
 	BoxPurposeDBCredential     BoxPurpose = "db-credential"
 	BoxPurposeCertKey          BoxPurpose = "cert-key"
+	BoxPurposeExecInput        BoxPurpose = "exec-input"
+	BoxPurposeImagePush        BoxPurpose = "image-push"
 )
 
 // ErrBoxWrongKey means a box was sealed to another encryption key than the

@@ -16,11 +16,13 @@ import { createDb } from "@roundhouse/db";
 import type { Env } from "../env";
 import { claimDueBackups } from "./backups/schedule";
 import { claimDueCertificates, syncCertificates } from "./certificates/schedule";
+import { claimCloudflareDeletions } from "./cloudflare/runtime";
 import { claimDueCronRuns } from "./cron/schedule";
 import { refreshAllNodes, refreshNodes } from "./desired-state";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
 import { runSaasTick } from "./domains/saas";
 import { progressRotations } from "./mesh";
+import { expireLostShellSessions } from "./shell";
 import { claimMigrationCleanups } from "./volume-migrations";
 import { claimVolumeDeletions } from "./volumes";
 
@@ -81,6 +83,8 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
     name: "saas",
     run: (env, now) => runSaasTick(env, now, () => refreshAllNodes(env, createDb(env.DB))),
   },
+  { name: "lost_shell_sessions", run: expireLostShellSessions },
+  { name: "cloudflare_deletions", run: claimCloudflareDeletions },
 ];
 
 /**

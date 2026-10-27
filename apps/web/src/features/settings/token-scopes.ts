@@ -39,6 +39,7 @@ export const SCOPE_LABELS: Record<ApiTokenScope, string> = {
   "backups:restore": "Restore and download backups",
   "changes:approve": "Approve or reject staged changes",
   "changes:auto_apply": "Apply staged changes without a person's approval",
+  "shell:open": "Open shells in running replicas (unprotected environments only)",
 };
 
 /** A choice in the create dialog: a preset, or picking scopes one by one. */

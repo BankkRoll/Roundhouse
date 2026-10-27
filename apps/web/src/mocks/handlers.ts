@@ -29,6 +29,7 @@ import { accessHandlers } from "./access-handlers";
 import { forgetMember } from "./access-resolve";
 import { accountSecurityHandlers } from "./account-security-handlers";
 import { changeHandlers } from "./changes-handlers";
+import { cloudflareHandlers } from "./cloudflare-handlers";
 import {
   apiError,
   currentUser,
@@ -49,6 +50,7 @@ import { metricsHandlers } from "./metrics-handlers";
 import { providerHandlers } from "./providers-handlers";
 import { registryHandlers } from "./registry-handlers";
 import { securityHandlers } from "./security-handlers";
+import { shellHandlers } from "./shell-handlers";
 import { signingKeyHandlers } from "./signing-keys-mock";
 import { templateHandlers } from "./templates-handlers";
 import { tlsHandlers } from "./tls-mock";
@@ -506,6 +508,9 @@ const phase0Handlers = [
   }),
 
   http.post("*/v1/workspaces/:workspaceId/invites", async ({ params, request }) => {
+    // Like the API, the fresh-session guard runs before validation and access checks.
+    const stale = requireFreshSession();
+    if (stale) return stale;
     const body = await readJson(request);
     const parsed = parseFields(body, { email: { max: 254, email: true } });
     if (!parsed.ok) return parsed.response;
@@ -675,6 +680,8 @@ const phase0Handlers = [
   }),
 
   http.post("*/v1/workspaces/:workspaceId/nodes/join-tokens", ({ params, request }) => {
+    const stale = requireFreshSession();
+    if (stale) return stale;
     const workspaceId = String(params.workspaceId);
     const access = requireWorkspace(workspaceId, "nodes:manage");
     if (!access.ok) return access.response;
@@ -802,4 +809,6 @@ export const handlers = [
   ...securityHandlers,
   ...accountSecurityHandlers,
   ...accessHandlers,
+  ...shellHandlers,
+  ...cloudflareHandlers,
 ];

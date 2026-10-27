@@ -300,6 +300,182 @@ describe("variables editor", () => {
     ).toBeInTheDocument();
   });
 
+  it("turns build-time on for a secret with a flags-only write", async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      http.put("*/v1/services/:serviceId/variables", async ({ request }) => {
+        bodies.push(await request.clone().json());
+      }),
+    );
+    const before = { ...serviceVariable("SESSION_SECRET")! };
+    const { user, rowOf } = await openVariables();
+    const toggle = within(rowOf("SESSION_SECRET")).getByRole("switch", {
+      name: "Available at build: SESSION_SECRET",
+    });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAccessibleDescription(
+      /BuildKit secrets read with RUN --mount=type=secret/,
+    );
+    expect(toggle).toHaveAccessibleDescription(/fork and PR preview builds never get/);
+    await user.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(rowOf("SESSION_SECRET")).toHaveTextContent("staged");
+    expect(rowOf("SESSION_SECRET")).toHaveTextContent(/fp [a-f0-9]{8}/);
+
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(/Saved as a new version/)).toBeInTheDocument();
+    expect(bodies).toEqual([
+      {
+        set: [{ key: "SESSION_SECRET", available_at_build: true }],
+        delete: [],
+        confirm_write_only: false,
+      },
+    ]);
+    expect(serviceVariable("SESSION_SECRET")).toMatchObject({
+      value: before.value,
+      tier: "secret",
+      available_at_build: true,
+      mount_as_file: false,
+      version: before.version + 1,
+    });
+    expect(
+      within(rowOf("SESSION_SECRET")).getByRole("switch", {
+        name: "Available at build: SESSION_SECRET",
+      }),
+    ).toBeChecked();
+    expect(rowOf("SESSION_SECRET")).not.toHaveTextContent("staged");
+  });
+
+  it("mounts a secret as a file from the editor without re-entering it", async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      http.put("*/v1/services/:serviceId/variables", async ({ request }) => {
+        bodies.push(await request.clone().json());
+      }),
+    );
+    const { user, rowOf } = await openVariables();
+    await user.click(
+      within(rowOf("DATABASE_URL")).getByRole("button", { name: "Edit DATABASE_URL" }),
+    );
+    const edit = screen.getByRole("form", { name: "Edit DATABASE_URL" });
+    const file = within(edit).getByRole("switch", { name: "Mount as file" });
+    expect(file).toHaveAccessibleDescription(
+      /read-only file at \/run\/secrets\/DATABASE_URL .*docker inspect.*DATABASE_URL_FILE=\/run\/secrets\/DATABASE_URL/,
+    );
+    expect(
+      within(edit).getByRole("switch", { name: "Available at build" }),
+    ).toHaveAccessibleDescription(
+      /BuildKit secret: read it with RUN --mount=type=secret,id=DATABASE_URL/,
+    );
+    await user.click(file);
+    await user.click(within(edit).getByRole("button", { name: "Done" }));
+    expect(
+      within(rowOf("DATABASE_URL")).getByRole("switch", { name: "Mount as file: DATABASE_URL" }),
+    ).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(/Saved as a new version/)).toBeInTheDocument();
+    expect(bodies).toEqual([
+      expect.objectContaining({ set: [{ key: "DATABASE_URL", mount_as_file: true }] }),
+    ]);
+    expect(serviceVariable("DATABASE_URL")).toMatchObject({
+      value: "postgres://store:hunter2@db.internal:5432/store",
+      mount_as_file: true,
+    });
+  });
+
+  it("toggling a flag back drops the staged change", async () => {
+    const { user, rowOf } = await openVariables();
+    const toggle = within(rowOf("NODE_ENV")).getByRole("switch", {
+      name: "Mount as file: NODE_ENV",
+    });
+    await user.click(toggle);
+    expect(screen.getByText("1 staged change")).toBeInTheDocument();
+    await user.click(toggle);
+    expect(screen.queryByText(/staged change/)).not.toBeInTheDocument();
+  });
+
+  it("prevents build-time where the API would refuse it, and says why", async () => {
+    const { user } = await openVariables();
+    await user.click(screen.getByRole("button", { name: "Add variable" }));
+    const form = screen.getByRole("form", { name: "New variable" });
+    await user.type(within(form).getByLabelText("Key"), "PATH");
+    const build = within(form).getByRole("switch", { name: "Available at build" });
+    expect(build).toBeDisabled();
+    expect(build).toHaveAccessibleDescription(/PATH is reserved for the builder's own environment/);
+
+    const key = within(form).getByLabelText("Key");
+    await user.clear(key);
+    await user.type(key, "DB_ARG");
+    expect(build).toBeEnabled();
+    await user.click(within(form).getByRole("combobox", { name: "Value" }));
+    await user.paste(ref("DATABASE_URL}}"));
+    expect(build).toBeDisabled();
+    expect(build).toHaveAccessibleDescription(
+      /DB_ARG references a secret.*RUN --mount=type=secret,id=DB_ARG/,
+    );
+    await user.click(within(form).getByRole("switch", { name: "Secret" }));
+    expect(build).toBeEnabled();
+  });
+
+  it("shows the API's build-time refusal on the variable's switch", async () => {
+    const message =
+      "NODE_ENV references a secret; make it a secret variable with available_at_build and read it with RUN --mount=type=secret,id=NODE_ENV";
+    server.use(
+      http.put("*/v1/services/:serviceId/variables", () =>
+        HttpResponse.json(
+          {
+            error: {
+              code: "build_arg_secret",
+              message,
+              details: [{ field: "NODE_ENV", code: "build_arg_secret", message }],
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+    );
+    const { user, rowOf } = await openVariables();
+    const toggle = within(rowOf("NODE_ENV")).getByRole("switch", {
+      name: "Available at build: NODE_ENV",
+    });
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    const alert = await within(rowOf("NODE_ENV")).findByRole("alert");
+    expect(alert).toHaveTextContent(message);
+    expect(toggle).toHaveAttribute("aria-invalid", "true");
+    expect(toggle).toHaveAccessibleDescription(
+      /NODE_ENV references a secret; make it a secret variable/,
+    );
+    expect(screen.getByText("1 staged change")).toBeInTheDocument();
+  });
+
+  it("disables the flag switches with the reason in a protected environment", async () => {
+    const production = db.deploy.environments.find((row) => row.id === SEED.production)!;
+    production.protected = true;
+    signInAs(USERS.member.id);
+    const { rowOf } = await openVariables();
+    await screen.findByRole("note");
+    for (const name of ["Available at build: NODE_ENV", "Mount as file: NODE_ENV"]) {
+      const toggle = within(rowOf("NODE_ENV")).getByRole("switch", { name });
+      expect(toggle).toBeDisabled();
+      expect(toggle).toHaveAccessibleDescription(/production is protected/);
+    }
+  });
+
+  it("shows flags to viewers as badges, not switches", async () => {
+    Object.assign(serviceVariable("SESSION_SECRET")!, {
+      available_at_build: true,
+      mount_as_file: true,
+    });
+    signInAs(USERS.viewer.id);
+    const { rowOf } = await openVariables();
+    const secret = rowOf("SESSION_SECRET");
+    expect(within(secret).queryByRole("switch")).not.toBeInTheDocument();
+    expect(within(secret).getByText("build")).toBeInTheDocument();
+    expect(within(secret).getByText("file")).toBeInTheDocument();
+    expect(within(rowOf("NODE_ENV")).queryByText("build")).not.toBeInTheDocument();
+  });
+
   it("is read-only for viewers, with secrets masked", async () => {
     signInAs(USERS.viewer.id);
     const { rowOf } = await openVariables();

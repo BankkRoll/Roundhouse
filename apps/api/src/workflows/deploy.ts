@@ -89,9 +89,11 @@ import {
   newId,
   ROLLOUT_TIMEOUT_MS,
   type ServiceKind,
+  type ServiceProvider,
   schedule,
   secretBuildArgsValid,
   secretDerivedVariables,
+  serviceProvider,
 } from "@roundhouse/shared";
 import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Env } from "../env";
@@ -139,6 +141,11 @@ import { resolveServiceEnvironment } from "../lib/resolve-env";
 import { environmentNodeIds, schedulerSnapshot } from "../lib/scheduling";
 import { loadEnvironmentVariables, projectKey } from "../lib/variables";
 import { ensureVolume, type VolumeRow } from "../lib/volumes";
+import {
+  type CloudflareHost,
+  runCloudflareDeploy,
+  switchBackFromCloudflare,
+} from "./cloudflare-deploy";
 
 /** Parameters a deploy workflow instance is created with. */
 export interface DeployParams {
@@ -354,6 +361,17 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       return { kind: "stop", status: "active" };
     }
 
+    // ADR 0011: Cloudflare Containers instead of nodes; `./cloudflare-deploy.ts`.
+    const provider = await step.do("provider", DB_STEP, () => this.providerOf(plan));
+    if (provider === "cloudflare") {
+      const outcome = await runCloudflareDeploy(
+        this.cloudflareHost(step, params, plan),
+        image!,
+        registryNodeId,
+      );
+      return outcome;
+    }
+
     const scheduled = await step.do("schedule", DB_STEP, () =>
       this.schedule(plan, image!, registryNodeId),
     );
@@ -385,7 +403,45 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         this.commitStatus(params, plan, "success", "Deployed"),
       );
     }
+    // Only once the node replicas are healthy and active does traffic leave Cloudflare.
+    await switchBackFromCloudflare({ env: this.env, step, plan });
     return { kind: "stop", status: "active" };
+  }
+
+  /** The provider the deployment's config version selects (ADR 0011). */
+  private async providerOf(plan: Plan): Promise<ServiceProvider> {
+    const { db } = this.lifecycle();
+    const [config] = await db
+      .select({ placement: serviceConfigs.placement })
+      .from(serviceConfigs)
+      .where(
+        and(
+          eq(serviceConfigs.serviceId, plan.serviceId),
+          eq(serviceConfigs.environmentId, plan.environmentId),
+          eq(serviceConfigs.version, plan.configVersion),
+        ),
+      )
+      .limit(1);
+    return config ? serviceProvider(config.placement) : "nodes";
+  }
+
+  /** The hooks the Cloudflare branch reuses from this workflow. */
+  private cloudflareHost(step: WorkflowStep, params: DeployParams, plan: Plan): CloudflareHost {
+    return {
+      env: this.env,
+      step,
+      plan,
+      waitForPush: (deadline, check) => this.waitFor(step, "image_push", deadline, check),
+      finalize: async () => {
+        const done = await step.do("finalize", DB_STEP, () => this.finalize(plan));
+        if (done.kind === "ok" && plan.git) {
+          await step.do("commit-status-success", NETWORK_STEP, () =>
+            this.commitStatus(params, plan, "success", "Deployed"),
+          );
+        }
+        return done;
+      },
+    };
   }
 
   /**
@@ -395,7 +451,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
    */
   private async waitFor<T>(
     step: WorkflowStep,
-    eventType: "build" | "health" | "pre_deploy",
+    eventType: "build" | "health" | "pre_deploy" | "image_push",
     deadline: number,
     check: (i: number) => Promise<Verdict<T> | { kind: "pending" }>,
   ): Promise<Verdict<T> | { kind: "timeout" }> {

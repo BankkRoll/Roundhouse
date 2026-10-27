@@ -1,13 +1,17 @@
 import {
   DEFAULT_LOG_RETENTION_DAYS,
+  DEFAULT_SHELL_RECORDING_RETENTION_DAYS,
   MAX_LOG_RETENTION_DAYS,
+  MAX_SHELL_RECORDING_RETENTION_DAYS,
   PRODUCT_NAME,
+  type ShellRecordingMode,
 } from "@roundhouse/shared";
 import {
   Badge,
   Button,
   EmptyState,
   SaveBar,
+  Select,
   SettingsRow,
   SettingsSection,
   SettingsStack,
@@ -51,10 +55,10 @@ import { SigningKeysSection } from "./signing-keys-section";
 export const MCP_DOCS_URL =
   "https://github.com/BankkRoll/Roundhouse/blob/main/apps/api/README.md#mcp";
 
-function parseRetention(value: string): number | string {
+function parseRetention(value: string, max = MAX_LOG_RETENTION_DAYS): number | string {
   const days = Number(value.trim());
-  if (!value.trim() || !Number.isInteger(days) || days < 1 || days > MAX_LOG_RETENTION_DAYS) {
-    return `Enter a whole number of days from 1 to ${MAX_LOG_RETENTION_DAYS}.`;
+  if (!value.trim() || !Number.isInteger(days) || days < 1 || days > max) {
+    return `Enter a whole number of days from 1 to ${max}.`;
   }
   return days;
 }
@@ -115,6 +119,99 @@ function LogRetentionForm({ settings }: { settings: InstanceSettings }) {
           setError(null);
         }}
       />
+    </form>
+  );
+}
+
+const RECORDING_MODE_LABELS: Record<ShellRecordingMode, string> = {
+  full: "Full: keystrokes and output",
+  metadata: "Metadata only",
+};
+
+function ShellRecordingForm({ settings }: { settings: InstanceSettings }) {
+  const update = useUpdateInstanceSettings();
+  // NOTE: `null` until the user changes them, so the fields follow the saved values.
+  const [mode, setMode] = useState<ShellRecordingMode | null>(null);
+  const [days, setDays] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const modeId = useId();
+  const currentMode = mode ?? settings.shell_recording;
+  const value = days ?? String(settings.shell_recording_retention_days);
+  const parsed = parseRetention(value, MAX_SHELL_RECORDING_RETENTION_DAYS);
+  const dirty =
+    currentMode !== settings.shell_recording ||
+    (days !== null && parsed !== settings.shell_recording_retention_days);
+
+  function discard() {
+    setMode(null);
+    setDays(null);
+    setError(null);
+  }
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (typeof parsed === "string") {
+      setError(parsed);
+      return;
+    }
+    setError(null);
+    update.mutate(
+      { shell_recording: currentMode, shell_recording_retention_days: parsed },
+      {
+        onSuccess: () => {
+          discard();
+          toast({ title: "Shell recording saved", tone: "success" });
+        },
+        onError: (cause) => setError(errorMessage(cause)),
+      },
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} noValidate aria-label="Web shell">
+      <SettingsSection
+        title="Web shell"
+        description="Shells are always audited: who, which replica, when and for how long. In full mode the session itself is recorded too, encrypted to its project's backup key, so audit readers who may open the shell can play it back."
+        actions={
+          <Badge tone={settings.shell_recording === "full" ? "success" : "neutral"}>
+            {settings.shell_recording === "full" ? "Recording" : "Metadata only"}
+          </Badge>
+        }
+      >
+        <SettingsRow
+          label="Record sessions"
+          description="Recordings hold everything typed and shown, secrets included. Changes apply to shells opened afterwards."
+          htmlFor={modeId}
+        >
+          <Select
+            id={modeId}
+            value={currentMode}
+            onChange={(event) => setMode(event.target.value as ShellRecordingMode)}
+            aria-describedby={`${modeId}-description`}
+            className="w-64 max-w-full"
+          >
+            {(Object.keys(RECORDING_MODE_LABELS) as ShellRecordingMode[]).map((option) => (
+              <option key={option} value={option}>
+                {RECORDING_MODE_LABELS[option]}
+              </option>
+            ))}
+          </Select>
+        </SettingsRow>
+        <SettingsField
+          label="Keep recordings for (days)"
+          description={`1 to ${MAX_SHELL_RECORDING_RETENTION_DAYS} days after a session ends. The default is ${DEFAULT_SHELL_RECORDING_RETENTION_DAYS}.`}
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={MAX_SHELL_RECORDING_RETENTION_DAYS}
+          step={1}
+          value={value}
+          onChange={(event) => setDays(event.target.value)}
+          error={error}
+          inputClassName="w-28 tabular-nums"
+        />
+      </SettingsSection>
+      <SaveBar dirty={dirty} saving={update.isPending} onDiscard={discard} />
     </form>
   );
 }
@@ -450,6 +547,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
               <McpSection settings={settings.data} />
               <NetworkSection settings={settings.data} />
               <RegistryStorageSection />
+              <ShellRecordingForm settings={settings.data} />
               <BackupStorageSection />
               <SigningKeysSection />
             </>
@@ -458,7 +556,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
           <EmptyState
             icon={<ShieldIcon />}
             title="Instance settings are for owners"
-            description="Log retention, MCP, the private network, backup storage and signing keys apply to the whole instance, so only workspace owners can change them."
+            description="Log retention, MCP, web shell recording, the private network, registry and backup storage, and signing keys apply to the whole instance, so only workspace owners can change them."
           />
         )}
         {github.isPending ? (

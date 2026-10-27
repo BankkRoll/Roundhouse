@@ -102,13 +102,18 @@ export interface LockedButtonProps {
  * A disabled button that still explains itself: wrapped in a focusable element (disabled
  * buttons get no focus or pointer events) with the reason as its tooltip and description.
  *
+ * The description is a visually hidden node referenced whether or not the tooltip is
+ * open, so it is there the moment focus lands. Radix also adds the open tooltip to
+ * `aria-describedby`, so the bubble's text is hidden from assistive technology to keep
+ * the reason announced once.
+ *
  * @param props - Reason, label and button styling.
  * @returns The locked control.
  */
 export function LockedButton({ reason, children, variant, size, className }: LockedButtonProps) {
   const reasonId = useId();
   return (
-    <Tooltip content={reason}>
+    <Tooltip content={<span aria-hidden="true">{reason}</span>}>
       <span
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a disabled button can't take focus, so its wrapper does, to announce the reason.
         tabIndex={0}

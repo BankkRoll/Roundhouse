@@ -145,6 +145,11 @@ export const AUDIT_ACTIONS = [
   "node.resumed",
   "service.degraded",
   "service.recovered",
+  "shell.opened",
+  "shell.closed",
+  "shell.terminated",
+  "shell.recording_viewed",
+  "service.provider_changed",
 ] as const;
 
 /** An audited action name. */

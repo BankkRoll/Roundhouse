@@ -2,12 +2,12 @@
 
 Wire protocol between the control plane and agents.
 
-| Path        | What                                                                                                                                                       |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/`      | zod schemas (source of truth), limits, spec hash, envelopes; one module per Phase 2–3 feature (`data`, `mesh`, `jobs`, `metrics`, `certs`, `signing-keys`) |
-| `schema/`   | Generated JSON Schema. Do not edit                                                                                                                         |
-| `fixtures/` | Sample messages both TS and Go tests decode                                                                                                                |
-| `go/`       | Go types, decoding, validation, spec hash, envelope checks                                                                                                 |
+| Path        | What                                                                                                                                                                             |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/`      | zod schemas (source of truth), limits, spec hash, envelopes; one module per Phase 2–4 feature (`data`, `mesh`, `jobs`, `metrics`, `certs`, `signing-keys`, `exec`, `image-push`) |
+| `schema/`   | Generated JSON Schema. Do not edit                                                                                                                                               |
+| `fixtures/` | Sample messages both TS and Go tests decode                                                                                                                                      |
+| `go/`       | Go types, decoding, validation, spec hash, envelope checks                                                                                                                       |
 
 ## Changing the protocol
 
@@ -66,18 +66,18 @@ constraints (ranges, formats, sizes) live in each type's `Validate()`.
 ### Versions
 
 The control plane accepts `MIN_PROTOCOL_VERSION` through `PROTOCOL_VERSION`
-(today 3 through 6). A `hello` below the minimum is closed with code 4002
+(today 3 through 7). A `hello` below the minimum is closed with code 4002
 (`agent_outdated`). ADR 0013 planned one version per phase; sealed
 environments took 4 first, so each phase moved up by one (ADR 0015):
 
-| Version | Phase    | Gates (TS / Go)                                                                          | Adds                                                                                                                                                         |
-| ------- | -------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 2       | 1        | `WORKLOADS_` / `WorkloadsProtocolVersion`                                                | workloads, builds, statuses, logs                                                                                                                            |
-| 3       | 1        | `BUILD_CANCEL_`, `SECRET_BUILD_ARGS_`                                                    | `build_cancel`, secret build args                                                                                                                            |
-| 4       | ADR 0014 | `SEALED_ENV_`                                                                            | `env_sealed`, `build_secrets_sealed`, `hello.encryption_key`                                                                                                 |
-| 5       | 2        | `MESH_`, `VOLUMES_`, `BACKUPS_`, `DB_QUERY_`, `KEY_ROLLOVER_` (`MeshProtocolVersion`, …) | mesh, route workloads, volumes and mounts, `exec` probes, `stop_first`, publish, backup/restore/copy, `db_query`, `task` logs, `volume_status`, key rollover |
-| 6       | 3        | `JOBS_`, `METRICS_`, `CERTS_` (`JobsProtocolVersion`, …)                                 | `job_*`, `metrics`, `cert_*`, wildcard routes, `hsts`, `desired_state.ingress` and `certificates`, `managed` TLS                                             |
-| 7       | 4        | not defined yet                                                                          | `exec_*`, `image_push`, `edge_gateway` (Phase 4 contracts)                                                                                                   |
+| Version | Phase    | Gates (TS / Go)                                                                          | Adds                                                                                                                                                                                           |
+| ------- | -------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2       | 1        | `WORKLOADS_` / `WorkloadsProtocolVersion`                                                | workloads, builds, statuses, logs                                                                                                                                                              |
+| 3       | 1        | `BUILD_CANCEL_`, `SECRET_BUILD_ARGS_`                                                    | `build_cancel`, secret build args                                                                                                                                                              |
+| 4       | ADR 0014 | `SEALED_ENV_`                                                                            | `env_sealed`, `build_secrets_sealed`, `hello.encryption_key`                                                                                                                                   |
+| 5       | 2        | `MESH_`, `VOLUMES_`, `BACKUPS_`, `DB_QUERY_`, `KEY_ROLLOVER_` (`MeshProtocolVersion`, …) | mesh, route workloads, volumes and mounts, `exec` probes, `stop_first`, publish, backup/restore/copy, `db_query`, `task` logs, `volume_status`, key rollover                                   |
+| 6       | 3        | `JOBS_`, `METRICS_`, `CERTS_` (`JobsProtocolVersion`, …)                                 | `job_*`, `metrics`, `cert_*`, wildcard routes, `hsts`, `desired_state.ingress` and `certificates`, `managed` TLS                                                                               |
+| 7       | 4        | `EXEC_`, `IMAGE_PUSH_` (`ExecProtocolVersion`, `ImagePushProtocolVersion`)               | `exec_open`, `exec_input` (sealed keystrokes), `exec_resize`, `exec_close`, `exec_opened`, `exec_output`, `exec_exit`, `image_push` (sealed login), `image_push_result`; edge gateway reserved |
 
 `MIN_PROTOCOL_VERSION` rises to N−1 with each phase's release, not with
 its contracts. Bump `PROTOCOL_VERSION`, in both `src/versions.ts` and

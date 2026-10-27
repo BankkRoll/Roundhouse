@@ -22,12 +22,14 @@ import (
 	"github.com/BankkRoll/Roundhouse/agent/internal/dbquery"
 	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
 	"github.com/BankkRoll/Roundhouse/agent/internal/firewall"
+	"github.com/BankkRoll/Roundhouse/agent/internal/imagepush"
 	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
 	"github.com/BankkRoll/Roundhouse/agent/internal/jobs"
 	"github.com/BankkRoll/Roundhouse/agent/internal/logship"
 	"github.com/BankkRoll/Roundhouse/agent/internal/mesh"
 	"github.com/BankkRoll/Roundhouse/agent/internal/metrics"
 	agentruntime "github.com/BankkRoll/Roundhouse/agent/internal/runtime"
+	"github.com/BankkRoll/Roundhouse/agent/internal/shell"
 	"github.com/BankkRoll/Roundhouse/agent/internal/volumes"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
@@ -55,6 +57,10 @@ type agent struct {
 	jobs *jobs.Runner
 	// backups runs backup, restore and copy tasks.
 	backups *backup.Runner
+	// shell runs web shell sessions (ADR 0012).
+	shell *shell.Manager
+	// images copies built images to remote registries (ADR 0011).
+	images *imagepush.Pusher
 	// refusal is why workloads, builds and jobs are refused on this connection
 	// ([conn.PlaintextRefusal]), "" when they run.
 	refusal string
@@ -288,6 +294,29 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 		Logger:    log.With("component", "data"),
 	})
 	client.Data = a.data
+	a.shell = shell.New(shell.Options{
+		Docker:    dc,
+		Workloads: a.runtime,
+		NodeID:    cfg.NodeID,
+		Key:       encryption,
+		// SECURITY: two nodes can share one Docker engine; each execs only
+		// into its own containers.
+		Namespace: cfg.NodeID,
+		Refusal:   refusal,
+		Send:      client.Send,
+		Logger:    log.With("component", "shell"),
+	})
+	client.Exec = a.shell
+	a.images = imagepush.New(imagepush.Options{
+		NodeID:  cfg.NodeID,
+		Key:     encryption,
+		Builder: cfg.Builder,
+		Refusal: refusal,
+		Send:    func(ctx context.Context, r *protocol.ImagePushResult) error { return client.Send(ctx, r) },
+		Log:     a.taskLog,
+		Logger:  log.With("component", "imagepush"),
+	})
+	client.Images = a.images
 	return a, nil
 }
 
@@ -420,6 +449,8 @@ func (a *agent) run(ctx context.Context) error {
 	goRun("mesh", a.mesh.Run)
 	goRun("data", a.data.Run)
 	goRun("backups", a.backups.Run)
+	goRun("shell", a.shell.Run)
+	goRun("images", a.images.Run)
 	goRun("ingress", a.ingress.Run)
 	goRun("logs", a.logs.Run)
 	goRun("builds", a.builds.Run)

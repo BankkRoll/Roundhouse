@@ -2,10 +2,11 @@ import { JOIN_TOKEN_TTL_MS } from "@roundhouse/shared";
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
-import { db, makeNode, WORKSPACE_ID } from "../../mocks/db";
+import { db, makeNode, PASSWORD, WORKSPACE_ID } from "../../mocks/db";
 import { apiError } from "../../mocks/handlers";
 import { server } from "../../mocks/server";
 import { renderWithProviders } from "../../test/render";
+import { ReauthDialog } from "../auth/reauth-dialog";
 import { AddServerDialog } from "./add-server-dialog";
 import { AddServerFlow } from "./add-server-flow";
 import { INSTALL_METHOD_STORAGE_KEY } from "./install-methods";
@@ -111,6 +112,37 @@ describe("AddServerFlow", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Durable Object is waking up");
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("curl retry | sh")).toBeInTheDocument();
+  });
+
+  it("asks for the password before minting a token with a stale session, then retries", async () => {
+    db.sessionStale = true;
+    const { user } = renderWithProviders(
+      <>
+        <ReauthDialog />
+        <AddServerFlow workspaceId={WORKSPACE_ID} pollIntervalMs={1000} onDone={() => {}} />
+      </>,
+    );
+    const reauth = await screen.findByRole("dialog", { name: "Confirm it's you" });
+    expect(db.joinTokens).toHaveLength(0);
+    await user.type(within(reauth).getByLabelText("Password"), PASSWORD);
+    await user.click(within(reauth).getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText(/curl -fsSL .*--token njt_\w+/)).toBeInTheDocument();
+    expect(db.joinTokens).toHaveLength(1);
+  });
+
+  it("mints nothing when the password prompt is cancelled, and lets the user try again", async () => {
+    db.sessionStale = true;
+    const { user } = renderWithProviders(
+      <>
+        <ReauthDialog />
+        <AddServerFlow workspaceId={WORKSPACE_ID} pollIntervalMs={1000} onDone={() => {}} />
+      </>,
+    );
+    const reauth = await screen.findByRole("dialog", { name: "Confirm it's you" });
+    await user.click(within(reauth).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(db.joinTokens).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 
   it("offers a new token once the current one expires", async () => {

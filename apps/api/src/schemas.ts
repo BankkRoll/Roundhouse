@@ -57,6 +57,7 @@ import {
   MAX_API_TOKEN_TTL_DAYS,
   MAX_HSTS_MAX_AGE_S,
   MAX_LOG_RETENTION_DAYS,
+  MAX_SHELL_RECORDING_RETENTION_DAYS,
   type NetworkingConfig,
   NODE_STATUSES,
   PLACEMENT_ONLY_STATES,
@@ -70,6 +71,7 @@ import {
   SERVICE_HEALTH_REASONS,
   SERVICE_KINDS,
   type ServiceSource,
+  SHELL_RECORDING_MODES,
   secretBuildArgsValid,
   TLS_MODES,
   type TlsMode,
@@ -83,6 +85,7 @@ import {
   PresenceEditingSchema,
   PresenceUpdateMessageSchema,
 } from "./schemas/changes";
+import { CloudflarePlacementSchema, ServiceProviderSchema } from "./schemas/cloudflare";
 import { CronConfigFields, CronConfigSchema, CronRunUpdatedMessageSchema } from "./schemas/cron";
 import { CostEstimateSchema } from "./schemas/providers";
 import { VariableKeyField } from "./schemas/variables";
@@ -524,12 +527,17 @@ const PlacementConfigFields = z.object({
   node_selector: z
     .record(z.string().max(128).regex(LABEL_KEY_RE, "expected a label key"), z.string().max(256))
     .refine((s) => Object.keys(s).length <= 16, { message: "at most 16 selector labels" }),
+  /** `nodes` when absent (ADR 0011). */
+  provider: ServiceProviderSchema.optional(),
+  /** Required with `provider: "cloudflare"`; kept when switching back. */
+  cloudflare: CloudflarePlacementSchema.optional(),
 });
 
-/** Which nodes may run a service. */
-export const PlacementConfigSchema = PlacementConfigFields.openapi(
-  "PlacementConfig",
-) satisfies z.ZodType<PlacementConfig>;
+/** Where a service runs: which nodes, or Cloudflare Containers (ADR 0011). */
+export const PlacementConfigSchema = PlacementConfigFields.refine(
+  (p) => p.provider !== "cloudflare" || p.cloudflare !== undefined,
+  { message: "placement.cloudflare is required with provider cloudflare", path: ["cloudflare"] },
+).openapi("PlacementConfig") satisfies z.ZodType<PlacementConfig>;
 
 /** One immutable config version of a service in an environment. */
 export const ServiceConfigSchema = z
@@ -846,6 +854,13 @@ export const InstanceSettingsSchema = z
      * new installs; while off, `/mcp` answers 404 before authenticating.
      */
     mcp_enabled: z.boolean(),
+    /**
+     * What web shells keep: `metadata` (who, where, when, how long) or
+     * `full` (also an encrypted recording of input and output, ADR 0012).
+     */
+    shell_recording: z.enum(SHELL_RECORDING_MODES),
+    /** Days a shell recording is kept after its session ended; deleted hourly. */
+    shell_recording_retention_days: z.number().int().min(1).max(MAX_SHELL_RECORDING_RETENTION_DAYS),
     /** Servers that run ingress, across workspaces; `acme` mode is for one. */
     ingress_nodes: z.number().int(),
     /**
@@ -886,6 +901,13 @@ export const InstanceSettingsPatchSchema = z
      * `mesh_supernet_locked` once a server has joined the mesh.
      */
     mesh_supernet: MeshSupernetField.optional(),
+    shell_recording: z.enum(SHELL_RECORDING_MODES).optional(),
+    shell_recording_retention_days: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_SHELL_RECORDING_RETENTION_DAYS)
+      .optional(),
   })
   .refine((b) => Object.values(b).some((v) => v !== undefined), {
     message: "nothing to update",

@@ -102,6 +102,23 @@ func TestServers(t *testing.T) {
 	h.expect(exitcode.NotFound, "", "servers", "add", "--workspace", "nope")
 }
 
+func TestServersAddReauth(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.SetSessionStale(true)
+	r := h.expect(exitcode.Forbidden, "", "servers", "add")
+	contains(t, r.stderr, "error: Confirm your password to continue")
+	contains(t, r.stderr, "hint: creating a join token needs a recent sign-in; run `roundhouse login` again, then retry")
+	if r.stdout != "" {
+		t.Errorf("stdout = %q, want nothing", r.stdout)
+	}
+
+	h.fake.SetSessionStale(false)
+	h.env[EnvToken] = h.fake.AddToken("ci", "workspace:read", "nodes:manage")
+	r = h.expect(exitcode.Forbidden, "", "servers", "add")
+	contains(t, r.stderr, "hint: API tokens never count as a recent sign-in, and creating a join token needs one; unset ROUNDHOUSE_TOKEN")
+}
+
 func TestVersion(t *testing.T) {
 	h := newHarness(t)
 	r := h.ok("", "version", "--json")
@@ -120,7 +137,7 @@ func TestVersion(t *testing.T) {
 
 func TestStubsAreUnavailable(t *testing.T) {
 	h := newHarness(t)
-	for _, args := range [][]string{{"up"}, {"shell"}, {"db", "connect"}, {"db", "connect", "postgres"}} {
+	for _, args := range [][]string{{"up"}, {"db", "connect"}, {"db", "connect", "postgres"}} {
 		r := h.expect(exitcode.Unavailable, "", args...)
 		contains(t, r.stderr, "not available on this control plane yet")
 	}

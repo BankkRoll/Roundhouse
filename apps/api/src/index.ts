@@ -8,6 +8,8 @@
  *   authorization server: discovery under `/.well-known/`, `/oauth/*`, and
  *   the consent routes under `/v1/oauth/*` (`mcp/oauth/`)
  * - Agent join/connect endpoints and the install script
+ * - The web shell socket, relayed by each node's `NodeConnection`
+ *   (`routes/shell.ts`, ADR 0012)
  * - The project realtime socket (`ProjectRoom`), the audit chain sealer
  *   (`AuditChain`), and the deploy and key rotation workflows
  *   (`DeployWorkflow`, `KeyRotationWorkflow`), and one-click server
@@ -27,6 +29,10 @@
  *   see `lib/dispatch.ts`
  * - The hourly retention job (Cron Trigger), see `lib/retention.ts`, and the
  *   cloud provider reconcile, see `lib/provisioning.ts`
+ * - The Cloudflare Containers provider (ADR 0011): its routes
+ *   (`routes/cloudflare.ts`), the `RuntimeEnv` entrypoint runtime scripts
+ *   bind as `CONTROL` (`runtime-env.ts`), and `tail()`, which stores their
+ *   console output as `system` log lines
  * - Static SPA assets (served by the platform for everything else)
  *
  * @module
@@ -45,6 +51,7 @@ import { ApiError, errorBody, errorCodeForStatus } from "./lib/errors";
 import { rateLimitSecrets, sameOriginMutations } from "./lib/guards";
 import { reconcileProviders } from "./lib/provisioning";
 import { runRetention } from "./lib/retention";
+import { SHELL_PATH } from "./lib/shell";
 import { twoFactorGate } from "./lib/two-factor-gate";
 import { oauthConsentRoutes } from "./mcp/oauth/consent";
 import { oauthRoutes } from "./mcp/oauth/routes";
@@ -56,6 +63,7 @@ import { auditRoutes } from "./routes/audit";
 import { authSecurityRoutes } from "./routes/auth-security";
 import { backupRoutes } from "./routes/backups";
 import { changeRoutes } from "./routes/changes";
+import { cloudflareRoutes } from "./routes/cloudflare";
 import { cronRoutes } from "./routes/cron";
 import { dataBrowserRoutes } from "./routes/data-browser";
 import { databaseRoutes } from "./routes/databases";
@@ -75,17 +83,20 @@ import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
 import { registryRoutes } from "./routes/registry";
 import { serviceRoutes } from "./routes/services";
 import { setupRoutes } from "./routes/setup";
+import { shellRoutes, withShellRevocation } from "./routes/shell";
 import { signingKeyRoutes } from "./routes/signing-keys";
 import { templateRoutes } from "./routes/templates";
 import { tlsRoutes } from "./routes/tls";
 import { tokenRoutes } from "./routes/tokens";
 import { variableRoutes } from "./routes/variables";
 import { workspaceRoutes } from "./routes/workspaces";
+import { type RuntimeTraceItem, storeRuntimeTail } from "./runtime-env";
 import { SESSION_SCHEME, TOKEN_SCHEME } from "./schemas";
 
 export { AuditChain } from "./durable/audit-chain";
 export { NodeConnection } from "./durable/node-connection";
 export { ProjectRoom } from "./durable/project-room";
+export { RuntimeEnv } from "./runtime-env";
 export { BackupWorkflow } from "./workflows/backup";
 export { CertificateWorkflow } from "./workflows/certificate";
 export { CronRunWorkflow } from "./workflows/cron-run";
@@ -110,7 +121,9 @@ const headers = secureHeaders();
 // upgrade, gets them.
 app.use("*", (c, next) =>
   c.req.header("upgrade")?.toLowerCase() === "websocket" &&
-  (AGENT_CONNECT_PATH.test(c.req.path) || REALTIME_PATH.test(c.req.path))
+  (AGENT_CONNECT_PATH.test(c.req.path) ||
+    REALTIME_PATH.test(c.req.path) ||
+    SHELL_PATH.test(c.req.path))
     ? next()
     : headers(c, next),
 );
@@ -126,7 +139,9 @@ app.use("*", rateLimitSecrets);
 app.use("/v1/*", sameOriginMutations);
 app.use("/v1/*", twoFactorGate);
 
-app.on(["GET", "POST"], "/api/auth/*", async (c) => (await authFor(c)).handler(c.req.raw));
+app.on(["GET", "POST"], "/api/auth/*", async (c) =>
+  withShellRevocation(c, async () => (await authFor(c)).handler(c.req.raw)),
+);
 
 app
   .route("/", setupRoutes)
@@ -149,9 +164,11 @@ app
   .route("/", instanceRoutes)
   .route("/", tlsRoutes)
   .route("/", registryRoutes)
+  .route("/", cloudflareRoutes)
   .route("/", githubRoutes)
   .route("/", tokenRoutes)
   .route("/", realtimeRoutes)
+  .route("/", shellRoutes)
   .route("/", accessRoutes)
   .route("/", authSecurityRoutes)
   .route("/", instanceAdminRoutes)
@@ -206,6 +223,13 @@ export { app };
 
 export default {
   fetch: app.fetch,
+  async tail(events, env) {
+    try {
+      await storeRuntimeTail(env, events as unknown as RuntimeTraceItem[]);
+    } catch (err) {
+      console.error("runtime tail failed", err instanceof Error ? err.name : "error");
+    }
+  },
   async scheduled(controller, env) {
     configureCloudflareApi(env);
     if (controller.cron === MINUTE_CRON) {

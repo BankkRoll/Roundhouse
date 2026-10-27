@@ -129,6 +129,11 @@ type Fake struct {
 	// cron holds cron schedule states and runs; see [Fake.cronState].
 	cron *cronState
 
+	// shell holds shell targets and sessions; cf the Cloudflare statuses set
+	// with [Fake.SetCloudflare].
+	shell *shellState
+	cf    map[string]*api.CloudflareStatus
+
 	// templateDeployErrors maps a template service ref to the message its
 	// first deployment fails to start with; see [Fake.FailTemplateDeploy].
 	templateDeployErrors map[string]string
@@ -724,10 +729,12 @@ func (f *Fake) routes(mux *http.ServeMux) {
 	f.cronRoutes(handlers)
 	f.meshRoutes(handlers)
 	f.drainRoutes(handlers)
+	f.shellRoutes(handlers)
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
 	}
 	mux.HandleFunc(api.RouteRealtime.Method+" "+api.RouteRealtime.Path, f.realtime)
+	mux.HandleFunc(api.RouteShell.Method+" "+api.RouteShell.Path, f.shellSocket)
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		apiError(w, http.StatusNotFound, "not_found", "No such endpoint")
 	})
@@ -1607,7 +1614,14 @@ func (f *Fake) listNodes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// joinToken mints the canned token. Like the API, it needs a fresh session:
+// API tokens and a stale session (see [Fake.SetSessionStale]) get 403
+// reauth_required.
 func (f *Fake) joinToken(w http.ResponseWriter, r *http.Request) {
+	if callerOf(r).token != nil || f.dataState().staleSession {
+		apiError(w, http.StatusForbidden, "reauth_required", "Confirm your password to continue")
+		return
+	}
 	if f.workspace(w, r) {
 		writeJSON(w, http.StatusCreated, api.JoinToken{Token: JoinToken, ExpiresAt: Now + 3600000, InstallCommand: InstallScript})
 	}

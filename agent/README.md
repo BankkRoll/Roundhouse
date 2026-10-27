@@ -253,3 +253,13 @@ removes `sys_buildkitd` and its network afterwards unless
 - Desired states carry secrets and are never written to disk; only the
   generation is. After a restart the agent applies the control plane's
   current state even if its generation equals the persisted one.
+- Web shell sessions (`internal/shell`, ADR 0012) exec only into this
+  node's own running service workloads, as the container's user. Docker
+  never ends a TTY exec when its client goes away, so closing a session
+  sends SIGHUP and then SIGKILL by host PID. That needs the host PID
+  namespace: the systemd install has it; an agent run in a container must
+  be started with `--pid=host`, or closed shells keep running until they
+  exit on their own (the agent logs a warning naming the session).
+- Builders copy images to another registry for `image_push`
+  (`internal/imagepush`, ADR 0011) without unpacking them; the target's
+  login is opened only for the push and never logged or stored.

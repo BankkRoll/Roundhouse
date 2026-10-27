@@ -133,13 +133,27 @@
       "version": "6",
       "when": 1792860000000,
       "tag": "0019_data_followups",
-        "breakpoints": true
-      },
-      {
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1792870000000,
+      "tag": "0020_restore_target_node",
+      "breakpoints": true
+    },
+    {
       "idx": 21,
       "version": "6",
       "when": 1792880000000,
       "tag": "0021_wireguard_mesh",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1792900000000,
+      "tag": "0023_shell_and_cloudflare",
       "breakpoints": true
     }
   ]

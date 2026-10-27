@@ -2,8 +2,8 @@
  * Install-wide settings: the first-run setup lock and completion marker, the
  * setting keys of the control-plane signing keys (handled by
  * `./signing-keys`), the fingerprint secret, the ingress settings
- * (`apps_domain`, `tls_mode`), log retention, and whether the MCP endpoint
- * is enabled, and the mesh settings (`mesh_enabled`, `mesh_supernet`).
+ * (`apps_domain`, `tls_mode`), log retention, whether the MCP endpoint
+ * is enabled, web shell recording, and the mesh and registry storage settings.
  *
  * @module
  */
@@ -11,8 +11,13 @@ import { type Db, instanceSettings } from "@roundhouse/db";
 import { fromBase64, toBase64 } from "@roundhouse/protocol";
 import {
   DEFAULT_LOG_RETENTION_DAYS,
+  DEFAULT_SHELL_RECORDING,
+  DEFAULT_SHELL_RECORDING_RETENTION_DAYS,
   DEFAULT_TLS_MODE,
   MAX_LOG_RETENTION_DAYS,
+  MAX_SHELL_RECORDING_RETENTION_DAYS,
+  SHELL_RECORDING_MODES,
+  type ShellRecordingMode,
   TLS_MODES,
   type TlsMode,
 } from "@roundhouse/shared";
@@ -51,6 +56,10 @@ export const SettingKey = {
   logRetentionDays: "log_retention_days",
   /** Whether `/mcp` serves coding agents (a boolean); off when unset (ADR 0012). */
   mcpEnabled: "mcp_enabled",
+  /** What web shells keep (`ShellRecordingMode`); `DEFAULT_SHELL_RECORDING` when unset (ADR 0012). */
+  shellRecording: "shell_recording",
+  /** Days shell recordings are kept (an integer); `DEFAULT_SHELL_RECORDING_RETENTION_DAYS` when unset. */
+  shellRecordingRetentionDays: "shell_recording_retention_days",
   /**
    * S3-compatible bucket for backups (ADR 0004): endpoint, bucket, region,
    * access key ID, and the secret access key sealed like the signing key.
@@ -92,6 +101,12 @@ export const SettingKey = {
   saas: "saas",
   /** Cloudflare's published IP ranges and when they were fetched (`ingress_firewall`). */
   cloudflareIps: "cloudflare_ips",
+  /**
+   * The Cloudflare Containers provider account (ADR 0011): account ID, API
+   * token (sealed), `workers.dev` subdomain, the apps zone and
+   * `apps_domain_proxied`. See `lib/cloudflare/settings.ts`.
+   */
+  cloudflareAccount: "cloudflare_account",
 } as const;
 
 /**
@@ -310,5 +325,49 @@ export async function getMeshSettings(db: Db): Promise<MeshSettings> {
   return {
     enabled: byKey.get(SettingKey.meshEnabled) === true,
     supernet: typeof supernet === "string" ? supernet : DEFAULT_MESH_SUPERNET,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Web shell recording
+// -----------------------------------------------------------------------------
+
+/** Install-wide web shell recording settings (ADR 0012 "Recording"). */
+export interface ShellRecordingSettings {
+  mode: ShellRecordingMode;
+  /** Days a recording is kept after its session ended. */
+  retentionDays: number;
+}
+
+/**
+ * Reads `shell_recording` and `shell_recording_retention_days`, falling back
+ * to the defaults for unset or invalid values.
+ *
+ * @param db - Database client.
+ * @returns The effective settings.
+ */
+export async function getShellRecordingSettings(db: Db): Promise<ShellRecordingSettings> {
+  const rows = await db
+    .select()
+    .from(instanceSettings)
+    .where(
+      inArray(instanceSettings.key, [
+        SettingKey.shellRecording,
+        SettingKey.shellRecordingRetentionDays,
+      ]),
+    );
+  const byKey = new Map(rows.map((r) => [r.key, r.value]));
+  const mode = byKey.get(SettingKey.shellRecording);
+  const days = byKey.get(SettingKey.shellRecordingRetentionDays);
+  return {
+    mode: (SHELL_RECORDING_MODES as readonly unknown[]).includes(mode)
+      ? (mode as ShellRecordingMode)
+      : DEFAULT_SHELL_RECORDING,
+    retentionDays:
+      Number.isInteger(days) &&
+      (days as number) >= 1 &&
+      (days as number) <= MAX_SHELL_RECORDING_RETENTION_DAYS
+        ? (days as number)
+        : DEFAULT_SHELL_RECORDING_RETENTION_DAYS,
   };
 }

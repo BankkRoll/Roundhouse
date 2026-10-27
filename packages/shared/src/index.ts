@@ -8,6 +8,7 @@
 export * from "./audit";
 export * from "./auth-policy";
 export * from "./changes";
+export * from "./cloudflare";
 export * from "./constants";
 export * from "./cron";
 export * from "./cron-jobs";
@@ -24,6 +25,7 @@ export * from "./realtime";
 export * from "./redaction";
 export * from "./scheduler";
 export * from "./service-config";
+export * from "./shell";
 export * from "./slug";
 export * from "./tokens";
 export * from "./variable-classifier";

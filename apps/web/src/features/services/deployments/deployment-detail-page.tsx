@@ -17,6 +17,7 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDotIcon,
+  CloudIcon,
   FileSearchIcon,
   HammerIcon,
   type LucideIcon,
@@ -56,7 +57,22 @@ const EVENT_ICONS: Record<DeploymentEvent["type"], { icon: LucideIcon; tone: str
   rollout_finished: { icon: CircleCheckIcon, tone: "text-success" },
   pre_deploy_started: { icon: TerminalIcon, tone: "text-info" },
   pre_deploy_finished: { icon: TerminalIcon, tone: "text-success" },
+  image_pushed: { icon: HammerIcon, tone: "text-success" },
+  cf_rollout_started: { icon: CloudIcon, tone: "text-info" },
+  cf_rollout_finished: { icon: CloudIcon, tone: "text-success" },
+  routes_switched: { icon: RouteIcon, tone: "text-accent-text" },
   error: { icon: CircleAlertIcon, tone: "text-danger" },
+};
+
+/**
+ * Event types worded beyond their id: a switch to Cloudflare goes push → script and
+ * rollout → warm → routes → drain (ADR 0011), and the timeline should read that way.
+ */
+const EVENT_LABELS: Partial<Record<DeploymentEvent["type"], string>> = {
+  image_pushed: "image pushed",
+  cf_rollout_started: "Cloudflare rollout",
+  cf_rollout_finished: "Cloudflare instances warm",
+  routes_switched: "routes switched",
 };
 
 /** The pre-deploy run an event is about, from its `data` (`{ run_id, status }`). */
@@ -109,7 +125,7 @@ function Timeline({
             <div className="min-w-0 flex-1">
               <p className="text-sm text-foreground">{event.message}</p>
               <p className="text-xs text-muted-foreground">
-                {event.type.replace(/_/g, " ")} ·{" "}
+                {EVENT_LABELS[event.type] ?? event.type.replace(/_/g, " ")} ·{" "}
                 <time
                   dateTime={new Date(event.created_at).toISOString()}
                   title={formatTimestamp(event.created_at)}

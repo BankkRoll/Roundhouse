@@ -102,6 +102,8 @@ export const DEPLOYMENT_TRIGGERS = [
   "template",
   "change_set",
   "migration",
+  /** Redeploy onto a new node after its volume was recovered there from a backup. */
+  "recovery",
 ] as const;
 
 /** What started a deployment; see {@link DEPLOYMENT_TRIGGERS}. */
@@ -128,6 +130,10 @@ export const DEPLOYMENT_EVENT_TYPES = [
   "rollout_finished",
   "pre_deploy_started",
   "pre_deploy_finished",
+  "image_pushed",
+  "cf_rollout_started",
+  "cf_rollout_finished",
+  "routes_switched",
   "error",
 ] as const;
 

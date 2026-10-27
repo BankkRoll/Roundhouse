@@ -89,6 +89,7 @@ var Routes = []Route{
 	RouteCancelCronRun, RoutePauseCron, RouteResumeCron, RouteCronPreview,
 	RouteGetMesh, RouteRotateMeshKey,
 	RouteDrainNode, RouteGetNodeDrain, RouteResumeNode,
+	RouteShellTargets, RouteShell, RouteServiceCloudflare,
 }
 
 // AuthRoutes lists the Better Auth routes the client calls.

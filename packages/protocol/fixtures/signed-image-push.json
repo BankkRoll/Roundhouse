@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"image_push\",\"id\":\"msg_fixture_image_push\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":1700000060000,\"push_id\":\"psh_01JMMMMMMMMMMMMMMMMMMMMMMM\",\"source\":\"127.0.0.1:5000/prj_01jaaaaaaaaaaaaaaaaaaaaaaa/svc_01jaaaaaaaaaaaaaaaaaaaaaaa@sha256:abababababababababababababababababababababababababababababababab\",\"target\":\"registry.cloudflare.com/0123456789abcdef0123456789abcdef/rh-abcdefghijklmnopqrst:dep_01jmmmmmmmmmmmmmmmmmmmmmmm\",\"platform\":\"linux/amd64\",\"credential_sealed\":{\"v\":1,\"kid\":\"f35e5616160a30bf\",\"epk\":\"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=\",\"ct\":\"BzYo4b8tG3MX9CVL8OgHGk5CxTEJWvSB4ktLGp8s7PJoBeKzXbD8r5zIfE2NLEO9s7XHdbuhZ92VXmzvGrd5O+Vucow=\"},\"timeout_s\":1800}",
+    "sig": "uX8mvcuQEg4swblfXTz+f8XRXZHSYVUwhkMWR0lN43MfnHvKT+89gPzs2/UbU3dzXXaTYjwqM7Lbe3RFFZVgBw=="
+  }
+}

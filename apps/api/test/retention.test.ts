@@ -2,15 +2,19 @@
  * The hourly retention job, driven by time travel (a run's `now` is the Cron
  * Trigger's scheduled time): expired log chunks leave R2 and D1 according to
  * `log_retention_days`, in bounded batches; delivery IDs, join tokens,
- * sessions, invites, verifications and redeemed nonces are pruned; nothing
- * live is touched.
+ * sessions, invites, verifications and redeemed nonces are pruned; shell
+ * recordings leave R2 after `shell_recording_retention_days` while their
+ * session rows stay; nothing live is touched.
  */
 import { createScheduledController, env } from "cloudflare:test";
+import { createDb } from "@roundhouse/db";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { runRetention } from "../src/lib/retention";
+import { putSetting, SettingKey } from "../src/lib/settings";
+import { shellRecordingKey } from "../src/lib/shell-recording";
 import { install } from "./helpers";
-import { createProject } from "./pipeline-helpers";
+import { createProject, createService } from "./pipeline-helpers";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.UTC(2026, 9, 22, 12, 0, 0);
@@ -183,6 +187,7 @@ describe("expired records", () => {
       loginAttempts: 1,
       githubClaims: 1,
       acmeChallenges: 0,
+      shellRecordings: 0,
     });
     const ids = async (table: string) =>
       (
@@ -211,5 +216,59 @@ describe("expired records", () => {
     expect(await count("log_chunks")).toBe(1);
     await tick(NOW + 7 * DAY);
     expect(await count("log_chunks")).toBe(0);
+  });
+});
+
+describe("shell recording retention", () => {
+  it("deletes recordings past shell_recording_retention_days and keeps the session rows", async () => {
+    const { owner, workspaceId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const { service } = await createService(owner, p.id);
+    const envId = p.environments[0]!.id;
+    const started = NOW - 40 * DAY;
+    /** A session that ended `endedDaysAgo` before {@link NOW} (`null`: still open) with `parts` stored. */
+    const session = async (id: string, endedDaysAgo: number | null, parts: number) => {
+      const ended = endedDaysAgo === null ? null : NOW - endedDaysAgo * DAY;
+      await env.DB.prepare(
+        "INSERT INTO shell_sessions (id, workspace_id, project_id, environment_id, service_id, workload_id, replica, command, started_at, ended_at, recording, recording_parts, recording_bytes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'wl_1', 0, 'sh', ?, ?, ?, ?, 10, ?, ?)",
+      )
+        .bind(
+          id,
+          workspaceId,
+          p.id,
+          envId,
+          service.id,
+          started,
+          ended,
+          ended === null ? "recording" : "stored",
+          parts,
+          started,
+          started,
+        )
+        .run();
+      const keys = Array.from({ length: parts }, (_, i) =>
+        shellRecordingKey(p.id, started, id, i + 1),
+      );
+      for (const key of keys) await env.LOGS.put(key, "sealed");
+      return keys;
+    };
+    const old = await session("shl_old", 31, 2);
+    const recent = await session("shl_recent", 2, 1);
+    const open = await session("shl_open", null, 1);
+    await session("shl_none", 60, 0);
+
+    expect((await runRetention(env, NOW)).shellRecordings).toBe(1);
+    for (const key of old) expect(await env.LOGS.head(key)).toBeNull();
+    for (const key of [...recent, ...open]) expect(await env.LOGS.head(key)).not.toBeNull();
+    const row = await env.DB.prepare(
+      "SELECT recording, recording_parts, recording_bytes FROM shell_sessions WHERE id = 'shl_old'",
+    ).first();
+    expect(row).toEqual({ recording: "none", recording_parts: 0, recording_bytes: 0 });
+    expect(await count("shell_sessions")).toBe(4);
+
+    await putSetting(createDb(env.DB), SettingKey.shellRecordingRetentionDays, 1);
+    expect((await runRetention(env, NOW)).shellRecordings).toBe(1);
+    for (const key of recent) expect(await env.LOGS.head(key)).toBeNull();
+    for (const key of open) expect(await env.LOGS.head(key)).not.toBeNull();
   });
 });

@@ -11,7 +11,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -61,8 +63,9 @@ func (c *Client) InspectExec(ctx context.Context, id string) (ExecInfo, error) {
 }
 
 // ExecStream is the hijacked connection of a started exec: writes go to the
-// process's stdin (when attached), and [ExecStream.Output] reads its
-// multiplexed stdout and stderr.
+// process's stdin (when attached). [ExecStream.Output] reads the multiplexed
+// stdout and stderr of an exec started without a TTY; [ExecStream.Read] reads
+// the raw terminal output of one started with [Client.StartExecTTY].
 type ExecStream struct {
 	conn net.Conn
 	r    *bufio.Reader
@@ -74,7 +77,20 @@ type ExecStream struct {
 // ctx closes the connection; the process keeps running until it exits or is
 // killed ([Client.KillExec]).
 func (c *Client) StartExec(ctx context.Context, execID string) (*ExecStream, error) {
-	body, _ := json.Marshal(map[string]bool{"Detach": false, "Tty": false})
+	return c.startExec(ctx, execID, false)
+}
+
+// StartExecTTY starts an exec created with Tty set and hijacks its
+// connection, whose output is then the terminal's raw bytes with no
+// multiplexing header ([ExecStream.Read]). Cancelling ctx closes the
+// connection; the process keeps running until it exits or is signalled
+// ([Client.SignalExec]).
+func (c *Client) StartExecTTY(ctx context.Context, execID string) (*ExecStream, error) {
+	return c.startExec(ctx, execID, true)
+}
+
+func (c *Client) startExec(ctx context.Context, execID string, tty bool) (*ExecStream, error) {
+	body, _ := json.Marshal(map[string]bool{"Detach": false, "Tty": tty})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/exec/"+url.PathEscape(execID)+"/start", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -112,6 +128,9 @@ func (c *Client) StartExec(ctx context.Context, execID string) (*ExecStream, err
 	}
 	return &ExecStream{conn: conn, r: br, stop: stop}, nil
 }
+
+// Read reads the raw output of an exec started with [Client.StartExecTTY].
+func (s *ExecStream) Read(p []byte) (int, error) { return s.r.Read(p) }
 
 // Write sends p to the process's stdin.
 func (s *ExecStream) Write(p []byte) (int, error) { return s.conn.Write(p) }
@@ -273,15 +292,31 @@ func (c *Client) killAfter(ctx context.Context, containerID, execID string) {
 	_, _ = c.KillExec(kctx, containerID, execID)
 }
 
-// KillExec kills a running exec's process and reports whether it did.
-//
-// NOTE: the engine has no API to stop an exec, and one keeps running when
-// its client disconnects, so the process is killed by the host PID the
-// engine reports. That works only where the agent shares the host's PID
-// namespace (a Linux node, not a containerised test run), and only after
-// checking that the PID still belongs to the container; elsewhere it
-// reports false and the process runs on until it exits.
+// ResizeExec sets the terminal size of an exec created with Tty set.
+func (c *Client) ResizeExec(ctx context.Context, execID string, rows, cols int) error {
+	return c.do(ctx, request{
+		method: http.MethodPost,
+		path:   "/exec/" + url.PathEscape(execID) + "/resize",
+		query:  url.Values{"h": {strconv.Itoa(rows)}, "w": {strconv.Itoa(cols)}},
+	}, nil)
+}
+
+// KillExec kills a running exec's process and reports whether it did
+// ([Client.SignalExec] with SIGKILL).
 func (c *Client) KillExec(ctx context.Context, containerID, execID string) (bool, error) {
+	return c.SignalExec(ctx, containerID, execID, syscall.SIGKILL)
+}
+
+// SignalExec sends sig to a running exec's process and reports whether it
+// did.
+//
+// NOTE: the engine has no API to signal or stop an exec, and one keeps
+// running when its client disconnects, so the process is signalled by the
+// host PID the engine reports. That works only where the agent shares the
+// host's PID namespace (a Linux node, not a containerised test run), and
+// only after checking that the PID still belongs to the container;
+// elsewhere it reports false and the process runs on until it exits.
+func (c *Client) SignalExec(ctx context.Context, containerID, execID string, sig syscall.Signal) (bool, error) {
 	info, err := c.InspectExec(ctx, execID)
 	if err != nil {
 		return false, err
@@ -292,5 +327,5 @@ func (c *Client) KillExec(ctx context.Context, containerID, execID string) (bool
 	if info.ContainerID != "" {
 		containerID = info.ContainerID
 	}
-	return killHostProcess(info.Pid, containerID)
+	return signalHostProcess(info.Pid, containerID, sig)
 }

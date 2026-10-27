@@ -2,9 +2,11 @@ import "@testing-library/jest-dom/vitest";
 import { clearToasts } from "@roundhouse/ui";
 import { act, cleanup, configure } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll } from "vitest";
+import { resetCloudflareMock } from "../mocks/cloudflare-handlers";
 import { resetDb } from "../mocks/db";
 import { resetRealtime } from "../mocks/deploy-handlers";
 import { server } from "../mocks/server";
+import { resetShellMock } from "../mocks/shell-handlers";
 
 // COMPAT: jsdom lacks pointer capture and scrollIntoView, which Radix calls during
 // pointer and keyboard interaction.
@@ -40,6 +42,8 @@ afterEach(() => {
   server.resetHandlers();
   resetDb();
   resetRealtime();
+  resetShellMock();
+  resetCloudflareMock();
   localStorage.clear();
   document.documentElement.className = "";
 });

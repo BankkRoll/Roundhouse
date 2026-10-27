@@ -73,6 +73,7 @@ import {
   toBuildArgPairs,
   toPairs,
 } from "./key-value-editor";
+import { RuntimeSection } from "./runtime-section";
 
 /** Slider bounds: the API accepts more, but these cover real services with useful steps. */
 export const CPU_SLIDER = { min: 100, max: 8000, step: 100 } as const;
@@ -87,11 +88,14 @@ type Part = Exclude<
   "environment_id" | "expected_version" | "name" | "slug" | "icon"
 >;
 
+/** Where a save's spinner and error show: a part, or a section sharing one. */
+type Slot = Part | "runtime";
+
 interface SaveContext {
   canEdit: boolean;
-  saving: Part | null;
-  errors: Partial<Record<Part, string>>;
-  save: (part: Part, value: UpdateServiceBody[Part]) => void;
+  saving: Slot | null;
+  errors: Partial<Record<Slot, string>>;
+  save: (part: Part, value: UpdateServiceBody[Part], slot?: Slot) => void;
 }
 
 /** The page's sections in order, for the jump list and the anchors. */
@@ -105,11 +109,17 @@ const SECTIONS = [
   { id: "networking", label: "Networking" },
   { id: "tcp-proxy", label: "TCP proxy" },
   { id: "domains", label: "Domains" },
+  { id: "runtime", label: "Runtime" },
   { id: "placement", label: "Placement" },
 ] as const;
 
 /** Sections a cron service leaves out: it serves no traffic, so nothing probes or routes to it. */
-const NOT_FOR_CRON: ReadonlySet<string> = new Set(["healthcheck", "networking", "domains"]);
+const NOT_FOR_CRON: ReadonlySet<string> = new Set([
+  "healthcheck",
+  "networking",
+  "domains",
+  "runtime",
+]);
 
 /**
  * One part of the config as its own form: the rows, any save error, and a save bar that
@@ -1256,7 +1266,11 @@ function SectionNav({
   cron: boolean;
 }) {
   const sections = database
-    ? [SECTIONS[0], ...DATABASE_SECTIONS, ...SECTIONS.slice(1)]
+    ? [
+        SECTIONS[0],
+        ...DATABASE_SECTIONS,
+        ...SECTIONS.slice(1).filter((section) => section.id !== "runtime"),
+      ]
     : cron
       ? [
           SECTIONS[0],
@@ -1300,8 +1314,8 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
   const access = useProjectPermissions(workspaceId, projectId);
   const gate = useEnvironmentGate(workspaceId, projectId, environment);
   const configLocked = gate.locked("services:manage");
-  const [saving, setSaving] = useState<Part | null>(null);
-  const [errors, setErrors] = useState<Partial<Record<Part, string>>>({});
+  const [saving, setSaving] = useState<Slot | null>(null);
+  const [errors, setErrors] = useState<Partial<Record<Slot, string>>>({});
 
   if (config.isPending || !service) {
     return (
@@ -1322,10 +1336,10 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
     canEdit: gate.can("services:manage"),
     saving,
     errors,
-    save: (part, value) => {
+    save: (part, value, slot = part) => {
       if (!environment) return;
-      setSaving(part);
-      setErrors((previous) => ({ ...previous, [part]: undefined }));
+      setSaving(slot);
+      setErrors((previous) => ({ ...previous, [slot]: undefined }));
       update.mutate(
         { environment_id: environment.id, expected_version: current.version, [part]: value },
         {
@@ -1340,7 +1354,7 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
             const message = isApiError(error, 409)
               ? "Someone else changed this config. Reload it, then make your change again."
               : errorMessage(error);
-            setErrors((previous) => ({ ...previous, [part]: message }));
+            setErrors((previous) => ({ ...previous, [slot]: message }));
             if (isApiError(error, 409)) void config.refetch();
           },
           onSettled: () => setSaving(null),
@@ -1450,6 +1464,18 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
             <DomainsSection workspaceId={workspaceId} projectId={projectId} serviceId={serviceId} />
           </>
         )}
+        {service.kind === "app" && !service.database && environment ? (
+          <RuntimeSection
+            workspaceId={workspaceId}
+            service={service}
+            config={current}
+            environmentId={environment.id}
+            canEdit={context.canEdit}
+            saving={saving === "runtime"}
+            error={errors.runtime}
+            onSave={(placement) => context.save("placement", placement, "runtime")}
+          />
+        ) : null}
         <PlacementSection config={current} context={context} />
         {canDelete ? (
           <div id="danger-zone" className="scroll-mt-20">

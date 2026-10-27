@@ -16,7 +16,8 @@ export type ServiceTab =
   | "variables"
   | "settings"
   | "domains"
-  | "runs";
+  | "runs"
+  | "shell";
 
 /** Route of each service tab. */
 export const SERVICE_TAB_PATHS = {
@@ -29,6 +30,7 @@ export const SERVICE_TAB_PATHS = {
   settings: "/w/$workspaceId/p/$projectId/s/$serviceId/settings",
   domains: "/w/$workspaceId/p/$projectId/s/$serviceId/domains",
   runs: "/w/$workspaceId/p/$projectId/s/$serviceId/runs",
+  shell: "/w/$workspaceId/p/$projectId/s/$serviceId/shell",
 } as const satisfies Record<ServiceTab, string>;
 
 /** Tabs of an app service, in display order, with their labels. */
@@ -45,13 +47,15 @@ export const SERVICE_TABS: readonly { id: ServiceTab; label: string }[] = [
  * The tabs a service shows. A database service adds Data (for callers with
  * `data:read`) and Backups, and drops Domains: it listens on the private network only.
  * A cron service leads with Runs and drops Metrics and Domains: it serves no traffic.
+ * App and database services end with Shell for callers with `shell:open`; a cron
+ * service has no long-running replica to open one in.
  *
  * @param service - The service; `database` is set for database services.
  * @param can - The caller's permission check.
  * @returns Tabs in display order.
  * @example
  * serviceTabs({ database: { engine: "postgres", version: "18" } }, () => true).map((t) => t.id);
- * // ["deployments", "logs", "metrics", "data", "backups", "variables", "settings"]
+ * // ["deployments", "logs", "metrics", "data", "backups", "variables", "settings", "shell"]
  */
 export function serviceTabs(
   service: { database?: unknown; kind?: string } | undefined,
@@ -66,7 +70,8 @@ export function serviceTabs(
       { id: "settings", label: "Settings" },
     ];
   }
-  if (!service?.database) return SERVICE_TABS;
+  const shell = can("shell:open") ? [{ id: "shell" as const, label: "Shell" }] : [];
+  if (!service?.database) return [...SERVICE_TABS, ...shell];
   return [
     { id: "deployments", label: "Deployments" },
     { id: "logs", label: "Logs" },
@@ -75,6 +80,7 @@ export function serviceTabs(
     { id: "backups", label: "Backups" },
     { id: "variables", label: "Variables" },
     { id: "settings", label: "Settings" },
+    ...shell,
   ];
 }
 

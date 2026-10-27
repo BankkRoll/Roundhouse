@@ -178,8 +178,10 @@ workspace; it installs the agent and joins on first boot. Without --plan or
 --region the provider's recommended offer is used. The command waits until
 the server joins unless --no-wait is given. Connect a provider in the
 dashboard first (Servers → Add server → Cloud provider): the CLI never
-handles provider tokens. Provisioning needs a recent "roundhouse login";
-API tokens cannot provision.`,
+handles provider tokens.
+
+Both need a recent "roundhouse login": a join token admits a machine to the
+workspace, so API tokens can neither create one nor provision.`,
 		Example: `  roundhouse servers add
   roundhouse servers add --workspace acme --json | jq -r .install_command
   roundhouse servers add --provider hetzner
@@ -210,7 +212,7 @@ API tokens cannot provision.`,
 			}
 			tok, err := sess.client.CreateJoinToken(ctx, ws.ID)
 			if err != nil {
-				return err
+				return a.reauthHint(err, "creating a join token")
 			}
 			if a.jsonOut {
 				return a.printJSON(tok)
@@ -842,13 +844,4 @@ func (a *App) upCmd() *cobra.Command {
 		`Upload the current directory and deploy it, without pushing to git.
 This needs a source upload endpoint the control plane does not offer yet.`,
 		`  roundhouse up`, noArgs)
-}
-
-func (a *App) shellCmd() *cobra.Command {
-	// TODO(phase-3): needs an exec endpoint that relays a TTY to a replica
-	// through its node agent.
-	return a.stub("shell", "Open a shell in a running replica (not available yet)",
-		`Open an interactive shell inside one of the service's running containers.
-This needs an exec relay the control plane does not offer yet.`,
-		`  roundhouse shell --service api`, noArgs)
 }

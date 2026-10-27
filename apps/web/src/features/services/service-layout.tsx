@@ -11,7 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
 import { ArrowLeftIcon, BoxIcon, ExternalLinkIcon, RocketIcon } from "lucide-react";
 import { errorMessage } from "../../lib/api/client";
-import { usePermissions } from "../../lib/permissions";
+import { useProjectPermissions } from "../../lib/permissions";
 import { useDeploy } from "../../queries/deployments";
 import { latestDeploymentQueryOptions } from "../../queries/projects";
 import { useDomains, useServiceConfig } from "../../queries/services";
@@ -54,7 +54,7 @@ export function ServiceLayout({ workspaceId, projectId, serviceId }: ServicePage
     enabled: Boolean(environment),
   });
   const deploy = useDeploy();
-  const { can } = usePermissions(workspaceId);
+  const { can } = useProjectPermissions(workspaceId, projectId);
   const gate = useEnvironmentGate(workspaceId, projectId, environment);
   const deployLocked = gate.locked("deployments:create");
 

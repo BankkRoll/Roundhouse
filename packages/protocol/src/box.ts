@@ -22,6 +22,7 @@ import { z } from "zod";
 import { fromBase64, toBase64 } from "./encoding";
 import {
   AGE_IDENTITY_RE,
+  base64Bytes,
   boundedString,
   DB_PASSWORD_RE,
   ENV_KEY_RE,
@@ -34,6 +35,7 @@ import {
   MAX_ENV_TOTAL_BYTES,
   MAX_ENV_VALUE_BYTES,
   MAX_ENV_VARS,
+  MAX_EXEC_INPUT_BYTES,
   MAX_MESH_PEERS,
   MAX_PRESIGNED_URL_BYTES,
   MAX_SEALED_BOX_CT_CHARS,
@@ -63,6 +65,8 @@ export const BOX_PURPOSES = [
   "restore",
   "db-credential",
   "cert-key",
+  "exec-input",
+  "image-push",
 ] as const;
 
 /** A box purpose; see {@link BOX_PURPOSES}. */
@@ -182,6 +186,30 @@ export function dbCredentialAad(nodeId: string, requestId: string): string {
  */
 export function certKeyAad(nodeId: string, certId: string, sha256: string): string {
   return `${boxInfo("cert-key")}:${nodeId}:${certId}:${sha256}`;
+}
+
+/**
+ * AAD of one batch of terminal input (`exec_input.data_sealed`). Binding the
+ * sequence number stops a captured batch being replayed at another position.
+ *
+ * @param nodeId - Node the box is sealed to.
+ * @param sessionId - `exec_input.session_id` (`shl_…`).
+ * @param seq - `exec_input.seq`.
+ * @returns E.g. `roundhouse-box:v1:exec-input:node_1:shl_1:0`.
+ */
+export function execInputAad(nodeId: string, sessionId: string, seq: number): string {
+  return `${boxInfo("exec-input")}:${nodeId}:${sessionId}:${seq}`;
+}
+
+/**
+ * AAD of an image push's registry credential (`image_push.credential_sealed`).
+ *
+ * @param nodeId - Node the box is sealed to.
+ * @param pushId - `image_push.push_id` (`psh_…`).
+ * @returns E.g. `roundhouse-box:v1:image-push:node_1:psh_1`.
+ */
+export function imagePushAad(nodeId: string, pushId: string): string {
+  return `${boxInfo("image-push")}:${nodeId}:${pushId}`;
 }
 
 const Base64Key32 = z.string().regex(/^[A-Za-z0-9+/]{43}=$/, "expected a base64 32-byte key");
@@ -343,6 +371,27 @@ export const SealedCertKeySchema = z.object({
 
 /** Plaintext of `cert_sync.upserts[].key_sealed`. */
 export type SealedCertKey = z.infer<typeof SealedCertKeySchema>;
+
+/**
+ * Plaintext of `exec_input.data_sealed`: keystrokes, which may include
+ * passwords typed at a prompt, as standard base64 of at most
+ * `MAX_EXEC_INPUT_BYTES` raw bytes.
+ */
+export const SealedExecInputSchema = z.object({
+  data: base64Bytes(MAX_EXEC_INPUT_BYTES),
+});
+
+/** Plaintext of `exec_input.data_sealed`. */
+export type SealedExecInput = z.infer<typeof SealedExecInputSchema>;
+
+/** Plaintext of `image_push.credential_sealed`: the target registry's temporary login. */
+export const SealedImagePushCredentialSchema = z.object({
+  username: boundedString(256, 1),
+  password: boundedString(4096, 1),
+});
+
+/** Plaintext of `image_push.credential_sealed`. */
+export type SealedImagePushCredential = z.infer<typeof SealedImagePushCredentialSchema>;
 
 // -----------------------------------------------------------------------------
 // Keys

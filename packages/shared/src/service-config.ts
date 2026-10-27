@@ -8,6 +8,7 @@
  *
  * @module
  */
+import type { CloudflarePlacement, ServiceProvider } from "./cloudflare";
 import type { CronConfig } from "./cron-jobs";
 
 /** Run an image reference as-is: no build. */
@@ -130,10 +131,27 @@ export interface NetworkingConfig {
   generated_domain: boolean;
 }
 
-/** Constraints on which nodes may run the service. */
+/** Where the service runs: which nodes, or Cloudflare Containers (ADR 0011). */
 export interface PlacementConfig {
-  /** Node labels that must all match exactly. */
+  /** Node labels that must all match exactly. Ignored on Cloudflare. */
   node_selector: Record<string, string>;
+  /**
+   * `nodes` (the default, also when absent in versions written before it
+   * existed) or `cloudflare`, which needs {@link cloudflareEligibility}.
+   */
+  provider?: ServiceProvider;
+  /** Required with `provider: "cloudflare"`; kept when switching back, for a quick return. */
+  cloudflare?: CloudflarePlacement;
+}
+
+/**
+ * The provider a placement selects.
+ *
+ * @param placement - A config's placement.
+ * @returns `cloudflare` or `nodes` (also for configs from before providers).
+ */
+export function serviceProvider(placement: Pick<PlacementConfig, "provider">): ServiceProvider {
+  return placement.provider ?? "nodes";
 }
 
 /** Every part of one immutable config version. */

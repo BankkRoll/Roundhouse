@@ -122,6 +122,18 @@ async function promptReauth(): Promise<boolean> {
   return reauthInFlight;
 }
 
+/**
+ * Asks the user to confirm their password outside a request, for refusals that don't
+ * come back as HTTP responses (a shell socket closing with 4428). Shares the prompt with
+ * any refused request in flight.
+ *
+ * @returns `true` once the session is fresh again; `false` when cancelled or no prompt
+ *   is mounted.
+ */
+export function requestReauth(): Promise<boolean> {
+  return promptReauth();
+}
+
 /** Options for {@link request}. */
 export interface RequestOptions {
   /** JSON-serialisable body. */
@@ -130,6 +142,8 @@ export interface RequestOptions {
   query?: Record<string, string | number | null | undefined>;
   /** Abort signal, usually from TanStack Query. */
   signal?: AbortSignal;
+  /** Return the body as text rather than parsed JSON, for non-JSON responses. */
+  text?: boolean;
 }
 
 function isEnvelope(value: unknown): value is ApiErrorBody {
@@ -200,7 +214,8 @@ async function readError(response: Response): Promise<ApiError> {
  * @param path - Same-origin path such as `/v1/me`. Interpolated segments must already be
  *   encoded.
  * @param options - Body, query and abort signal.
- * @returns The parsed JSON body, or `undefined` for 204 and empty responses.
+ * @returns The parsed JSON body (the text with `options.text`), or `undefined` for 204
+ *   and empty responses.
  * @throws {ApiError} For non-2xx responses, non-JSON bodies and network failures.
  */
 export async function request<T>(
@@ -245,6 +260,7 @@ async function send<T>(
   if (response.status === 204) return undefined as T;
 
   const text = await response.text();
+  if (options.text) return text as T;
   if (!text) return undefined as T;
   try {
     return JSON.parse(text) as T;
