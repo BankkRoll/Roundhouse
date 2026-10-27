@@ -17,7 +17,12 @@
  * @module
  */
 
-/** Variables the control plane injects into every service. */
+/**
+ * Variables the control plane injects into every service. The TCP proxy
+ * pair (ADR 0004) exists only for a service that publishes a port: the
+ * node's public hostname (or IP; empty until the service is placed) and
+ * the published port.
+ */
 export const BUILTIN_VARIABLES = [
   "PORT",
   "ROUNDHOUSE_PUBLIC_DOMAIN",
@@ -26,6 +31,8 @@ export const BUILTIN_VARIABLES = [
   "ROUNDHOUSE_GIT_COMMIT_SHA",
   "ROUNDHOUSE_SERVICE_NAME",
   "ROUNDHOUSE_DEPLOYMENT_ID",
+  "ROUNDHOUSE_TCP_PROXY_DOMAIN",
+  "ROUNDHOUSE_TCP_PROXY_PORT",
 ] as const;
 
 /** A built-in variable name; see {@link BUILTIN_VARIABLES}. */

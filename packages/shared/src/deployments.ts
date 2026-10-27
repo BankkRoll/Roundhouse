@@ -101,6 +101,7 @@ export const DEPLOYMENT_TRIGGERS = [
   "api",
   "template",
   "change_set",
+  "migration",
 ] as const;
 
 /** What started a deployment; see {@link DEPLOYMENT_TRIGGERS}. */
