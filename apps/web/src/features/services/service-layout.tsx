@@ -1,4 +1,5 @@
 import {
+  Badge,
   Button,
   EmptyState,
   Skeleton,
@@ -36,6 +37,13 @@ export interface ServicePageProps {
  * @param props - Workspace, project and service ids.
  * @returns The layout.
  */
+/** Why a service is degraded, in words (ADR 0005, service health). */
+const HEALTH_REASON = {
+  node_offline: "Its server is offline, and a replica with a volume can't move on its own.",
+  node_maintenance:
+    "Its server is in maintenance: a forced drain stopped it until the server resumes.",
+} as const;
+
 export function ServiceLayout({ workspaceId, projectId, serviceId }: ServicePageProps) {
   const { project, environment, envParam } = useProjectEnvironment(projectId);
   const service = findService(project.data, serviceId);
@@ -108,6 +116,11 @@ export function ServiceLayout({ workspaceId, projectId, serviceId }: ServicePage
               {service.name}
             </h1>
             {latest.data ? <StatusBadge status={latest.data.status} kind="deployment" /> : null}
+            {service.health === "degraded" ? (
+              <Badge tone="warning" title={HEALTH_REASON[service.health_reason ?? "node_offline"]}>
+                Degraded
+              </Badge>
+            ) : null}
             {gate.protected ? <ProtectedBadge /> : null}
           </div>
           <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground">
