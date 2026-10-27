@@ -342,6 +342,7 @@ function toPolicy(service: Service, environmentId: string): BackupPolicy {
     max_age_days: stored?.max_age_days ?? null,
     quiesce: stored?.quiesce ?? "none",
     databases: stored?.databases ?? null,
+    pitr: stored?.pitr ?? false,
     next_run_at: enabled ? nextCronRun(schedule, now) : null,
     next_runs: enabled ? nextCronRuns(schedule, now, 3) : [],
   };
@@ -594,6 +595,8 @@ function recoverVolume(
   db.data.volumes.push(fresh);
   const restore: Restore = {
     id: nextId("rst"),
+    trigger: "manual",
+    target_time: null,
     backup_id: backup.id,
     mode: "in_place",
     target_service_id: backup.service_id,
@@ -1697,6 +1700,7 @@ export const dataHandlers = [
         body.max_age_days !== undefined ? body.max_age_days : (current?.max_age_days ?? null),
       quiesce: body.quiesce ?? current?.quiesce ?? "none",
       databases: body.databases !== undefined ? body.databases : (current?.databases ?? null),
+      pitr: false,
     };
     if (current) Object.assign(current, next);
     else db.data.policies.push(next);
@@ -1913,6 +1917,8 @@ export const dataHandlers = [
       });
       const restore: Restore = {
         id: nextId("rst"),
+        trigger: "manual",
+        target_time: null,
         backup_id: backup.id,
         mode: "new_service",
         target_service_id: added.service.id,
@@ -1962,6 +1968,8 @@ export const dataHandlers = [
         });
     const restore: Restore = {
       id: nextId("rst"),
+      trigger: "manual",
+      target_time: null,
       backup_id: backup.id,
       mode: "in_place",
       target_service_id: backup.service_id,

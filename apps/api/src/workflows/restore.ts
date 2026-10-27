@@ -39,6 +39,7 @@ import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { Env } from "../env";
 import { BACKUP_TIMEOUT_S, BACKUP_WAIT_GRACE_S } from "../lib/backups/backups";
 import { loadBackupIdentity } from "../lib/backups/keys";
+import { ensureWalStream, retireWalStreams } from "../lib/backups/pitr";
 import {
   auditRestore,
   failRestore,
@@ -49,6 +50,8 @@ import {
 import { loadBackupStorage } from "../lib/backups/storage";
 import { DATA_TARGET_MESSAGES, findDataTarget } from "../lib/backups/target";
 import { disposeRpc } from "../lib/deployments";
+import { refreshNodes } from "../lib/desired-state";
+import { volumeOf } from "../lib/volumes";
 
 /** Parameters of a restore workflow instance. */
 export interface RestoreParams {
@@ -89,10 +92,13 @@ interface Plan {
   objectKey: string;
   sha256: string;
   sizeBytes: number;
-  method: "dump" | "snapshot";
+  method: "dump" | "snapshot" | "base";
   engine: DatabaseEngine | null;
   workloadId: string | null;
   timeoutS: number;
+  mode: "in_place" | "new_service";
+  /** A `base` restore's recovery: target (unix ms), WAL count and last segment. */
+  pitr: { targetTime: number | null; walFiles: number; walEnd: string | null } | null;
 }
 
 type Verdict<T = object> =
@@ -318,6 +324,15 @@ export class RestoreWorkflow extends WorkflowEntrypoint<Env, RestoreParams> {
         engine: backup.engine,
         workloadId: found.target.workloadId,
         timeoutS: BACKUP_TIMEOUT_S,
+        mode: restore.mode,
+        pitr:
+          backup.method === "base"
+            ? {
+                targetTime: restore.targetTime ? +restore.targetTime : null,
+                walFiles: restore.walFiles ?? 0,
+                walEnd: restore.walEnd,
+              }
+            : null,
       },
     };
   }
@@ -373,6 +388,15 @@ export class RestoreWorkflow extends WorkflowEntrypoint<Env, RestoreParams> {
       size_bytes: plan.sizeBytes,
       secrets_sealed: sealed,
       timeout_s: plan.timeoutS,
+      ...(plan.pitr
+        ? {
+            pitr: {
+              target_time: plan.pitr.targetTime,
+              wal_files: plan.pitr.walFiles,
+              wal_end: plan.pitr.walFiles > 0 ? plan.pitr.walEnd : null,
+            },
+          }
+        : {}),
     });
     const verdict: Verdict = result.sent
       ? { kind: "ok" }
@@ -405,6 +429,25 @@ export class RestoreWorkflow extends WorkflowEntrypoint<Env, RestoreParams> {
       .where(and(eq(restores.id, plan.restoreId), eq(restores.status, "running")))
       .returning();
     if (row) await auditRestore(db, row, "restore.succeeded");
+    if (row && plan.mode === "in_place" && plan.method !== "dump") {
+      // The data now has another history than the WAL archived so far: a
+      // new stream starts, and its first base backup follows on the tick.
+      await this.restartWalStream(row);
+    }
     return { kind: "ok" };
+  }
+
+  private async restartWalStream(restore: {
+    targetServiceId: string | null;
+    targetEnvironmentId: string | null;
+  }) {
+    if (!restore.targetServiceId || !restore.targetEnvironmentId) return;
+    const db = this.db();
+    const old = await retireWalStreams(db, restore.targetServiceId, restore.targetEnvironmentId);
+    if (!old) return;
+    const volume = await volumeOf(db, restore.targetServiceId, restore.targetEnvironmentId);
+    if (!volume?.nodeId) return;
+    await ensureWalStream(db, volume);
+    await refreshNodes(this.env, db, [volume.nodeId]);
   }
 }

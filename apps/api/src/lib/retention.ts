@@ -222,7 +222,7 @@ export async function runRetention(
   // NOTE: backup maintenance talks to S3; its failure must not stop the rest.
   const backups = await runBackupMaintenance(env, now).catch((err) => {
     console.error("backup maintenance failed", err instanceof Error ? err.name : "error");
-    return { expired: 0, stuck: 0 };
+    return { expired: 0, walExpired: 0, stuck: 0 };
   });
   return {
     backups: backups.expired,

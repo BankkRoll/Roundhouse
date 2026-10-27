@@ -161,7 +161,13 @@ async function onBackupResult(ctx: BackupFrameContext, frame: BackupResult) {
     isNull(backups.sha256),
     isNull(backups.error),
   );
-  if (frame.ok) {
+  if (frame.ok && backup.method === "base" && !frame.wal_start) {
+    // Without its first segment a base backup can't be replayed onto.
+    await ctx.db
+      .update(backups)
+      .set({ error: "the agent reported no WAL start for the base backup", updatedAt: now })
+      .where(answered);
+  } else if (frame.ok) {
     await ctx.db
       .update(backups)
       .set({
@@ -169,6 +175,7 @@ async function onBackupResult(ctx: BackupFrameContext, frame: BackupResult) {
         bytesRaw: frame.bytes_raw!,
         bytesStored: frame.bytes_stored!,
         sha256: frame.sha256!,
+        ...(backup.method === "base" ? { walStart: frame.wal_start! } : {}),
         updatedAt: now,
       })
       .where(answered);

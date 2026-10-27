@@ -116,6 +116,33 @@ export const CreatedDatabaseSchema = z
 /** `{volumeId}` path param. */
 export const VolumeParams = z.object({ volumeId: z.string() });
 
+/**
+ * A copy a recovery left on a lost server, and where its deletion stands:
+ * `waiting_for_server` (offline), `scheduled` (deleted once the grace
+ * period ends), `kept` (`message` says why), `deleting` (`volume_delete`
+ * sent) or `deleted`.
+ */
+export const AbandonedCopySchema = z
+  .object({
+    volume_id: z.string(),
+    node_id: z.string().nullable(),
+    node_name: z.string().nullable(),
+    state: z.enum(["waiting_for_server", "scheduled", "kept", "deleting", "deleted"]),
+    message: z.string().nullable(),
+    size_mb: z.number().int(),
+    used_bytes: z.number().int().nullable(),
+    abandoned_at: Millis.nullable(),
+    delete_after: Millis.nullable(),
+    delete_sent_at: Millis.nullable(),
+    cleaned_at: Millis.nullable(),
+  })
+  .openapi("AbandonedCopy");
+
+/** A service's abandoned copies in one environment, newest first. */
+export const AbandonedCopyListSchema = z
+  .object({ copies: z.array(AbandonedCopySchema) })
+  .openapi("AbandonedCopyList");
+
 /** Body of `PATCH /v1/volumes/{volumeId}`. */
 export const ResizeVolumeBody = z.object({ size_mb: SizeMbField }).openapi("ResizeVolume");
 
@@ -312,6 +339,20 @@ export const getServiceVolume = defineRoute(session("services:read"), {
   responses: { 200: json(VolumeSchema), ...errors(401, 403, 404) },
 });
 
+/**
+ * The copies recoveries left on lost servers for the service's volume in
+ * an environment, and whether each is deleted yet.
+ */
+export const listAbandonedCopies = defineRoute(session("services:read"), {
+  method: "get",
+  path: "/v1/services/{serviceId}/volume/abandoned-copies",
+  tags: ["volumes"],
+  summary: "List abandoned volume copies",
+  security: sessionAuth,
+  request: { params: ServiceParams, query: EnvironmentQuery },
+  responses: { 200: json(AbandonedCopyListSchema), ...errors(400, 401, 403, 404) },
+});
+
 /** Grows a volume; the node applies it online. Shrinking is refused with 422. */
 export const resizeVolume = defineRoute(session("services:manage", ["volume.resized"]), {
   method: "patch",
@@ -498,6 +539,7 @@ export const listCredentialRotations = defineRoute(session("services:read"), {
 export const DATABASE_ROUTES = {
   createDatabase,
   getServiceVolume,
+  listAbandonedCopies,
   resizeVolume,
   deleteVolume,
   undeleteVolume,
@@ -522,6 +564,8 @@ export type Volume = z.infer<typeof VolumeSchema>;
 export type CreatedDatabase = z.infer<typeof CreatedDatabaseSchema>;
 /** A volume migration. */
 export type VolumeMigration = z.infer<typeof VolumeMigrationSchema>;
+/** A copy a recovery left on a lost server. */
+export type AbandonedCopy = z.infer<typeof AbandonedCopySchema>;
 /** Nodes a volume can move to. */
 export type MigrationTargets = z.infer<typeof MigrationTargetsSchema>;
 /** A service's TCP proxy. */

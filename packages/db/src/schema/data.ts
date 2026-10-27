@@ -1,6 +1,7 @@
 /**
  * Data services (ADR 0004): volumes, backup policies, backups and their
- * uploaded parts, restores, and moves of a volume between nodes.
+ * uploaded parts, restores, moves of a volume between nodes, WAL archives
+ * for point-in-time recovery, and automatic recovery policies.
  *
  * Nothing here holds a credential: backup objects are encrypted to the
  * project's age recipient (its identity is sealed in `project_keys`), and
@@ -15,11 +16,14 @@ import type {
   BackupTrigger,
   CredentialRotationStatus,
   DatabasePrincipal,
+  RecoveryPolicyStatus,
   RestoreMode,
   RestoreStatusName,
+  RestoreTrigger,
   ServiceDatabaseEngine,
   VolumeMigrationPhase,
   VolumeStatusName,
+  WalStreamStatus,
 } from "@roundhouse/shared";
 import { sql } from "drizzle-orm";
 import {
@@ -74,6 +78,14 @@ export const volumes = sqliteTable(
     deleteAfter: timestamp("delete_after"),
     /** When `volume_delete` was last sent, so the minute tick doesn't resend every minute. */
     deleteSentAt: timestamp("delete_sent_at"),
+    /**
+     * When a recovery replaced this volume with one on another node. The
+     * copy left on its old node is deleted once that node is back and
+     * `delete_after` has passed.
+     */
+    abandonedAt: timestamp("abandoned_at"),
+    /** When the old node of an `abandoned` volume reported its copy deleted. */
+    cleanedAt: timestamp("cleaned_at"),
     ...timestamps,
   },
   (t) => [
@@ -82,6 +94,7 @@ export const volumes = sqliteTable(
       .where(sql`status NOT IN ('deleted', 'abandoned')`),
     index("volumes_node_idx").on(t.nodeId, t.status),
     index("volumes_delete_after_idx").on(t.status, t.deleteAfter),
+    index("volumes_abandoned_idx").on(t.status, t.cleanedAt, t.deleteAfter),
   ],
 );
 
@@ -109,6 +122,11 @@ export const backupPolicies = sqliteTable(
     quiesce: text("quiesce").$type<"none" | "stop">().notNull().default("none"),
     /** Databases to dump; `NULL` dumps all. */
     databases: json<string[] | null>("databases"),
+    /**
+     * Point-in-time recovery (Postgres): WAL is archived continuously and
+     * scheduled backups are `base` backups.
+     */
+    pitr: integer("pitr", { mode: "boolean" }).notNull().default(false),
     /** Next slot; `NULL` while disabled. The minute tick claims it. */
     nextRunAt: timestamp("next_run_at"),
     ...timestamps,
@@ -153,6 +171,12 @@ export const backups = sqliteTable(
     sha256: text("sha256"),
     /** Exempt from `keep_last`; manual backups are pinned. */
     pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
+    /** A `base` backup's WAL stream, whose files replay onto it. */
+    walStreamId: text("wal_stream_id").references((): AnySQLiteColumn => walStreams.id, {
+      onDelete: "set null",
+    }),
+    /** A `base` backup's first WAL segment, from its `backup_label`. */
+    walStart: text("wal_start"),
     error: text("error"),
     requestedBy: text("requested_by").references(() => users.id, { onDelete: "set null" }),
     startedAt: timestamp("started_at"),
@@ -211,6 +235,18 @@ export const restores = sqliteTable(
      * (ADR 0004 `target_node_id`): the node the new volume was created on.
      */
     targetNodeId: text("target_node_id").references(() => nodes.id, { onDelete: "set null" }),
+    /** `automatic` when a recovery policy started it. */
+    trigger: text("trigger").$type<RestoreTrigger>().notNull().default("manual"),
+    /** The volume a recovery replaced; its old node's copy is deleted after it succeeds. */
+    abandonedVolumeId: text("abandoned_volume_id").references((): AnySQLiteColumn => volumes.id, {
+      onDelete: "set null",
+    }),
+    /** A point-in-time restore's target, unix ms; `NULL` restores the backup as taken. */
+    targetTime: timestamp("target_time"),
+    /** The last WAL segment a point-in-time restore replays. */
+    walEnd: text("wal_end"),
+    /** How many WAL files a point-in-time restore fetches. */
+    walFiles: integer("wal_files"),
     status: text("status").$type<RestoreStatusName>().notNull().default("queued"),
     error: text("error"),
     requestedBy: text("requested_by").references(() => users.id, { onDelete: "set null" }),
@@ -281,6 +317,110 @@ export const volumeMigrations = sqliteTable(
       .where(sql`status IN ('queued', 'running')`),
     index("volume_migrations_target_idx").on(t.targetNodeId, t.status),
     index("volume_migrations_cleanup_idx").on(t.cleanedAt, t.cleanupAfter),
+  ],
+);
+
+/**
+ * A database's continuous WAL archive (ADR 0004, "Point-in-time recovery"),
+ * from one volume's history. A restore that replaces the data, a new volume
+ * or turning point-in-time recovery off retires it, and the next one starts
+ * with a fresh base backup, so WAL file names never collide within one.
+ */
+export const walStreams = sqliteTable(
+  "wal_streams",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    serviceId: text("service_id")
+      .notNull()
+      .references(() => services.id, { onDelete: "cascade" }),
+    environmentId: text("environment_id")
+      .notNull()
+      .references(() => environments.id, { onDelete: "cascade" }),
+    /** The volume whose database writes this WAL. */
+    volumeId: text("volume_id").references(() => volumes.id, { onDelete: "set null" }),
+    status: text("status").$type<WalStreamStatus>().notNull().default("active"),
+    segmentCount: integer("segment_count").notNull().default(0),
+    bytesStored: integer("bytes_stored").notNull().default(0),
+    firstArchivedAt: timestamp("first_archived_at"),
+    lastArchivedAt: timestamp("last_archived_at"),
+    /** The newest file recorded. */
+    lastFile: text("last_file"),
+    retiredAt: timestamp("retired_at"),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("wal_streams_active_uq")
+      .on(t.serviceId, t.environmentId)
+      .where(sql`status = 'active'`),
+    index("wal_streams_volume_idx").on(t.volumeId, t.status),
+    index("wal_streams_svc_env_idx").on(t.serviceId, t.environmentId, t.id),
+  ],
+);
+
+/** One archived WAL file of a stream, stored at `walObjectKey`. */
+export const walSegments = sqliteTable(
+  "wal_segments",
+  {
+    streamId: text("stream_id")
+      .notNull()
+      .references(() => walStreams.id, { onDelete: "cascade" }),
+    /** A segment, `.partial`, `.backup` or `.history` file name. */
+    name: text("name").notNull(),
+    sizeRaw: integer("size_raw").notNull(),
+    sizeStored: integer("size_stored").notNull(),
+    /** SHA-256 of the stored (compressed, encrypted) bytes, hex. */
+    sha256: text("sha256").notNull(),
+    /** When Postgres finished the file: every WAL record before it is in this file or an earlier one. */
+    archivedAt: timestamp("archived_at").notNull(),
+    createdAt: timestamp("created_at")
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => [
+    primaryKey({ columns: [t.streamId, t.name] }),
+    index("wal_segments_archived_idx").on(t.streamId, t.archivedAt),
+  ],
+);
+
+/**
+ * A service's automatic recovery in one environment (ADR 0004): when the
+ * node holding its volume stays offline for `grace_minutes`, the latest
+ * backup is restored onto a healthy node, acting with the access of the
+ * person who turned it on.
+ */
+export const recoveryPolicies = sqliteTable(
+  "recovery_policies",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    serviceId: text("service_id")
+      .notNull()
+      .references(() => services.id, { onDelete: "cascade" }),
+    environmentId: text("environment_id")
+      .notNull()
+      .references(() => environments.id, { onDelete: "cascade" }),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+    graceMinutes: integer("grace_minutes").notNull().default(30),
+    /** Whose access a recovery runs with; re-checked every time. */
+    enabledBy: text("enabled_by").references(() => users.id, { onDelete: "set null" }),
+    status: text("status").$type<RecoveryPolicyStatus>().notNull().default("idle"),
+    /** Why the status is what it is, for the dashboard. */
+    message: text("message"),
+    /** The offline node being watched or recovered from. */
+    lostNodeId: text("lost_node_id").references(() => nodes.id, { onDelete: "set null" }),
+    /** The last automatic recovery. */
+    restoreId: text("restore_id").references(() => restores.id, { onDelete: "set null" }),
+    triggeredAt: timestamp("triggered_at"),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("recovery_policies_svc_env_uq").on(t.serviceId, t.environmentId),
+    index("recovery_policies_enabled_idx").on(t.enabled),
   ],
 );
 

@@ -9,8 +9,9 @@
  *   workflow under the backup's ID. Two overlapping ticks can't both claim a
  *   slot, and starting an existing instance is a no-op. Missed slots run
  *   once: the next slot is computed from now, not from the missed one.
- * - {@link runBackupMaintenance}, hourly: retention for every policy, and
- *   cleanup of backups and restores whose workflow is long past its timeout.
+ * - {@link runBackupMaintenance}, hourly: retention for every policy, then
+ *   for archived WAL (`./pitr`), and cleanup of backups and restores whose
+ *   workflow is long past its timeout.
  *
  * NOTE: the ADR's `JOBS` queue is skipped: the claimer starts each
  * workflow directly. The conditional update already makes a slot run at
@@ -34,6 +35,7 @@ import {
   failBackup,
   startBackupWorkflow,
 } from "./backups";
+import { applyWalRetention } from "./pitr";
 import { failRestore } from "./restores";
 import { loadBackupStorage } from "./storage";
 
@@ -159,6 +161,8 @@ async function requeueStalled(env: Env, db: Db, now: number): Promise<number> {
 export interface BackupMaintenanceReport {
   /** Backups deleted by retention. */
   expired: number;
+  /** Archived WAL files deleted by retention (point-in-time recovery). */
+  walExpired: number;
   /** Backups and restores failed for running far past their timeout. */
   stuck: number;
 }
@@ -188,6 +192,15 @@ export async function runBackupMaintenance(
       .limit(RETENTION_POLICY_BATCH);
     for (const p of policies) {
       expired += await applyBackupRetention(db, s3, p.serviceId, p.environmentId, now);
+    }
+  }
+  let walExpired = 0;
+  if (s3) {
+    try {
+      // After backup retention, which decides which base backups remain.
+      walExpired = await applyWalRetention(db, s3, now);
+    } catch (err) {
+      console.warn("WAL retention failed", err instanceof Error ? err.message : "error");
     }
   }
   let stuck = 0;
@@ -222,5 +235,5 @@ export async function runBackupMaintenance(
   for (const r of staleRestores) {
     if (await failRestore(db, r.id, "timed_out: cleaned up by maintenance")) stuck++;
   }
-  return { expired, stuck };
+  return { expired, walExpired, stuck };
 }

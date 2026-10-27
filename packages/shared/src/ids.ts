@@ -86,6 +86,10 @@ export const ID_PREFIXES = {
   cfDeployment: "cfd",
   /** One registry-to-registry image copy on a builder (ADR 0011). */
   imagePush: "psh",
+  /** A database's continuous WAL archive between two base-replacing events (ADR 0004). */
+  walStream: "wal",
+  /** A service's automatic recovery setting in one environment (ADR 0004). */
+  recoveryPolicy: "rcp",
 } as const;
 
 /** An entity kind that has an ID prefix. */

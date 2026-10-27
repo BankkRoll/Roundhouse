@@ -19,6 +19,9 @@
  *   From `CERTS_PROTOCOL_VERSION` routes carry HSTS and the frame carries
  *   the node's TLS settings and certificate manifest (ADR 0009,
  *   `lib/certificates/manifest.ts`).
+ *   From `PITR_PROTOCOL_VERSION`, a Postgres volume with point-in-time
+ *   recovery on carries `wal_archive` and its database runs with the
+ *   archive settings on its command line (`lib/backups/pitr.ts`).
  * - From `MESH_PROTOCOL_VERSION`, `mesh` (ADR 0005, `lib/mesh.ts`):
  *   `null` tears the mesh down; on a meshed node every replica carries its
  *   mesh IP and uses the private DNS, the frame lists peers, sealed
@@ -59,6 +62,8 @@ import {
   MAX_VOLUMES_PER_NODE,
   MAX_WORKLOADS_PER_NODE,
   MESH_PROTOCOL_VERSION,
+  PITR_PROTOCOL_VERSION,
+  postgresArchiveArgs,
   type RouteHsts,
   SEALED_ENV_PROTOCOL_VERSION,
   type SealedBox,
@@ -83,6 +88,7 @@ import {
 } from "@roundhouse/shared";
 import { and, asc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import type { NodeConnection } from "../durable/node-connection";
+import { walArchivesFor } from "./backups/pitr";
 import { nodeTls, type RoutedDomain, routeHsts } from "./certificates/manifest";
 import { type KeyEnv, type Sealed, sealWith, unsealWith } from "./crypto";
 import { ingressAllowedSources } from "./domains/saas";
@@ -334,6 +340,11 @@ export interface WorkloadInput {
   volume?: { id: string; mountPath: string };
   /** A database service: its engine's `exec` probe replaces the configured one. */
   database?: { engine: ServiceDatabaseEngine; version: string | null };
+  /**
+   * The volume archives WAL (point-in-time recovery): a Postgres database
+   * without its own start command runs with the archive settings.
+   */
+  walArchive?: boolean;
   /** The replica's mesh IP, on a meshed node (ADR 0005). */
   meshIp?: string;
   /** Resolve through the node's private DNS: every replica on a meshed node. */
@@ -418,7 +429,9 @@ export async function workloadSpec(w: WorkloadInput): Promise<WorkloadSpec> {
     registry_auth: null,
     ...(w.config.deploy.start_command
       ? { command: ["/bin/sh", "-c", w.config.deploy.start_command] }
-      : {}),
+      : w.walArchive && w.volume && w.database?.engine === "postgres"
+        ? { command: ["postgres", ...postgresArchiveArgs(w.volume.mountPath)] }
+        : {}),
     env_sealed: w.envSealed,
     ports: workloadPorts(port, w.publish),
     ...(w.publish ? { publish_allowed_cidrs: w.publish.allowedCidrs } : {}),
@@ -584,19 +597,27 @@ export async function buildDesiredState(
           .limit(MAX_VOLUMES_PER_NODE)
       ).map((r) => r.volume)
     : [];
+  const archives =
+    node.protocolVersion >= PITR_PROTOCOL_VERSION
+      ? await walArchivesFor(db, keys, nodeVolumes)
+      : new Map<string, { stream_id: string; age_recipient: string }>();
   if (holdsVolumes) {
     // Every volume the node holds, including those of services scaled to
     // zero: the agent reports an unlisted one as orphaned but never deletes it.
-    body.volumes = [...nodeVolumes, ...incoming].slice(0, MAX_VOLUMES_PER_NODE).map(
-      (v): VolumeSpec => ({
-        id: v.id,
-        size_mb: v.sizeMb,
-        project_id: v.projectId,
-        environment_id: v.environmentId,
-        service_id: v.serviceId,
-        owner: null,
-      }),
-    );
+    body.volumes = [...nodeVolumes, ...incoming]
+      .slice(0, MAX_VOLUMES_PER_NODE)
+      .map((v): VolumeSpec => {
+        const archive = nodeVolumes.includes(v) ? archives.get(v.id) : undefined;
+        return {
+          id: v.id,
+          size_mb: v.sizeMb,
+          project_id: v.projectId,
+          environment_id: v.environmentId,
+          service_id: v.serviceId,
+          owner: null,
+          ...(archive ? { wal_archive: archive } : {}),
+        };
+      });
   }
   // Every node's replicas, not only this one's: a peer's replica placed
   // since its last refresh must still be listed here.
@@ -788,6 +809,7 @@ export async function buildDesiredState(
         ...(r.databaseEngine
           ? { database: { engine: r.databaseEngine, version: r.databaseVersion } }
           : {}),
+        ...(volume && archives.has(volume.id) ? { walArchive: true } : {}),
         ...(meshed
           ? {
               privateDns: true,

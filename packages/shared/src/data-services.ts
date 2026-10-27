@@ -6,6 +6,8 @@
  * - {@link backupPartSize}: the multipart part size for an estimated size.
  * - {@link selectExpiredBackups}: what retention deletes.
  * - {@link backupObjectKey}: where a backup lives in the bucket.
+ * - {@link walObjectKey}: where an archived WAL file lives (point-in-time
+ *   recovery).
  *
  * @module
  */
@@ -84,8 +86,12 @@ export const BACKUP_STATUSES = ["queued", "running", "succeeded", "failed", "del
 /** A backup's status; see {@link BACKUP_STATUSES}. */
 export type BackupStatusName = (typeof BACKUP_STATUSES)[number];
 
-/** `dump` runs the engine's tool; `snapshot` archives the volume's files. */
-export const BACKUP_METHOD_NAMES = ["dump", "snapshot"] as const;
+/**
+ * `dump` runs the engine's tool; `snapshot` archives the volume's files;
+ * `base` is a Postgres base backup that archived WAL replays onto
+ * (point-in-time recovery).
+ */
+export const BACKUP_METHOD_NAMES = ["dump", "snapshot", "base"] as const;
 
 /** A backup method; see {@link BACKUP_METHOD_NAMES}. */
 export type BackupMethodName = (typeof BACKUP_METHOD_NAMES)[number];
@@ -95,6 +101,12 @@ export const RESTORE_MODES = ["in_place", "new_service"] as const;
 
 /** A restore mode; see {@link RESTORE_MODES}. */
 export type RestoreMode = (typeof RESTORE_MODES)[number];
+
+/** Who started a restore: a person, or a recovery policy. */
+export const RESTORE_TRIGGERS = ["manual", "automatic"] as const;
+
+/** A restore trigger; see {@link RESTORE_TRIGGERS}. */
+export type RestoreTrigger = (typeof RESTORE_TRIGGERS)[number];
 
 /** A restore's lifecycle. */
 export const RESTORE_STATUSES = ["queued", "running", "succeeded", "failed"] as const;
@@ -107,6 +119,48 @@ export const DEFAULT_BACKUP_SCHEDULE = "0 3 * * *";
 
 /** Scheduled backups a new policy keeps. */
 export const DEFAULT_BACKUP_KEEP_LAST = 7;
+
+/**
+ * A WAL stream's lifecycle: `active` receives the database's WAL;
+ * `retired` (after a restore that replaced the data, a new volume, or
+ * point-in-time recovery turned off) is kept for restores until retention
+ * removes its last base backup; `deleted` has no files left.
+ */
+export const WAL_STREAM_STATUSES = ["active", "retired", "deleted"] as const;
+
+/** A WAL stream's status; see {@link WAL_STREAM_STATUSES}. */
+export type WalStreamStatus = (typeof WAL_STREAM_STATUSES)[number];
+
+/**
+ * Where a service's automatic recovery stands:
+ * - `idle`: its volume's server is fine (or the policy is off);
+ * - `watching`: the server is offline, inside the grace period;
+ * - `recovering`: a recovery restore runs;
+ * - `recovered`: the last recovery succeeded;
+ * - `blocked`: the grace period ended but recovery could not start (the
+ *   message says why), and it is retried every minute;
+ * - `failed`: the last recovery restore failed.
+ */
+export const RECOVERY_POLICY_STATUSES = [
+  "idle",
+  "watching",
+  "recovering",
+  "recovered",
+  "blocked",
+  "failed",
+] as const;
+
+/** An automatic recovery status; see {@link RECOVERY_POLICY_STATUSES}. */
+export type RecoveryPolicyStatus = (typeof RECOVERY_POLICY_STATUSES)[number];
+
+/** How long a server must stay offline before automatic recovery starts, by default. */
+export const DEFAULT_RECOVERY_GRACE_MINUTES = 30;
+
+/** Shortest grace period a recovery policy accepts. */
+export const MIN_RECOVERY_GRACE_MINUTES = 5;
+
+/** Longest grace period a recovery policy accepts (one week). */
+export const MAX_RECOVERY_GRACE_MINUTES = 10_080;
 
 const MIB = 1024 * 1024;
 
@@ -149,6 +203,23 @@ export function backupObjectKey(b: {
   id: string;
 }): string {
   return `backups/${b.projectId}/${b.serviceId}/${b.environmentId}/${b.id}.rhbk.zst.age`;
+}
+
+/**
+ * The object key of an archived WAL file. Every presigned URL names exactly
+ * this key, so one leaked URL reaches one file.
+ *
+ * @param w - The stream's project, service, environment and ID, and the file name.
+ * @returns E.g. `wal/prj_1/svc_1/env_1/wal_1/000000010000000000000002.zst.age`.
+ */
+export function walObjectKey(w: {
+  projectId: string;
+  serviceId: string;
+  environmentId: string;
+  streamId: string;
+  name: string;
+}): string {
+  return `wal/${w.projectId}/${w.serviceId}/${w.environmentId}/${w.streamId}/${w.name}.zst.age`;
 }
 
 /** A backup as retention sees it. */

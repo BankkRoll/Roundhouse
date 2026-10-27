@@ -46,6 +46,7 @@ import {
   sealPartUrls,
 } from "../lib/backups/backups";
 import { ensureBackupRecipient } from "../lib/backups/keys";
+import { activeWalStream } from "../lib/backups/pitr";
 import { wakeRestoresAwaiting } from "../lib/backups/restores";
 import { loadBackupStorage } from "../lib/backups/storage";
 import { DATA_TARGET_MESSAGES, findDataTarget } from "../lib/backups/target";
@@ -87,7 +88,7 @@ interface Plan {
   objectKey: string;
   uploadId: string;
   partSizeBytes: number;
-  method: "dump" | "snapshot";
+  method: "dump" | "snapshot" | "base";
   engine: DatabaseEngine | null;
   workloadId: string | null;
   quiesce: "none" | "stop";
@@ -212,7 +213,20 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
             ),
           );
     const isDump = backup.method === "dump";
-    const quiesce = !isDump && policy?.quiesce === "stop" && target.workloadId ? "stop" : "none";
+    const isBase = backup.method === "base";
+    const quiesce =
+      backup.method === "snapshot" && policy?.quiesce === "stop" && target.workloadId
+        ? "stop"
+        : "none";
+    let walStreamId = backup.walStreamId;
+    if (isBase) {
+      // A base backup belongs to the stream of the volume it is taken of.
+      const stream = await activeWalStream(db, backup.serviceId, backup.environmentId);
+      if (!stream || stream.volumeId !== target.volumeId) {
+        return fail("no_wal_stream: point-in-time recovery is not archiving this volume");
+      }
+      walStreamId = stream.id;
+    }
 
     const ageRecipient = await ensureBackupRecipient(db, this.env, backup.projectId);
     const partSizeBytes = backup.partSizeBytes ?? backupPartSize(target.usedBytes);
@@ -226,6 +240,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
         volumeId: target.volumeId,
         uploadId,
         partSizeBytes,
+        walStreamId,
         startedAt: backup.startedAt ?? now,
         updatedAt: now,
       })
@@ -247,7 +262,7 @@ export class BackupWorkflow extends WorkflowEntrypoint<Env, BackupParams> {
         partSizeBytes,
         method: backup.method,
         engine: backup.engine,
-        workloadId: isDump || quiesce === "stop" ? target.workloadId : null,
+        workloadId: isDump || isBase || quiesce === "stop" ? target.workloadId : null,
         quiesce,
         databases: isDump && policy?.databases?.length ? policy.databases : null,
         ageRecipient,

@@ -6,7 +6,7 @@
  * @module
  */
 import { type Db, deployments, nodes, placements, volumes } from "@roundhouse/db";
-import { BACKUPS_PROTOCOL_VERSION } from "@roundhouse/protocol";
+import { BACKUPS_PROTOCOL_VERSION, PITR_PROTOCOL_VERSION } from "@roundhouse/protocol";
 import type { BackupMethodName } from "@roundhouse/shared";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { LIVE_DEPLOYMENT_STATUSES } from "../desired-state";
@@ -40,7 +40,7 @@ export type DataTargetFailure =
  * @param db - Database client.
  * @param serviceId - The service.
  * @param environmentId - The environment.
- * @param method - `dump` needs a running replica; `snapshot` uses one when there is.
+ * @param method - `dump` and `base` need a running replica; `snapshot` uses one when there is.
  * @returns The target, or why there is none.
  */
 export async function findDataTarget(
@@ -76,6 +76,9 @@ export async function findDataTarget(
   if (!node?.key) return { ok: false, reason: "node_unavailable" };
   if (node.protocolVersion < BACKUPS_PROTOCOL_VERSION)
     return { ok: false, reason: "agent_outdated" };
+  if (method === "base" && node.protocolVersion < PITR_PROTOCOL_VERSION) {
+    return { ok: false, reason: "agent_outdated" };
+  }
   const [replica] = await db
     .select({ workloadId: placements.workloadId })
     .from(placements)
@@ -91,7 +94,7 @@ export async function findDataTarget(
     )
     .orderBy(asc(placements.state))
     .limit(1);
-  if (method === "dump" && !replica) return { ok: false, reason: "service_not_running" };
+  if (method !== "snapshot" && !replica) return { ok: false, reason: "service_not_running" };
   return {
     ok: true,
     target: {
@@ -109,6 +112,7 @@ export const DATA_TARGET_MESSAGES: Record<DataTargetFailure, string> = {
   no_volume: "no_volume: the service has no volume in this environment",
   volume_not_ready: "volume_not_ready: the volume isn't placed and ready",
   node_unavailable: "node_offline: the volume's node is gone or has no encryption key",
-  agent_outdated: "agent_outdated: the volume's node runs an agent without backups",
-  service_not_running: "service_not_running: a dump needs the database running",
+  agent_outdated:
+    "agent_outdated: the volume's node runs an agent without this kind of backup; upgrade it",
+  service_not_running: "service_not_running: a dump or base backup needs the database running",
 };

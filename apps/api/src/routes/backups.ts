@@ -26,18 +26,26 @@ import {
   backupPolicies,
   backups,
   credentialRotations,
+  recoveryPolicies,
   restores,
   type services,
 } from "@roundhouse/db";
 import {
   DEFAULT_BACKUP_KEEP_LAST,
   DEFAULT_BACKUP_SCHEDULE,
+  DEFAULT_RECOVERY_GRACE_MINUTES,
   type InstanceAction,
   newId,
   nextCronRuns,
 } from "@roundhouse/shared";
 import { and, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
-import { type AppContext, clientIp, createRouter, requireInstanceAction } from "../context";
+import {
+  type AppContext,
+  type Caller,
+  clientIp,
+  createRouter,
+  requireInstanceAction,
+} from "../context";
 import {
   createBackup,
   downloadBackup,
@@ -45,16 +53,21 @@ import {
   getBackupDecryptionKey,
   getBackupPolicy,
   getBackupStorage,
+  getPitrStatus,
+  getRecoveryPolicy,
   getRestore,
   listBackups,
   policyOf,
   putBackupPolicy,
   putBackupStorage,
+  putRecoveryPolicy,
   removeBackup,
   restoreBackup,
+  restorePitr,
 } from "../contracts";
 import { ageRecipientOf } from "../lib/age";
 import { auditInsert } from "../lib/audit";
+import { toApiRecoveryPolicy } from "../lib/backups/auto-recovery";
 import {
   type BackupRow,
   backupMethodFor,
@@ -63,6 +76,15 @@ import {
   startBackupWorkflow,
 } from "../lib/backups/backups";
 import { loadBackupIdentity } from "../lib/backups/keys";
+import {
+  activeWalStream,
+  ensureWalStream,
+  pitrIneligibility,
+  pitrWindows,
+  planPitrRestore,
+  requestBaseBackup,
+  retireWalStreams,
+} from "../lib/backups/pitr";
 import { startVolumeRecovery } from "../lib/backups/recovery";
 import { type RestoreRow, restoreServiceSlug, startRestoreWorkflow } from "../lib/backups/restores";
 import { nextBackupSlot } from "../lib/backups/schedule";
@@ -77,6 +99,7 @@ import {
 } from "../lib/backups/storage";
 import { addDatabaseService } from "../lib/changes/database";
 import type { ProjectRow } from "../lib/changes/store";
+import { refreshNodes } from "../lib/desired-state";
 import { ApiError, conflict, notFound } from "../lib/errors";
 import { requireFreshSession } from "../lib/fresh-session";
 import { DOWNLOAD_URL_TTL_S, headObject, presignGet, S3Error } from "../lib/s3";
@@ -126,6 +149,8 @@ function toApiRestore(r: RestoreRow) {
     target_environment_id: r.targetEnvironmentId,
     safety_backup_id: r.safetyBackupId,
     target_node_id: r.targetNodeId,
+    trigger: r.trigger,
+    target_time: ms(r.targetTime),
     status: r.status,
     error: r.error,
     requested_by: r.requestedBy,
@@ -156,6 +181,7 @@ function toApiPolicy(
     max_age_days: p?.maxAgeDays ?? null,
     quiesce: p?.quiesce ?? "none",
     databases: p?.databases ?? null,
+    pitr: p?.pitr ?? false,
     next_run_at: ms(p?.nextRunAt ?? null),
     next_runs: enabled ? nextCronRuns(schedule, now, 3) : [],
   };
@@ -179,9 +205,10 @@ async function startNewServiceRestore(
     service: ServiceRow;
     project: ProjectRow;
     body: { target_environment_id?: string | undefined; slug?: string | undefined };
+    pitr: PitrTarget | null;
   },
 ): Promise<RestoreRow> {
-  const { backup, service, body } = input;
+  const { backup, service, body, pitr } = input;
   const db = c.get("db");
   const targetEnvId = body.target_environment_id ?? backup.environmentId;
   const inTarget = await projectScope(c, input.project.id, "services:manage", targetEnvId);
@@ -195,7 +222,9 @@ async function startNewServiceRestore(
     }
   }
   const engine = backup.engine ?? service.databaseEngine;
-  if (!engine || backup.method !== "dump") {
+  // NOTE: a base backup carries the source's passwords too, but the agent
+  // puts the new service's own back once it has recovered.
+  if (!engine || backup.method === "snapshot") {
     throw new ApiError(
       422,
       "restore_mode_unsupported",
@@ -238,6 +267,7 @@ async function startNewServiceRestore(
         targetServiceId: created.id,
         targetEnvironmentId: environment.id,
         safetyBackupId: null,
+        ...pitrColumns(pitr),
         status: "queued",
         requestedBy: caller.user.id,
         createdAt: at,
@@ -257,12 +287,203 @@ async function startNewServiceRestore(
         source_service_id: backup.serviceId,
         service_id: created.id,
         environment_id: environment.id,
+        ...(pitr ? { target_time: pitr.targetTime } : {}),
       },
       ip: clientIp(c),
     }),
   ]);
   await startRestoreWorkflow(c.env, id);
   return restore!;
+}
+
+/** A point-in-time restore's plan, as the restore row records it. */
+interface PitrTarget {
+  targetTime: number;
+  walFiles: number;
+  walEnd: string;
+}
+
+/** The `restores` columns of a point-in-time restore. */
+function pitrColumns(pitr: PitrTarget | null) {
+  return pitr
+    ? { targetTime: new Date(pitr.targetTime), walFiles: pitr.walFiles, walEnd: pitr.walEnd }
+    : {};
+}
+
+/**
+ * Starts a restore of a succeeded backup once the route has checked the
+ * caller, the fresh session and the confirmation: into a new service, in
+ * place (with a safety backup unless skipped), or onto another server for
+ * a lost one. A point-in-time restore passes its plan along.
+ */
+async function startRestore(
+  c: AppContext,
+  input: {
+    backup: BackupRow;
+    service: ServiceRow;
+    project: ProjectRow;
+    caller: Caller;
+    body: {
+      mode: "in_place" | "new_service";
+      target_environment_id?: string | undefined;
+      slug?: string | undefined;
+      skip_safety_backup?: boolean | undefined;
+      target_node_id?: string | undefined;
+    };
+    pitr: PitrTarget | null;
+  },
+): Promise<RestoreRow> {
+  const { backup, service, project, caller, body, pitr } = input;
+  if (body.target_node_id !== undefined && body.mode !== "in_place") {
+    throw new ApiError(400, "invalid_request", "target_node_id applies to in_place restores only");
+  }
+  if (body.mode === "new_service") {
+    return startNewServiceRestore(c, { backup, service, project, body, pitr });
+  }
+  if (body.target_environment_id && body.target_environment_id !== backup.environmentId) {
+    throw new ApiError(400, "invalid_request", "in_place restores into the backup's environment");
+  }
+  if (backup.status !== "succeeded") throw conflict("Only a succeeded backup can be restored");
+  const db = c.get("db");
+  if (!(await isBackupStorageConfigured(db))) throw storageNotConfigured();
+  if (service.databaseEngine && backup.method === "snapshot") {
+    // SECURITY: a snapshot puts back the passwords the data directory had;
+    // after a rotation the variables no longer match them, and nothing
+    // (the control plane included) could sign in to change them back.
+    const [rotated] = await db
+      .select({ id: credentialRotations.id })
+      .from(credentialRotations)
+      .where(
+        and(
+          eq(credentialRotations.serviceId, backup.serviceId),
+          eq(credentialRotations.environmentId, backup.environmentId),
+          gt(credentialRotations.createdAt, backup.startedAt ?? backup.createdAt),
+          sql`${credentialRotations.applied} <> '[]'`,
+        ),
+      )
+      .limit(1);
+    if (rotated) {
+      throw conflict(
+        "The credentials were rotated after this snapshot; restoring it would bring back passwords nothing knows. Restore a later backup, or a dump",
+      );
+    }
+  }
+  const [busy] = await db
+    .select({ id: restores.id })
+    .from(restores)
+    .where(
+      and(
+        eq(restores.targetServiceId, backup.serviceId),
+        eq(restores.targetEnvironmentId, backup.environmentId),
+        inArray(restores.status, ["queued", "running"]),
+      ),
+    )
+    .limit(1);
+  if (busy) throw conflict(`Restore ${busy.id} is already running for this service`);
+
+  if (body.target_node_id !== undefined) {
+    const restore = await startVolumeRecovery(c, {
+      backup,
+      service,
+      project,
+      caller,
+      targetNodeId: body.target_node_id,
+    });
+    await startRestoreWorkflow(c.env, restore.id);
+    return restore;
+  }
+
+  const safety = body.skip_safety_backup
+    ? null
+    : await createBackupRow(db, {
+        projectId: project.id,
+        serviceId: backup.serviceId,
+        environmentId: backup.environmentId,
+        trigger: "pre_restore",
+        method: backupMethodFor(service.databaseEngine),
+        engine: service.databaseEngine,
+        engineVersion: service.databaseVersion,
+        volumeId: null,
+        pinned: false,
+        requestedBy: caller.user.id,
+      });
+  const now = new Date();
+  const id = newId("restore");
+  const [[restore]] = await db.batch([
+    db
+      .insert(restores)
+      .values({
+        id,
+        backupId: backup.id,
+        mode: "in_place",
+        targetServiceId: backup.serviceId,
+        targetEnvironmentId: backup.environmentId,
+        safetyBackupId: safety?.id ?? null,
+        ...pitrColumns(pitr),
+        status: "queued",
+        requestedBy: caller.user.id,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning(),
+    auditInsert(db, {
+      workspaceId: project.workspaceId,
+      ...caller.actor,
+      action: "restore.started",
+      targetType: "restore",
+      targetId: id,
+      metadata: {
+        project_id: project.id,
+        backup_id: backup.id,
+        mode: "in_place",
+        service_id: backup.serviceId,
+        environment_id: backup.environmentId,
+        safety_backup_id: safety?.id ?? null,
+        ...(pitr ? { target_time: pitr.targetTime } : {}),
+      },
+      ip: clientIp(c),
+    }),
+  ]);
+  if (safety) await startBackupWorkflow(c.env, safety.id);
+  await startRestoreWorkflow(c.env, id);
+  return restore!;
+}
+
+/**
+ * Starts or stops archiving after a policy's `pitr` changed: on, the live
+ * volume gets its stream and a first base backup at once; off, the stream
+ * is retired (kept for restores until retention). Either way the volume's
+ * node gets a new desired state, which restarts the database once with or
+ * without the archive settings.
+ */
+async function applyPitrChange(
+  c: AppContext,
+  service: ServiceRow,
+  policy: PolicyRow,
+  now: number,
+): Promise<void> {
+  const db = c.get("db");
+  const volume = await volumeOf(db, service.id, policy.environmentId);
+  const nodeId = volume?.nodeId ?? null;
+  if (policy.pitr) {
+    if (volume?.nodeId && volume.status === "ready") {
+      const { stream, started } = await ensureWalStream(db, volume, now);
+      if (started) {
+        try {
+          await requestBaseBackup(c.env, db, { policy, service, stream, volumeId: volume.id }, now);
+        } catch (err) {
+          // NOTE: the minute tick asks again for a stream without a base backup.
+          console.warn(
+            "first base backup failed to start",
+            err instanceof Error ? err.name : "error",
+          );
+        }
+      }
+    }
+  } else {
+    await retireWalStreams(db, service.id, policy.environmentId, now);
+  }
+  if (nodeId) await refreshNodes(c.env, db, [nodeId]);
 }
 
 /**
@@ -319,11 +540,11 @@ export const backupRoutes = createRouter()
     if (!(await volumeOf(db, serviceId, env.id))) {
       throw conflict(`${service.name} has no volume in ${env.name} to back up`);
     }
-    const method = backupMethodFor(service.databaseEngine);
-    if (method === "dump" && body.quiesce === "stop") {
+    const dumpOrSnapshot = backupMethodFor(service.databaseEngine);
+    if (dumpOrSnapshot === "dump" && body.quiesce === "stop") {
       throw new ApiError(422, "invalid_request", "quiesce: stop applies to snapshots only");
     }
-    if (method === "snapshot" && body.databases) {
+    if (dumpOrSnapshot === "snapshot" && body.databases) {
       throw new ApiError(422, "invalid_request", "databases applies to database services only");
     }
     const [current] = await db
@@ -334,6 +555,19 @@ export const backupRoutes = createRouter()
     const now = Date.now();
     const enabled = body.enabled ?? current?.enabled ?? true;
     if (enabled && !(await isBackupStorageConfigured(db))) throw storageNotConfigured();
+    const pitr = body.pitr ?? current?.pitr ?? false;
+    if (pitr && !enabled) {
+      throw new ApiError(
+        422,
+        "invalid_request",
+        "Point-in-time recovery needs scheduled backups: its base backups follow the schedule",
+      );
+    }
+    if (pitr && !current?.pitr) {
+      const unavailable = await pitrIneligibility(db, service, env.id);
+      if (unavailable) throw conflict(unavailable);
+    }
+    const method = pitr ? "base" : dumpOrSnapshot;
     const schedule = body.schedule ?? current?.schedule ?? DEFAULT_BACKUP_SCHEDULE;
     const next = enabled ? nextBackupSlot(schedule, now) : null;
     const values = {
@@ -344,6 +578,7 @@ export const backupRoutes = createRouter()
       keepLast: body.keep_last ?? current?.keepLast ?? DEFAULT_BACKUP_KEEP_LAST,
       maxAgeDays:
         body.max_age_days !== undefined ? body.max_age_days : (current?.maxAgeDays ?? null),
+      pitr,
       quiesce: body.quiesce ?? current?.quiesce ?? "none",
       databases: body.databases !== undefined ? body.databases : (current?.databases ?? null),
       nextRunAt: next === null ? null : new Date(next),
@@ -379,10 +614,12 @@ export const backupRoutes = createRouter()
           schedule,
           keep_last: values.keepLast,
           max_age_days: values.maxAgeDays,
+          pitr,
         },
         ip: clientIp(c),
       }),
     ]);
+    if (pitr !== (current?.pitr ?? false)) await applyPitrChange(c, service, saved!, now);
     return c.json(toApiPolicy(serviceId, env.id, service.databaseEngine, saved, now), 200);
   })
   .openapi(listBackups, async (c) => {
@@ -572,122 +809,8 @@ export const backupRoutes = createRouter()
     if (body.confirm !== service.slug) {
       throw new ApiError(400, "invalid_request", "confirm must equal the service's slug");
     }
-    if (body.target_node_id !== undefined && body.mode !== "in_place") {
-      throw new ApiError(
-        400,
-        "invalid_request",
-        "target_node_id applies to in_place restores only",
-      );
-    }
-    if (body.mode === "new_service") {
-      const restore = await startNewServiceRestore(c, { backup, service, project, body });
-      return c.json(toApiRestore(restore), 202);
-    }
-    if (body.target_environment_id && body.target_environment_id !== backup.environmentId) {
-      throw new ApiError(400, "invalid_request", "in_place restores into the backup's environment");
-    }
-    if (backup.status !== "succeeded") throw conflict("Only a succeeded backup can be restored");
-    const db = c.get("db");
-    if (!(await isBackupStorageConfigured(db))) throw storageNotConfigured();
-    if (service.databaseEngine && backup.method === "snapshot") {
-      // SECURITY: a snapshot puts back the passwords the data directory had;
-      // after a rotation the variables no longer match them, and nothing
-      // (the control plane included) could sign in to change them back.
-      const [rotated] = await db
-        .select({ id: credentialRotations.id })
-        .from(credentialRotations)
-        .where(
-          and(
-            eq(credentialRotations.serviceId, backup.serviceId),
-            eq(credentialRotations.environmentId, backup.environmentId),
-            gt(credentialRotations.createdAt, backup.startedAt ?? backup.createdAt),
-            sql`${credentialRotations.applied} <> '[]'`,
-          ),
-        )
-        .limit(1);
-      if (rotated) {
-        throw conflict(
-          "The credentials were rotated after this snapshot; restoring it would bring back passwords nothing knows. Restore a later backup, or a dump",
-        );
-      }
-    }
-    const [busy] = await db
-      .select({ id: restores.id })
-      .from(restores)
-      .where(
-        and(
-          eq(restores.targetServiceId, backup.serviceId),
-          eq(restores.targetEnvironmentId, backup.environmentId),
-          inArray(restores.status, ["queued", "running"]),
-        ),
-      )
-      .limit(1);
-    if (busy) throw conflict(`Restore ${busy.id} is already running for this service`);
-
-    if (body.target_node_id !== undefined) {
-      const restore = await startVolumeRecovery(c, {
-        backup,
-        service,
-        project,
-        caller,
-        targetNodeId: body.target_node_id,
-      });
-      await startRestoreWorkflow(c.env, restore.id);
-      return c.json(toApiRestore(restore), 202);
-    }
-
-    const safety = body.skip_safety_backup
-      ? null
-      : await createBackupRow(db, {
-          projectId: project.id,
-          serviceId: backup.serviceId,
-          environmentId: backup.environmentId,
-          trigger: "pre_restore",
-          method: backupMethodFor(service.databaseEngine),
-          engine: service.databaseEngine,
-          engineVersion: service.databaseVersion,
-          volumeId: null,
-          pinned: false,
-          requestedBy: caller.user.id,
-        });
-    const now = new Date();
-    const id = newId("restore");
-    const [[restore]] = await db.batch([
-      db
-        .insert(restores)
-        .values({
-          id,
-          backupId,
-          mode: "in_place",
-          targetServiceId: backup.serviceId,
-          targetEnvironmentId: backup.environmentId,
-          safetyBackupId: safety?.id ?? null,
-          status: "queued",
-          requestedBy: caller.user.id,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning(),
-      auditInsert(db, {
-        workspaceId: project.workspaceId,
-        ...caller.actor,
-        action: "restore.started",
-        targetType: "restore",
-        targetId: id,
-        metadata: {
-          project_id: project.id,
-          backup_id: backupId,
-          mode: "in_place",
-          service_id: backup.serviceId,
-          environment_id: backup.environmentId,
-          safety_backup_id: safety?.id ?? null,
-        },
-        ip: clientIp(c),
-      }),
-    ]);
-    if (safety) await startBackupWorkflow(c.env, safety.id);
-    await startRestoreWorkflow(c.env, id);
-    return c.json(toApiRestore(restore!), 202);
+    const restore = await startRestore(c, { backup, service, project, caller, body, pitr: null });
+    return c.json(toApiRestore(restore), 202);
   })
   .openapi(getRestore, async (c) => {
     const { restoreId } = c.req.valid("param");
@@ -705,6 +828,202 @@ export const backupRoutes = createRouter()
       throw err;
     }
     return c.json(toApiRestore(restore), 200);
+  })
+  .openapi(getPitrStatus, async (c) => {
+    const { serviceId } = c.req.valid("param");
+    const { environment_id } = c.req.valid("query");
+    const { service, project } = await serviceScope(
+      c,
+      serviceId,
+      policyOf(getPitrStatus).action!,
+      environment_id,
+    );
+    const env = await environmentOf(c, project.id, environment_id);
+    const db = c.get("db");
+    const [policy] = await db
+      .select({ pitr: backupPolicies.pitr })
+      .from(backupPolicies)
+      .where(and(eq(backupPolicies.serviceId, serviceId), eq(backupPolicies.environmentId, env.id)))
+      .limit(1);
+    const stream = await activeWalStream(db, serviceId, env.id);
+    const [bases] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(backups)
+      .where(
+        and(
+          eq(backups.serviceId, serviceId),
+          eq(backups.environmentId, env.id),
+          eq(backups.method, "base"),
+          eq(backups.status, "succeeded"),
+        ),
+      );
+    return c.json(
+      {
+        service_id: serviceId,
+        environment_id: env.id,
+        enabled: policy?.pitr ?? false,
+        unavailable_reason: await pitrIneligibility(db, service, env.id),
+        stream: stream
+          ? {
+              id: stream.id,
+              status: stream.status,
+              segment_count: stream.segmentCount,
+              bytes_stored: stream.bytesStored,
+              first_archived_at: ms(stream.firstArchivedAt),
+              last_archived_at: ms(stream.lastArchivedAt),
+              created_at: +stream.createdAt,
+            }
+          : null,
+        windows: await pitrWindows(db, serviceId, env.id),
+        base_backups: Number(bases?.n ?? 0),
+      },
+      200,
+    );
+  })
+  .openapi(restorePitr, async (c) => {
+    const { serviceId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { service, project, caller } = await serviceScope(
+      c,
+      serviceId,
+      policyOf(restorePitr).action!,
+      body.environment_id,
+    );
+    const env = await environmentOf(c, project.id, body.environment_id);
+    await requireFreshSession(c);
+    if (body.confirm !== service.slug) {
+      throw new ApiError(400, "invalid_request", "confirm must equal the service's slug");
+    }
+    if (body.target_time > Date.now()) {
+      throw new ApiError(400, "invalid_request", "target_time is in the future");
+    }
+    const db = c.get("db");
+    const plan = await planPitrRestore(db, serviceId, env.id, body.target_time);
+    if (!plan) {
+      const windows = await pitrWindows(db, serviceId, env.id);
+      throw new ApiError(
+        422,
+        "pitr_target_unavailable",
+        windows.length
+          ? `No base backup and archived WAL cover that time; restorable: ${windows
+              .map((w) => `${new Date(w.from).toISOString()} to ${new Date(w.to).toISOString()}`)
+              .join(", ")}`
+          : "Nothing is restorable to a point in time yet: point-in-time recovery needs a base backup and WAL archived after it",
+      );
+    }
+    const restore = await startRestore(c, {
+      backup: plan.backup,
+      service,
+      project,
+      caller,
+      body,
+      pitr: { targetTime: body.target_time, walFiles: plan.walFiles, walEnd: plan.walEnd },
+    });
+    return c.json(toApiRestore(restore), 202);
+  })
+  .openapi(getRecoveryPolicy, async (c) => {
+    const { serviceId } = c.req.valid("param");
+    const { environment_id } = c.req.valid("query");
+    const { project } = await serviceScope(
+      c,
+      serviceId,
+      policyOf(getRecoveryPolicy).action!,
+      environment_id,
+    );
+    const env = await environmentOf(c, project.id, environment_id);
+    const [policy] = await c
+      .get("db")
+      .select()
+      .from(recoveryPolicies)
+      .where(
+        and(eq(recoveryPolicies.serviceId, serviceId), eq(recoveryPolicies.environmentId, env.id)),
+      )
+      .limit(1);
+    return c.json(
+      toApiRecoveryPolicy(policy, serviceId, env.id, DEFAULT_RECOVERY_GRACE_MINUTES),
+      200,
+    );
+  })
+  .openapi(putRecoveryPolicy, async (c) => {
+    const { serviceId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { project, caller } = await serviceScope(
+      c,
+      serviceId,
+      policyOf(putRecoveryPolicy).action!,
+      body.environment_id,
+    );
+    const env = await environmentOf(c, project.id, body.environment_id);
+    await requireFreshSession(c);
+    // SECURITY: a policy recovers with its enabler's access, so turning it
+    // on needs everything a manual recovery does.
+    for (const action of ["services:manage", "deployments:create"] as const) {
+      if (!caller.allows(action)) {
+        throw new ApiError(
+          403,
+          "forbidden",
+          `Automatic recovery replaces the volume and redeploys: it needs ${action}`,
+        );
+      }
+    }
+    const db = c.get("db");
+    if (!(await volumeOf(db, serviceId, env.id))) {
+      throw conflict("The service has no volume in this environment to recover");
+    }
+    const [current] = await db
+      .select()
+      .from(recoveryPolicies)
+      .where(
+        and(eq(recoveryPolicies.serviceId, serviceId), eq(recoveryPolicies.environmentId, env.id)),
+      )
+      .limit(1);
+    const enabled = body.enabled ?? current?.enabled ?? false;
+    if (enabled && !(await isBackupStorageConfigured(db))) throw storageNotConfigured();
+    const now = new Date();
+    const turnedOn = enabled && !current?.enabled;
+    const values = {
+      enabled,
+      graceMinutes: body.grace_minutes ?? current?.graceMinutes ?? DEFAULT_RECOVERY_GRACE_MINUTES,
+      // The person who last saves it enabled is whose access it runs with.
+      enabledBy: enabled ? caller.user.id : (current?.enabledBy ?? null),
+      ...(turnedOn || !enabled ? { status: "idle" as const, message: null, lostNodeId: null } : {}),
+      updatedAt: now,
+    };
+    const [[saved]] = await db.batch([
+      db
+        .insert(recoveryPolicies)
+        .values({
+          id: newId("recoveryPolicy"),
+          projectId: project.id,
+          serviceId,
+          environmentId: env.id,
+          createdAt: now,
+          ...values,
+        })
+        .onConflictDoUpdate({
+          target: [recoveryPolicies.serviceId, recoveryPolicies.environmentId],
+          set: values,
+        })
+        .returning(),
+      auditInsert(db, {
+        workspaceId: project.workspaceId,
+        ...caller.actor,
+        action: "recovery.policy_updated",
+        targetType: "service",
+        targetId: serviceId,
+        metadata: {
+          project_id: project.id,
+          environment_id: env.id,
+          enabled,
+          grace_minutes: values.graceMinutes,
+        },
+        ip: clientIp(c),
+      }),
+    ]);
+    return c.json(
+      toApiRecoveryPolicy(saved, serviceId, env.id, DEFAULT_RECOVERY_GRACE_MINUTES),
+      200,
+    );
   })
   .openapi(getBackupStorage, async (c) => {
     await requireInstanceAction(c, policyOf(getBackupStorage).action as InstanceAction);

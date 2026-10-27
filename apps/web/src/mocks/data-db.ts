@@ -311,6 +311,7 @@ export function seedData(deploy: DeployDb, now = Date.now()): DataDb {
         max_age_days: 30,
         quiesce: "none",
         databases: null,
+        pitr: false,
       },
     ],
     backups: [

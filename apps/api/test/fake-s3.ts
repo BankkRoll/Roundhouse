@@ -163,17 +163,19 @@ export class FakeS3 {
         ? "CreateMultipartUpload"
         : request.method === "PUT" && q.has("partNumber")
           ? "UploadPart"
-          : request.method === "POST" && q.has("uploadId")
-            ? "CompleteMultipartUpload"
-            : request.method === "DELETE" && q.has("uploadId")
-              ? "AbortMultipartUpload"
-              : request.method === "HEAD"
-                ? "HeadObject"
-                : request.method === "GET"
-                  ? "GetObject"
-                  : request.method === "DELETE"
-                    ? "DeleteObject"
-                    : "Unknown";
+          : request.method === "PUT"
+            ? "PutObject"
+            : request.method === "POST" && q.has("uploadId")
+              ? "CompleteMultipartUpload"
+              : request.method === "DELETE" && q.has("uploadId")
+                ? "AbortMultipartUpload"
+                : request.method === "HEAD"
+                  ? "HeadObject"
+                  : request.method === "GET"
+                    ? "GetObject"
+                    : request.method === "DELETE"
+                      ? "DeleteObject"
+                      : "Unknown";
     this.seen.push({ method: request.method, op, key, presigned: q.has("X-Amz-Signature") });
     const denied = await this.verify(request, url);
     if (denied) return denied;
@@ -239,6 +241,10 @@ export class FakeS3 {
         return xml(
           `<CompleteMultipartUploadResult><Key>${key}</Key><ETag>"etag-${listed.length}"</ETag></CompleteMultipartUploadResult>`,
         );
+      }
+      case "PutObject": {
+        this.objects.set(key, new Uint8Array(await request.arrayBuffer()));
+        return new Response(null, { status: 200, headers: { etag: '"put"' } });
       }
       case "AbortMultipartUpload":
         if (!this.uploads.delete(q.get("uploadId")!)) return error(404, "NoSuchUpload");

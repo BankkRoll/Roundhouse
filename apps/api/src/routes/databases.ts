@@ -36,6 +36,7 @@ import {
   getServiceVolume,
   getTcpProxy,
   getVolumeMigration,
+  listAbandonedCopies,
   listCredentialRotations,
   listMigrationTargets,
   listVolumeMigrations,
@@ -46,6 +47,7 @@ import {
   rotateDatabaseCredentials,
   undeleteVolume,
 } from "../contracts";
+import { abandonedCopies } from "../lib/abandoned-volumes";
 import { auditInsert, recordAudit } from "../lib/audit";
 import { isBackupStorageConfigured, storageNotConfigured } from "../lib/backups/storage";
 import { addDatabaseService } from "../lib/changes/database";
@@ -188,6 +190,18 @@ export const databaseRoutes = createRouter()
     const volume = await volumeOf(db, serviceId, environment_id);
     if (!volume) throw notFound("Volume");
     return c.json(await present(db, volume), 200);
+  })
+  .openapi(listAbandonedCopies, async (c) => {
+    const { serviceId } = c.req.valid("param");
+    const { environment_id } = c.req.valid("query");
+    const { project } = await serviceScope(
+      c,
+      serviceId,
+      policyOf(listAbandonedCopies).action!,
+      environment_id,
+    );
+    await environmentOf(c, project.id, environment_id);
+    return c.json({ copies: await abandonedCopies(c.get("db"), serviceId, environment_id) }, 200);
   })
   .openapi(resizeVolume, async (c) => {
     const { volumeId } = c.req.valid("param");

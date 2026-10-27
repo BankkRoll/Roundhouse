@@ -16,6 +16,10 @@
  *   be restored that way: 422 `restore_mode_unsupported` for a snapshot of
  *   any other service.
  *
+ * Data follow-ups (ADR 0004): point-in-time recovery for Postgres (the
+ * policy's `pitr`, the restorable window and restores to a timestamp) and
+ * automatic recovery policies.
+ *
  * @module
  */
 import { z } from "@hono/zod-openapi";
@@ -24,8 +28,13 @@ import {
   BACKUP_STATUSES,
   BACKUP_TRIGGERS,
   isValidCron,
+  MAX_RECOVERY_GRACE_MINUTES,
+  MIN_RECOVERY_GRACE_MINUTES,
+  RECOVERY_POLICY_STATUSES,
   RESTORE_MODES,
   RESTORE_STATUSES,
+  RESTORE_TRIGGERS,
+  WAL_STREAM_STATUSES,
 } from "@roundhouse/shared";
 import {
   body,
@@ -116,6 +125,11 @@ export const BackupPolicySchema = z
     max_age_days: z.number().int().nullable(),
     quiesce: z.enum(["none", "stop"]),
     databases: z.array(z.string()).nullable(),
+    /**
+     * Point-in-time recovery (Postgres): WAL is archived continuously and
+     * scheduled backups are `base` backups.
+     */
+    pitr: z.boolean(),
     next_run_at: Millis.nullable(),
     /** The next few slots, for a schedule preview. */
     next_runs: z.array(Millis),
@@ -134,6 +148,12 @@ export const PutBackupPolicyBody = z
     quiesce: z.enum(["none", "stop"]).optional(),
     /** Databases to dump (database services only); `null` dumps all. */
     databases: z.array(DatabaseNameField).min(1).max(64).nullable().optional(),
+    /**
+     * Point-in-time recovery (Postgres only, with the schedule enabled).
+     * Turning it on or off restarts the database once, to change its
+     * archive settings.
+     */
+    pitr: z.boolean().optional(),
   })
   .openapi("PutBackupPolicy");
 
@@ -199,6 +219,10 @@ export const RestoreSchema = z
     safety_backup_id: z.string().nullable(),
     /** The node a recovery restored onto; `null` for every other restore. */
     target_node_id: z.string().nullable(),
+    /** `automatic` when a recovery policy started it. */
+    trigger: z.enum(RESTORE_TRIGGERS),
+    /** A point-in-time restore's target; `null` restores the backup as taken. */
+    target_time: Millis.nullable(),
     status: z.enum(RESTORE_STATUSES),
     error: z.string().nullable(),
     requested_by: z.string().nullable(),
@@ -207,6 +231,93 @@ export const RestoreSchema = z
     created_at: Millis,
   })
   .openapi("Restore");
+
+/** A restorable range of time; `to` is the newest point (exclusive). */
+export const PitrRangeSchema = z.object({ from: Millis, to: Millis }).openapi("PitrRange");
+
+/** A service's point-in-time recovery in one environment. */
+export const PitrStatusSchema = z
+  .object({
+    service_id: z.string(),
+    environment_id: z.string(),
+    /** The backup policy's `pitr`. */
+    enabled: z.boolean(),
+    /** Why it can't be turned on (or isn't archiving); `null` when it can. */
+    unavailable_reason: z.string().nullable(),
+    /** The stream archiving now. */
+    stream: z
+      .object({
+        id: z.string(),
+        status: z.enum(WAL_STREAM_STATUSES),
+        segment_count: z.number().int(),
+        bytes_stored: z.number().int(),
+        first_archived_at: Millis.nullable(),
+        last_archived_at: Millis.nullable(),
+        created_at: Millis,
+      })
+      .nullable(),
+    /** Every range a restore can target, oldest first. */
+    windows: z.array(PitrRangeSchema),
+    /** Succeeded base backups that WAL replays onto. */
+    base_backups: z.number().int(),
+  })
+  .openapi("PitrStatus");
+
+/** Body of `POST /v1/services/{serviceId}/pitr/restore`. */
+export const PitrRestoreBody = z
+  .object({
+    environment_id: z.string(),
+    /** The moment to restore to, unix ms; inside one of the status's `windows`. */
+    target_time: Millis,
+    mode: z.enum(RESTORE_MODES),
+    /** `new_service` only; the service's environment by default. */
+    target_environment_id: z.string().optional(),
+    /** `new_service` only: the new service's slug. */
+    slug: ServiceSlugField.optional(),
+    /** Must equal the service's slug. */
+    confirm: z.string().min(1).max(100),
+    /** `in_place` only: skip the `pre_restore` safety backup. */
+    skip_safety_backup: z.boolean().optional(),
+  })
+  .openapi("PitrRestore");
+
+/** A service's automatic recovery in one environment; the defaults when none is saved. */
+export const RecoveryPolicySchema = z
+  .object({
+    /** `null` until a policy is saved. */
+    id: z.string().nullable(),
+    service_id: z.string(),
+    environment_id: z.string(),
+    enabled: z.boolean(),
+    /** How long the volume's server must stay offline before recovery starts. */
+    grace_minutes: z.number().int(),
+    /** Whose access recoveries run with; re-checked every time. */
+    enabled_by: z.string().nullable(),
+    status: z.enum(RECOVERY_POLICY_STATUSES),
+    /** Why the status is what it is. */
+    message: z.string().nullable(),
+    /** The offline server being watched or recovered from. */
+    lost_node_id: z.string().nullable(),
+    /** The last automatic recovery. */
+    restore_id: z.string().nullable(),
+    triggered_at: Millis.nullable(),
+    updated_at: Millis.nullable(),
+  })
+  .openapi("RecoveryPolicy");
+
+/** Body of `PUT /v1/services/{serviceId}/recovery-policy`; omitted fields keep their value. */
+export const PutRecoveryPolicyBody = z
+  .object({
+    environment_id: z.string(),
+    enabled: z.boolean().optional(),
+    grace_minutes: z
+      .number()
+      .int()
+      .min(MIN_RECOVERY_GRACE_MINUTES)
+      .max(MAX_RECOVERY_GRACE_MINUTES)
+      .optional(),
+  })
+  .openapi("PutRecoveryPolicy");
 
 /** The instance's backup bucket; the secret access key is never returned. */
 export const BackupStorageSchema = z
@@ -389,6 +500,73 @@ export const getRestore = defineRoute(session("services:read"), {
   responses: { 200: json(RestoreSchema), ...errors(401, 403, 404) },
 });
 
+/**
+ * The service's point-in-time recovery: whether it is on, why it can't be,
+ * the stream archiving now, and the times a restore can target.
+ */
+export const getPitrStatus = defineRoute(session("services:read"), {
+  method: "get",
+  path: "/v1/services/{serviceId}/pitr",
+  tags: ["backups"],
+  summary: "Get point-in-time recovery",
+  security: sessionAuth,
+  request: { params: ServiceParams, query: EnvironmentQuery },
+  responses: { 200: json(PitrStatusSchema), ...errors(400, 401, 403, 404) },
+});
+
+/**
+ * Restores the database to `target_time`: the newest base backup before it,
+ * with the archived WAL replayed up to it. Same modes, confirmation, fresh
+ * session and extra permissions as restoring a backup; 422
+ * `pitr_target_unavailable` when no base backup and WAL cover the time.
+ */
+export const restorePitr = defineRoute(
+  session("backups:restore", ["restore.started"], { reauth: true }),
+  {
+    method: "post",
+    path: "/v1/services/{serviceId}/pitr/restore",
+    tags: ["backups"],
+    summary: "Restore to a point in time",
+    security: sessionAuth,
+    request: { params: ServiceParams, ...body(PitrRestoreBody) },
+    responses: {
+      202: json(RestoreSchema, "Started"),
+      ...errors(400, 401, 403, 404, 409, 422),
+    },
+  },
+);
+
+/** The service's automatic recovery, or the defaults when none is saved. */
+export const getRecoveryPolicy = defineRoute(session("services:read"), {
+  method: "get",
+  path: "/v1/services/{serviceId}/recovery-policy",
+  tags: ["backups"],
+  summary: "Get automatic recovery",
+  security: sessionAuth,
+  request: { params: ServiceParams, query: EnvironmentQuery },
+  responses: { 200: json(RecoveryPolicySchema), ...errors(400, 401, 403, 404) },
+});
+
+/**
+ * Turns automatic recovery on or off, or changes its grace period. Turning
+ * it on needs what a manual recovery needs (`backups:restore`,
+ * `services:manage`, `deployments:create` in the environment) and a fresh
+ * session; recoveries then run with the caller's access, re-checked each
+ * time. 409 for a service without a volume or without backup storage.
+ */
+export const putRecoveryPolicy = defineRoute(
+  session("backups:restore", ["recovery.policy_updated"], { reauth: true }),
+  {
+    method: "put",
+    path: "/v1/services/{serviceId}/recovery-policy",
+    tags: ["backups"],
+    summary: "Set automatic recovery",
+    security: sessionAuth,
+    request: { params: ServiceParams, ...body(PutRecoveryPolicyBody) },
+    responses: { 200: json(RecoveryPolicySchema), ...errors(400, 401, 403, 404, 409) },
+  },
+);
+
 /** The instance's backup bucket, without its secret. */
 export const getBackupStorage = defineRoute(sessionOnly("instance:manage"), {
   method: "get",
@@ -429,6 +607,10 @@ export const BACKUP_ROUTES = {
   getBackupDecryptionKey,
   restoreBackup,
   getRestore,
+  getPitrStatus,
+  restorePitr,
+  getRecoveryPolicy,
+  putRecoveryPolicy,
   getBackupStorage,
   putBackupStorage,
 } as const;
@@ -441,3 +623,7 @@ export type BackupPolicy = z.infer<typeof BackupPolicySchema>;
 export type Restore = z.infer<typeof RestoreSchema>;
 /** Backup storage settings. */
 export type BackupStorage = z.infer<typeof BackupStorageSchema>;
+/** A service's point-in-time recovery. */
+export type PitrStatus = z.infer<typeof PitrStatusSchema>;
+/** A service's automatic recovery. */
+export type RecoveryPolicy = z.infer<typeof RecoveryPolicySchema>;

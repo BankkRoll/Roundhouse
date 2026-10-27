@@ -478,6 +478,33 @@ export function presignUploadPart(
 }
 
 /**
+ * Presigns a `PUT` of a whole object (an archived WAL file), so the holder
+ * can write exactly this key, once per URL lifetime.
+ *
+ * @param cfg - Storage settings.
+ * @param key - Object key.
+ * @param expiresIn - Seconds, e.g. {@link UPLOAD_PART_URL_TTL_S}.
+ * @param now - Unix ms.
+ * @returns The URL.
+ */
+export function presignPut(
+  cfg: S3Config,
+  key: string,
+  expiresIn: number,
+  now = Date.now(),
+): Promise<string> {
+  return presignV4({
+    method: "PUT",
+    url: objectUrl(cfg, key),
+    region: cfg.region,
+    accessKeyId: cfg.accessKeyId,
+    secretAccessKey: cfg.secretAccessKey,
+    now,
+    expiresIn,
+  });
+}
+
+/**
  * Presigns a `GET` of a whole object.
  *
  * @param cfg - Storage settings.

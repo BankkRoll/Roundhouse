@@ -34,7 +34,8 @@
  *   data-browser queries (`runQuery`, answered by `db_query_result`,
  *   `./node/handlers/data.ts`), create each database's read-only principal
  *   once it runs healthy, and send `volume_delete` (ADR 0004); backup and
- *   restore frames are dispatched to `./node/handlers/backups.ts`;
+ *   restore frames are dispatched to `./node/handlers/backups.ts`, WAL
+ *   archiving and point-in-time restore frames to `../lib/backups/pitr.ts`;
  * - record `hello.mesh` (the node's WireGuard key, `wg0` mode and
  *   reachability, with the address the connection came from), let the node
  *   join the mesh, and apply `mesh_status` and `mesh_key` (ADR 0005,
@@ -106,6 +107,7 @@ import {
   METRICS_PROTOCOL_VERSION,
   MIN_PROTOCOL_VERSION,
   type NodeEncryptionKey,
+  PITR_PROTOCOL_VERSION,
   PREVIEW_BUILDS_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   SEALED_ENV_PROTOCOL_VERSION,
@@ -127,7 +129,14 @@ import {
 } from "@roundhouse/shared";
 import { and, eq, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Env } from "../env";
+import { onAbandonedCopiesReported } from "../lib/abandoned-volumes";
 import { recordAudit } from "../lib/audit";
+import {
+  onWalArchive,
+  onWalFetchRequest,
+  type WalArchiveAckBody,
+  type WalFetchBody,
+} from "../lib/backups/pitr";
 import {
   DB_QUERY_WAIT_MS,
   type DbQueryBody,
@@ -226,6 +235,10 @@ export const FRAME_RATE_LIMITS = {
   backup_progress: 16,
   backup_result: 4,
   restore_result: 4,
+  /** On spool changes and every 30 s per archiving volume, coalesced on the agent. */
+  wal_archive: 16,
+  /** One per 32 WAL files of a running point-in-time restore. */
+  wal_fetch_request: 8,
   /** Sent after a manifest mismatch; each one costs a desired-state build. */
   cert_request: 2,
   cert_ack: 8,
@@ -579,6 +592,7 @@ export class NodeConnection extends DurableObject<Env> {
         if (attachment.protocolVersion < VOLUMES_PROTOCOL_VERSION) return;
         await onVolumeStatus(this.db, this.env, attachment.nodeId, message);
         await onMigrationVolumeReports(this.env, this.db, attachment.nodeId, message.volumes);
+        await onAbandonedCopiesReported(this.db, attachment.nodeId, message.volumes);
         // The 60 s report doubles as the retry tick for read-only principals.
         this.provisionReadonlySoon(attachment.nodeId);
         return;
@@ -606,6 +620,33 @@ export class NodeConnection extends DurableObject<Env> {
           },
           message,
         );
+        return;
+      // WAL archiving and point-in-time restores (ADR 0004): `../lib/backups/pitr.ts`.
+      case "wal_archive":
+      case "wal_fetch_request":
+        if (attachment.protocolVersion < PITR_PROTOCOL_VERSION) return;
+        try {
+          const ctx = {
+            db: this.db,
+            env: this.env,
+            nodeId: attachment.nodeId,
+            reply: async (body: WalArchiveAckBody | WalFetchBody) => {
+              await this.send(ws, {
+                ...this.header(attachment.nodeId, Date.now(), CREDENTIAL_FRAME_TTL_MS),
+                ...body,
+              } as ControlMessage);
+            },
+          };
+          if (message.type === "wal_archive") await onWalArchive(ctx, message);
+          else await onWalFetchRequest(ctx, message);
+        } catch (err) {
+          // The agent asks again; the connection stays up.
+          console.error(
+            "pitr frame failed",
+            message.type,
+            err instanceof Error ? err.message : "error",
+          );
+        }
         return;
       // Certificates (ADR 0009): `./node/handlers/certs.ts`.
       case "cert_request":

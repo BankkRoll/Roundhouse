@@ -58,6 +58,7 @@ export type ErrorCode =
   | "backup_storage_not_configured"
   | "backup_storage_unreachable"
   | "restore_mode_unsupported"
+  | "pitr_target_unavailable"
   | "volume_requires_single_replica"
   | "volume_shrink_unsupported"
   | "migration_target_ineligible"

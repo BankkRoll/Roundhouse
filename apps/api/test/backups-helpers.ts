@@ -60,6 +60,8 @@ export interface DataAgentBehaviour {
   query?: QueryAnswer | ((q: DbQuery, credential: SealedDbCredential) => QueryAnswer);
   /** The engine error a failed query reports. */
   queryError?: string;
+  /** The first WAL segment a base backup reports. */
+  walStart?: string;
 }
 
 /** How the fake agent answers one `db_query`. */
@@ -197,6 +199,9 @@ export async function connectDataAgent(
       bytes_raw: all.byteLength * 3,
       bytes_stored: all.byteLength,
       sha256: await sha256Hex(all),
+      ...(job.type === "backup_job" && job.method === "base"
+        ? { wal_start: agent.behaviour.walStart ?? "000000010000000000000002" }
+        : {}),
       duration_ms: 42,
     });
   };

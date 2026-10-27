@@ -162,6 +162,13 @@
       "when": 1792900000000,
       "tag": "0023_shell_and_cloudflare",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1792910000000,
+      "tag": "0024_data_recovery",
+      "breakpoints": true
     }
   ]
 }

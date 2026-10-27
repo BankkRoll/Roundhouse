@@ -15,6 +15,9 @@
 import { createDb } from "@roundhouse/db";
 import type { Env } from "../env";
 import { startPreviewAction } from "../workflows/preview";
+import { claimAbandonedCleanups } from "./abandoned-volumes";
+import { claimRecoveries } from "./backups/auto-recovery";
+import { claimPitrStreams } from "./backups/pitr";
 import { claimDueBackups } from "./backups/schedule";
 import { claimDueCertificates, syncCertificates } from "./certificates/schedule";
 import { claimCloudflareDeletions } from "./cloudflare/runtime";
@@ -70,7 +73,12 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
   },
   { name: "volume_deletions", run: claimVolumeDeletions },
   { name: "backup_policies", run: claimDueBackups },
+  // After the scheduled backups, so a stream's first base backup isn't asked twice.
+  { name: "pitr_streams", run: claimPitrStreams },
   { name: "migration_cleanups", run: claimMigrationCleanups },
+  { name: "abandoned_copies", run: claimAbandonedCleanups },
+  // ADR 0004: restore a lost server's stateful services onto healthy ones.
+  { name: "recoveries", run: claimRecoveries },
   { name: "cron", run: claimDueCronRuns },
   {
     // Activates rotations whose peers had their time, and starts the

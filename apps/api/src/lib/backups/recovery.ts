@@ -4,12 +4,16 @@
  * the volume's node, because that node is offline or removed, runs on a
  * chosen node instead.
  *
- * {@link startVolumeRecovery} checks the request, then in one batch marks the
- * old volume `abandoned`, creates an empty volume pinned to the target, and
- * records the restore with its `target_node_id`. It then redeploys the
- * service's last deployment (same image and config) onto the target.
- * `RestoreWorkflow` waits until that deployment is active and the new volume
- * ready, as for a `new_service` restore, and restores the backup into it.
+ * {@link beginVolumeRecovery} checks the request, then in one batch marks
+ * the old volume `abandoned` (its copy on the old node is deleted once that
+ * node is back, by `../abandoned-volumes`), creates an empty volume pinned
+ * to the target, and records the restore with its `target_node_id`. It then
+ * redeploys the service's last deployment (same image and config) onto the
+ * target. `RestoreWorkflow` waits until that deployment is active and the
+ * new volume ready, as for a `new_service` restore, and restores the backup
+ * into it. A person starts it through the restore route
+ * ({@link startVolumeRecovery}); a recovery policy through
+ * `./auto-recovery`.
  *
  * SECURITY: the volume's node must not be online. A reachable node still
  * holds the live data, which a move copies without loss; recovery would
@@ -19,6 +23,7 @@
  */
 import {
   type backups,
+  type Db,
   deployments,
   nodes,
   type projects,
@@ -26,10 +31,12 @@ import {
   type services,
   volumes,
 } from "@roundhouse/db";
-import { newId, type VolumeStatusName } from "@roundhouse/shared";
+import { newId, type RestoreTrigger, type VolumeStatusName } from "@roundhouse/shared";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { type AppContext, type Caller, clientIp } from "../../context";
-import { auditInsert } from "../audit";
+import type { Env } from "../../env";
+import { abandonedCopyDeleteAfter } from "../abandoned-volumes";
+import { type AuditEntry, auditInsert } from "../audit";
 import { createDeployment } from "../deployments";
 import { refreshNodes } from "../desired-state";
 import { ApiError, conflict, isUniqueViolation, notFound } from "../errors";
@@ -59,24 +66,41 @@ export interface VolumeRecoveryInput {
   targetNodeId: string;
 }
 
+/** What {@link beginVolumeRecovery} needs, from a person or a recovery policy. */
+export interface RecoveryRequest {
+  backup: typeof backups.$inferSelect;
+  service: typeof services.$inferSelect;
+  project: typeof projects.$inferSelect;
+  targetNodeId: string;
+  /** Who the audit entry names: the person, or the system for a policy. */
+  actor: Pick<AuditEntry, "actorType" | "actorId">;
+  /** The user recorded as having asked for the restore (a policy's enabler). */
+  requestedBy: string | null;
+  trigger: RestoreTrigger;
+  ip: string | null;
+  /** Public origin, for the redeploy's links. */
+  origin: string;
+  /** Extra audit metadata, e.g. the recovery policy. */
+  auditExtra?: Record<string, unknown>;
+}
+
 /**
- * Starts recovering the backup's volume onto `targetNodeId`. The caller has
- * already checked `backups:restore`, a fresh session, `confirm`, that the
- * backup succeeded, and that no other restore runs for the service.
+ * Starts recovering the backup's volume onto `targetNodeId` for a person.
+ * The caller has already checked `backups:restore`, a fresh session,
+ * `confirm`, that the backup succeeded, and that no other restore runs for
+ * the service.
  *
  * @param c - Request context.
  * @param input - The backup, its service and project, the caller, and the target.
  * @returns The queued restore; the caller starts its workflow.
  * @throws {ApiError} 403 without `services:manage` and `deployments:create`;
- *   404 for an unknown target; 409 when there is no placed volume, it is
- *   moving, its node is online, or there is nothing to redeploy; 422
- *   `migration_target_ineligible` when the target can't take the volume.
+ *   otherwise as {@link beginVolumeRecovery}.
  */
 export async function startVolumeRecovery(
   c: AppContext,
   input: VolumeRecoveryInput,
 ): Promise<RestoreRow> {
-  const { backup, service, project, caller } = input;
+  const { caller } = input;
   if (!caller.allows("services:manage") || !caller.allows("deployments:create")) {
     throw new ApiError(
       403,
@@ -84,7 +108,38 @@ export async function startVolumeRecovery(
       "Recovering onto another server replaces the volume and redeploys: it needs services:manage and deployments:create",
     );
   }
-  const db = c.get("db");
+  return beginVolumeRecovery(
+    { db: c.get("db"), env: c.env },
+    {
+      ...input,
+      actor: caller.actor,
+      requestedBy: caller.user.id,
+      trigger: "manual",
+      ip: clientIp(c),
+      origin: publicOrigin(c),
+    },
+  );
+}
+
+/**
+ * Starts a recovery: checks the volume, its node and the target, abandons
+ * the old volume, creates the new one, records the restore and redeploys.
+ * Access checks are the caller's.
+ *
+ * @param deps - Database and bindings.
+ * @param input - The backup, service, project, target and who asks.
+ * @returns The queued restore; the caller starts its workflow.
+ * @throws {ApiError} 404 for an unknown target; 409 when there is no placed
+ *   volume, it is moving, its node is online, or there is nothing to
+ *   redeploy; 422 `migration_target_ineligible` when the target can't take
+ *   the volume.
+ */
+export async function beginVolumeRecovery(
+  deps: { db: Db; env: Env },
+  input: RecoveryRequest,
+): Promise<RestoreRow> {
+  const { backup, service, project } = input;
+  const { db } = deps;
   const volume = await volumeOf(db, service.id, backup.environmentId);
   if (!volume?.nodeId) {
     throw conflict("The service has no placed volume in this environment; deploy it instead");
@@ -139,7 +194,14 @@ export async function startVolumeRecovery(
     const [, , [inserted]] = await db.batch([
       db
         .update(volumes)
-        .set({ status: "abandoned", updatedAt: now })
+        .set({
+          status: "abandoned",
+          abandonedAt: now,
+          deleteAfter: abandonedCopyDeleteAfter(+now),
+          deleteSentAt: null,
+          cleanedAt: null,
+          updatedAt: now,
+        })
         .where(
           and(eq(volumes.id, volume.id), inArray(volumes.status, [...RECOVERABLE_VOLUME_STATUSES])),
         ),
@@ -165,16 +227,18 @@ export async function startVolumeRecovery(
           targetServiceId: backup.serviceId,
           targetEnvironmentId: backup.environmentId,
           targetNodeId: target.id,
+          abandonedVolumeId: volume.id,
+          trigger: input.trigger,
           safetyBackupId: null,
           status: "queued",
-          requestedBy: caller.user.id,
+          requestedBy: input.requestedBy,
           createdAt: now,
           updatedAt: now,
         })
         .returning(),
       auditInsert(db, {
         workspaceId: project.workspaceId,
-        ...caller.actor,
+        ...input.actor,
         action: "restore.started",
         targetType: "restore",
         targetId: id,
@@ -182,6 +246,7 @@ export async function startVolumeRecovery(
           project_id: project.id,
           backup_id: backup.id,
           mode: "in_place",
+          trigger: input.trigger,
           service_id: backup.serviceId,
           environment_id: backup.environmentId,
           safety_backup_id: null,
@@ -191,8 +256,9 @@ export async function startVolumeRecovery(
             abandoned_volume_id: volume.id,
             volume_id: volumeId,
           },
+          ...input.auditExtra,
         },
-        ip: clientIp(c),
+        ip: input.ip,
       }),
     ]);
     restore = inserted;
@@ -206,14 +272,14 @@ export async function startVolumeRecovery(
 
   try {
     await createDeployment(
-      { db, env: c.env },
+      { db, env: deps.env },
       {
         projectId: project.id,
         serviceId: service.id,
         environmentId: backup.environmentId,
         trigger: "recovery",
-        triggeredBy: caller.user.id,
-        origin: publicOrigin(c),
+        triggeredBy: input.requestedBy,
+        origin: input.origin,
         rollbackOf: last,
       },
     );
@@ -224,6 +290,10 @@ export async function startVolumeRecovery(
     await failRestore(db, id, `redeploy_failed: ${message}`);
     throw err;
   }
-  await refreshNodes(c.env, db, source && !source.deletedAt ? [source.id, target.id] : [target.id]);
+  await refreshNodes(
+    deps.env,
+    db,
+    source && !source.deletedAt ? [source.id, target.id] : [target.id],
+  );
   return restore!;
 }
