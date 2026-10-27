@@ -4,9 +4,10 @@
 // Responsibilities:
 //   - volume_delete goes to the volume manager, the only path that deletes
 //     a volume's data;
-//   - backup_job, backup_parts, restore_job, volume_copy_out and
-//     volume_copy_in go to the backup runner, or are answered with a failed
-//     result when the node has none;
+//   - backup_job, backup_parts, restore_job, volume_copy_out,
+//     volume_copy_in and wal_fetch go to the backup runner, or are answered
+//     with a failed result when the node has none;
+//   - wal_archive_ack goes to the WAL shipper;
 //   - db_query: open the sealed credential with the node's key under the
 //     node and request binding, find the workload's container on this node
 //     and its bridge address, run the operation through a [DBQueryRunner]
@@ -93,6 +94,12 @@ type Backups interface {
 	StartRestore(m *protocol.RestoreJob)
 	StartCopyOut(m *protocol.VolumeCopyOut)
 	StartCopyIn(m *protocol.VolumeCopyIn)
+	AddWALFiles(m *protocol.WALFetch)
+}
+
+// WAL ships the volumes' WAL spools; *walship.Shipper implements it.
+type WAL interface {
+	Ack(m *protocol.WALArchiveAck)
 }
 
 // Workloads finds a workload's container; *runtime.Runtime implements it.
@@ -114,7 +121,9 @@ type Options struct {
 	Volumes Volumes
 	// Backups is nil on a node that runs no backups; jobs are then answered
 	// with a failed result.
-	Backups   Backups
+	Backups Backups
+	// WAL is nil on a node that ships no WAL; acks are then dropped.
+	WAL       WAL
 	Workloads Workloads
 	Docker    Inspector
 	// Query runs db_query operations; nil answers every query with an error.
@@ -217,6 +226,22 @@ func (h *Handler) StartCopyOut(m *protocol.VolumeCopyOut) {
 		return
 	}
 	h.opts.Backups.StartCopyOut(m)
+}
+
+// AddWALFiles hands a wal_fetch frame's URLs to its running restore.
+func (h *Handler) AddWALFiles(m *protocol.WALFetch) {
+	if h.opts.Backups != nil {
+		h.opts.Backups.AddWALFiles(m)
+	}
+}
+
+// AckWAL hands a wal_archive_ack to the WAL shipper.
+func (h *Handler) AckWAL(m *protocol.WALArchiveAck) {
+	if h.opts.WAL == nil {
+		h.log.Warn("ignoring wal_archive_ack: this node ships no WAL", "volume_id", m.VolumeID)
+		return
+	}
+	h.opts.WAL.Ack(m)
 }
 
 // StartCopyIn hands a volume_copy_in to the backup runner.

@@ -263,3 +263,9 @@ removes `sys_buildkitd` and its network afterwards unless
 - Builders copy images to another registry for `image_push`
   (`internal/imagepush`, ADR 0011) without unpacking them; the target's
   login is opened only for the push and never logged or stored.
+- Databases with point-in-time recovery on (ADR 0004) archive WAL into
+  `roundhouse-wal` on their volume; `internal/walship` uploads each file,
+  compressed and encrypted to the project's backup key, and deletes it only
+  once the control plane has recorded it. A point-in-time restore replays
+  the archived WAL in a one-off server with no network, then starts the
+  database on the result (`internal/backup`).

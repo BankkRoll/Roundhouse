@@ -125,6 +125,8 @@ type DataHandler interface {
 	StartCopyOut(m *protocol.VolumeCopyOut)
 	StartCopyIn(m *protocol.VolumeCopyIn)
 	RunQuery(m *protocol.DBQuery)
+	AckWAL(m *protocol.WALArchiveAck)
+	AddWALFiles(m *protocol.WALFetch)
 }
 
 // CertHandler receives cert_sync frames (ADR 0009), which carry sealed
@@ -692,6 +694,10 @@ func (s *session) apply(kid string, msg protocol.ControlMessage) {
 		s.data(protocol.BackupsProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.StartCopyIn(m) })
 	case *protocol.DBQuery:
 		s.data(protocol.DBQueryProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.RunQuery(m) })
+	case *protocol.WALArchiveAck:
+		s.data(protocol.PITRProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.AckWAL(m) })
+	case *protocol.WALFetch:
+		s.data(protocol.PITRProtocolVersion, m.Type, m.ID, func(d DataHandler) { d.AddWALFiles(m) })
 	case *protocol.CertSync:
 		s.raisePeer(protocol.CertsProtocolVersion)
 		if s.PeerProtocolVersion() < protocol.CertsProtocolVersion {
@@ -880,6 +886,11 @@ func desiredStateVersion(m *protocol.DesiredState) int {
 	}
 	if m.Ingress != nil || m.Certificates != nil || m.TLSMode == protocol.TLSManaged || usesCertsFeatures(m.Workloads) {
 		v = max(v, protocol.CertsProtocolVersion)
+	}
+	for _, vol := range m.Volumes {
+		if vol.WALArchive != nil {
+			v = max(v, protocol.PITRProtocolVersion)
+		}
 	}
 	return v
 }

@@ -119,6 +119,10 @@ func writeTar(w io.Writer, root string, skipped func(name string)) error {
 // clean relative path, and every entry's parent a directory this extraction
 // created itself, so no entry can be written through a symlink or outside
 // dir. Hard links may only name regular files extracted before them.
+//
+// NOTE: pg_basebackup's tar names the WAL it appends "./pg_wal/…" and
+// repeats the pg_wal/archive_status directory, so a leading "./" is
+// dropped and a directory that already exists is accepted again.
 func extractTar(r io.Reader, dir string) (int64, error) {
 	tr := tar.NewReader(r)
 	dirs := map[string]bool{".": true}
@@ -139,6 +143,9 @@ func extractTar(r io.Reader, dir string) (int64, error) {
 			return total, err
 		}
 		name := strings.TrimSuffix(hdr.Name, "/")
+		if len(name) > 2 && strings.HasPrefix(name, "./") {
+			name = name[2:]
+		}
 		root := first && name == "." && hdr.Typeflag == tar.TypeDir
 		first = false
 		if !root && (name == "" || name == "." || path.IsAbs(name) || path.Clean(name) != name || name == ".." ||
@@ -147,6 +154,9 @@ func extractTar(r io.Reader, dir string) (int64, error) {
 		}
 		if !dirs[path.Dir(name)] {
 			return total, fmt.Errorf("entry %q: parent is not a directory of this archive", name)
+		}
+		if !root && dirs[name] && hdr.Typeflag == tar.TypeDir {
+			continue
 		}
 		if !root && (dirs[name] || files[name]) {
 			return total, fmt.Errorf("entry %q: duplicate", name)
@@ -200,6 +210,7 @@ func extractTar(r io.Reader, dir string) (int64, error) {
 			}
 			continue
 		case tar.TypeLink:
+			hdr.Linkname = strings.TrimPrefix(hdr.Linkname, "./")
 			if !files[hdr.Linkname] {
 				return total, fmt.Errorf("entry %q: hard link to %q, which is not an earlier file", name, hdr.Linkname)
 			}

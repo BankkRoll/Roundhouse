@@ -58,6 +58,9 @@ const (
 	FormatRDB = "rdb"
 	// FormatMongoArchive is mongodump --archive output.
 	FormatMongoArchive = "mongo_archive"
+	// FormatPGBaseTar is pg_basebackup's tar of the data directory, with
+	// the WAL it needs to be consistent (base backups).
+	FormatPGBaseTar = "pg_base_tar"
 )
 
 // Header describes one entry.

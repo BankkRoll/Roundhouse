@@ -31,6 +31,7 @@ import (
 	agentruntime "github.com/BankkRoll/Roundhouse/agent/internal/runtime"
 	"github.com/BankkRoll/Roundhouse/agent/internal/shell"
 	"github.com/BankkRoll/Roundhouse/agent/internal/volumes"
+	"github.com/BankkRoll/Roundhouse/agent/internal/walship"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
 
@@ -57,6 +58,7 @@ type agent struct {
 	jobs *jobs.Runner
 	// backups runs backup, restore and copy tasks.
 	backups *backup.Runner
+	wal     *walship.Shipper
 	// shell runs web shell sessions (ADR 0012).
 	shell *shell.Manager
 	// images copies built images to remote registries (ADR 0011).
@@ -267,6 +269,9 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 		if v >= protocol.VolumesProtocolVersion {
 			a.volumes.Connected()
 		}
+		if v >= protocol.PITRProtocolVersion {
+			a.wal.Connected()
+		}
 		if v >= protocol.CertsProtocolVersion {
 			a.certs.Connected()
 			a.tlsStatus.Connected()
@@ -282,11 +287,20 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 		Log:       a.taskLog,
 		Logger:    log.With("component", "backup"),
 	})
+	a.wal = walship.New(walship.Options{
+		NodeID:  cfg.NodeID,
+		Key:     encryption,
+		Volumes: taskVolumes{a.volumes},
+		Send:    client.Send,
+		Enabled: func() bool { return client.PeerProtocolVersion() >= protocol.PITRProtocolVersion },
+		Logger:  log.With("component", "walship"),
+	})
 	a.data = dataplane.New(dataplane.Options{
 		NodeID:    cfg.NodeID,
 		Key:       encryption,
 		Volumes:   a.volumes,
 		Backups:   a.backups,
+		WAL:       a.wal,
 		Workloads: a.runtime,
 		Docker:    dc,
 		Query:     queryRunner{dbquery.New(dbquery.Options{})},
@@ -449,6 +463,7 @@ func (a *agent) run(ctx context.Context) error {
 	goRun("mesh", a.mesh.Run)
 	goRun("data", a.data.Run)
 	goRun("backups", a.backups.Run)
+	goRun("walship", a.wal.Run)
 	goRun("shell", a.shell.Run)
 	goRun("images", a.images.Run)
 	goRun("ingress", a.ingress.Run)
@@ -528,6 +543,7 @@ func (h handler) ApplyDesiredState(m *protocol.DesiredState) bool {
 	// Volumes first, so the runtime's first pass over this state finds them.
 	// Both ignore a generation they have seen.
 	h.a.volumes.Apply(m.Generation, m.Volumes)
+	h.a.wal.Apply(m.Generation, m.Volumes)
 	if !h.a.runtime.Apply(m) {
 		return false
 	}

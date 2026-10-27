@@ -15,8 +15,11 @@
 //   - restore: download the object to scratch space while hashing it,
 //     verify its SHA-256 before anything is applied, then decrypt,
 //     decompress and apply each entry, and answer restore_result;
+//   - take Postgres base backups and run point-in-time restores from them
+//     (./pitr.go);
 //   - never leave a workload stopped: every stop is paired with a start,
-//     and a snapshot restore that doesn't come up healthy is rolled back.
+//     and a snapshot or base restore that doesn't come up healthy is
+//     rolled back.
 package backup
 
 import (
@@ -124,6 +127,8 @@ type Runner struct {
 	// volumes holds the volume each running task works on, so two tasks
 	// never touch one volume at once.
 	volumes map[string]string
+	// walBooks holds the WAL URL inbox of every running base restore.
+	walBooks map[string]*walBook
 }
 
 // New returns a runner.
@@ -150,6 +155,7 @@ func New(opts Options) *Runner {
 	return &Runner{
 		opts: opts, log: log, http: hc, ctx: ctx, cancel: cancel,
 		backups: map[string]*partURLs{}, tasks: map[string]bool{}, volumes: map[string]string{},
+		walBooks: map[string]*walBook{},
 	}
 }
 
@@ -342,6 +348,8 @@ type backupStats struct {
 	parts       int
 	raw, stored int64
 	sha256      string
+	// walStart is a base backup's first WAL segment.
+	walStart string
 }
 
 func (r *Runner) sendBackupResult(backupID string, start time.Time, st *backupStats, err error) {
@@ -354,6 +362,7 @@ func (r *Runner) sendBackupResult(backupID string, start time.Time, st *backupSt
 	} else {
 		parts, raw, stored := st.parts, st.raw, st.stored
 		res.PartCount, res.BytesRaw, res.BytesStored, res.SHA256 = &parts, &raw, &stored, st.sha256
+		res.WALStart = st.walStart
 	}
 	if sendErr := r.deliver(r.ctx, res); sendErr != nil {
 		r.log.Error("could not deliver backup_result", "backup_id", backupID, "err", sendErr)
@@ -472,7 +481,7 @@ func (r *Runner) runBackup(ctx context.Context, t backupTask, book *partURLs) (b
 		return backupStats{}, err
 	}
 
-	srcErr := r.readSource(ctx, t, dataPath, w)
+	walStart, srcErr := r.readSource(ctx, t, dataPath, w)
 	if srcErr == nil {
 		srcErr = w.Close()
 	}
@@ -499,40 +508,48 @@ func (r *Runner) runBackup(ctx context.Context, t backupTask, book *partURLs) (b
 	if err := prog.flush(ctx, true); err != nil {
 		return backupStats{}, fmt.Errorf("report uploaded parts: %w", err)
 	}
-	return backupStats{parts: parts, raw: w.RawBytes(), stored: up.stored, sha256: up.digest()}, nil
+	return backupStats{parts: parts, raw: w.RawBytes(), stored: up.stored, sha256: up.digest(), walStart: walStart}, nil
 }
 
-// readSource writes the backup's entries.
-func (r *Runner) readSource(ctx context.Context, t backupTask, dataPath string, w *rhbk.Writer) error {
+// readSource writes the backup's entries and, for a base backup, returns
+// the WAL segment its replay starts from.
+func (r *Runner) readSource(ctx context.Context, t backupTask, dataPath string, w *rhbk.Writer) (string, error) {
 	switch t.source.Method {
 	case protocol.BackupDump:
 		target, err := r.target(ctx, t.source.WorkloadID, t.backupID)
 		if err != nil {
-			return err
+			return "", err
 		}
 		r.system(t.backupID, "dumping %s from workload %s", t.source.Engine, t.source.WorkloadID)
-		return target.dump(ctx, t.source.Engine, t.dbs, w)
+		return "", target.dump(ctx, t.source.Engine, t.dbs, w)
+	case protocol.BackupBase:
+		target, err := r.target(ctx, t.source.WorkloadID, t.backupID)
+		if err != nil {
+			return "", err
+		}
+		r.system(t.backupID, "taking a base backup of workload %s", t.source.WorkloadID)
+		return target.baseBackup(ctx, t.backupID, w)
 	case protocol.BackupSnapshot:
 		if t.quiesce {
 			release, err := r.opts.Workloads.Hold(ctx, t.source.WorkloadID, "stopped for a snapshot backup")
 			if err != nil {
-				return fmt.Errorf("stop workload %s: %w", t.source.WorkloadID, err)
+				return "", fmt.Errorf("stop workload %s: %w", t.source.WorkloadID, err)
 			}
 			defer release()
 		}
 		r.system(t.backupID, "archiving volume %s", t.source.VolumeID)
 		e, err := w.Create(rhbk.Header{Name: "volume.tar", Engine: string(t.source.Engine), Format: rhbk.FormatTar})
 		if err != nil {
-			return err
+			return "", err
 		}
 		if err := writeTar(ctxWriter{ctx, e}, dataPath, func(name string) {
 			r.system(t.backupID, "skipped %s: not a file, directory or link", name)
 		}); err != nil {
-			return fmt.Errorf("archive volume: %w", err)
+			return "", fmt.Errorf("archive volume: %w", err)
 		}
-		return e.Close()
+		return "", e.Close()
 	}
-	return fmt.Errorf("unsupported method %q", t.source.Method)
+	return "", fmt.Errorf("unsupported method %q", t.source.Method)
 }
 
 // ctxWriter fails writes once ctx ends, so a tar walk stops on timeout.
@@ -572,12 +589,17 @@ type restoreTask struct {
 	source  protocol.BackupSource
 	target  protocol.RestoreTarget
 	secrets protocol.SealedRestoreSecrets
+	// pitr is set for a base restore.
+	pitr *protocol.PITRRecovery
 }
 
 // StartRestore runs a restore_job in the background.
 func (r *Runner) StartRestore(m *protocol.RestoreJob) {
 	s, err := protocol.OpenRestoreSecrets(r.opts.Key, r.opts.NodeID, m.RestoreID, &m.SecretsSealed)
-	r.startRestore(restoreTask{id: m.RestoreID, source: m.BackupSource, target: m.RestoreTarget, secrets: s}, err)
+	if err == nil && (m.Method == protocol.BackupBase) != (m.PITR != nil) {
+		err = errors.New("a base restore needs its recovery settings")
+	}
+	r.startRestore(restoreTask{id: m.RestoreID, source: m.BackupSource, target: m.RestoreTarget, secrets: s, pitr: m.PITR}, err)
 }
 
 // StartCopyIn runs a volume_copy_in: a snapshot restore into a volume no
@@ -676,6 +698,8 @@ func (r *Runner) runRestore(ctx context.Context, t restoreTask) (int64, error) {
 		return r.restoreSnapshot(ctx, t, dataPath, rr)
 	case protocol.BackupDump:
 		return r.restoreDump(ctx, t, dataPath, rr)
+	case protocol.BackupBase:
+		return r.restoreBase(ctx, t, identity, dataPath, rr)
 	}
 	return 0, fmt.Errorf("unsupported method %q", t.source.Method)
 }

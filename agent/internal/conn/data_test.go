@@ -42,6 +42,8 @@ func (f *fakeData) StartRestore(m *protocol.RestoreJob)    { f.add("restore_job 
 func (f *fakeData) StartCopyOut(m *protocol.VolumeCopyOut) { f.add("volume_copy_out " + m.MigrationID) }
 func (f *fakeData) StartCopyIn(m *protocol.VolumeCopyIn)   { f.add("volume_copy_in " + m.MigrationID) }
 func (f *fakeData) RunQuery(m *protocol.DBQuery)           { f.add("db_query " + m.RequestID) }
+func (f *fakeData) AckWAL(m *protocol.WALArchiveAck)       { f.add("wal_archive_ack " + m.StreamID) }
+func (f *fakeData) AddWALFiles(m *protocol.WALFetch)       { f.add("wal_fetch " + m.RestoreID) }
 
 func backupJob(t *testing.T, id string, ttl time.Duration) *protocol.BackupJob {
 	t.Helper()
@@ -135,5 +137,9 @@ func TestDesiredStateVersion(t *testing.T) {
 	ds.Certificates = []protocol.CertificateRef{}
 	if v := desiredStateVersion(ds); v != protocol.CertsProtocolVersion {
 		t.Fatalf("certificates: %d", v)
+	}
+	ds.Volumes = []protocol.VolumeSpec{{ID: "vol_1", WALArchive: &protocol.WALArchiveSpec{StreamID: "wal_1"}}}
+	if v := desiredStateVersion(ds); v != protocol.PITRProtocolVersion {
+		t.Fatalf("wal archive: %d", v)
 	}
 }

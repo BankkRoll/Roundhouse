@@ -15,6 +15,8 @@ func linkCount(fs.FileInfo) uint64 { return 1 }
 
 func lchown(string, int, int) error { return nil }
 
+func ownerOf(fs.FileInfo) (int, int, bool) { return 0, 0, false }
+
 func listXattrs(string) (map[string]string, error) { return nil, nil }
 
 func setXattr(string, string, string) error { return nil }

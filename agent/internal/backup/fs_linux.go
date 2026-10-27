@@ -31,6 +31,15 @@ func linkCount(info fs.FileInfo) uint64 {
 
 func lchown(path string, uid, gid int) error { return os.Lchown(path, uid, gid) }
 
+// ownerOf returns the uid and gid that own a file.
+func ownerOf(info fs.FileInfo) (uid, gid int, ok bool) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, false
+	}
+	return int(st.Uid), int(st.Gid), true
+}
+
 // listXattrs reads every extended attribute of path, without following a
 // symlink. A filesystem without xattr support has none.
 func listXattrs(path string) (map[string]string, error) {

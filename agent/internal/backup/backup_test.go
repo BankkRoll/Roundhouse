@@ -212,8 +212,10 @@ type harness struct {
 	requests []protocol.BackupPartsRequest
 	// answer, when set, answers backup_parts_request frames.
 	answer bool
-	stop   context.CancelFunc
-	done   chan struct{}
+	// onWALFetch, when set, answers wal_fetch_request frames.
+	onWALFetch func(*protocol.WALFetchRequest)
+	stop       context.CancelFunc
+	done       chan struct{}
 }
 
 func newHarness(t *testing.T) *harness {
@@ -246,7 +248,11 @@ func (h *harness) send(_ context.Context, m protocol.AgentMessage) error {
 	h.mu.Lock()
 	h.sent = append(h.sent, m)
 	answer := h.answer
+	onWAL := h.onWALFetch
 	h.mu.Unlock()
+	if req, ok := m.(*protocol.WALFetchRequest); ok && onWAL != nil {
+		go onWAL(req)
+	}
 	if req, ok := m.(*protocol.BackupPartsRequest); ok {
 		h.mu.Lock()
 		h.requests = append(h.requests, *req)
