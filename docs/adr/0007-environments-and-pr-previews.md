@@ -452,7 +452,7 @@ top. Where the build differs from the text above:
   status and the comment use generic descriptions, never failure reasons.
 - **Database seeding.** `database_seed: latest_backup` and a clone's
   `volumes: latest_backup` restore each database from the source's latest
-  successful *dump* through the restore workflow's new-database path, which
+  successful _dump_ through the restore workflow's new-database path, which
   keeps the target's fresh credentials. Snapshots don't qualify (they carry
   the source's passwords). A preview that withholds secrets, every fork
   included, always starts empty; a clone's restore needs `backups:restore`.
