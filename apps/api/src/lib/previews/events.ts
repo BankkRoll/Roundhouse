@@ -218,7 +218,9 @@ export async function previewGitServices(
 /**
  * Whether a project's previews track a PR's base: one of its in-scope git
  * services reads the base repository's base branch through the delivering
- * installation.
+ * installation, or without any installation (a public repository; the
+ * caller has already limited matching to the workspace that claimed the
+ * delivering installation, as push deploys are).
  *
  * @param tracked - From {@link previewGitServices}.
  * @param base - The PR's base repository clone URL and branch.
@@ -233,7 +235,7 @@ export function tracksBase(
   const url = normalizeRepoUrl(base.clone_url);
   return tracked.some(
     (t) =>
-      t.source.github_installation_id === installationRef &&
+      (!t.source.github_installation_id || t.source.github_installation_id === installationRef) &&
       t.source.branch === base.ref &&
       normalizeRepoUrl(t.source.repo_url) === url,
   );

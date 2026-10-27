@@ -29,7 +29,7 @@ import { PREVIEW_ROUTES, policyOf } from "../src/contracts";
 import { app } from "../src/index";
 import { runMinuteTick } from "../src/lib/dispatch";
 import { admitPreview } from "../src/lib/previews/engine";
-import { parsePullRequestEvent } from "../src/lib/previews/events";
+import { parsePullRequestEvent, tracksBase } from "../src/lib/previews/events";
 import { renderPreviewComment } from "../src/lib/previews/github";
 import { loadPreviewSettings } from "../src/lib/previews/settings";
 import { planPreviewVariables } from "../src/lib/previews/variables";
@@ -478,6 +478,24 @@ describe("preview rules", () => {
     const badRepo = pr();
     badRepo.pull_request.base.repo.full_name = "../../etc";
     expect(parsePullRequestEvent(badRepo)).toBeNull();
+  });
+
+  it("tracks a base through the delivering installation or a public source, never another installation", () => {
+    const base = { clone_url: "https://github.com/acme/shop.git", ref: "main" };
+    const source = (installation?: string) => ({
+      serviceId: "svc_1",
+      source: {
+        type: "git" as const,
+        repo_url: "https://github.com/ACME/shop",
+        branch: "main",
+        root_dir: ".",
+        ...(installation ? { github_installation_id: installation } : {}),
+      },
+    });
+    expect(tracksBase([source("ghi_1")], base, "ghi_1")).toBe(true);
+    expect(tracksBase([source()], base, "ghi_1")).toBe(true);
+    expect(tracksBase([source("ghi_2")], base, "ghi_1")).toBe(false);
+    expect(tracksBase([source("ghi_1")], { ...base, ref: "develop" }, "ghi_1")).toBe(false);
   });
 
   it("renders a comment of statuses, links and SHAs only", () => {
