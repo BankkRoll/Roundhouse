@@ -6,7 +6,10 @@
  * The set is opened, a `service.create` op with `database` staged, and the
  * set applied in one call, so the service, its configs, its volume in every
  * environment and its generated write-only credentials land through the
- * same authorization, validation and audit as any reviewed change.
+ * same authorization, validation and audit as any reviewed change. The
+ * staged op is the canvas's own `service.create` with `database`
+ * (`databaseCreateOp`), so there is one way a database is built; applied
+ * as a direct request, it needs no review.
  *
  * @module
  */
@@ -63,7 +66,7 @@ export async function addDatabaseService(
 ): Promise<AddedDatabase> {
   const db = c.get("db");
   const { project, environment, caller } = scope;
-  const ctx: StagingContext = { db, keys: requireKeys(c), project, environment, caller };
+  const ctx: StagingContext = { c, db, keys: requireKeys(c), project, environment, caller };
   let set = await openChangeSet(db, {
     projectId: project.id,
     environmentId: environment.id,
@@ -109,6 +112,7 @@ export async function addDatabaseService(
   const applied = await applySet({ c, db, env: c.env, project, environment }, set, {
     expectedRevision: set.revision,
     deploy: input.deploy ? "affected" : "none",
+    direct: true,
   });
   const [op] = await db
     .select({ result: stagedChanges.result })

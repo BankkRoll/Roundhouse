@@ -25,6 +25,8 @@ import {
 } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
 import type { AuditLogPage, Invite, Me, Member, Node, Workspace } from "../lib/api/types";
+import { accessHandlers } from "./access-handlers";
+import { forgetMember } from "./access-resolve";
 import { accountSecurityHandlers } from "./account-security-handlers";
 import { changeHandlers } from "./changes-handlers";
 import {
@@ -33,6 +35,7 @@ import {
   invalid,
   notFound,
   recordAudit,
+  requireFreshSession,
   requireWorkspace,
   unauthorized,
 } from "./common";
@@ -120,7 +123,7 @@ function parseRole(body: Record<string, unknown>): Role | Response {
 
 function toWorkspace(workspaceId: string, role: Role): Workspace | undefined {
   const row = db.workspaces.find((workspace) => workspace.id === workspaceId);
-  return row ? { ...row, role } : undefined;
+  return row ? { ...row, staged_changes: row.staged_changes ?? true, role } : undefined;
 }
 
 function toMember(row: DbMembership): Member {
@@ -174,7 +177,14 @@ function uniqueSlug(name: string): string {
 }
 
 function createWorkspaceFor(userId: string, name: string): Workspace {
-  const workspace = { id: nextId("ws"), name, slug: uniqueSlug(name), created_at: Date.now() };
+  // Like the API (ADR 0006 "Rollout"), a new workspace stages canvas edits from the start.
+  const workspace = {
+    id: nextId("ws"),
+    name,
+    slug: uniqueSlug(name),
+    staged_changes: true,
+    created_at: Date.now(),
+  };
   db.workspaces.push(workspace);
   db.memberships.push({
     id: nextId("mem"),
@@ -356,26 +366,49 @@ const phase0Handlers = [
   }),
 
   http.patch("*/v1/workspaces/:workspaceId", async ({ params, request }) => {
-    const parsed = parseFields(await readJson(request), {
-      name: { min: 1, max: 100, trim: true },
+    const body = await readJson(request);
+    const parsed = parseFields(body, {
+      name: { min: 1, max: 100, trim: true, optional: true },
     });
     if (!parsed.ok) return parsed.response;
+    const staged = body.staged_changes;
+    if (staged !== undefined && typeof staged !== "boolean") {
+      return invalid("staged_changes: Invalid input: expected boolean");
+    }
+    if (parsed.values.name === undefined && staged === undefined) {
+      return invalid("nothing to update");
+    }
     const workspaceId = String(params.workspaceId);
     const access = requireWorkspace(workspaceId, "workspace:update");
     if (!access.ok) return access.response;
     const row = db.workspaces.find((workspace) => workspace.id === workspaceId);
     if (!row) return notFound("Workspace");
-    const name = parsed.values.name ?? row.name;
-    row.name = name;
-    recordAudit({
-      workspaceId,
-      actorType: "user",
-      actorId: access.user.id,
-      action: "workspace.renamed",
-      targetType: "workspace",
-      targetId: workspaceId,
-      metadata: { name },
-    });
+    const name = parsed.values.name;
+    if (name !== undefined && name !== row.name) {
+      row.name = name;
+      recordAudit({
+        workspaceId,
+        actorType: "user",
+        actorId: access.user.id,
+        action: "workspace.renamed",
+        targetType: "workspace",
+        targetId: workspaceId,
+        metadata: { name },
+      });
+    }
+    const before = row.staged_changes ?? true;
+    if (staged !== undefined && staged !== before) {
+      row.staged_changes = staged;
+      recordAudit({
+        workspaceId,
+        actorType: "user",
+        actorId: access.user.id,
+        action: "workspace.settings_updated",
+        targetType: "workspace",
+        targetId: workspaceId,
+        metadata: { from: { staged_changes: before }, to: { staged_changes: staged } },
+      });
+    }
     return HttpResponse.json(toWorkspace(workspaceId, access.membership.role));
   }),
 
@@ -396,6 +429,8 @@ const phase0Handlers = [
     const workspaceId = String(params.workspaceId);
     const access = requireWorkspace(workspaceId, "members:manage");
     if (!access.ok) return access.response;
+    const stale = requireFreshSession();
+    if (stale) return stale;
     const target = db.memberships.find(
       (row) => row.id === params.memberId && row.workspace_id === workspaceId,
     );
@@ -430,6 +465,8 @@ const phase0Handlers = [
     const isSelf = target?.user_id === user.id;
     const access = requireWorkspace(workspaceId, isSelf ? "workspace:read" : "members:manage");
     if (!access.ok) return access.response;
+    const stale = isSelf ? null : requireFreshSession();
+    if (stale) return stale;
     if (!target) return notFound("Member");
     if (target.role === "owner" && !isSelf && access.membership.role !== "owner") {
       return apiError(403, "forbidden", "Only owners can remove an owner");
@@ -437,6 +474,7 @@ const phase0Handlers = [
     if (target.role === "owner" && ownerCount(workspaceId) <= 1) return lastOwner();
     const removed = toMember(target);
     db.memberships = db.memberships.filter((row) => row !== target);
+    forgetMember(workspaceId, target.user_id);
     recordAudit({
       workspaceId,
       actorType: "user",
@@ -755,4 +793,5 @@ export const handlers = [
   ...signingKeyHandlers,
   ...securityHandlers,
   ...accountSecurityHandlers,
+  ...accessHandlers,
 ];

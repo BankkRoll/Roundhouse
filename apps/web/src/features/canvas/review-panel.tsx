@@ -7,12 +7,13 @@ import {
   DialogTitle,
   Spinner,
 } from "@roundhouse/ui";
-import { LockIcon, RocketIcon, Undo2Icon } from "lucide-react";
+import { GitMergeIcon, LockIcon, RocketIcon, Undo2Icon } from "lucide-react";
 import { useMemo } from "react";
-import type { ChangeSet, StagedChange } from "../../lib/api/changes-types";
+import type { ChangeSet, ChangeSetReview, StagedChange } from "../../lib/api/changes-types";
 import { errorMessage, isApiError } from "../../lib/api/client";
 import { useReview } from "../../queries/changes";
 import { formatSide, groupChanges, pathLabel } from "./diff-format";
+import { ReviewStatus } from "./review-status";
 
 /** Props for {@link ReviewPanel}. */
 export interface ReviewPanelProps {
@@ -30,8 +31,40 @@ export interface ReviewPanelProps {
   onApply?: (deploy: "affected" | "none") => void;
   onDiscard?: () => void;
   applying?: boolean;
-  /** Error of the last apply, shown at the top. */
+  /** Error of the last apply or review action, shown at the top. */
   error?: unknown;
+  /** The signed-in user, to tell authors and approvers apart. */
+  userId?: string;
+  /** Display name of a user ID. */
+  userName?: (userId: string) => string;
+  /** Present when the caller may propose changes: asks for a review. */
+  onSubmit?: (note: string | undefined) => void;
+  /** Present when the caller holds `changes:approve`. */
+  onDecide?: (decision: "approve" | "reject", note: string | undefined) => void;
+  /** Present when the caller may edit the set: moves it onto the current state. */
+  onRebase?: () => void;
+  /** A review action or rebase is in flight. */
+  reviewing?: boolean;
+}
+
+/**
+ * Why Apply is held back, or `null` when it isn't. Mirrors the API's checks so the
+ * button says why instead of failing; the API decides either way.
+ */
+function applyHold(
+  set: ChangeSet,
+  approval: ChangeSetReview["approval"] | undefined,
+  userId: string | undefined,
+  conflicts: number,
+): string | null {
+  if (set.op_count === 0) return "Nothing is staged";
+  if (conflicts > 0) return "Resolve the conflicts first";
+  if (set.review_status === "rejected") return "Rejected: change it or ask for another review";
+  if (approval?.required && !approval.approved) return "Needs an approval first";
+  if (approval?.required && set.approved_by && set.approved_by === userId) {
+    return "You approved this, so someone else applies it";
+  }
+  return null;
 }
 
 const REASONS = {
@@ -39,6 +72,7 @@ const REASONS = {
   variables: "variables changed",
   created: "new service",
   references: "references a changed variable",
+  volume: "new volume",
 } as const;
 
 function ApplyError({ error }: { error: unknown }) {
@@ -83,13 +117,21 @@ export function ReviewPanel({
   onDiscard,
   applying = false,
   error,
+  userId,
+  userName = (id) => id,
+  onSubmit,
+  onDecide,
+  onRebase,
+  reviewing = false,
 }: ReviewPanelProps) {
   const review = useReview(set.id, open);
   const pending = set.changes.filter((c) => c.status !== "applied");
   const groups = useMemo(() => groupChanges(pending, nameOf), [pending, nameOf]);
   const conflicts = pending.filter((c) => c.status === "conflicted");
   const willConflict = new Set(review.data?.conflicts.map((c) => c.id) ?? []);
-  const blocked = conflicts.length > 0 || pending.length === 0;
+  const hold = applyHold(set, review.data?.approval, userId, conflicts.length);
+  const blocked = hold !== null;
+  const stale = (review.data?.rebases.length ?? 0) > 0 || willConflict.size > conflicts.length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -117,6 +159,29 @@ export function ReviewPanel({
               <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
                 The last apply stopped: {set.error.message}
               </p>
+            ) : null}
+
+            <ReviewStatus
+              set={set}
+              approval={review.data?.approval}
+              userId={userId}
+              nameOf={userName}
+              onSubmit={onSubmit}
+              onDecide={onDecide}
+              pending={reviewing}
+            />
+
+            {stale && onRebase ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-md border border-info/30 bg-info/10 px-3 py-2 text-sm text-info">
+                <span className="mr-auto">
+                  Changes landed since these were staged. Rebase to see the diffs against what runs
+                  now.
+                </span>
+                <Button size="sm" variant="secondary" disabled={reviewing} onClick={onRebase}>
+                  <GitMergeIcon />
+                  Rebase
+                </Button>
+              </div>
             ) : null}
 
             {groups.map((group) => (
@@ -249,6 +314,7 @@ export function ReviewPanel({
           ) : null}
           {onApply ? (
             <div className="ml-auto flex flex-wrap items-center gap-2">
+              {hold ? <p className="text-xs text-muted-foreground">{hold}</p> : null}
               <Button
                 variant="secondary"
                 disabled={blocked || applying}

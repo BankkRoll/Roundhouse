@@ -105,6 +105,11 @@ export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
  * - `data:write`: run writing queries as the database's admin principal.
  * - `backups:manage`: backup policies, manual backups and backup deletion.
  * - `backups:restore`: restore a backup or download its encrypted object.
+ * - `changes:approve`: approve or reject a change set someone else staged
+ *   (ADR 0006).
+ * - `changes:auto_apply`: an API token may apply staged changes without a
+ *   person approving them first. Sessions never need it; as a token scope it
+ *   must be chosen explicitly, since no preset carries it (ADR 0012).
  *
  * Viewers get no data action: a database's rows can be as sensitive as its
  * secrets (ADR 0004).
@@ -123,6 +128,8 @@ export const PROJECT_ACTIONS = [
   "data:write",
   "backups:manage",
   "backups:restore",
+  "changes:approve",
+  "changes:auto_apply",
 ] as const;
 
 /** A project-level action; see {@link PROJECT_ACTIONS}. */
@@ -213,6 +220,7 @@ const DEVELOP: ProjectAction[] = [
   "variables:manage",
   "data:read",
   "backups:manage",
+  "changes:auto_apply",
 ];
 
 const PROJECT_GRANTS: Record<ProjectRole, ReadonlySet<ProjectAction>> = {

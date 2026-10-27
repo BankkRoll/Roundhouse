@@ -18,6 +18,7 @@ import { errorMessage, isApiError } from "../../lib/api/client";
 import type { DatabaseQueryOp, DatabaseQueryResult } from "../../lib/api/data-client";
 import { usePermissions } from "../../lib/permissions";
 import { useBrowseQuery, useDatabaseQuery, useDatabaseSchema } from "../../queries/databases";
+import { useEnvironmentGate } from "../access/environment-gate";
 import { findService, useProjectEnvironment } from "../projects/use-project-environment";
 import type { ServicePageProps } from "../services/service-layout";
 import { ResultGrid } from "./result-grid";
@@ -297,7 +298,8 @@ function QueryView({
 export function DataTab({ workspaceId, projectId, serviceId }: ServicePageProps) {
   const { project, environment } = useProjectEnvironment(projectId);
   const service = findService(project.data, serviceId);
-  const { can, role } = usePermissions(workspaceId);
+  const { role } = usePermissions(workspaceId);
+  const { can } = useEnvironmentGate(workspaceId, projectId, environment);
   const allowed = can("data:read");
   const engine = service?.database?.engine;
   const schema = useDatabaseSchema(serviceId, environment?.id, allowed && Boolean(engine));

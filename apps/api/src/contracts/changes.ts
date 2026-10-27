@@ -11,16 +11,25 @@
  * that matters depends on the ops in the body or the set; handlers check
  * those per op.
  *
+ * Review (submit, approve, reject) records who vouched for exactly which
+ * revision; an environment whose protection requires approval refuses to
+ * apply without one (ADR 0006 "Apply", step 2).
+ *
  * SECURITY: A staged `variable.set` takes a plaintext `value` on input
  * only. Responses carry its key, tier and fingerprint, never the value.
  *
  * @module
  */
 import { z } from "@hono/zod-openapi";
+import { isSafeMountPath } from "@roundhouse/protocol";
 import {
   CHANGE_SET_SOURCES,
+  MAX_REVIEW_NOTE_LENGTH,
   MAX_STAGED_OPS,
+  MAX_VOLUME_MB,
+  MIN_VOLUME_MB,
   NEW_SERVICE_REF_RE,
+  SERVICE_DATABASE_ENGINES,
   SERVICE_KINDS,
   STAGED_CHANGE_STATUSES,
   VARIABLE_SCOPES,
@@ -40,6 +49,7 @@ import {
   VariableKeyField,
   VariableTierSchema,
   VariableValueField,
+  WorkspaceParams,
 } from "../schemas";
 import { DatabaseChoiceSchema } from "./databases";
 import { EnvironmentParams, ProjectParams } from "./params";
@@ -126,6 +136,44 @@ const ConfigPatchOp = z.object({
 
 const VariableDeleteOp = z.object({ type: z.literal("variable.delete"), ...VariableTarget });
 
+const LiveServiceId = z.string().min(1).max(128).openapi({ description: "A live service ID" });
+
+/** A container path a volume may be mounted at; see `isSafeMountPath`. */
+const MountPathField = z
+  .string()
+  .min(2)
+  .max(1024)
+  .refine(isSafeMountPath, { message: "not a safe absolute mount path" })
+  .openapi({ example: "/data" });
+
+const VolumeSetOp = z.object({
+  type: z.literal("volume.set"),
+  service: LiveServiceId,
+  /** Required when the service has no volume in the environment yet. */
+  mount_path: MountPathField.optional(),
+  /** Grow-only: a smaller size than the current one is refused with 422. */
+  size_mb: z.number().int().min(MIN_VOLUME_MB).max(MAX_VOLUME_MB),
+});
+
+const VolumeDeleteOp = z.object({ type: z.literal("volume.delete"), service: LiveServiceId });
+
+const DomainAddOp = z.object({
+  type: z.literal("domain.add"),
+  service: LiveServiceId,
+  /** Normalised when staged: case, one trailing dot and IDNs are accepted. */
+  hostname: z.string().min(1).max(300).openapi({ example: "shop.example.com" }),
+});
+
+const DomainRemoveInputOp = z.object({
+  type: z.literal("domain.remove"),
+  domain_id: z.string().min(1).max(128),
+});
+
+const DomainRemoveOp = DomainRemoveInputOp.extend({
+  hostname: z.string(),
+  service: z.string(),
+});
+
 /**
  * An op as a client stages it. `variable.set` carries the plaintext value,
  * sealed by the server on arrival.
@@ -149,6 +197,10 @@ export const StagedOpInputSchema = z
       acknowledge_public: z.boolean().default(false),
     }),
     VariableDeleteOp,
+    VolumeSetOp,
+    VolumeDeleteOp,
+    DomainAddOp,
+    DomainRemoveInputOp,
   ])
   .refine(
     (op) =>
@@ -186,6 +238,10 @@ export const StagedOpSchema = z
       staged_tier: VariableTierSchema,
     }),
     VariableDeleteOp,
+    VolumeSetOp,
+    VolumeDeleteOp,
+    DomainAddOp,
+    DomainRemoveOp,
   ])
   .openapi("StagedOp");
 
@@ -238,9 +294,25 @@ export const PlannedDeploySchema = z
     /** A service ID, or `new:<n>`. */
     service: z.string(),
     name: z.string(),
-    reason: z.enum(["config", "variables", "created", "references"]),
+    /** `volume`: the set gives it a new volume, which only a new deployment mounts. */
+    reason: z.enum(["config", "variables", "created", "references", "volume"]),
   })
   .openapi("PlannedDeploy");
+
+/** Whether a change set may be applied as far as review goes, and who may review it. */
+export const ChangeSetApprovalSchema = z
+  .object({
+    /** The environment is protected and its protection requires approval. */
+    required: z.boolean(),
+    /** Approved at the current revision. */
+    approved: z.boolean(),
+    /**
+     * Users who opened the set or staged ops in it: none of them may approve
+     * it. Lets a client hide Approve from them.
+     */
+    authors: z.array(z.string()),
+  })
+  .openapi("ChangeSetApproval");
 
 /** A change set checked against the current state, without changing anything. */
 export const ChangeSetReviewSchema = z
@@ -251,6 +323,7 @@ export const ChangeSetReviewSchema = z
     conflicts: z.array(z.object({ id: z.string(), conflict: StagedConflictSchema })),
     /** What `deploy: "affected"` would start. */
     deploys: z.array(PlannedDeploySchema),
+    approval: ChangeSetApprovalSchema,
   })
   .openapi("ChangeSetReview");
 
@@ -316,6 +389,44 @@ export const DiscardChangeSetBody = z
   .object({ expected_revision: z.number().int().positive().optional() })
   .openapi("DiscardChangeSet");
 
+const ReviewNote = z.string().trim().min(1).max(MAX_REVIEW_NOTE_LENGTH);
+
+/** Body of `POST /v1/change-sets/{changeSetId}/submit`. */
+export const SubmitChangeSetBody = z
+  .object({
+    /** Refuse unless the set is still at this revision. */
+    expected_revision: z.number().int().positive().optional(),
+    /** What reviewers should know. Shown as text. */
+    note: ReviewNote.optional(),
+  })
+  .openapi("SubmitChangeSet");
+
+/** Body of `POST …/approve` and `POST …/reject`. */
+export const ReviewChangeSetBody = z
+  .object({
+    /** The revision the reviewer looked at; the decision covers exactly it. */
+    expected_revision: z.number().int().positive(),
+    /** Why, for a rejection especially. Shown as text. */
+    note: ReviewNote.optional(),
+  })
+  .openapi("ReviewDecision");
+
+/** Body of `POST /v1/change-sets/{changeSetId}/rebase`. */
+export const RebaseChangeSetBody = z
+  .object({ expected_revision: z.number().int().positive() })
+  .openapi("RebaseChangeSet");
+
+/** Response of the rebase route. */
+export const RebasedChangeSetSchema = z
+  .object({
+    change_set: ChangeSetSchema,
+    /** Ops moved onto the current state; their diffs were recomputed. */
+    rebased: z.array(z.string()),
+    /** Ops that conflict and need Keep mine / Take theirs. */
+    conflicts: z.array(z.object({ id: z.string(), conflict: StagedConflictSchema })),
+  })
+  .openapi("RebasedChangeSet");
+
 /** Query of `GET /v1/environments/{environmentId}/change-sets`. */
 export const ChangeSetListQuery = z.object({
   /** Only open sets (the default), or every set newest first. */
@@ -325,6 +436,35 @@ export const ChangeSetListQuery = z.object({
 // -----------------------------------------------------------------------------
 // Canvas
 // -----------------------------------------------------------------------------
+
+/** A service's volume in the canvas's environment, with what the draft does to it. */
+export const CanvasVolumeSchema = z
+  .object({
+    /** `null` while only staged. */
+    id: z.string().nullable(),
+    mount_path: z.string(),
+    size_mb: z.number().int(),
+    /** A volume status (`pending`, `ready`, `pending_deletion`, …); `null` while only staged. */
+    status: z.string().nullable(),
+    /** Unix ms after which a deleted volume's data is removed. */
+    delete_after: z.number().int().nullable(),
+    staged: z.enum(["create", "resize", "delete"]).nullable(),
+    /** The size the draft sets, when it creates or grows the volume. */
+    staged_size_mb: z.number().int().nullable(),
+  })
+  .openapi("CanvasVolume");
+
+/** A custom domain of a service in the canvas's environment. */
+export const CanvasDomainSchema = z
+  .object({
+    /** `null` for one the draft adds. */
+    id: z.string().nullable(),
+    hostname: z.string(),
+    /** `null` for one the draft adds. */
+    status: z.string().nullable(),
+    staged: z.enum(["add", "remove"]).nullable(),
+  })
+  .openapi("CanvasDomain");
 
 /** One service on the canvas: live, or staged for creation. */
 export const CanvasNodeSchema = z
@@ -339,26 +479,59 @@ export const CanvasNodeSchema = z
     staged: z.enum(["create", "update", "delete"]).nullable(),
     /** Number of draft ops about this service. */
     staged_ops: z.number().int().nonnegative(),
+    /** Engine and registry version of a database service, live or staged. */
+    database: z
+      .object({ engine: z.enum(SERVICE_DATABASE_ENGINES), version: z.string() })
+      .nullable(),
+    volume: CanvasVolumeSchema.nullable(),
+    domains: z.array(CanvasDomainSchema),
   })
   .openapi("CanvasNode");
 
 /**
- * A dependency between two services, derived from `${{slug.VAR}}`
- * references. `private_network` when one of the references is a private
- * domain built-in. `staged` edges only exist once the draft applies;
- * `removed` ones disappear then.
+ * A dependency between two services: derived from `${{slug.VAR}}`
+ * references (`reference`, or `private_network` when one of them is a
+ * private domain built-in), or drawn by someone (`explicit`, ID `edg_…`).
+ * `staged` reference edges only exist once the draft applies; `removed`
+ * ones disappear then. Explicit edges are always `current`.
  */
 export const CanvasEdgeSchema = z
   .object({
     id: z.string(),
     from: z.string(),
     to: z.string(),
-    kind: z.enum(["reference", "private_network"]),
-    /** Referenced variables as `slug.NAME`. */
+    kind: z.enum(["reference", "private_network", "explicit"]),
+    /** Referenced variables as `slug.NAME`; empty for explicit edges. */
     variables: z.array(z.string()),
     state: z.enum(["current", "staged", "removed"]),
   })
   .openapi("CanvasEdge");
+
+/** Body of `POST /v1/projects/{projectId}/edges`. */
+export const AddServiceEdgeBody = z
+  .object({
+    from_service_id: z.string().min(1).max(128),
+    to_service_id: z.string().min(1).max(128),
+  })
+  .refine((b) => b.from_service_id !== b.to_service_id, {
+    message: "a service can't connect to itself",
+  })
+  .openapi("AddServiceEdge");
+
+/** An explicit "connects to" edge. */
+export const ServiceEdgeSchema = z
+  .object({
+    id: z.string(),
+    project_id: z.string(),
+    from_service_id: z.string(),
+    to_service_id: z.string(),
+    created_by: z.string().nullable(),
+    created_at: z.number().int(),
+  })
+  .openapi("ServiceEdge");
+
+/** `{projectId}` and `{edgeId}` path params. */
+export const ServiceEdgeParams = ProjectParams.extend({ edgeId: z.string() });
 
 /** Query of the canvas route. */
 export const CanvasQuery = z.object({ environment_id: z.string() });
@@ -370,6 +543,10 @@ export const CanvasSchema = z
     environment_id: z.string(),
     /** Applying changes here is limited by the environment's protection rules (ADR 0014). */
     environment_protected: z.boolean(),
+    /** Applying here needs an approval (ADR 0006); see `require_approval` on protection. */
+    environment_requires_approval: z.boolean(),
+    /** The workspace stages dashboard edits (`staged_changes`); off, they apply as saved. */
+    staging: z.boolean(),
     nodes: z.array(CanvasNodeSchema),
     edges: z.array(CanvasEdgeSchema),
     positions: CanvasPositionsSchema,
@@ -430,7 +607,18 @@ export const listChangeSets = defineRoute(session("projects:read"), {
   security: sessionAuth,
   request: { params: EnvironmentParams, query: ChangeSetListQuery },
   responses: {
-    200: json(z.object({ change_sets: z.array(ChangeSetSummarySchema) }).openapi("ChangeSetList")),
+    200: json(
+      z
+        .object({
+          change_sets: z.array(ChangeSetSummarySchema),
+          /**
+           * Applying here needs an approval (protected with `require_approval`), so a set
+           * whose `review_status` isn't `approved` can't apply yet.
+           */
+          environment_requires_approval: z.boolean(),
+        })
+        .openapi("ChangeSetList"),
+    ),
     ...errors(400, 401, 403, 404),
   },
 });
@@ -443,7 +631,7 @@ export const createChangeSet = defineRoute(session("projects:read", ["change_set
   summary: "Open a change set",
   security: sessionAuth,
   request: { params: EnvironmentParams, ...body(CreateChangeSetBody) },
-  responses: { 201: json(ChangeSetSchema, "Opened"), ...errors(400, 401, 403, 404, 409) },
+  responses: { 201: json(ChangeSetSchema, "Opened"), ...errors(400, 401, 403, 404, 409, 422) },
 });
 
 /** The environment's shared draft, or `null` when nothing is staged. */
@@ -468,7 +656,7 @@ export const stageDraftOp = defineRoute(session("projects:read"), {
   summary: "Stage a change in the draft",
   security: sessionAuth,
   request: { params: EnvironmentParams, ...body(StageOpBody) },
-  responses: { 200: json(ChangeSetSchema, "Staged"), ...errors(400, 401, 403, 404, 409) },
+  responses: { 200: json(ChangeSetSchema, "Staged"), ...errors(400, 401, 403, 404, 409, 422) },
 });
 
 /** A change set with its ops and value-free diffs. */
@@ -504,7 +692,7 @@ export const stageOp = defineRoute(session("projects:read"), {
   summary: "Stage a change",
   security: sessionAuth,
   request: { params: ChangeSetParams, ...body(StageOpBody) },
-  responses: { 200: json(ChangeSetSchema, "Staged"), ...errors(400, 401, 403, 404, 409) },
+  responses: { 200: json(ChangeSetSchema, "Staged"), ...errors(400, 401, 403, 404, 409, 422) },
 });
 
 /** Removes one op from a change set. */
@@ -558,6 +746,117 @@ export const applyChangeSet = defineRoute(
   },
 );
 
+/**
+ * Asks for a review. Needs `services:manage` or `variables:manage`; a set
+ * already submitted or approved is left as it is.
+ */
+export const submitChangeSet = defineRoute(session("projects:read", ["change_set.submitted"]), {
+  method: "post",
+  path: "/v1/change-sets/{changeSetId}/submit",
+  tags,
+  summary: "Submit a change set for review",
+  security: sessionAuth,
+  request: { params: ChangeSetParams, ...body(SubmitChangeSetBody) },
+  responses: { 200: json(ChangeSetSchema, "Submitted"), ...errors(400, 401, 403, 404, 409) },
+});
+
+/**
+ * Approves a change set at the revision the reviewer saw. Nobody who opened
+ * it or staged an op in it may approve it (403 `self_review`); any later
+ * edit voids the approval.
+ */
+export const approveChangeSet = defineRoute(session("changes:approve", ["change_set.approved"]), {
+  method: "post",
+  path: "/v1/change-sets/{changeSetId}/approve",
+  tags,
+  summary: "Approve a change set",
+  security: sessionAuth,
+  request: { params: ChangeSetParams, ...body(ReviewChangeSetBody) },
+  responses: { 200: json(ChangeSetSchema, "Approved"), ...errors(400, 401, 403, 404, 409) },
+});
+
+/** Rejects a change set at the revision the reviewer saw; it can't apply until edited. */
+export const rejectChangeSet = defineRoute(session("changes:approve", ["change_set.rejected"]), {
+  method: "post",
+  path: "/v1/change-sets/{changeSetId}/reject",
+  tags,
+  summary: "Reject a change set",
+  security: sessionAuth,
+  request: { params: ChangeSetParams, ...body(ReviewChangeSetBody) },
+  responses: { 200: json(ChangeSetSchema, "Rejected"), ...errors(400, 401, 403, 404, 409) },
+});
+
+/**
+ * Moves a stale set onto the current state (ADR 0006 "Conflicts"): ops whose
+ * base drifted on disjoint fields are rebased and their diffs recomputed;
+ * the rest are marked conflicted. Bumps the revision when anything changed.
+ */
+export const rebaseChangeSet = defineRoute(session("projects:read"), {
+  method: "post",
+  path: "/v1/change-sets/{changeSetId}/rebase",
+  tags,
+  summary: "Rebase a change set",
+  security: sessionAuth,
+  request: { params: ChangeSetParams, ...body(RebaseChangeSetBody) },
+  responses: { 200: json(RebasedChangeSetSchema), ...errors(400, 401, 403, 404, 409) },
+});
+
+/** Draws a "connects to" edge between two live services of the project. */
+export const addServiceEdge = defineRoute(session("services:manage", ["canvas.edge_added"]), {
+  method: "post",
+  path: "/v1/projects/{projectId}/edges",
+  tags,
+  summary: "Connect two services",
+  security: sessionAuth,
+  request: { params: ProjectParams, ...body(AddServiceEdgeBody) },
+  responses: { 201: json(ServiceEdgeSchema, "Added"), ...errors(400, 401, 403, 404, 409) },
+});
+
+/** Removes a "connects to" edge. */
+export const removeServiceEdge = defineRoute(session("services:manage", ["canvas.edge_removed"]), {
+  method: "delete",
+  path: "/v1/projects/{projectId}/edges/{edgeId}",
+  tags,
+  summary: "Disconnect two services",
+  security: sessionAuth,
+  request: { params: ServiceEdgeParams },
+  responses: { 204: { description: "Removed" }, ...errors(401, 403, 404) },
+});
+
+/** A change set in a workspace-wide list, with where it applies. */
+export const WorkspaceChangeSetSchema = ChangeSetSummarySchema.extend({
+  project_name: z.string(),
+  environment_name: z.string(),
+  environment_requires_approval: z.boolean(),
+}).openapi("WorkspaceChangeSet");
+
+/** Query of `GET /v1/workspaces/{workspaceId}/change-sets`. */
+export const WorkspaceChangeSetQuery = z.object({
+  /** Every open set (the default), or only those waiting for a reviewer. */
+  review: z.enum(["open", "pending"]).default("open"),
+});
+
+/**
+ * Open change sets across the workspace's projects the caller can see,
+ * newest first: the workspace's review queue.
+ */
+export const listWorkspaceChangeSets = defineRoute(session("projects:read"), {
+  method: "get",
+  path: "/v1/workspaces/{workspaceId}/change-sets",
+  tags,
+  summary: "List a workspace's open change sets",
+  security: sessionAuth,
+  request: { params: WorkspaceParams, query: WorkspaceChangeSetQuery },
+  responses: {
+    200: json(
+      z
+        .object({ change_sets: z.array(WorkspaceChangeSetSchema) })
+        .openapi("WorkspaceChangeSetList"),
+    ),
+    ...errors(400, 401, 403, 404),
+  },
+});
+
 /** Throws a change set away. */
 export const discardChangeSet = defineRoute(session("projects:read", ["change_set.discarded"]), {
   method: "post",
@@ -584,6 +883,13 @@ export const CHANGE_ROUTES = {
   resolveOp,
   applyChangeSet,
   discardChangeSet,
+  submitChangeSet,
+  approveChangeSet,
+  rejectChangeSet,
+  rebaseChangeSet,
+  addServiceEdge,
+  removeServiceEdge,
+  listWorkspaceChangeSets,
 } as const;
 
 /** A change set with its ops. */
@@ -598,3 +904,7 @@ export type StagedOpInput = z.input<typeof StagedOpInputSchema>;
 export type Canvas = z.infer<typeof CanvasSchema>;
 /** A change set review. */
 export type ChangeSetReview = z.infer<typeof ChangeSetReviewSchema>;
+/** An explicit "connects to" edge. */
+export type ServiceEdge = z.infer<typeof ServiceEdgeSchema>;
+/** A change set in the workspace review queue. */
+export type WorkspaceChangeSet = z.infer<typeof WorkspaceChangeSetSchema>;

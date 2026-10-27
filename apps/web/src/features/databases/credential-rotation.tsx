@@ -14,8 +14,8 @@ import { ConfirmDialog } from "../../components/confirm-dialog";
 import type { CredentialRotation, DatabasePrincipal } from "../../lib/api/data-client";
 import type { Environment, Service } from "../../lib/api/deploy-types";
 import { formatRelativeTime, formatTimestamp } from "../../lib/format";
-import { usePermissions } from "../../lib/permissions";
 import { useCredentialRotations, useRotateCredentials } from "../../queries/databases";
+import { useEnvironmentGate } from "../access/environment-gate";
 import { actionError } from "./backups-tab";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "info";
@@ -200,7 +200,7 @@ export function CredentialRotationRows({
   engine,
   environment,
 }: CredentialRotationRowsProps) {
-  const { can } = usePermissions(workspaceId);
+  const { can } = useEnvironmentGate(workspaceId, service.project_id, environment);
   const rotations = useCredentialRotations(service.id, environment?.id);
   const [dialog, setDialog] = useState<"rotate" | "finish" | null>(null);
   const canRotate = can("data:write") && can("variables:manage") && can("deployments:create");

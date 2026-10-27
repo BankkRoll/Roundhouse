@@ -54,6 +54,8 @@ export const ID_PREFIXES = {
   changeSet: "chs",
   /** One operation staged in a change set. */
   stagedChange: "stg",
+  /** A "connects to" edge drawn between two services on the canvas (ADR 0006). */
+  serviceEdge: "edg",
   /** A service's persistent volume in one environment (ADR 0004). */
   volume: "vol",
   /** One backup of a volume; also its workflow instance ID. */

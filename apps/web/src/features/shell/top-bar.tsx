@@ -10,7 +10,14 @@ import {
   KbdHint,
 } from "@roundhouse/ui";
 import { Link, useMatches, useNavigate, useParams } from "@tanstack/react-router";
-import { BellIcon, ChevronsUpDownIcon, LayersIcon, MenuIcon, SearchIcon } from "lucide-react";
+import {
+  BellIcon,
+  ChevronsUpDownIcon,
+  LayersIcon,
+  LockIcon,
+  MenuIcon,
+  SearchIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { isApplePlatform } from "../../lib/platform";
 import { useMembership } from "../../queries/me";
@@ -62,10 +69,13 @@ function ProjectCrumbs({
         <DropdownMenu>
           <DropdownMenuTrigger
             className="flex h-7 items-center gap-1.5 rounded-md border border-border bg-surface px-2 text-xs text-foreground outline-none transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label={`Environment: ${environment?.name ?? "loading"}. Switch environment`}
+            aria-label={`Environment: ${environment?.name ?? "loading"}${environment?.protected ? " (protected)" : ""}. Switch environment`}
           >
             <LayersIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
             {environment?.name ?? "…"}
+            {environment?.protected ? (
+              <LockIcon className="size-3 text-warning" aria-hidden="true" />
+            ) : null}
             <ChevronsUpDownIcon className="size-3 text-muted-foreground" aria-hidden="true" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56">
@@ -86,6 +96,12 @@ function ProjectCrumbs({
               {project.data?.environments.map((entry) => (
                 <DropdownMenuRadioItem key={entry.id} value={entry.slug}>
                   <span>{entry.name}</span>
+                  {entry.protected ? (
+                    <>
+                      <LockIcon className="size-3 text-warning" aria-hidden="true" />
+                      <span className="sr-only">(protected)</span>
+                    </>
+                  ) : null}
                   <span className="ml-auto text-xs text-subtle-foreground">{entry.kind}</span>
                 </DropdownMenuRadioItem>
               ))}

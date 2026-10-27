@@ -5,8 +5,8 @@ import {
 } from "@roundhouse/shared";
 import { Badge, SettingsRow, SettingsSection } from "@roundhouse/ui";
 import type { Environment, Service } from "../../lib/api/deploy-types";
-import { usePermissions } from "../../lib/permissions";
 import { useServiceVariables } from "../../queries/variables";
+import { useEnvironmentGate } from "../access/environment-gate";
 import { CopyButton } from "./copy-button";
 import { CredentialRotationRows } from "./credential-rotation";
 import {
@@ -34,7 +34,7 @@ export interface DatabaseSectionProps {
  * @returns The section.
  */
 export function DatabaseSection({ workspaceId, service, environment }: DatabaseSectionProps) {
-  const { can } = usePermissions(workspaceId);
+  const { can } = useEnvironmentGate(workspaceId, service.project_id, environment);
   const { engine, version } = service.database;
   const spec = DATABASE_ENGINE_SPECS[engine];
   const variables = useServiceVariables(service.id, environment?.id, can("variables:read"));

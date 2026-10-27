@@ -65,10 +65,10 @@ export const STAGED_CHANGE_STATUSES = ["pending", "conflicted", "applied"] as co
 export type StagedChangeStatus = (typeof STAGED_CHANGE_STATUSES)[number];
 
 /**
- * Op types that can be staged today. ADR 0006 also lists `volume.*`,
- * `domain.*`, `tcp_proxy.set`, `backup_policy.set` and `deployment.promote`;
- * each lands with the feature that owns it (0004, 0007, 0009) by adding a
- * member here, a branch to the union below, and an apply step in the API.
+ * Op types that can be staged today. ADR 0006 also lists `tcp_proxy.set`,
+ * `backup_policy.set` and `deployment.promote`; each lands with the feature
+ * that owns it (0004, 0007) by adding a member here, a branch to the union
+ * below, and an apply step in the API.
  */
 export const STAGED_OP_TYPES = [
   "service.create",
@@ -77,6 +77,10 @@ export const STAGED_OP_TYPES = [
   "config.patch",
   "variable.set",
   "variable.delete",
+  "volume.set",
+  "volume.delete",
+  "domain.add",
+  "domain.remove",
 ] as const;
 
 /** A staged op's type; see {@link STAGED_OP_TYPES}. */
@@ -84,6 +88,25 @@ export type StagedOpType = (typeof STAGED_OP_TYPES)[number];
 
 /** Most ops one change set holds. */
 export const MAX_STAGED_OPS = 100;
+
+/**
+ * Where a change set is in review (ADR 0006 "Apply", step 2):
+ * - `none`: nobody asked for a review;
+ * - `submitted`: someone asked for one, or edited an approved or rejected set;
+ * - `approved` / `rejected`: a reviewer with `changes:approve` decided, at the
+ *   set's current revision. Any later edit moves the set back to `submitted`,
+ *   so an approval always covers exactly what applies.
+ */
+export const CHANGE_SET_REVIEW_STATUSES = ["none", "submitted", "approved", "rejected"] as const;
+
+/** A change set's review state; see {@link CHANGE_SET_REVIEW_STATUSES}. */
+export type ChangeSetReviewStatus = (typeof CHANGE_SET_REVIEW_STATUSES)[number];
+
+/** Longest note a submitter or reviewer can leave on a change set. */
+export const MAX_REVIEW_NOTE_LENGTH = 500;
+
+/** Most explicit "connects to" edges one project holds. */
+export const MAX_SERVICE_EDGES = 500;
 
 /**
  * A service created in the same set, addressed before it has an ID:
@@ -214,6 +237,48 @@ export interface VariableDeleteOp {
   key: string;
 }
 
+/**
+ * Gives a live service a volume in the set's environment, or grows the one it
+ * has (ADR 0004). Volumes never shrink; a service with a volume runs one
+ * replica.
+ */
+export interface VolumeSetOp {
+  type: "volume.set";
+  /** A live service ID. */
+  service: string;
+  /** Required when the service has no volume in the environment yet. */
+  mount_path?: string;
+  /** Quota in MiB. */
+  size_mb: number;
+}
+
+/**
+ * Soft-deletes a service's volume in the set's environment: its data is
+ * removed from the node after `VOLUME_DELETE_GRACE_MS` (72 h) unless it is
+ * undeleted first.
+ */
+export interface VolumeDeleteOp {
+  type: "volume.delete";
+  service: string;
+}
+
+/** Adds a custom domain to a live service in the set's environment (ADR 0009). */
+export interface DomainAddOp {
+  type: "domain.add";
+  service: string;
+  /** Normalised when staged (lower case, punycode, no trailing dot). */
+  hostname: string;
+}
+
+/** Removes a custom domain. */
+export interface DomainRemoveOp {
+  type: "domain.remove";
+  domain_id: string;
+  /** Filled in when staged, for the coalescing key and the review. */
+  hostname: string;
+  service: string;
+}
+
 /** One operation of a change set. */
 export type StagedOp =
   | ServiceCreateOp
@@ -221,7 +286,11 @@ export type StagedOp =
   | ServiceDeleteOp
   | ConfigPatchOp
   | VariableSetOp
-  | VariableDeleteOp;
+  | VariableDeleteOp
+  | VolumeSetOp
+  | VolumeDeleteOp
+  | DomainAddOp
+  | DomainRemoveOp;
 
 /**
  * The service an op is about, if any: its ID or `new:<n>` ref.
@@ -241,6 +310,11 @@ export function serviceOfOp(op: StagedOp): string | null {
     case "variable.set":
     case "variable.delete":
       return op.scope === "shared" ? null : (op.service ?? null);
+    case "volume.set":
+    case "volume.delete":
+    case "domain.add":
+    case "domain.remove":
+      return op.service;
   }
 }
 
@@ -249,7 +323,7 @@ export function serviceOfOp(op: StagedOp): string | null {
  * set, so staging the second one merges into or replaces the first.
  *
  * @param op - A staged op.
- * @returns e.g. `config:svc_1`, `var:shared:API_URL`, `create:new:1`.
+ * @returns e.g. `config:svc_1`, `var:shared:API_URL`, `create:new:1`, `domain:shop.example.com`.
  * @example
  * targetKeyOf({ type: "variable.delete", scope: "service", service: "svc_1", key: "A" });
  * // "var:svc_1:A"
@@ -266,12 +340,19 @@ export function targetKeyOf(op: StagedOp): string {
     case "variable.set":
     case "variable.delete":
       return `var:${op.scope === "shared" ? SHARED_NAMESPACE : op.service}:${op.key}`;
+    case "volume.set":
+    case "volume.delete":
+      return `volume:${op.service}`;
+    case "domain.add":
+    case "domain.remove":
+      return `domain:${op.hostname}`;
   }
 }
 
 /**
  * The RBAC action applying an op needs (ADR 0006 "Operations"). Apply checks
- * it against the target environment, so protection rules apply.
+ * it against the target environment, so protection rules apply. Volumes and
+ * domains are `services:manage`, as on their direct routes.
  *
  * @param op - A staged op.
  * @returns `services:manage` or `variables:manage`.
@@ -308,6 +389,14 @@ export function describeOp(op: StagedOp, serviceName: (ref: string) => string = 
       const ns = op.scope === "shared" ? SHARED_NAMESPACE : serviceName(op.service ?? "");
       return `${op.type === "variable.set" ? "set" : "delete"} ${ns}.${op.key}`;
     }
+    case "volume.set":
+      return `set ${serviceName(op.service)} volume to ${op.size_mb} MiB`;
+    case "volume.delete":
+      return `delete ${serviceName(op.service)} volume`;
+    case "domain.add":
+      return `add domain ${op.hostname} to ${serviceName(op.service)}`;
+    case "domain.remove":
+      return `remove domain ${op.hostname} from ${serviceName(op.service)}`;
   }
 }
 

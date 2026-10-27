@@ -13,6 +13,7 @@ import {
   API_TOKEN_PRESETS,
   DEFAULT_LOG_RETENTION_DAYS,
   defaultServiceConfig,
+  presenceColor,
   type ServiceSource,
   type VariableTier,
 } from "@roundhouse/shared";
@@ -493,7 +494,9 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         kind: "production",
         pr_number: null,
         source_branch: null,
-        protected: true,
+        // NOTE: Created before ADR 0014, so the migration left it unprotected; the tools
+        // project's production shows the protected case.
+        protected: false,
         created_at: now - 7 * DAY,
       },
       {
@@ -761,8 +764,24 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
       webhookSecret: "whsec_mock",
     },
     presence: [
-      { user_id: "usr_ada", name: "Ada Lovelace", image: null },
-      { user_id: "usr_bob", name: "Bob Builder", image: null },
+      {
+        user_id: "usr_ada",
+        name: "Ada Lovelace",
+        image: null,
+        color: presenceColor("usr_ada"),
+        environment_id: null,
+        selection: [],
+        editing: null,
+      },
+      {
+        user_id: "usr_bob",
+        name: "Bob Builder",
+        image: null,
+        color: presenceColor("usr_bob"),
+        environment_id: null,
+        selection: [],
+        editing: null,
+      },
     ],
     tokens: [
       {

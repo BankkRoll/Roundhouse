@@ -24,8 +24,8 @@ import { ConfirmDialog } from "../../components/confirm-dialog";
 import { errorMessage, isApiError } from "../../lib/api/client";
 import type { TcpProxy } from "../../lib/api/data-client";
 import type { Environment, Service } from "../../lib/api/deploy-types";
-import { usePermissions } from "../../lib/permissions";
 import { useDeleteTcpProxy, usePutTcpProxy, useTcpProxy } from "../../queries/databases";
+import { useEnvironmentGate } from "../access/environment-gate";
 import { parseAllowlist } from "./allowlist";
 import { actionError } from "./backups-tab";
 import { CopyButton } from "./copy-button";
@@ -214,7 +214,7 @@ export interface TcpProxySectionProps {
  * @returns The section.
  */
 export function TcpProxySection({ workspaceId, service, environment }: TcpProxySectionProps) {
-  const { can } = usePermissions(workspaceId);
+  const { can } = useEnvironmentGate(workspaceId, service.project_id, environment);
   const query = useTcpProxy(service.id, environment?.id);
   const remove = useDeleteTcpProxy(service.id, environment?.id ?? "");
   const [editing, setEditing] = useState(false);

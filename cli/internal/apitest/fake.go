@@ -688,6 +688,10 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteReviewChangeSet:  {"projects:read", f.reviewChangeSet},
 		api.RouteApplyChangeSet:   {"projects:read", f.applyChangeSet},
 		api.RouteDiscardChangeSet: {"projects:read", f.discardChangeSet},
+		api.RouteSubmitChangeSet:  {"projects:read", f.submitChangeSet},
+		api.RouteApproveChangeSet: {"changes:approve", f.approveChangeSet},
+		api.RouteRejectChangeSet:  {"changes:approve", f.rejectChangeSet},
+		api.RouteRebaseChangeSet:  {"projects:read", f.rebaseChangeSet},
 
 		api.RouteServiceMetrics: {"services:read", f.serviceMetricsHandler},
 		api.RouteMetricsSummary: {"projects:read", f.metricsSummaryHandler},

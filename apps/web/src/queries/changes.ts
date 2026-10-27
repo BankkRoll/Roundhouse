@@ -26,6 +26,10 @@ export const changeKeys = {
   draft: (environmentId: string) => ["environments", environmentId, "draft"] as const,
   changeSet: (changeSetId: string) => ["change-sets", changeSetId] as const,
   review: (changeSetId: string) => ["change-sets", changeSetId, "review"] as const,
+  /** Every workspace review queue; prefix of {@link changeKeys.workspaceQueue}. */
+  workspaceQueueAll: () => ["change-sets", "workspace"] as const,
+  workspaceQueue: (workspaceId: string, review: "open" | "pending") =>
+    ["change-sets", "workspace", workspaceId, review] as const,
 };
 
 /**
@@ -217,6 +221,115 @@ export function useDiscard(scope: SetScope) {
 }
 
 /**
+ * The workspace's open change sets: its review queue.
+ *
+ * @param workspaceId - Workspace id.
+ * @param review - Every open set, or only those waiting for a reviewer.
+ * @returns The queue query.
+ */
+export function useWorkspaceChangeSets(workspaceId: string, review: "open" | "pending" = "open") {
+  return useQuery({
+    queryKey: changeKeys.workspaceQueue(workspaceId, review),
+    queryFn: ({ signal }) => changesApi.listWorkspaceChangeSets(workspaceId, review, signal),
+    select: (data) => data.change_sets,
+  });
+}
+
+/**
+ * Asks for a review of a set.
+ *
+ * @param scope - Project and environment.
+ * @returns A mutation taking the set id, the revision the caller saw and a note.
+ */
+export function useSubmit(scope: SetScope) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { setId: string; revision: number; note?: string }) =>
+      changesApi.submit(input.setId, {
+        expected_revision: input.revision,
+        ...(input.note ? { note: input.note } : {}),
+      }),
+    onSuccess: (set) => {
+      storeSet(queryClient, scope, set);
+      void queryClient.invalidateQueries({ queryKey: changeKeys.workspaceQueueAll() });
+    },
+  });
+}
+
+/**
+ * Approves or rejects the revision a reviewer looked at.
+ *
+ * @param scope - Project and environment.
+ * @returns A mutation taking the set id, decision, reviewed revision and a note.
+ */
+export function useDecide(scope: SetScope) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      setId: string;
+      decision: "approve" | "reject";
+      revision: number;
+      note?: string;
+    }) =>
+      changesApi.decide(input.setId, input.decision, {
+        expected_revision: input.revision,
+        ...(input.note ? { note: input.note } : {}),
+      }),
+    onSuccess: (set) => {
+      storeSet(queryClient, scope, set);
+      void queryClient.invalidateQueries({ queryKey: changeKeys.workspaceQueueAll() });
+    },
+    onError: (_, input) => {
+      void queryClient.invalidateQueries({ queryKey: changeKeys.changeSet(input.setId) });
+    },
+  });
+}
+
+/**
+ * Moves a stale set onto the current state.
+ *
+ * @param scope - Project and environment.
+ * @returns A mutation taking the set id and the revision the caller saw.
+ */
+export function useRebase(scope: SetScope) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ setId, revision }: { setId: string; revision: number }) =>
+      changesApi.rebase(setId, revision),
+    onSuccess: (result) => storeSet(queryClient, scope, result.change_set),
+  });
+}
+
+/**
+ * Draws a "connects to" edge.
+ *
+ * @param projectId - Project id.
+ * @returns A mutation taking both service ids.
+ */
+export function useAddEdge(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ from, to }: { from: string; to: string }) =>
+      changesApi.addEdge(projectId, from, to),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: changeKeys.canvasAll(projectId) }),
+  });
+}
+
+/**
+ * Removes a "connects to" edge.
+ *
+ * @param projectId - Project id.
+ * @returns A mutation taking the edge id.
+ */
+export function useRemoveEdge(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (edgeId: string) => changesApi.removeEdge(projectId, edgeId),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: changeKeys.canvasAll(projectId) }),
+  });
+}
+
+/**
  * Persists canvas positions. A stale version refetches the canvas; the caller keeps
  * its local positions and retries on the next move.
  *
@@ -277,6 +390,8 @@ export function applyChangeRealtime(
       void queryClient.invalidateQueries({
         queryKey: changeKeys.canvas(set.project_id, set.environment_id),
       });
+      void queryClient.invalidateQueries({ queryKey: changeKeys.review(set.id) });
+      void queryClient.invalidateQueries({ queryKey: changeKeys.workspaceQueueAll() });
       return true;
     }
     case "change_set.applied":
@@ -284,6 +399,9 @@ export function applyChangeRealtime(
       return true;
     case "canvas.layout_updated":
       setLayout(queryClient, projectId, message.positions, message.version);
+      return true;
+    case "canvas.edges_updated":
+      void queryClient.invalidateQueries({ queryKey: changeKeys.canvasAll(projectId) });
       return true;
     default:
       return false;

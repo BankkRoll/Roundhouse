@@ -4,6 +4,7 @@ import { ErrorState } from "../../components/error-state";
 import { errorMessage } from "../../lib/api/client";
 import { usePermissions } from "../../lib/permissions";
 import { useMembers } from "../../queries/members";
+import { DefaultAccessSection } from "../access/default-access-section";
 import { SettingsFrame } from "../settings/settings-frame";
 import { useShellActions } from "../shell/shell-actions";
 import { MembersTable } from "./members-table";
@@ -60,6 +61,7 @@ export function MembersPage({ workspaceId }: { workspaceId: string }) {
             <MembersTable workspaceId={workspaceId} members={members.data} />
           </SettingsSection>
           {canManage ? <PendingInvites workspaceId={workspaceId} /> : null}
+          <DefaultAccessSection workspaceId={workspaceId} />
         </SettingsStack>
       )}
     </SettingsFrame>

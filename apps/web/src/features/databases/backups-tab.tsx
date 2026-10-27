@@ -39,7 +39,7 @@ import type { Backup, BackupPolicy, RestoreBody } from "../../lib/api/backups-cl
 import { errorMessage, isApiError } from "../../lib/api/client";
 import type { Environment, Service } from "../../lib/api/deploy-types";
 import { formatBytes, formatDuration, formatRelativeTime, formatTimestamp } from "../../lib/format";
-import { canManageInstance, usePermissions } from "../../lib/permissions";
+import { canManageInstance } from "../../lib/permissions";
 import {
   useBackupDownload,
   useBackupPolicy,
@@ -52,6 +52,7 @@ import {
   useSaveBackupPolicy,
 } from "../../queries/backups";
 import { useMe } from "../../queries/me";
+import { useEnvironmentGate } from "../access/environment-gate";
 import { findService, useProjectEnvironment } from "../projects/use-project-environment";
 import type { ServicePageProps } from "../services/service-layout";
 import { defaultRestoreSlug } from "./database-meta";
@@ -682,7 +683,7 @@ function BackupRow({
 export function BackupsTab({ workspaceId, projectId, serviceId }: ServicePageProps) {
   const { project, environment } = useProjectEnvironment(projectId);
   const service = findService(project.data, serviceId);
-  const { can } = usePermissions(workspaceId);
+  const { can } = useEnvironmentGate(workspaceId, projectId, environment);
   const { data: me } = useMe();
   const admin = canManageInstance(me);
   const storage = useBackupStorage(admin);

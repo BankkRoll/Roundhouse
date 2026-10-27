@@ -16,6 +16,14 @@ type changeSet struct {
 	// drift holds ops that conflict as soon as an apply checks them, as if
 	// someone changed their target after the last review.
 	drift map[string]bool
+	// rebasable holds ops whose base drifted on other fields, so they
+	// rebase cleanly.
+	rebasable map[string]bool
+	// requireApproval stands for the environment's protection requiring
+	// an approval before an apply.
+	requireApproval bool
+	// approvedRevision is the revision an approval covers.
+	approvedRevision int
 }
 
 // ChangeSetSpec describes a change set for [Fake.StageChangeSet].
@@ -25,7 +33,14 @@ type ChangeSetSpec struct {
 	Draft  bool
 	Title  string
 	Source string
-	// Changes are stored in order; empty IDs, seqs, statuses and
+	// CreatedBy is the user who opened the set and, unless a change names
+	// another, staged its changes; the seeded user by default, who then
+	// can't review it.
+	CreatedBy string
+	// RequireApproval makes an apply wait for an approval, as when the
+	// environment's protection requires one.
+	RequireApproval bool
+	// Changes are stored in order; empty IDs, seqs, statuses, authors and
 	// timestamps are filled in.
 	Changes []api.StagedChange
 	// Deploys is what applying with deploy "affected" starts.
@@ -41,14 +56,20 @@ func (f *Fake) StageChangeSet(spec ChangeSetSpec) string {
 	if source == "" {
 		source = "dashboard"
 	}
+	author := spec.CreatedBy
+	if author == "" {
+		author = f.user.ID
+	}
 	cs := &changeSet{
 		ChangeSet: api.ChangeSet{ChangeSetSummary: api.ChangeSetSummary{
 			ID: f.nextID("chs"), ProjectID: ProjectID, EnvironmentID: spec.EnvironmentID, Status: api.ChangeSetOpen,
-			IsDraft: spec.Draft, Source: source, Revision: 1, CreatedBy: str(f.user.ID),
+			IsDraft: spec.Draft, Source: source, Revision: 1, CreatedBy: str(author), ReviewStatus: api.ReviewNone,
 			CreatedAt: Now - 60000 + int64(f.seq), UpdatedAt: Now - 60000 + int64(f.seq),
 		}},
-		deploys: slices.Clone(spec.Deploys),
-		drift:   map[string]bool{},
+		deploys:         slices.Clone(spec.Deploys),
+		drift:           map[string]bool{},
+		rebasable:       map[string]bool{},
+		requireApproval: spec.RequireApproval,
 	}
 	if spec.Title != "" {
 		cs.Title = str(spec.Title)
@@ -68,6 +89,9 @@ func (f *Fake) StageChangeSet(spec ChangeSetSpec) string {
 		}
 		if c.Diff == nil {
 			c.Diff = []api.DiffEntry{}
+		}
+		if c.CreatedBy == nil {
+			c.CreatedBy = str(author)
 		}
 		if c.CreatedAt == 0 {
 			c.CreatedAt, c.UpdatedAt = cs.CreatedAt, cs.CreatedAt
@@ -93,6 +117,31 @@ func (f *Fake) DriftOnApply(changeSetID, opID string, deleted bool) {
 	for _, cs := range f.changeSets {
 		if cs.ID == changeSetID {
 			cs.drift[opID] = deleted
+		}
+	}
+}
+
+// DriftOnRebase makes op's base drift on fields it doesn't change, so the
+// review lists it as rebasing and the next rebase moves it.
+func (f *Fake) DriftOnRebase(changeSetID, opID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, cs := range f.changeSets {
+		if cs.ID == changeSetID {
+			cs.rebasable[opID] = true
+		}
+	}
+}
+
+// ApproveAs records userID's approval of a change set's current revision.
+// The seeded user can apply it only when userID is someone else.
+func (f *Fake) ApproveAs(changeSetID, userID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, cs := range f.changeSets {
+		if cs.ID == changeSetID {
+			cs.ReviewStatus, cs.ApprovedBy, cs.ApprovedAt = api.ReviewApproved, str(userID), i64(Now)
+			cs.approvedRevision = cs.Revision
 		}
 	}
 }
@@ -129,6 +178,53 @@ func (cs *changeSet) bump() {
 	cs.count()
 }
 
+// edit bumps the revision of an open set and, like the API's
+// bumpRevision, voids its review decision: what was reviewed moved.
+func (cs *changeSet) edit() {
+	cs.bump()
+	if cs.ReviewStatus != api.ReviewNone {
+		cs.ReviewStatus = api.ReviewSubmitted
+	}
+	cs.ApprovedBy, cs.ApprovedAt, cs.RejectedBy, cs.RejectedAt = nil, nil, nil, nil
+	cs.approvedRevision = 0
+}
+
+func (cs *changeSet) approved() bool {
+	return cs.ReviewStatus == api.ReviewApproved && cs.ApprovedBy != nil && cs.approvedRevision == cs.Revision
+}
+
+// authors mirrors authorsOf in apps/api/src/lib/changes/review.ts.
+func (cs *changeSet) authors() []string {
+	var ids []string
+	if cs.CreatedBy != nil {
+		ids = append(ids, *cs.CreatedBy)
+	}
+	for _, c := range cs.Changes {
+		if c.Status != api.StagedApplied && c.CreatedBy != nil {
+			ids = append(ids, *c.CreatedBy)
+		}
+	}
+	slices.Sort(ids)
+	return slices.Compact(ids)
+}
+
+func (cs *changeSet) approval() api.ChangeSetApproval {
+	authors := cs.authors()
+	if authors == nil {
+		authors = []string{}
+	}
+	return api.ChangeSetApproval{Required: cs.requireApproval, Approved: cs.approved(), Authors: authors}
+}
+
+func changeSetChanged(w http.ResponseWriter, cs *changeSet) {
+	apiError(w, http.StatusConflict, "change_set_changed",
+		fmt.Sprintf("The change set changed since you reviewed it; it is at revision %d. Reload and review again", cs.Revision))
+}
+
+func notOpen(w http.ResponseWriter, cs *changeSet) {
+	apiError(w, http.StatusConflict, "conflict", "The change set is "+cs.Status)
+}
+
 func (f *Fake) environmentExists(id string) bool {
 	for _, p := range f.projects {
 		if slices.ContainsFunc(p.Environments, func(e api.Environment) bool { return e.ID == id }) {
@@ -136,6 +232,17 @@ func (f *Fake) environmentExists(id string) bool {
 		}
 	}
 	return false
+}
+
+func (f *Fake) environmentName(id string) string {
+	for _, p := range f.projects {
+		for _, e := range p.Environments {
+			if e.ID == id {
+				return e.Name
+			}
+		}
+	}
+	return id
 }
 
 func (f *Fake) findChangeSet(w http.ResponseWriter, id string) *changeSet {
@@ -160,13 +267,20 @@ func (f *Fake) listChangeSets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []api.ChangeSetSummary{}
+	// The fake keeps the approval rule per set; an environment requires
+	// approval when any of its sets was staged under that rule.
+	requires := false
 	for i := len(f.changeSets) - 1; i >= 0; i-- {
 		cs := f.changeSets[i]
-		if cs.EnvironmentID == env && (status == "all" || cs.Status == api.ChangeSetOpen) {
+		if cs.EnvironmentID != env {
+			continue
+		}
+		requires = requires || cs.requireApproval
+		if status == "all" || cs.Status == api.ChangeSetOpen {
 			out = append(out, cs.ChangeSetSummary)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"change_sets": out})
+	writeJSON(w, http.StatusOK, map[string]any{"change_sets": out, "environment_requires_approval": requires})
 }
 
 func (f *Fake) getDraft(w http.ResponseWriter, r *http.Request) {
@@ -195,8 +309,11 @@ func (f *Fake) reviewChangeSet(w http.ResponseWriter, r *http.Request) {
 	if cs == nil {
 		return
 	}
-	review := api.ChangeSetReview{ChangeSet: cs.ChangeSet, Rebases: []string{}, Conflicts: []api.ChangeSetConflict{}, Deploys: cs.deploys}
+	review := api.ChangeSetReview{ChangeSet: cs.ChangeSet, Rebases: []string{}, Conflicts: []api.ChangeSetConflict{}, Deploys: cs.deploys, Approval: cs.approval()}
 	for _, c := range cs.Changes {
+		if cs.rebasable[c.ID] && c.Status != api.StagedApplied {
+			review.Rebases = append(review.Rebases, c.ID)
+		}
 		if c.Status == api.StagedConflicted && c.Conflict != nil {
 			review.Conflicts = append(review.Conflicts, api.ChangeSetConflict{ID: c.ID, Conflict: *c.Conflict})
 		}
@@ -222,12 +339,23 @@ func (f *Fake) applyChangeSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cs.Status != api.ChangeSetOpen {
-		apiError(w, http.StatusConflict, "conflict", "The change set is "+cs.Status)
+		notOpen(w, cs)
 		return
 	}
 	if in.ExpectedRevision != cs.Revision {
-		apiError(w, http.StatusConflict, "change_set_changed",
-			fmt.Sprintf("The change set changed since you reviewed it; it is at revision %d. Reload and review again", cs.Revision))
+		changeSetChanged(w, cs)
+		return
+	}
+	// Mirrors applyBlocker in apps/api/src/lib/changes/review.ts.
+	switch {
+	case cs.ReviewStatus == api.ReviewRejected:
+		apiError(w, http.StatusConflict, "change_set_rejected", "This change set was rejected; change it, or ask for another review, first")
+		return
+	case cs.requireApproval && !cs.approved():
+		apiError(w, http.StatusForbidden, "approval_required", f.environmentName(cs.EnvironmentID)+" requires an approval before changes apply; submit the change set for review")
+		return
+	case cs.requireApproval && *cs.ApprovedBy == f.user.ID:
+		apiError(w, http.StatusForbidden, "forbidden", "You approved this change set, so someone else must apply it")
 		return
 	}
 	var details []api.ErrorDetail
@@ -249,7 +377,7 @@ func (f *Fake) applyChangeSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(details) > 0 {
 		clear(cs.drift)
-		cs.bump()
+		cs.edit()
 		plural := "s"
 		if len(details) == 1 {
 			plural = ""
@@ -304,15 +432,145 @@ func (f *Fake) discardChangeSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cs.Status != api.ChangeSetOpen {
-		apiError(w, http.StatusConflict, "conflict", "The change set is "+cs.Status)
+		notOpen(w, cs)
 		return
 	}
 	if in.ExpectedRevision != 0 && in.ExpectedRevision != cs.Revision {
-		apiError(w, http.StatusConflict, "change_set_changed",
-			fmt.Sprintf("The change set changed since you reviewed it; it is at revision %d. Reload and review again", cs.Revision))
+		changeSetChanged(w, cs)
 		return
 	}
 	cs.Status = api.ChangeSetDiscarded
 	cs.bump()
 	writeJSON(w, http.StatusOK, cs.ChangeSet)
+}
+
+// openForReview answers the refusals submit, approve and reject share; it
+// reports whether the set may be reviewed.
+func openForReview(w http.ResponseWriter, cs *changeSet, expectedRevision int) bool {
+	switch {
+	case cs.Status != api.ChangeSetOpen:
+		notOpen(w, cs)
+	case expectedRevision != 0 && expectedRevision != cs.Revision:
+		changeSetChanged(w, cs)
+	case cs.OpCount == 0:
+		apiError(w, http.StatusConflict, "conflict", "Nothing is staged in this change set")
+	default:
+		return true
+	}
+	return false
+}
+
+func (f *Fake) submitChangeSet(w http.ResponseWriter, r *http.Request) {
+	cs := f.findChangeSet(w, r.PathValue("changeSetId"))
+	if cs == nil {
+		return
+	}
+	var in api.SubmitChangeSetInput
+	if decode(r, &in) != nil {
+		apiError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON body")
+		return
+	}
+	if !openForReview(w, cs, in.ExpectedRevision) {
+		return
+	}
+	if cs.ReviewStatus == api.ReviewSubmitted || cs.approved() {
+		writeJSON(w, http.StatusOK, cs.ChangeSet)
+		return
+	}
+	cs.ReviewStatus, cs.SubmittedBy, cs.SubmittedAt = api.ReviewSubmitted, str(f.user.ID), i64(Now)
+	cs.RejectedBy, cs.RejectedAt, cs.ReviewNote = nil, nil, nil
+	if in.Note != "" {
+		cs.ReviewNote = str(in.Note)
+	}
+	cs.UpdatedAt = Now
+	writeJSON(w, http.StatusOK, cs.ChangeSet)
+}
+
+func (f *Fake) approveChangeSet(w http.ResponseWriter, r *http.Request) { f.decide(w, r, true) }
+func (f *Fake) rejectChangeSet(w http.ResponseWriter, r *http.Request)  { f.decide(w, r, false) }
+
+// decide mirrors decideSet in apps/api/src/lib/changes/review.ts.
+func (f *Fake) decide(w http.ResponseWriter, r *http.Request, approve bool) {
+	cs := f.findChangeSet(w, r.PathValue("changeSetId"))
+	if cs == nil {
+		return
+	}
+	var in api.ReviewDecisionInput
+	if decode(r, &in) != nil || in.ExpectedRevision <= 0 {
+		apiError(w, http.StatusBadRequest, "invalid_request", "expected_revision: Required")
+		return
+	}
+	if !openForReview(w, cs, in.ExpectedRevision) {
+		return
+	}
+	if slices.Contains(cs.authors(), f.user.ID) {
+		apiError(w, http.StatusForbidden, "self_review", "You opened this change set or staged changes in it, so someone else must review it")
+		return
+	}
+	cs.ApprovedBy, cs.ApprovedAt, cs.RejectedBy, cs.RejectedAt, cs.ReviewNote = nil, nil, nil, nil, nil
+	cs.approvedRevision = 0
+	if approve {
+		cs.ReviewStatus, cs.ApprovedBy, cs.ApprovedAt = api.ReviewApproved, str(f.user.ID), i64(Now)
+		cs.approvedRevision = cs.Revision
+	} else {
+		cs.ReviewStatus, cs.RejectedBy, cs.RejectedAt = api.ReviewRejected, str(f.user.ID), i64(Now)
+	}
+	if in.Note != "" {
+		cs.ReviewNote = str(in.Note)
+	}
+	if cs.SubmittedAt == nil {
+		cs.SubmittedAt = i64(Now)
+	}
+	cs.UpdatedAt = Now
+	writeJSON(w, http.StatusOK, cs.ChangeSet)
+}
+
+// rebaseChangeSet moves the ops [Fake.DriftOnRebase] marked and records
+// the drift [Fake.DriftOnApply] set up as conflicts.
+func (f *Fake) rebaseChangeSet(w http.ResponseWriter, r *http.Request) {
+	cs := f.findChangeSet(w, r.PathValue("changeSetId"))
+	if cs == nil {
+		return
+	}
+	var in api.RebaseChangeSetInput
+	if decode(r, &in) != nil || in.ExpectedRevision <= 0 {
+		apiError(w, http.StatusBadRequest, "invalid_request", "expected_revision: Required")
+		return
+	}
+	if cs.Status != api.ChangeSetOpen {
+		notOpen(w, cs)
+		return
+	}
+	if in.ExpectedRevision != cs.Revision {
+		changeSetChanged(w, cs)
+		return
+	}
+	out := api.RebasedChangeSet{Rebased: []string{}, Conflicts: []api.ChangeSetConflict{}}
+	changed := false
+	for i := range cs.Changes {
+		c := &cs.Changes[i]
+		if c.Status == api.StagedApplied {
+			continue
+		}
+		if cs.rebasable[c.ID] {
+			c.Status, c.Conflict = api.StagedPending, nil
+			out.Rebased = append(out.Rebased, c.ID)
+			changed = true
+		}
+		if deleted, drifted := cs.drift[c.ID]; drifted {
+			v := 1
+			c.Status, c.Conflict = api.StagedConflicted, &api.StagedConflict{BaseVersion: &v, CurrentVersion: &v, Deleted: deleted}
+			changed = true
+		}
+		if c.Status == api.StagedConflicted && c.Conflict != nil {
+			out.Conflicts = append(out.Conflicts, api.ChangeSetConflict{ID: c.ID, Conflict: *c.Conflict})
+		}
+	}
+	clear(cs.rebasable)
+	clear(cs.drift)
+	if changed {
+		cs.edit()
+	}
+	out.ChangeSet = cs.ChangeSet
+	writeJSON(w, http.StatusOK, out)
 }

@@ -16,7 +16,6 @@ import { errorMessage } from "../../lib/api/client";
 import type { Volume } from "../../lib/api/data-client";
 import type { Environment, Service } from "../../lib/api/deploy-types";
 import { formatBytes, formatDuration, formatTimestamp } from "../../lib/format";
-import { usePermissions } from "../../lib/permissions";
 import {
   migrationInFlight,
   useDeleteVolume,
@@ -26,6 +25,7 @@ import {
   useVolumeMigrations,
 } from "../../queries/databases";
 import { useNodes } from "../../queries/nodes";
+import { useEnvironmentGate } from "../access/environment-gate";
 import { MigrationHistory, MigrationProgress, MoveVolumeDialog } from "./volume-migration";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "info";
@@ -150,7 +150,7 @@ export interface VolumeSectionProps {
  * @returns The section.
  */
 export function VolumeSection({ workspaceId, service, environment }: VolumeSectionProps) {
-  const { can } = usePermissions(workspaceId);
+  const { can } = useEnvironmentGate(workspaceId, service.project_id, environment);
   const volume = useVolume(service.id, environment?.id);
   const remove = useDeleteVolume();
   const undelete = useUndeleteVolume();

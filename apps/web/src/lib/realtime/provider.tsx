@@ -15,7 +15,13 @@ import { applyRealtimeMessage } from "../../queries/realtime";
 import { api, isApiError } from "../api/client";
 import type { PresenceUser, RealtimeLogLines, RealtimeTopic } from "../api/deploy-types";
 import { endSession } from "../session";
-import { RealtimeClient, type RealtimeSocket, type RealtimeStatus, realtimeUrl } from "./client";
+import {
+  type PresenceState,
+  RealtimeClient,
+  type RealtimeSocket,
+  type RealtimeStatus,
+  realtimeUrl,
+} from "./client";
 
 /** What {@link useRealtime} exposes to a project's pages. */
 export interface RealtimeContextValue {
@@ -31,6 +37,8 @@ export interface RealtimeContextValue {
     topic: RealtimeTopic,
     listener: (message: RealtimeLogLines) => void,
   ) => () => void;
+  /** Tells the room what this tab shows (environment, selection, editing), by ID. */
+  updatePresence: (state: PresenceState) => void;
 }
 
 const RealtimeContext = createContext<RealtimeContextValue | null>(null);
@@ -110,9 +118,13 @@ export function RealtimeProvider({ projectId, children, createSocket }: Realtime
     (topic, listener) => client.subscribeLogs(topic, listener),
     [client],
   );
+  const updatePresence = useCallback(
+    (state: PresenceState) => client.updatePresence(state),
+    [client],
+  );
   const value = useMemo<RealtimeContextValue>(
-    () => ({ status, presence, subscribeLogs }),
-    [status, presence, subscribeLogs],
+    () => ({ status, presence, subscribeLogs, updatePresence }),
+    [status, presence, subscribeLogs, updatePresence],
   );
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;

@@ -11,6 +11,18 @@ describe("API token scopes", () => {
     expect(isApiTokenScope("workspaces:create")).toBe(false);
     expect(isApiTokenScope("tokens:manage")).toBe(true);
     expect(isApiTokenScope(42)).toBe(false);
+    expect(isApiTokenScope("changes:approve")).toBe(true);
+    expect(isApiTokenScope("changes:auto_apply")).toBe(true);
+  });
+
+  it("never grants auto-apply through a preset: it must be chosen explicitly", () => {
+    for (const scopes of Object.values(API_TOKEN_PRESETS)) {
+      expect(scopes).not.toContain("changes:auto_apply");
+      expect(scopes).not.toContain("changes:approve");
+    }
+    expect(scopesBeyondRole("member", ["changes:auto_apply", "changes:approve"])).toEqual([
+      "changes:approve",
+    ]);
   });
 
   it("keeps presets within a member's grants and free of management scopes", () => {

@@ -29,6 +29,8 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CREDENTIAL_ROUTES, PHASE1_ROUTES } from "../../../api/src/contracts";
 import { RealtimeServerMessageSchema } from "../../../api/src/schemas";
+import { ACCESS_SEED } from "./access-db";
+import { requireApprovalIn } from "./changes-handlers";
 import { DATA_SEED } from "./data-db";
 import {
   db,
@@ -92,6 +94,7 @@ const ROUTE_MODULES = [
   "signing-keys",
   "instance-admin",
   "auth-security",
+  "access",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -156,6 +159,14 @@ let apiRoutes: ApiRoute[] = [];
 /** `Location` of the last response `call` received, for redirects. */
 let lastLocation: string | null = null;
 const exercised = new Set<string>();
+/** Every response body `call` received, so a test can check none ever carried a staged value. */
+const responseTexts: string[] = [];
+/**
+ * Values the change set scenarios stage as secrets. Deliberately unlike any real credential
+ * format; no response body may ever contain them.
+ */
+const STAGED_VALUE = "staged-fixture-value-one";
+const STAGED_VALUE_TWO = "staged-fixture-value-two";
 const failures: string[] = [];
 
 beforeAll(async () => {
@@ -195,6 +206,7 @@ async function call(
   });
   lastLocation = response.headers.get("location");
   const text = await response.text();
+  responseTexts.push(text);
   const parsed: unknown = text ? JSON.parse(text) : undefined;
   if (BETTER_AUTH_PATHS.has(url.pathname)) {
     exercised.add(`${method} ${url.pathname}`);
@@ -322,8 +334,24 @@ describe("MSW mocks match the API contract", () => {
       expect((await call("PATCH", OTHER_WS, { name: "X" })).status).toBe(404);
       expect(await call("PATCH", WS, { name: "Acme Robotics" })).toMatchObject({
         status: 200,
-        body: { name: "Acme Robotics", slug: "acme" },
+        body: { name: "Acme Robotics", slug: "acme", staged_changes: true },
       });
+      expect((await call("PATCH", WS, {})).status).toBe(400);
+      expect((await call("PATCH", WS, { staged_changes: "yes" })).status).toBe(400);
+      expect(await call("PATCH", WS, { staged_changes: false })).toMatchObject({
+        status: 200,
+        body: { name: "Acme Robotics", staged_changes: false },
+      });
+      expect(db.audit.at(-1)).toMatchObject({
+        action: "workspace.settings_updated",
+        metadata: { from: { staged_changes: true }, to: { staged_changes: false } },
+      });
+      expect(
+        await call("GET", `/v1/projects/${SEED.project}/canvas?environment_id=${SEED.production}`),
+      ).toMatchObject({ status: 200, body: { staging: false } });
+      expect((await call("GET", WS)).body).toMatchObject({ staged_changes: false });
+      as("member");
+      expect((await call("PATCH", WS, { staged_changes: true })).status).toBe(403);
       as(null);
       expect((await call("GET", WS)).status).toBe(401);
       expect((await call("PATCH", WS, { name: "X" })).status).toBe(401);
@@ -2163,7 +2191,7 @@ describe("MSW mocks match the API contract", () => {
             scope: "service",
             service: SEED.api,
             key: "API_TOKEN",
-            value: "tok-123456789",
+            value: STAGED_VALUE,
             tier: "secret",
           },
         }),
@@ -2174,13 +2202,13 @@ describe("MSW mocks match the API contract", () => {
           scope: "service",
           service: SEED.api,
           key: "API_TOKEN",
-          value: "tok-123456789",
+          value: STAGED_VALUE,
           tier: "secret",
           confirm_write_only: true,
         },
       });
       expect(secret.status).toBe(200);
-      expect(JSON.stringify(secret.body)).not.toContain("tok-123456789");
+      expect(JSON.stringify(secret.body)).not.toContain(STAGED_VALUE);
 
       expect((await call("GET", `/v1/change-sets/${set.id}`)).status).toBe(200);
       expect((await call("GET", `/v1/change-sets/chs_nope`)).status).toBe(404);
@@ -2273,13 +2301,479 @@ describe("MSW mocks match the API contract", () => {
       expect((applied.body as { deployment_ids: string[] }).deployment_ids.length).toBeGreaterThan(
         0,
       );
-      expect(JSON.stringify(applied.body)).not.toContain("tok-123456789");
+      expect(JSON.stringify(applied.body)).not.toContain(STAGED_VALUE);
 
       as("viewer");
       expect((await call("POST", `${ENV}/draft/ops`, { op: patch })).status).toBe(403);
       as(null);
       expect((await call("GET", `${ENV}/draft`)).status).toBe(401);
     });
+  });
+
+  it("canvas: explicit edges, resources on nodes, presence, volume and domain ops", async () => {
+    await fresh(async () => {
+      const ENV = `/v1/environments/${SEED.production}`;
+      const CANVAS = `/v1/projects/${SEED.project}/canvas?environment_id=${SEED.production}`;
+      const EDGES = `/v1/projects/${SEED.project}/edges`;
+      const url = new URL(`/v1/projects/${SEED.project}/realtime`, window.location.origin);
+      url.protocol = "ws:";
+      const socket = new WebSocket(url);
+      const received: { type: string; users?: { user_id: string; selection: string[] }[] }[] = [];
+      socket.onmessage = (event) => received.push(JSON.parse(String(event.data)));
+      await new Promise((resolve) => socket.addEventListener("open", resolve, { once: true }));
+
+      const edge = await call("POST", EDGES, {
+        from_service_id: SEED.web,
+        to_service_id: SEED.api,
+      });
+      expect(edge).toMatchObject({
+        status: 201,
+        body: { project_id: SEED.project, from_service_id: SEED.web, created_by: USERS.owner.id },
+      });
+      const edgeId = (edge.body as { id: string }).id;
+      expect(edgeId).toMatch(/^edg_/);
+      expect(db.audit.at(-1)).toMatchObject({ action: "canvas.edge_added" });
+      expect(
+        (await call("POST", EDGES, { from_service_id: SEED.web, to_service_id: SEED.api })).status,
+      ).toBe(409);
+      expect(
+        (await call("POST", EDGES, { from_service_id: SEED.web, to_service_id: SEED.web })).status,
+      ).toBe(400);
+      expect(
+        (await call("POST", EDGES, { from_service_id: SEED.web, to_service_id: "svc_nope" }))
+          .status,
+      ).toBe(404);
+      expect(
+        (
+          await call("POST", "/v1/projects/prj_nope/edges", {
+            from_service_id: SEED.web,
+            to_service_id: SEED.api,
+          })
+        ).status,
+      ).toBe(404);
+      const canvas = await call("GET", CANVAS);
+      const body = canvas.body as {
+        environment_protected: boolean;
+        edges: { id: string; kind: string }[];
+        nodes: { id: string; database: unknown; volume: unknown; domains: unknown[] }[];
+      };
+      expect(body.environment_protected).toBe(
+        db.deploy.environments.find((e) => e.id === SEED.production)!.protected,
+      );
+      expect(body.edges).toContainEqual({
+        id: edgeId,
+        from: SEED.web,
+        to: SEED.api,
+        kind: "explicit",
+        variables: [],
+        state: "current",
+      });
+      expect(body.nodes.find((n) => n.id === DATA_SEED.database)).toMatchObject({
+        database: { engine: "postgres", version: "18" },
+        volume: { id: DATA_SEED.volume, size_mb: 5120, status: "ready", staged: null },
+        domains: [],
+      });
+      expect(body.nodes.find((n) => n.id === SEED.web)).toMatchObject({
+        database: null,
+        volume: null,
+      });
+
+      as("viewer");
+      expect(
+        (await call("POST", EDGES, { from_service_id: SEED.api, to_service_id: SEED.web })).status,
+      ).toBe(403);
+      expect((await call("DELETE", `${EDGES}/${edgeId}`)).status).toBe(403);
+      as(null);
+      expect((await call("DELETE", `${EDGES}/${edgeId}`)).status).toBe(401);
+      as("owner");
+      expect((await call("DELETE", `${EDGES}/${edgeId}`)).status).toBe(204);
+      expect((await call("DELETE", `${EDGES}/${edgeId}`)).status).toBe(404);
+      expect(
+        ((await call("GET", CANVAS)).body as { edges: { kind: string }[] }).edges.filter(
+          (e) => e.kind === "explicit",
+        ),
+      ).toEqual([]);
+
+      // NOTE: Like the API, the socket takes only ID-shaped targets; the seeded
+      // environment id (`env_store_prod`) isn't one, so this tab reports none.
+      socket.send(
+        JSON.stringify({
+          type: "presence.update",
+          environment_id: "env_notanid_",
+          selection: [],
+          editing: null,
+        }),
+      );
+      socket.send(
+        JSON.stringify({
+          type: "presence.update",
+          environment_id: null,
+          selection: [SEED.api, "new:1"],
+          editing: { service_id: SEED.api, part: "config" },
+        }),
+      );
+      await expect
+        .poll(() =>
+          received.some(
+            (m) =>
+              m.type === "presence" &&
+              m.users?.some((u) => u.user_id === USERS.owner.id && u.selection.includes(SEED.api)),
+          ),
+        )
+        .toBe(true);
+      expect(received.filter((m) => m.type === "presence")).toHaveLength(2);
+      await expect
+        .poll(() => received.filter((m) => m.type === "canvas.edges_updated").length)
+        .toBe(2);
+      socket.close();
+      for (const message of received) {
+        const result = RealtimeServerMessageSchema.safeParse(message);
+        if (!result.success)
+          failures.push(`realtime ${JSON.stringify(message)}: ${result.error.message}`);
+      }
+
+      const domain = await call("POST", `/v1/services/${SEED.web}/domains`, {
+        environment_id: SEED.production,
+        hostname: "shop.example.com",
+      });
+      const domainId = (domain.body as { id: string }).id;
+      const stage = (op: Record<string, unknown>) => call("POST", `${ENV}/draft/ops`, { op });
+      const added = await stage({
+        type: "domain.add",
+        service: SEED.web,
+        hostname: "Docs.Example.com",
+      });
+      expect(added.status).toBe(200);
+      expect((added.body as { changes: unknown[] }).changes).toContainEqual(
+        expect.objectContaining({
+          target_key: "domain:docs.example.com",
+          diff: [
+            {
+              path: "/domains/docs.example.com",
+              before: null,
+              after: { hostname: "docs.example.com" },
+            },
+          ],
+        }),
+      );
+      expect(
+        await stage({ type: "domain.add", service: SEED.web, hostname: "shop.example.com" }),
+      ).toMatchObject({ status: 409, body: { error: { code: "domain_taken" } } });
+      expect(
+        (await stage({ type: "domain.add", service: SEED.web, hostname: "not a host" })).status,
+      ).toBe(400);
+      expect((await stage({ type: "domain.remove", domain_id: "dom_nope" })).status).toBe(404);
+      expect((await stage({ type: "domain.remove", domain_id: domainId })).status).toBe(200);
+      const grow = await stage({ type: "volume.set", service: DATA_SEED.database, size_mb: 10240 });
+      expect((grow.body as { changes: unknown[] }).changes).toContainEqual(
+        expect.objectContaining({
+          summary: "set postgres volume to 10240 MiB",
+          diff: [{ path: "/volume/size_mb", before: 5120, after: 10240 }],
+        }),
+      );
+      expect(
+        (await stage({ type: "volume.set", service: DATA_SEED.database, size_mb: 5120 })).status,
+      ).toBe(400);
+      expect(
+        (await stage({ type: "volume.set", service: SEED.worker, size_mb: 1024 })).status,
+      ).toBe(400);
+      const created = await stage({
+        type: "volume.set",
+        service: SEED.worker,
+        mount_path: "/data",
+        size_mb: 1024,
+      });
+      expect((created.body as { op_count: number }).op_count).toBe(4);
+      const review = await call(
+        "GET",
+        `/v1/change-sets/${(created.body as { id: string }).id}/diff`,
+      );
+      expect((review.body as { deploys: unknown[] }).deploys).toContainEqual({
+        service: SEED.worker,
+        name: "worker",
+        reason: "volume",
+      });
+      // Deleting a volume that is only staged takes the staged one out.
+      expect(await stage({ type: "volume.delete", service: SEED.worker })).toMatchObject({
+        status: 200,
+        body: { op_count: 3 },
+      });
+      expect((await stage({ type: "volume.delete", service: SEED.worker })).status).toBe(404);
+      const staged = (await call("GET", CANVAS)).body as {
+        nodes: { id: string; volume: unknown; domains: unknown[]; staged: string | null }[];
+      };
+      expect(staged.nodes.find((n) => n.id === DATA_SEED.database)).toMatchObject({
+        staged: "update",
+        volume: { id: DATA_SEED.volume, staged: "resize", staged_size_mb: 10240 },
+      });
+      expect(staged.nodes.find((n) => n.id === SEED.web)?.domains).toEqual([
+        { id: domainId, hostname: "shop.example.com", status: "pending_dns", staged: "remove" },
+        { id: null, hostname: "docs.example.com", status: null, staged: "add" },
+      ]);
+
+      const draft = (await call("GET", `${ENV}/draft`)).body as {
+        change_set: { id: string; revision: number };
+      };
+      const applied = await call("POST", `/v1/change-sets/${draft.change_set.id}/apply`, {
+        expected_revision: draft.change_set.revision,
+      });
+      expect(applied).toMatchObject({ status: 200, body: { change_set: { status: "applied" } } });
+      expect(db.data.volumes.find((v) => v.id === DATA_SEED.volume)?.size_mb).toBe(10240);
+      expect(db.deploy.domains.map((d) => d.hostname)).toContain("docs.example.com");
+      expect(db.deploy.domains.map((d) => d.hostname)).not.toContain("shop.example.com");
+    });
+  });
+
+  it("change sets: submit, approve, reject, rebase, and the workspace review queue", async () => {
+    await fresh(async () => {
+      requireApprovalIn(SEED.production);
+      const ENV = `/v1/environments/${SEED.production}`;
+      const QUEUE = `${WS}/change-sets`;
+      const secret = {
+        type: "variable.set",
+        scope: "service",
+        service: SEED.api,
+        key: "UPSTREAM_PASSWORD",
+        value: STAGED_VALUE,
+        tier: "secret",
+        confirm_write_only: true,
+      };
+      const first = await call("POST", `${ENV}/draft/ops`, { op: secret });
+      expect(first.status).toBe(200);
+      const id = (first.body as { id: string }).id;
+      const SET = `/v1/change-sets/${id}`;
+      const revisionOf = async () =>
+        ((await call("GET", SET)).body as { revision: number }).revision;
+
+      expect(
+        await call("POST", `${SET}/apply`, { expected_revision: await revisionOf() }),
+      ).toMatchObject({ status: 403, body: { error: { code: "approval_required" } } });
+      expect((await call("GET", `${SET}/diff`)).body).toMatchObject({
+        approval: { required: true, approved: false, authors: [USERS.owner.id] },
+      });
+      expect(
+        await call("GET", `/v1/projects/${SEED.project}/canvas?environment_id=${SEED.production}`),
+      ).toMatchObject({
+        status: 200,
+        body: { environment_protected: true, environment_requires_approval: true },
+      });
+
+      as("viewer");
+      expect((await call("POST", `${SET}/submit`, {})).status).toBe(403);
+      as(null);
+      expect((await call("POST", `${SET}/submit`, {})).status).toBe(401);
+      as("owner");
+      expect((await call("POST", `${SET}/submit`, { note: "" })).status).toBe(400);
+      expect((await call("POST", "/v1/change-sets/chs_nope/submit", {})).status).toBe(404);
+      expect((await call("POST", `${SET}/submit`, { expected_revision: 99 })).status).toBe(409);
+      expect((await call("GET", `${QUEUE}?review=pending`)).body).toEqual({ change_sets: [] });
+      const submitted = await call("POST", `${SET}/submit`, { note: "Rotates the upstream login" });
+      expect(submitted).toMatchObject({
+        status: 200,
+        body: {
+          review_status: "submitted",
+          submitted_by: USERS.owner.id,
+          review_note: "Rotates the upstream login",
+        },
+      });
+      expect(db.audit.at(-1)).toMatchObject({ action: "change_set.submitted" });
+      expect((await call("POST", `${SET}/submit`, {})).body).toMatchObject({
+        review_status: "submitted",
+        review_note: "Rotates the upstream login",
+      });
+
+      expect(await call("GET", `${QUEUE}?review=pending`)).toMatchObject({
+        status: 200,
+        body: {
+          change_sets: [
+            {
+              id,
+              project_name: "storefront",
+              environment_name: "production",
+              environment_requires_approval: true,
+              review_status: "submitted",
+            },
+          ],
+        },
+      });
+      expect((await call("GET", `${QUEUE}?review=bogus`)).status).toBe(400);
+      expect((await call("GET", `${OTHER_WS}/change-sets`)).status).toBe(404);
+      as(null);
+      expect((await call("GET", QUEUE)).status).toBe(401);
+
+      as("owner");
+      const revision = await revisionOf();
+      expect(await call("POST", `${SET}/approve`, { expected_revision: revision })).toMatchObject({
+        status: 403,
+        body: { error: { code: "self_review" } },
+      });
+      as("member");
+      expect(await call("POST", `${SET}/approve`, { expected_revision: revision })).toMatchObject({
+        status: 403,
+        body: { error: { code: "forbidden" } },
+      });
+      as("admin");
+      expect((await call("POST", `${SET}/approve`, {})).status).toBe(400);
+      expect(
+        (await call("POST", `${SET}/approve`, { expected_revision: revision + 1 })).status,
+      ).toBe(409);
+      const approved = await call("POST", `${SET}/approve`, {
+        expected_revision: revision,
+        note: "Looks right",
+      });
+      expect(approved).toMatchObject({
+        status: 200,
+        body: { review_status: "approved", approved_by: USERS.admin.id, revision },
+      });
+      expect((await call("GET", `${SET}/diff`)).body).toMatchObject({
+        approval: { required: true, approved: true, authors: [USERS.owner.id] },
+      });
+      expect((await call("GET", `${QUEUE}?review=pending`)).body).toEqual({ change_sets: [] });
+      expect(
+        ((await call("GET", QUEUE)).body as { change_sets: { id: string }[] }).change_sets.map(
+          (s) => s.id,
+        ),
+      ).toEqual([id]);
+      expect(await call("POST", `${SET}/apply`, { expected_revision: revision })).toMatchObject({
+        status: 403,
+        body: { error: { code: "forbidden" } },
+      });
+
+      // Any edit voids the decision and asks for another review.
+      as("owner");
+      const edited = await call("POST", `${SET}/ops`, {
+        op: { ...secret, value: STAGED_VALUE_TWO },
+      });
+      expect(edited).toMatchObject({
+        status: 200,
+        body: { review_status: "submitted", approved_by: null, approved_at: null },
+      });
+      as("admin");
+      const rejected = await call("POST", `${SET}/reject`, {
+        expected_revision: (edited.body as { revision: number }).revision,
+        note: "Not this week",
+      });
+      expect(rejected).toMatchObject({
+        status: 200,
+        body: {
+          review_status: "rejected",
+          rejected_by: USERS.admin.id,
+          review_note: "Not this week",
+        },
+      });
+      expect(db.audit.at(-1)).toMatchObject({ action: "change_set.rejected" });
+      as("owner");
+      expect(
+        await call("POST", `${SET}/apply`, {
+          expected_revision: (rejected.body as { revision: number }).revision,
+        }),
+      ).toMatchObject({ status: 409, body: { error: { code: "change_set_rejected" } } });
+      const resubmitted = await call("POST", `${SET}/submit`, {});
+      expect(resubmitted).toMatchObject({
+        status: 200,
+        body: { review_status: "submitted", rejected_by: null },
+      });
+      as("admin");
+      const again = await call("POST", `${SET}/approve`, {
+        expected_revision: (resubmitted.body as { revision: number }).revision,
+      });
+      expect(again.status).toBe(200);
+      as("owner");
+      const applied = await call("POST", `${SET}/apply`, {
+        expected_revision: (again.body as { revision: number }).revision,
+      });
+      expect(applied).toMatchObject({
+        status: 200,
+        body: { change_set: { status: "applied", review_status: "approved" } },
+      });
+      expect((await call("POST", `${SET}/submit`, {})).status).toBe(409);
+      expect((await call("POST", `${SET}/approve`, { expected_revision: 1 })).status).toBe(409);
+      expect((await call("POST", `${SET}/reject`, { expected_revision: 1 })).status).toBe(409);
+      expect((await call("POST", `${SET}/rebase`, { expected_revision: 1 })).status).toBe(409);
+      expect((await call("GET", QUEUE)).body).toEqual({ change_sets: [] });
+
+      // An empty set has nothing to review.
+      const empty = await call("POST", `${ENV}/change-sets`, { title: "Nothing yet" });
+      const EMPTY = `/v1/change-sets/${(empty.body as { id: string }).id}`;
+      expect((await call("POST", `${EMPTY}/submit`, {})).status).toBe(409);
+      as("admin");
+      expect((await call("POST", `${EMPTY}/reject`, { expected_revision: 1 })).status).toBe(409);
+      expect((await call("POST", `${EMPTY}/reject`, {})).status).toBe(400);
+      as("member");
+      expect((await call("POST", `${EMPTY}/reject`, { expected_revision: 1 })).status).toBe(403);
+      as(null);
+      expect((await call("POST", `${EMPTY}/approve`, { expected_revision: 1 })).status).toBe(401);
+
+      // Rebase: a disjoint direct edit rebases, an overlapping one conflicts.
+      as("owner");
+      const other = await call("POST", `${ENV}/change-sets`, {
+        ops: [{ type: "config.patch", service: SEED.api, patch: { deploy: { replicas: 3 } } }],
+      });
+      const OTHER = `/v1/change-sets/${(other.body as { id: string }).id}`;
+      const opId = (other.body as { changes: { id: string }[] }).changes[0]!.id;
+      expect(await call("POST", `${OTHER}/rebase`, { expected_revision: 1 })).toMatchObject({
+        status: 409,
+        body: { error: { code: "change_set_changed" } },
+      });
+      expect(
+        await call("POST", `${OTHER}/rebase`, {
+          expected_revision: (other.body as { revision: number }).revision,
+        }),
+      ).toMatchObject({ status: 200, body: { rebased: [], conflicts: [] } });
+      expect((await call("POST", `${OTHER}/rebase`, {})).status).toBe(400);
+      expect(
+        (await call("POST", "/v1/change-sets/chs_nope/rebase", { expected_revision: 1 })).status,
+      ).toBe(404);
+      await call("POST", `${OTHER}/submit`, {});
+      as("admin");
+      const approvedOther = await call("POST", `${OTHER}/approve`, {
+        expected_revision: ((await call("GET", OTHER)).body as { revision: number }).revision,
+      });
+      expect(approvedOther.body).toMatchObject({ review_status: "approved" });
+      const bump = (deploy: Record<string, unknown>) => {
+        const latest = db.deploy.configs
+          .filter((c) => c.service_id === SEED.api && c.environment_id === SEED.production)
+          .sort((a, b) => b.version - a.version)[0]!;
+        db.deploy.configs.push({
+          ...latest,
+          id: `cfg_direct_${latest.version + 1}`,
+          version: latest.version + 1,
+          deploy: { ...latest.deploy, ...deploy },
+        });
+      };
+      bump({ drain_s: 45 });
+      as("viewer");
+      expect((await call("POST", `${OTHER}/rebase`, { expected_revision: 1 })).status).toBe(403);
+      as("owner");
+      const rebased = await call("POST", `${OTHER}/rebase`, {
+        expected_revision: ((await call("GET", OTHER)).body as { revision: number }).revision,
+      });
+      expect(rebased).toMatchObject({
+        status: 200,
+        body: { rebased: [opId], conflicts: [], change_set: { review_status: "submitted" } },
+      });
+      bump({ replicas: 5 });
+      const conflicted = await call("POST", `${OTHER}/rebase`, {
+        expected_revision: (rebased.body as { change_set: { revision: number } }).change_set
+          .revision,
+      });
+      expect(conflicted).toMatchObject({
+        status: 200,
+        body: {
+          rebased: [],
+          conflicts: [{ id: opId, conflict: { paths: ["/deploy/replicas"] } }],
+          change_set: { conflicted_count: 1 },
+        },
+      });
+    });
+  });
+
+  it("never returns a staged secret value", () => {
+    for (const text of responseTexts) {
+      expect(text).not.toContain(STAGED_VALUE);
+      expect(text).not.toContain(STAGED_VALUE_TWO);
+    }
+    expect(responseTexts.length).toBeGreaterThan(0);
   });
 
   it("databases: add one, then read, grow, delete and undelete its volume", async () => {
@@ -2996,6 +3490,305 @@ describe("MSW mocks match the API contract", () => {
       expect((await call("PUT", storage, body)).status).toBe(403);
       as(null);
       expect((await call("GET", storage)).status).toBe(401);
+    });
+  });
+
+  it("ADR 0014 access: settings, effective access, teams, grants, protection", async () => {
+    await fresh(async () => {
+      const settings = `${WS}/access-settings`;
+      expect(await call("GET", settings)).toMatchObject({
+        status: 200,
+        body: { member_default_project_role: "developer", viewer_default_project_role: "viewer" },
+      });
+      expect((await call("PATCH", settings, {})).status).toBe(400);
+      db.sessionStale = true;
+      expect(
+        await call("PATCH", settings, { member_default_project_role: "viewer" }),
+      ).toMatchObject({ status: 403, body: { error: { code: "reauth_required" } } });
+      db.sessionStale = false;
+      expect(
+        await call("PATCH", settings, { member_default_project_role: "deployer" }),
+      ).toMatchObject({ status: 200, body: { member_default_project_role: "deployer" } });
+
+      expect(await call("GET", `${WS}/access/me`)).toMatchObject({
+        status: 200,
+        body: { workspace_role: "owner", instance_admin: true },
+      });
+      as("member");
+      const member = (await call("GET", `${WS}/access/me`)).body as {
+        projects: { project_id: string; role: string; actions: string[] }[];
+      };
+      const store = member.projects.find((p) => p.project_id === SEED.project);
+      expect(store?.role).toBe("deployer");
+      expect(store?.actions).not.toContain("variables:manage");
+      expect((await call("GET", `${OTHER_WS}/access/me`)).status).toBe(404);
+      expect((await call("PATCH", settings, { viewer_default_project_role: "none" })).status).toBe(
+        403,
+      );
+
+      const teams = `${WS}/teams`;
+      expect(await call("GET", teams)).toMatchObject({
+        status: 200,
+        body: { teams: [{ id: ACCESS_SEED.platformTeam, member_count: 2 }] },
+      });
+      expect((await call("POST", teams, { name: "Ops" })).status).toBe(403);
+      as("owner");
+      expect((await call("POST", teams, { name: "" })).status).toBe(400);
+      expect((await call("POST", teams, { name: "Ops", user_ids: ["usr_nobody"] })).status).toBe(
+        400,
+      );
+      expect((await call("POST", teams, { name: "Platform" })).status).toBe(409);
+      const created = await call("POST", teams, {
+        name: "Ops",
+        description: "On call",
+        user_ids: [USERS.viewer.id],
+      });
+      expect(created).toMatchObject({
+        status: 201,
+        body: { slug: "ops", member_count: 1, members: [{ user_id: USERS.viewer.id }] },
+      });
+      const teamId = (created.body as { id: string }).id;
+      const team = `/v1/teams/${teamId}`;
+      expect((await call("GET", team)).status).toBe(200);
+      expect((await call("GET", "/v1/teams/team_nope")).status).toBe(404);
+      expect((await call("PATCH", team, {})).status).toBe(400);
+      expect((await call("PATCH", team, { slug: "platform" })).status).toBe(409);
+      expect(await call("PATCH", team, { name: "Operations" })).toMatchObject({
+        status: 200,
+        body: { name: "Operations", member_count: 1 },
+      });
+      expect((await call("PUT", `${team}/members`, { user_ids: ["usr_nobody"] })).status).toBe(400);
+      expect(
+        await call("PUT", `${team}/members`, { user_ids: [USERS.viewer.id, USERS.member.id] }),
+      ).toMatchObject({ status: 200, body: { member_count: 2 } });
+
+      const access = `/v1/projects/${SEED.project}/access`;
+      expect(await call("GET", access)).toMatchObject({
+        status: 200,
+        body: { grants: [], implied: { member: "deployer", viewer: "viewer" } },
+      });
+      const unknownTeam = { principal: { type: "team", id: "team_nope" }, role: "viewer" };
+      expect((await call("PUT", access, unknownTeam)).status).toBe(400);
+      expect(
+        (await call("PUT", access, { principal: { type: "user" }, role: "viewer" })).status,
+      ).toBe(400);
+      const granted = await call("PUT", access, {
+        principal: { type: "team", id: teamId },
+        role: "developer",
+      });
+      expect(granted).toMatchObject({
+        status: 200,
+        body: { principal: { type: "team", id: teamId }, principal_name: "Operations" },
+      });
+      expect(
+        await call("PUT", access, { principal: { type: "team", id: teamId }, role: "viewer" }),
+      ).toMatchObject({ status: 200, body: { role: "viewer" } });
+      const grantId = (granted.body as { id: string }).id;
+
+      const protection = `/v1/environments/${SEED.production}/protection`;
+      expect(await call("GET", protection)).toMatchObject({
+        status: 200,
+        body: { protected: false, rules: { variables: { roles: [] } } },
+      });
+      expect((await call("GET", "/v1/environments/env_nope/protection")).status).toBe(404);
+      expect((await call("PUT", protection, {})).status).toBe(400);
+      const badRule = { roles: [], user_ids: [], team_ids: ["team_nope"] };
+      expect(
+        (await call("PUT", protection, { protected: true, rules: { variables: badRule } })).status,
+      ).toBe(400);
+      expect(
+        await call("PUT", protection, {
+          protected: true,
+          rules: { variables: { roles: ["developer"], user_ids: [], team_ids: [teamId] } },
+        }),
+      ).toMatchObject({
+        status: 200,
+        body: {
+          protected: true,
+          rules: {
+            deploy: { roles: ["developer", "deployer"] },
+            variables: { team_ids: [teamId] },
+          },
+        },
+      });
+      expect(
+        await call("PUT", protection, { protected: true, require_approval: true }),
+      ).toMatchObject({ status: 200, body: { protected: true, require_approval: true } });
+      expect((await call("GET", protection)).body).toMatchObject({ require_approval: true });
+      expect(
+        (await call("PUT", protection, { protected: true, require_approval: "yes" })).status,
+      ).toBe(400);
+
+      as("member");
+      expect((await call("GET", access)).status).toBe(403);
+      const selfGrant = { principal: { type: "user", id: USERS.member.id }, role: "developer" };
+      expect((await call("PUT", access, selfGrant)).status).toBe(403);
+      expect((await call("DELETE", `${access}/${grantId}`)).status).toBe(403);
+      expect((await call("PUT", protection, { protected: false })).status).toBe(403);
+      expect((await call("GET", protection)).status).toBe(200);
+      expect((await call("DELETE", team)).status).toBe(403);
+      as("viewer");
+      expect((await call("GET", teams)).status).toBe(403);
+      expect((await call("GET", team)).status).toBe(403);
+      expect((await call("GET", settings)).status).toBe(403);
+      db.access.settings[WORKSPACE_ID]!.viewer_default_project_role = "none";
+      db.access.grants = [];
+      expect((await call("GET", protection)).status).toBe(404);
+      expect((await call("GET", access)).status).toBe(404);
+
+      as("owner");
+      const regrant = await call("PUT", access, selfGrant);
+      const regrantId = (regrant.body as { id: string }).id;
+      expect((await call("DELETE", `${access}/pag_nope`)).status).toBe(404);
+      db.sessionStale = true;
+      expect((await call("DELETE", `${access}/${regrantId}`)).status).toBe(403);
+      expect((await call("DELETE", team)).status).toBe(403);
+      db.sessionStale = false;
+      expect((await call("DELETE", `${access}/${regrantId}`)).status).toBe(204);
+      expect((await call("DELETE", team)).status).toBe(204);
+      expect(db.access.rules[SEED.production]?.variables.teamIds).toEqual([]);
+      expect((await call("DELETE", team)).status).toBe(404);
+      expect((await call("PUT", `${team}/members`, { user_ids: [] })).status).toBe(404);
+      expect((await call("PATCH", team, { name: "X" })).status).toBe(404);
+
+      as(null);
+      const anonymous: [string, string, unknown?][] = [
+        ["GET", settings],
+        ["PATCH", settings, { member_default_project_role: "viewer" }],
+        ["GET", `${WS}/access/me`],
+        ["GET", teams],
+        ["POST", teams, { name: "Ops" }],
+        ["GET", team],
+        ["PATCH", team, { name: "X" }],
+        ["DELETE", team],
+        ["PUT", `${team}/members`, { user_ids: [] }],
+        ["GET", access],
+        ["PUT", access, selfGrant],
+        ["DELETE", `${access}/${regrantId}`],
+        ["GET", protection],
+        ["PUT", protection, { protected: false }],
+      ];
+      for (const [method, path, body] of anonymous) {
+        expect((await call(method, path, body)).status).toBe(401);
+      }
+    });
+  });
+
+  it("ADR 0014 protection: deploys and variable writes in a protected environment", async () => {
+    await fresh(async () => {
+      const environment = db.deploy.environments.find((row) => row.id === SEED.production);
+      if (environment) environment.protected = true;
+      const variables = `/v1/services/${SEED.web}/variables?environment_id=${SEED.production}`;
+      const deploy = `/v1/services/${SEED.web}/deployments?environment_id=${SEED.production}`;
+      as("member");
+      expect(await call("PUT", variables, { set: [{ key: "A", value: "1" }] })).toMatchObject({
+        status: 403,
+        body: { error: { code: "forbidden" } },
+      });
+      expect((await call("POST", deploy, {})).status).toBe(201);
+      db.access.rules[SEED.production] = {
+        deploy: { roles: [], userIds: [], teamIds: [] },
+        config: { roles: [], userIds: [], teamIds: [] },
+        variables: { roles: [], userIds: [], teamIds: [] },
+      };
+      expect((await call("POST", deploy, {})).status).toBe(403);
+      as("owner");
+      expect(
+        await call("PUT", variables, { set: [{ key: "API_TOKEN", value: "x", tier: "secret" }] }),
+      ).toMatchObject({
+        status: 400,
+        body: { error: { code: "confirmation_required", details: [{ field: "API_TOKEN" }] } },
+      });
+      expect(
+        await call("PUT", variables, {
+          set: [
+            { key: "VITE_DB", value: "postgres://app:not-a-real-password@db.example.test/app" },
+          ],
+        }),
+      ).toMatchObject({ status: 400, body: { error: { code: "public_prefix_secret_value" } } });
+      expect(
+        (
+          await call("PUT", variables, {
+            set: [{ key: "API_TOKEN", value: "x", tier: "secret" }],
+            confirm_write_only: true,
+          })
+        ).status,
+      ).toBe(200);
+
+      // Config writes, deleting a service and cancelling are gated too.
+      as("member");
+      expect(
+        await call("PATCH", `/v1/services/${SEED.web}`, {
+          environment_id: SEED.production,
+          deploy: { replicas: 3 },
+        }),
+      ).toMatchObject({ status: 403, body: { error: { code: "forbidden" } } });
+      expect((await call("PATCH", `/v1/services/${SEED.web}`, { name: "web-2" })).status).toBe(200);
+      expect((await call("DELETE", `/v1/services/${SEED.worker}`)).status).toBe(403);
+      expect((await call("POST", `/v1/deployments/${SEED.workerDeploying}/cancel`)).status).toBe(
+        403,
+      );
+      db.access.rules[SEED.production]!.config.userIds = [USERS.member.id];
+      db.access.rules[SEED.production]!.deploy.teamIds = [ACCESS_SEED.platformTeam];
+      expect((await call("POST", `/v1/deployments/${SEED.workerDeploying}/cancel`)).status).toBe(
+        200,
+      );
+      expect((await call("DELETE", `/v1/services/${SEED.worker}`)).status).toBe(204);
+    });
+  });
+
+  it("ADR 0014 project roles: grants raise, defaults lower, no role is a 404", async () => {
+    await fresh(async () => {
+      const project = `/v1/projects/${SEED.project}`;
+      as("viewer");
+      expect((await call("PATCH", `/v1/services/${SEED.web}`, { name: "web-2" })).status).toBe(403);
+      db.access.grants.push({
+        id: "pag_viewer_dev",
+        project_id: SEED.project,
+        principal_type: "user",
+        user_id: USERS.viewer.id,
+        team_id: null,
+        role: "developer",
+        created_by: USERS.owner.id,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      });
+      expect((await call("PATCH", `/v1/services/${SEED.web}`, { name: "web-2" })).status).toBe(200);
+
+      db.access.settings[WORKSPACE_ID] = {
+        member_default_project_role: "none",
+        viewer_default_project_role: "viewer",
+      };
+      as("member");
+      expect((await call("GET", project)).status).toBe(404);
+      expect(await call("GET", `${WS}/projects`)).toMatchObject({
+        status: 200,
+        body: { projects: [] },
+      });
+      db.access.settings[WORKSPACE_ID]!.member_default_project_role = "viewer";
+      expect((await call("GET", project)).status).toBe(200);
+      expect(
+        await call(
+          "POST",
+          `/v1/services/${SEED.web}/deployments?environment_id=${SEED.production}`,
+          {},
+        ),
+      ).toMatchObject({ status: 403, body: { error: { code: "forbidden" } } });
+    });
+  });
+
+  it("ADR 0014 fresh sessions: member role changes and removals, but not leaving", async () => {
+    await fresh(async () => {
+      db.sessionStale = true;
+      const member = `${WS}/members/mem_member`;
+      expect(await call("PATCH", member, { role: "viewer" })).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      expect((await call("DELETE", member)).status).toBe(403);
+      as("viewer");
+      expect((await call("DELETE", `${WS}/members/mem_viewer`)).status).toBe(204);
+      db.sessionStale = false;
     });
   });
 

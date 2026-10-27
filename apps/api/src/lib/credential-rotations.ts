@@ -468,7 +468,7 @@ async function storePasswords(
   const db = c.get("db");
   const { project, environment, service } = input;
   const { caller } = await projectScope(c, project.id, "projects:read");
-  const ctx: StagingContext = { db, keys: requireKeys(c), project, environment, caller };
+  const ctx: StagingContext = { c, db, keys: requireKeys(c), project, environment, caller };
   let set = await openChangeSet(db, {
     projectId: project.id,
     environmentId: environment.id,
@@ -507,6 +507,7 @@ async function storePasswords(
   const applied = await applySet({ c, db, env: c.env, project, environment }, set, {
     expectedRevision: set.revision,
     deploy: "affected",
+    direct: true,
   });
   return { changeSetId: applied.set.id, deploymentIds: applied.deploymentIds };
 }
