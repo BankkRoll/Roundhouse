@@ -81,7 +81,7 @@ func (s *dnsServer) answer(query []byte, maxSize int) []byte {
 			resp.RCode = dnsmessage.RCodeNotImplemented
 		}
 		resp.Authoritative = false
-		return build(resp, nil, nil)
+		return build(resp, nil, nil, 0)
 	}
 	name := strings.ToLower(q.Name.String())
 	var answers []netip.Addr
@@ -98,15 +98,15 @@ func (s *dnsServer) answer(query []byte, maxSize int) []byte {
 			answers = addrs
 		}
 	}
-	out := build(resp, &q, answers)
+	out := build(resp, &q, answers, 0)
 	if len(out) > maxSize {
 		resp.Truncated = true
-		out = build(resp, &q, nil)
+		out = build(resp, &q, nil, 0)
 	}
 	return out
 }
 
-func build(h dnsmessage.Header, q *dnsmessage.Question, answers []netip.Addr) []byte {
+func build(h dnsmessage.Header, q *dnsmessage.Question, answers []netip.Addr, ttl uint32) []byte {
 	b := dnsmessage.NewBuilder(make([]byte, 0, 512), h)
 	b.EnableCompression()
 	if q != nil {
@@ -117,7 +117,7 @@ func build(h dnsmessage.Header, q *dnsmessage.Question, answers []netip.Addr) []
 			if !a.Is4() {
 				continue
 			}
-			_ = b.AResource(dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: 0},
+			_ = b.AResource(dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: ttl},
 				dnsmessage.AResource{A: a.As4()})
 		}
 	}

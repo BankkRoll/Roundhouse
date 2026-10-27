@@ -42,3 +42,13 @@ func (c *Client) PutArchive(ctx context.Context, id, dir string, r io.Reader) er
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBody))
 	return nil
 }
+
+// SaveImages streams a `docker save` tar of refs. The caller must close the
+// stream.
+func (c *Client) SaveImages(ctx context.Context, refs ...string) (io.ReadCloser, error) {
+	return c.openStream(ctx, request{
+		method: http.MethodGet,
+		path:   "/images/get",
+		query:  url.Values{"names": refs},
+	})
+}

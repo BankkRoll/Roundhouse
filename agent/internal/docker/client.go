@@ -276,6 +276,14 @@ type Info struct {
 	// DockerRootDir is where the engine keeps images and containers.
 	DockerRootDir string `json:"DockerRootDir"`
 	OSType        string `json:"OSType"`
+	// FirewallBackend is nil before Docker 28.
+	FirewallBackend *FirewallBackend `json:"FirewallBackend,omitempty"`
+}
+
+// FirewallBackend is how the engine programs the host firewall.
+type FirewallBackend struct {
+	// Driver is e.g. "iptables", "iptables+firewalld" or "nftables".
+	Driver string `json:"Driver"`
 }
 
 // Info returns engine-wide information.

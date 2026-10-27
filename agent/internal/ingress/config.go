@@ -18,7 +18,10 @@
 //     and forgets it ([Manager]);
 //   - answer Caddy's on-demand TLS permission checks for exactly the
 //     hostnames in the desired routes, never wildcards or managed hosts
-//     ([Manager.ServeAsk]).
+//     ([Manager.ServeAsk]);
+//   - serve the mesh's private DNS zone to the node's own containers and
+//     forward their other lookups to the host's resolvers ([PrivateDNS],
+//     ADR 0005).
 //
 // TLS modes (ADR 0009): in acme mode Caddy issues on demand, gated by the
 // ask endpoint, and sends its tls logs to the agent ([DefaultTLSLogListen]).

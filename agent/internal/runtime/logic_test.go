@@ -202,7 +202,7 @@ func TestIngressSelection(t *testing.T) {
 	}
 	ds := desired(1, w)
 	cfg := func() []string {
-		c := rt.ingressConfig(ds, []*wantSpec{ws}, nil)
+		c := rt.ingressConfig(ds, []*wantSpec{ws}, nil, nil)
 		if len(c.Routes) == 0 {
 			return nil
 		}
@@ -438,7 +438,7 @@ func TestRouteConflictsBetweenProjects(t *testing.T) {
 			if len(lines) != 2 || strings.Contains(strings.Join(lines, "\n"), "prj_") {
 				t.Fatalf("system lines %q: one per workload, never naming the other project", lines)
 			}
-			cfg := rt.ingressConfig(desired(1), tc.specs, got)
+			cfg := rt.ingressConfig(desired(1), tc.specs, got, nil)
 			if len(cfg.Routes) != 0 || len(cfg.AllowedHosts) != 0 {
 				t.Fatalf("conflicting route served: %+v", cfg)
 			}
@@ -462,7 +462,7 @@ func TestIngressConfigCarriesTLSSettings(t *testing.T) {
 	ds.TLSMode = protocol.TLSManaged
 	up := &protocol.ACMEChallengeUpstream{URL: "https://cp.example.com/v1/acme/http-01", Host: "cp.example.com"}
 	ds.Ingress = &protocol.IngressSettings{ACMEChallengeUpstream: up, ManagedHosts: []string{"*.apps.example.com"}}
-	cfg := rt.ingressConfig(ds, []*wantSpec{{WorkloadSpec: w}}, nil)
+	cfg := rt.ingressConfig(ds, []*wantSpec{{WorkloadSpec: w}}, nil, nil)
 	if cfg.TLSMode != protocol.TLSManaged || cfg.ChallengeUpstream != up ||
 		!slices.Equal(cfg.ManagedHosts, []string{"*.apps.example.com"}) {
 		t.Fatalf("ingress settings lost: %+v", cfg)

@@ -25,7 +25,11 @@
 //   - keep one bridge network per environment, remove the ones no longer
 //     used, serve no route that two projects claim, report workload_status
 //     on every state change, and garbage-collect unused images under disk
-//     pressure.
+//     pressure;
+//   - on a meshed node (ADR 0005), point private_dns containers at the
+//     node's private DNS, report each replica's mesh IP and bridge IP to the
+//     mesh, and serve route-only workloads' routes from remote replicas'
+//     mesh IPs without any container.
 //
 // Nothing secret is written to disk: environment values live only in the
 // engine's container config and in memory, and mount_as_file values on the
@@ -146,6 +150,9 @@ type Options struct {
 	// as its status message. Nil runs workloads with the Env they carry,
 	// which only tests do: Env never comes off the wire.
 	OpenEnv func(generation int64, w *protocol.WorkloadSpec) error
+	// Mesh connects the runtime to the WireGuard mesh (ADR 0005); nil
+	// creates every container without private DNS.
+	Mesh MeshHooks
 	// SecretsDir holds each workload's mount_as_file values in a
 	// subdirectory named after the workload ([DefaultSecretsDir] on a node),
 	// bind-mounted read-only at [SecretsMountPath]. Runtimes sharing a host
@@ -319,6 +326,13 @@ func (r *Runtime) Apply(ds *protocol.DesiredState) bool {
 	blocked := map[string]string{}
 	for i := range ds.Workloads {
 		w := &ds.Workloads[i]
+		if w.Kind == protocol.WorkloadRouteOnly {
+			if reason := admitRoute(w, ds.Mesh, r.opts.Namespace); reason != "" {
+				blocked[w.ID] = reason
+				r.log.Error("not serving route workload", "workload_id", w.ID, "generation", ds.Generation, "reason", reason)
+			}
+			continue
+		}
 		reason := admit(w)
 		if reason == "" {
 			reason = r.admitData(w, volumes)
@@ -507,14 +521,15 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 		r.publish(nil)
 		return next
 	}
-	specs := r.wantSpecs(ds)
+	specs := withoutRoutes(r.wantSpecs(ds))
 	r.ensureNetworks(ctx, specs)
 	r.collectNetworks(ctx, specs)
 
 	now := time.Now()
 	r.mu.Lock()
+	routes := r.routeSpecs(ds)
 	assignLabelAliases(specs)
-	conflicts := r.markRouteConflicts(specs)
+	conflicts := r.markRouteConflicts(append(slices.Clip(specs), routes...))
 	wanted := make(map[string]*wantSpec, len(specs))
 	for _, s := range specs {
 		wanted[s.ID] = s
@@ -528,9 +543,16 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 	if d > 0 {
 		next = min(next, d)
 	}
-	cfg := r.ingressConfig(ds, specs, conflicts)
+	cfg := r.ingressConfig(ds, specs, conflicts, routes)
 	r.collectSecretDirs(specs)
+	var replicas []MeshReplica
+	if r.opts.Mesh != nil {
+		replicas = r.meshReplicas(specs)
+	}
 	r.mu.Unlock()
+	if r.opts.Mesh != nil {
+		r.opts.Mesh.SetReplicas(replicas)
+	}
 
 	// Zero-downtime order: routes leave the old containers before their
 	// drain clock starts.
@@ -699,6 +721,10 @@ func (r *Runtime) reconcileWorkload(s *wantSpec, wanted map[string]*wantSpec, no
 		}
 		if now.Before(ws.retryAt) {
 			return ws.retryAt.Sub(now)
+		}
+		if r.usePrivateDNS(s) {
+			ws.phase, ws.message = protocol.StatePending, privateDNSWait
+			return time.Second
 		}
 		ws.busy = true
 		ws.volumes = mountedVolumes(&s.WorkloadSpec)
@@ -895,14 +921,19 @@ func short(id string) string {
 // ingressConfig picks, for every route, the containers that should serve
 // it: healthy containers of the desired spec; failing that, the replaced
 // containers still running and not yet draining (they keep serving until
-// their replacement is healthy); failing that, desired containers whose
-// probe is failing, since a degraded answer beats none. Every desired route
-// is listed with its port even while nothing serves it, so the ingress
-// keeps the route (and Caddy's config) stable. Caller holds r.mu.
-func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec, conflicts map[routeKey]bool) ingress.Config {
+// their replacement is healthy); failing that, the mesh IPs of the
+// service's replicas on other nodes, from its route-only workload (ADR
+// 0005: local replicas are preferred, remote ones serve only when no local
+// one is healthy); failing that, desired containers whose probe is
+// failing, since a degraded answer beats none. Every desired route is
+// listed with its port even while nothing serves it, so the ingress keeps
+// the route (and Caddy's config) stable. Caller holds r.mu.
+func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec, conflicts map[routeKey]bool,
+	routes []*wantSpec) ingress.Config {
 	type key = routeKey
 	healthy := map[key][]string{}
 	old := map[key][]string{}
+	remote := map[key][]string{}
 	degraded := map[key][]string{}
 	ports := map[key][]int{}
 	hsts := map[key]*protocol.RouteHSTS{}
@@ -974,6 +1005,24 @@ func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec, co
 		}
 	}
 
+	for _, s := range routes {
+		for _, rt := range s.Routes {
+			if conflicts[keyOf(rt.Hostname, rt.PathPrefix)] {
+				continue
+			}
+			hosts = append(hosts, rt.Hostname)
+			k := key{rt.Hostname, rt.PathPrefix}
+			note(k)
+			if !slices.Contains(ports[k], rt.ContainerPort) {
+				ports[k] = append(ports[k], rt.ContainerPort)
+			}
+			if rt.HSTS != nil && hsts[k] == nil {
+				hsts[k] = rt.HSTS
+			}
+			remote[k] = append(remote[k], routeUpstreams(s, rt.ContainerPort)...)
+		}
+	}
+
 	cfg := ingress.Config{TLSMode: ds.TLSMode, AllowedHosts: hosts}
 	if in := ds.Ingress; in != nil {
 		cfg.ManagedHosts, cfg.ChallengeUpstream = in.ManagedHosts, in.ACMEChallengeUpstream
@@ -985,6 +1034,9 @@ func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec, co
 		ups := healthy[k]
 		if len(ups) == 0 {
 			ups = old[k]
+		}
+		if len(ups) == 0 {
+			ups = remote[k]
 		}
 		if len(ups) == 0 {
 			ups = degraded[k]

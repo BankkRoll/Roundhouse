@@ -61,6 +61,9 @@ type wantSpec struct {
 	// labelAlias grants the label's private domain as a network alias; see
 	// [assignLabelAliases].
 	labelAlias bool
+	// dns is the private DNS server the container resolves through, decided
+	// just before it is created; "" keeps Docker's upstreams.
+	dns string
 }
 
 // containerName is unique per workload and spec, so a replacement can be
@@ -88,6 +91,9 @@ func containerCreate(s *wantSpec) docker.ContainerCreate {
 	hc.PortBindings = s.hostPorts
 	hc.Binds = s.binds
 	hc.Mounts = s.mounts
+	if s.dns != "" {
+		hc.DNS = []string{s.dns}
+	}
 	return docker.ContainerCreate{
 		Image:        s.Image,
 		Cmd:          s.Command,
