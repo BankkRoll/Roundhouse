@@ -151,6 +151,12 @@ type Capabilities struct {
 	Builder bool `json:"builder"`
 	// Ingress nil means true: the node runs Caddy for every route.
 	Ingress *bool `json:"ingress,omitempty"`
+	// TCPProxy means the node enforces publish_allowed_cidrs with a firewall
+	// rule installed before a port is published, so it runs workloads with
+	// ports[].publish (ADR 0004, "TCP proxy").
+	TCPProxy bool `json:"tcp_proxy,omitempty"`
+	// DBSetPassword means the query runner accepts the set_password op.
+	DBSetPassword bool `json:"db_set_password,omitempty"`
 }
 
 // NodeUsage is a point-in-time resource usage sample for the whole node.

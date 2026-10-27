@@ -37,6 +37,8 @@ export interface ConfirmDialogProps {
   confirmText?: string;
   /** Paints the confirm button as destructive. Defaults to `true`. */
   destructive?: boolean;
+  /** Keeps the confirm button disabled, e.g. until a required choice is made. */
+  confirmDisabled?: boolean;
   /** Extra controls between the description and the buttons, e.g. an opt-out checkbox. */
   children?: ReactNode;
 }
@@ -59,6 +61,7 @@ export function ConfirmDialog({
   error,
   confirmText,
   destructive = true,
+  confirmDisabled = false,
   children,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState("");
@@ -67,7 +70,7 @@ export function ConfirmDialog({
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
-    if (matches) onConfirm();
+    if (matches && !confirmDisabled) onConfirm();
   }
 
   return (
@@ -113,7 +116,7 @@ export function ConfirmDialog({
               type="submit"
               variant={destructive ? "danger" : "primary"}
               loading={pending}
-              disabled={!matches}
+              disabled={!matches || confirmDisabled}
             >
               {confirmLabel}
             </Button>

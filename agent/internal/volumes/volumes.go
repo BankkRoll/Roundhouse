@@ -62,8 +62,8 @@ var ErrNotReady = errors.New("volume not ready")
 type Options struct {
 	// Root is the volumes root; empty means [DefaultRoot].
 	Root string
-	// Quota is the agent config's volumes.quota: auto, xfs, ext4, loop or
-	// none; empty means auto.
+	// Quota is the agent config's volumes.quota: auto, loop or none;
+	// empty means auto. xfs and ext4 are refused.
 	Quota string
 	// StatePath is where the manager persists what it holds.
 	StatePath string
@@ -170,15 +170,17 @@ func New(opts Options) (*Manager, error) {
 		if m.modes[protocol.QuotaLoop] != nil {
 			m.mode = protocol.QuotaLoop
 		}
-		// TODO: prefer xfs_project / ext4_project when the root's
-		// filesystem has project quotas (ADR 0004); auto falls back to
-		// loop or none until they are implemented.
+		// SECURITY: never a project quota, even where the filesystem has
+		// them: a container in the initial user namespace can move its
+		// own files to project 0 (FS_IOC_FSSETXATTR) and escape the
+		// limit. Only a loop device bounds what the workload can write
+		// (ADR 0004, "Why not project quotas").
 	case QuotaLoop:
 		m.mode = protocol.QuotaLoop
 	case QuotaNone:
 		m.mode = protocol.QuotaNone
 	case QuotaXFS, QuotaExt4:
-		return nil, fmt.Errorf("volumes.quota %q: project quotas are not implemented yet; use auto, loop or none", opts.Quota)
+		return nil, fmt.Errorf("volumes.quota %q: project quotas are not enforced against containers that can change their files' project ID, so they are not offered; use auto, loop or none", opts.Quota)
 	default:
 		return nil, fmt.Errorf("volumes.quota: invalid %q (auto, xfs, ext4, loop or none)", opts.Quota)
 	}

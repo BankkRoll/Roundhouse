@@ -386,6 +386,23 @@ describe("Phase 2–3 frames", () => {
     expect(ok({ ...q, op: { type: "raw", argv: ["GET", "k"], params: ["x"] } })).toBe(false);
     expect(ok({ ...q, op: { type: "provision_readonly" } })).toBe(false);
     expect(ok({ ...q, mode: "write", op: { type: "provision_readonly" } })).toBe(true);
+    expect(ok({ ...q, mode: "write", op: { type: "set_password", user: "roundhouse_ro" } })).toBe(
+      true,
+    );
+    expect(ok({ ...q, op: { type: "set_password", user: "roundhouse_ro" } })).toBe(false);
+    expect(ok({ ...q, mode: "write", op: { type: "set_password" } })).toBe(false);
+    expect(ok({ ...q, mode: "write", op: { type: "set_password", user: "x'; --" } })).toBe(false);
+    const cred = { username: "postgres", password: "old" };
+    expect(SealedDbCredentialSchema.safeParse(cred).success).toBe(true);
+    expect(
+      SealedDbCredentialSchema.safeParse({ ...cred, new_password: "a".repeat(43) }).success,
+    ).toBe(true);
+    expect(SealedDbCredentialSchema.safeParse({ ...cred, new_password: "short" }).success).toBe(
+      false,
+    );
+    expect(
+      SealedDbCredentialSchema.safeParse({ ...cred, new_password: `${"a".repeat(20)}'--` }).success,
+    ).toBe(false);
     expect(ok({ ...q, max_rows: 1001 })).toBe(false);
     expect(ok({ ...q, request_id: "bad id" })).toBe(false);
   });

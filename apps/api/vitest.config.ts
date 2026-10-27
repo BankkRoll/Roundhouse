@@ -29,6 +29,10 @@ export default defineConfig(async () => {
     ],
     test: {
       setupFiles: ["./test/apply-migrations.ts"],
+      // NOTE: many tests run real deploy, backup and restore workflows; on a
+      // loaded machine (the whole suite runs files in parallel) a full
+      // rollout takes longer than vitest's 5 s default.
+      testTimeout: 30_000,
       // test-node/ needs Node APIs (Docker, node:https) and has its own config.
       exclude: [...configDefaults.exclude, "test-node/**"],
     },

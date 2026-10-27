@@ -82,7 +82,8 @@ func Collect(ctx context.Context) (Static, error) {
 		Docker: s.DockerVersion != nil,
 		GVisor: runscErr == nil,
 		// NOTE: builder is an operator choice (join --builder), not a fact;
-		// callers set it from the config.
+		// callers set it from the config. tcp_proxy is set by the agent once
+		// its firewall probe passes.
 		Builder: false,
 	}
 	s.PublicIP = publicIP()

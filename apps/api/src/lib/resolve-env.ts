@@ -30,6 +30,7 @@ import {
 } from "@roundhouse/shared";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { LIVE_DEPLOYMENT_STATUSES, privateDomain } from "./desired-state";
+import { tcpProxyEndpoints } from "./tcp-proxies";
 import { type EnvironmentVariables, loadEnvironmentVariables } from "./variables";
 
 /** Which service to resolve, and where. */
@@ -76,7 +77,7 @@ export async function resolveServiceEnvironment(
   options: ResolveOptions = {},
 ): Promise<ResolveVariablesResult> {
   const { projectId, serviceId, environment } = target;
-  const [vars, live, configs, hosts, [current]] = await Promise.all([
+  const [vars, live, configs, hosts, [current], proxies] = await Promise.all([
     options.variables ?? loadEnvironmentVariables(db, key, projectId, environment.id),
     db
       .select({ id: services.id, slug: services.slug, name: services.name })
@@ -112,6 +113,7 @@ export async function resolveServiceEnvironment(
       )
       .orderBy(desc(deployments.id))
       .limit(1),
+    tcpProxyEndpoints(db, projectId, environment.id),
   ]);
 
   // Rows are newest version first, so the first one per service is the
@@ -138,6 +140,13 @@ export async function resolveServiceEnvironment(
       ROUNDHOUSE_ENVIRONMENT: environment.slug,
       ROUNDHOUSE_SERVICE_NAME: s.name,
     };
+    const proxy = proxies.get(s.id);
+    if (proxy) {
+      // NOTE: empty until the service is placed, so a value referencing it
+      // still resolves; the next deploy after placement fills it in.
+      builtins[s.slug]!.ROUNDHOUSE_TCP_PROXY_DOMAIN = proxy.host ?? "";
+      builtins[s.slug]!.ROUNDHOUSE_TCP_PROXY_PORT = String(proxy.port);
+    }
     if (s.id === serviceId) slug = s.slug;
   }
   if (!slug) return { ok: true, env: {} };

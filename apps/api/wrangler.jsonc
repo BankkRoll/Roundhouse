@@ -63,6 +63,11 @@
       "class_name": "RestoreWorkflow"
     },
     {
+      "name": "roundhouse-volume-migration",
+      "binding": "VOLUME_MIGRATION_WORKFLOW",
+      "class_name": "VolumeMigrationWorkflow"
+    },
+    {
       "name": "roundhouse-certificate",
       "binding": "CERT_WORKFLOW",
       "class_name": "CertificateWorkflow"

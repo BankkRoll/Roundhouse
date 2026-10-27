@@ -81,27 +81,28 @@ Declared in `apps/api/wrangler.jsonc`. `pnpm run deploy` creates the D1
 database, the R2 bucket, the Durable Object namespaces and the Workflows on
 the first deploy; there are no IDs to copy.
 
-| Binding                 | Kind             | Purpose                                                                 |
-| ----------------------- | ---------------- | ----------------------------------------------------------------------- |
-| `DB`                    | D1               | Control-plane metadata (`roundhouse`), migrations in `packages/db`      |
-| `LOGS`                  | R2               | Log chunks (`roundhouse-logs`)                                          |
-| `ASSETS`                | Static assets    | The dashboard build (`apps/web/dist`)                                   |
-| `NODE_CONNECTION`       | Durable Object   | One per node: the agent's socket                                        |
-| `PROJECT_ROOM`          | Durable Object   | One per project: the dashboard's realtime socket                        |
-| `AUDIT_CHAIN`           | Durable Object   | One per install: hash-chains audit entries                              |
-| `DEPLOY_WORKFLOW`       | Workflow         | The deploy pipeline, one instance per deployment                        |
-| `KEY_ROTATION_WORKFLOW` | Workflow         | Re-seals stored secrets under the current master key                    |
-| `PROVISION_WORKFLOW`    | Workflow         | One-click cloud server provisioning                                     |
-| `BACKUP_WORKFLOW`       | Workflow         | One database or volume backup per instance                              |
-| `RESTORE_WORKFLOW`      | Workflow         | One restore per instance                                                |
-| `CERT_WORKFLOW`         | Workflow         | One certificate order per attempt (managed TLS, ADR 0009)               |
-| `CRON_RUN_WORKFLOW`     | Workflow         | One cron run per instance (ADR 0010)                                    |
-| `PREVIEW_WORKFLOW`      | Workflow         | Pull request previews: one instance per delivery and project (ADR 0007) |
-| `AUTH_LIMITER`          | Rate limit       | 10 a minute per IP on secret-accepting endpoints and agent connects     |
-| `WEBHOOK_LIMITER`       | Rate limit       | 300 a minute per IP on the GitHub webhook receiver                      |
-| `MCP_LIMITER`           | Rate limit       | 60 a minute per token on MCP tool calls                                 |
-| `ACME_LIMITER`          | Rate limit       | 60 a minute per IP on the public ACME HTTP-01 responder                 |
-| `METRICS`               | Analytics Engine | Metrics dataset (`roundhouse_metrics`); optional, absent in development |
+| Binding                     | Kind             | Purpose                                                                 |
+| --------------------------- | ---------------- | ----------------------------------------------------------------------- |
+| `DB`                        | D1               | Control-plane metadata (`roundhouse`), migrations in `packages/db`      |
+| `LOGS`                      | R2               | Log chunks (`roundhouse-logs`)                                          |
+| `ASSETS`                    | Static assets    | The dashboard build (`apps/web/dist`)                                   |
+| `NODE_CONNECTION`           | Durable Object   | One per node: the agent's socket                                        |
+| `PROJECT_ROOM`              | Durable Object   | One per project: the dashboard's realtime socket                        |
+| `AUDIT_CHAIN`               | Durable Object   | One per install: hash-chains audit entries                              |
+| `DEPLOY_WORKFLOW`           | Workflow         | The deploy pipeline, one instance per deployment                        |
+| `KEY_ROTATION_WORKFLOW`     | Workflow         | Re-seals stored secrets under the current master key                    |
+| `PROVISION_WORKFLOW`        | Workflow         | One-click cloud server provisioning                                     |
+| `BACKUP_WORKFLOW`           | Workflow         | One database or volume backup per instance                              |
+| `RESTORE_WORKFLOW`          | Workflow         | One restore per instance                                                |
+| `VOLUME_MIGRATION_WORKFLOW` | Workflow         | One move of a volume between nodes per instance                         |
+| `CERT_WORKFLOW`             | Workflow         | One certificate order per attempt (managed TLS, ADR 0009)               |
+| `CRON_RUN_WORKFLOW`         | Workflow         | One cron run per instance (ADR 0010)                                    |
+| `PREVIEW_WORKFLOW`          | Workflow         | Pull request previews: one instance per delivery and project (ADR 0007) |
+| `AUTH_LIMITER`              | Rate limit       | 10 a minute per IP on secret-accepting endpoints and agent connects     |
+| `WEBHOOK_LIMITER`           | Rate limit       | 300 a minute per IP on the GitHub webhook receiver                      |
+| `MCP_LIMITER`               | Rate limit       | 60 a minute per token on MCP tool calls                                 |
+| `ACME_LIMITER`              | Rate limit       | 60 a minute per IP on the public ACME HTTP-01 responder                 |
+| `METRICS`                   | Analytics Engine | Metrics dataset (`roundhouse_metrics`); optional, absent in development |
 
 Two cron triggers run in the same Worker: hourly retention (`17 * * * *`),
 which also applies backup retention, and a minute tick that seals the audit

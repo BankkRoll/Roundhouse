@@ -22,6 +22,7 @@ import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
 import { configuredOrigin } from "./origin";
 import { runPreviewTick } from "./previews/engine";
 import { reapRetiredEnvironments } from "./previews/environment";
+import { claimMigrationCleanups } from "./volume-migrations";
 import { claimVolumeDeletions } from "./volumes";
 
 /** The Cron Trigger expression of the minute tick; it must match `wrangler.jsonc`. */
@@ -64,6 +65,7 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
   },
   { name: "volume_deletions", run: claimVolumeDeletions },
   { name: "backup_policies", run: claimDueBackups },
+  { name: "migration_cleanups", run: claimMigrationCleanups },
   { name: "cron", run: claimDueCronRuns },
   {
     // ADR 0007: expire idle previews and admit queued ones as slots free up.

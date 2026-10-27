@@ -11,13 +11,20 @@ import {
   type BackupJob,
   backupPartsAad,
   type ControlMessage,
+  type DbQuery,
+  type DesiredState,
+  dbCredentialAad,
   type JoinResponse,
   openBox,
   type RestoreJob,
   restoreSecretsAad,
   SealedBackupPartsSchema,
   type SealedBox,
+  type SealedDbCredential,
+  SealedDbCredentialSchema,
   SealedRestoreSecretsSchema,
+  type VolumeCopyIn,
+  type VolumeCopyOut,
   verifyEnvelope,
 } from "@roundhouse/protocol";
 import { newId } from "@roundhouse/shared";
@@ -44,7 +51,19 @@ export interface DataAgentBehaviour {
   partSizes?: (partSize: number) => number[];
   /** `ok` downloads, checks and reports success; `fail` reports an error. */
   restore?: "ok" | "fail" | "silent";
+  /** `healthy` reports each new workload healthy and each listed volume ready. */
+  workloads?: "healthy" | "silent";
+  /**
+   * How `db_query` is answered: `ok` with an empty result, `fail` with
+   * `queryError`, or never; a function decides per query.
+   */
+  query?: QueryAnswer | ((q: DbQuery, credential: SealedDbCredential) => QueryAnswer);
+  /** The engine error a failed query reports. */
+  queryError?: string;
 }
+
+/** How the fake agent answers one `db_query`. */
+export type QueryAnswer = "ok" | "fail" | "silent";
 
 /** A protocol 5 agent for backup tests. */
 export interface FakeDataAgent {
@@ -56,8 +75,10 @@ export interface FakeDataAgent {
   rejected: string[];
   /** Opened `parts_sealed` URLs per backup, by part number. */
   partUrls: Map<string, Map<number, string>>;
-  /** Opened `secrets_sealed` per restore. */
+  /** Opened `secrets_sealed` per restore (or migration, for a copy-in). */
   restoreSecrets: Map<string, { download_url: string; age_identity: string }>;
+  /** Every `db_query` with its opened credential, in arrival order. */
+  queries: { query: DbQuery; credential: SealedDbCredential }[];
   /** Raw sealed boxes as received, for AAD checks. */
   boxes: { frame: string; id: string; box: SealedBox }[];
   send(frame: unknown): void;
@@ -68,7 +89,11 @@ export interface FakeDataAgent {
   ): Promise<T>;
 }
 
-async function open(box: SealedBox, purpose: "backup-parts" | "restore", aad: string) {
+async function open(
+  box: SealedBox,
+  purpose: "backup-parts" | "restore" | "db-credential",
+  aad: string,
+) {
   return JSON.parse(decoder.decode(await openBox(NODE_ENCRYPTION_PRIVATE_KEY, box, purpose, aad)));
 }
 
@@ -83,6 +108,7 @@ export async function connectDataAgent(
   joined: JoinResponse,
   fake: FakeS3,
   behaviour: DataAgentBehaviour = { backup: "ok", restore: "ok" },
+  helloOverrides: Record<string, unknown> = {},
 ): Promise<FakeDataAgent> {
   const res = await SELF.fetch(`${ORIGIN}/v1/nodes/${joined.node_id}/connect`, {
     headers: { upgrade: "websocket", authorization: `Bearer ${joined.credential}` },
@@ -99,6 +125,7 @@ export async function connectDataAgent(
     rejected: [],
     partUrls: new Map(),
     restoreSecrets: new Map(),
+    queries: [],
     boxes: [],
     send,
     waitFor<T extends ControlMessage>(
@@ -123,7 +150,7 @@ export async function connectDataAgent(
     },
   };
 
-  const onBackupJob = async (job: BackupJob) => {
+  const onBackupJob = async (job: BackupJob | VolumeCopyOut) => {
     if (agent.behaviour.backup === "silent") return;
     if (agent.behaviour.backup === "fail") {
       send({
@@ -174,30 +201,87 @@ export async function connectDataAgent(
     });
   };
 
-  const onRestoreJob = async (job: RestoreJob) => {
+  const onRestoreJob = async (job: RestoreJob | VolumeCopyIn) => {
+    const restoreId = job.type === "restore_job" ? job.restore_id : job.migration_id;
     if (agent.behaviour.restore === "silent") return;
     if (agent.behaviour.restore === "fail") {
       send({
         type: "restore_result",
-        restore_id: job.restore_id,
+        restore_id: restoreId,
         ok: false,
         error: "pg_restore: error: could not connect",
         duration_ms: 2,
       });
       return;
     }
-    const secrets = agent.restoreSecrets.get(job.restore_id)!;
+    const secrets = agent.restoreSecrets.get(restoreId)!;
     const got = await fake.fetch(new Request(secrets.download_url));
     const body = new Uint8Array(await got.arrayBuffer());
     const ok =
       got.ok && (await sha256Hex(body)) === job.sha256 && body.byteLength === job.size_bytes;
     send({
       type: "restore_result",
-      restore_id: job.restore_id,
+      restore_id: restoreId,
       ok,
       ...(ok ? { bytes: body.byteLength } : { error: `download check failed: ${got.status}` }),
       duration_ms: 5,
     });
+  };
+
+  const onQuery = (q: DbQuery, credential: SealedDbCredential) => {
+    const answer = agent.behaviour.query;
+    const how = typeof answer === "function" ? answer(q, credential) : (answer ?? "silent");
+    if (how === "silent") return;
+    send(
+      how === "ok"
+        ? {
+            type: "db_query_result",
+            request_id: q.request_id,
+            ok: true,
+            columns: [],
+            rows: [],
+            row_count: 0,
+            truncated: false,
+            duration_ms: 2,
+          }
+        : {
+            type: "db_query_result",
+            request_id: q.request_id,
+            ok: false,
+            error: agent.behaviour.queryError ?? "query failed",
+            duration_ms: 2,
+          },
+    );
+  };
+
+  const reported = new Set<string>();
+  const onDesired = (m: DesiredState) => {
+    if (agent.behaviour.workloads !== "healthy") return;
+    for (const w of m.workloads) {
+      if (reported.has(w.id)) continue;
+      reported.add(w.id);
+      send({
+        type: "workload_status",
+        workload_id: w.id,
+        deployment_id: w.deployment_id,
+        state: "healthy",
+        container_id: "0123456789ab",
+        restarts: 0,
+        ts: Date.now(),
+      });
+    }
+    if (m.volumes?.length) {
+      send({
+        type: "volume_status",
+        volumes: m.volumes.map((v) => ({
+          volume_id: v.id,
+          state: "ready",
+          size_bytes: v.size_mb * 2 ** 20,
+          used_bytes: 4096,
+          quota: "loop",
+        })),
+      });
+    }
   };
 
   ws.addEventListener("message", (e) => {
@@ -213,7 +297,7 @@ export async function connectDataAgent(
       }
       const m = verified.message;
       try {
-        if (m.type === "backup_job" || m.type === "backup_parts") {
+        if (m.type === "backup_job" || m.type === "backup_parts" || m.type === "volume_copy_out") {
           agent.boxes.push({ frame: m.type, id: m.backup_id, box: m.parts_sealed });
           const { parts } = SealedBackupPartsSchema.parse(
             await open(m.parts_sealed, "backup-parts", backupPartsAad(joined.node_id, m.backup_id)),
@@ -222,18 +306,28 @@ export async function connectDataAgent(
           for (const p of parts) urls.set(p.part_number, p.url);
           agent.partUrls.set(m.backup_id, urls);
         }
-        if (m.type === "restore_job") {
-          agent.boxes.push({ frame: m.type, id: m.restore_id, box: m.secrets_sealed });
+        if (m.type === "restore_job" || m.type === "volume_copy_in") {
+          const id = m.type === "restore_job" ? m.restore_id : m.migration_id;
+          agent.boxes.push({ frame: m.type, id, box: m.secrets_sealed });
           agent.restoreSecrets.set(
-            m.restore_id,
+            id,
             SealedRestoreSecretsSchema.parse(
-              await open(
-                m.secrets_sealed,
-                "restore",
-                restoreSecretsAad(joined.node_id, m.restore_id),
-              ),
+              await open(m.secrets_sealed, "restore", restoreSecretsAad(joined.node_id, id)),
             ),
           );
+        }
+        if (m.type === "db_query") {
+          agent.boxes.push({ frame: m.type, id: m.request_id, box: m.credential_sealed });
+          agent.queries.push({
+            query: m,
+            credential: SealedDbCredentialSchema.parse(
+              await open(
+                m.credential_sealed,
+                "db-credential",
+                dbCredentialAad(joined.node_id, m.request_id),
+              ),
+            ),
+          });
         }
       } catch {
         agent.rejected.push(`box:${m.type}`);
@@ -241,12 +335,20 @@ export async function connectDataAgent(
       }
       agent.received.push(m);
       for (const l of [...listeners]) l();
-      if (m.type === "backup_job") await onBackupJob(m);
-      if (m.type === "restore_job") await onRestoreJob(m);
+      if (m.type === "desired_state") onDesired(m);
+      if (m.type === "backup_job" || m.type === "volume_copy_out") await onBackupJob(m);
+      if (m.type === "restore_job" || m.type === "volume_copy_in") await onRestoreJob(m);
+      if (m.type === "db_query") onQuery(m, agent.queries.at(-1)!.credential);
     })();
   });
 
-  send(hello(joined.node_id, { protocol_version: BACKUPS_PROTOCOL_VERSION, statuses: [] }));
+  send(
+    hello(joined.node_id, {
+      protocol_version: BACKUPS_PROTOCOL_VERSION,
+      statuses: [],
+      ...helloOverrides,
+    }),
+  );
   await agent.waitFor((m): m is ControlMessage => m.type === "desired_state");
   return agent;
 }

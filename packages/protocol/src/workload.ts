@@ -123,7 +123,12 @@ export const ROLLOUT_STRATEGIES = ["start_first", "stop_first"] as const;
 /** Replacement order; see {@link ROLLOUT_STRATEGIES}. */
 export type RolloutStrategy = (typeof ROLLOUT_STRATEGIES)[number];
 
-/** Host addresses a TCP proxy port binds (ADR 0004). */
+/**
+ * Host addresses a TCP proxy port binds (ADR 0004): `"0.0.0.0"` publishes
+ * on IPv4 only; `"::"` is dual stack, bound on both `0.0.0.0` and `::`
+ * with the allowlist enforced in iptables and ip6tables. The control plane
+ * sends `"::"` exactly when the allowlist has an IPv6 block.
+ */
 export const PUBLISH_HOST_IPS = ["0.0.0.0", "::"] as const;
 
 /**
@@ -345,8 +350,11 @@ export type RegistryAuth = z.infer<typeof RegistryAuthSchema>;
 
 /**
  * Publishes a container port on the node (ADR 0004, TCP proxy; from
- * `VOLUMES_PROTOCOL_VERSION`). Docker binds it; the agent drops every source
- * outside `WorkloadSpec.publish_allowed_cidrs` with a final nftables rule.
+ * `VOLUMES_PROTOCOL_VERSION`), only to agents that advertise
+ * `capabilities.tcp_proxy`. Docker binds it; the agent drops every source
+ * outside `WorkloadSpec.publish_allowed_cidrs` in its `ROUNDHOUSE-PUBLISH`
+ * iptables (and, for `"::"`, ip6tables) chain, installed first. IPv4 blocks
+ * admit IPv4 sources and IPv6 blocks IPv6 sources.
  */
 export const PortPublishSchema = z.object({
   host_port: z.number().int().min(1024).max(65535),
@@ -567,7 +575,7 @@ export const WorkloadSpecSchema = z
     stop_grace_s: z.number().int().min(0).max(600).optional(),
     /**
      * Sources admitted to `ports[].publish`; required exactly when a port is
-     * published. Not hashed: the agent's nftables rule changes in place.
+     * published. Not hashed: the agent's allowlist chain changes in place.
      */
     publish_allowed_cidrs: z.array(CidrString).min(1).max(MAX_PUBLISH_CIDRS).optional(),
     /**

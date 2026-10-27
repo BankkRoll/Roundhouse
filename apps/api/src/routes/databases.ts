@@ -6,32 +6,78 @@
  *   the same authorization, validation and audit as any reviewed change.
  * - Volume routes read a service's volume and grow, soft-delete or undelete
  *   it, then push the holding node's desired state.
+ * - Migration routes list where a volume can move, start the move in
+ *   `VolumeMigrationWorkflow`, and report on it.
+ * - TCP proxy routes publish a service's port behind a source allowlist, or
+ *   stop publishing it, and push the replica's node.
  *
  * SECURITY: a database's generated credentials are written as `secret`
  * variables by the apply; this module only ever reports their keys.
  *
  * @module
  */
-import { changeSets, type Db, nodes, services, variables, volumes } from "@roundhouse/db";
-import { DATABASE_ENGINE_SPECS } from "@roundhouse/shared";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import {
+  type Db,
+  nodes,
+  services,
+  tcpProxies,
+  variables,
+  volumeMigrations,
+  volumes,
+} from "@roundhouse/db";
+import { BACKUPS_PROTOCOL_VERSION } from "@roundhouse/protocol";
+import { DATABASE_ENGINE_SPECS, DATABASE_PUBLIC_URL_VARIABLE, newId } from "@roundhouse/shared";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { type AppContext, clientIp, createRouter, requireKeys } from "../context";
 import {
   createDatabase,
+  deleteTcpProxy,
   deleteVolume,
   getServiceVolume,
+  getTcpProxy,
+  getVolumeMigration,
+  listCredentialRotations,
+  listMigrationTargets,
+  listVolumeMigrations,
+  migrateVolume,
   policyOf,
+  putTcpProxy,
   resizeVolume,
+  rotateDatabaseCredentials,
   undeleteVolume,
 } from "../contracts";
-import { recordAudit } from "../lib/audit";
-import { applySet } from "../lib/changes/apply";
-import { type StagingContext, stageIntoSet } from "../lib/changes/staging";
-import { openChangeSet } from "../lib/changes/store";
+import { auditInsert, recordAudit } from "../lib/audit";
+import { isBackupStorageConfigured, storageNotConfigured } from "../lib/backups/storage";
+import { addDatabaseService } from "../lib/changes/database";
+import { configAt } from "../lib/changes/staging";
+import { listRotations, rotateCredentials, toApiRotation } from "../lib/credential-rotations";
 import { refreshNodes } from "../lib/desired-state";
-import { ApiError, notFound } from "../lib/errors";
+import { ApiError, conflict, isUniqueViolation, notFound } from "../lib/errors";
+import { effectiveStatus } from "../lib/nodes";
+import { publicOrigin } from "../lib/origin";
 import { environmentOf, projectScope, serviceScope } from "../lib/scope";
 import { toApiService } from "../lib/serialize";
+import {
+  allocatePublicPort,
+  defaultContainerPort,
+  deleteDatabasePublicUrl,
+  enforcesTcpProxy,
+  normalizeAllowlist,
+  presentTcpProxy,
+  proxyNode,
+  tcpProxyOf,
+  writeDatabasePublicUrl,
+} from "../lib/tcp-proxies";
+import { projectKey } from "../lib/variables";
+import {
+  createMigrationRow,
+  eligibilityContext,
+  MIGRATABLE_VOLUME_STATUSES,
+  migrationTargets,
+  startVolumeMigration,
+  targetIneligibility,
+  toApiMigration,
+} from "../lib/volume-migrations";
 import {
   resizeVolume as growVolume,
   undeleteVolume as restoreVolume,
@@ -58,7 +104,11 @@ async function present(db: Db, v: VolumeRow) {
  * Loads a volume of a live service and authorizes the caller in its
  * environment, so protection rules apply.
  */
-async function volumeScope(c: AppContext, volumeId: string, action: "services:manage") {
+async function volumeScope(
+  c: AppContext,
+  volumeId: string,
+  action: "services:manage" | "services:read",
+) {
   const db = c.get("db");
   const [row] = await db
     .select({ volume: volumes })
@@ -92,60 +142,19 @@ export const databaseRoutes = createRouter()
     }
     const { project, caller } = await projectScope(c, projectId, "projects:read");
     const environment = await environmentOf(c, project.id, input.environment_id);
-    const ctx: StagingContext = { c, db, keys: requireKeys(c), project, environment, caller };
-
-    let set = await openChangeSet(db, {
-      projectId: project.id,
-      environmentId: environment.id,
-      source: "api",
-      isDraft: false,
-      caller,
-      title: `Add a ${input.engine} database`,
-    });
-    try {
-      set = await stageIntoSet(ctx, set, {
-        type: "service.create",
-        ref: "new:1",
-        kind: "database",
+    const { service, applied } = await addDatabaseService(
+      c,
+      { project, environment, caller },
+      {
+        engine: input.engine,
+        ...(input.version !== undefined ? { version: input.version } : {}),
+        ...(input.size_mb !== undefined ? { sizeMb: input.size_mb } : {}),
         name: input.name ?? DATABASE_ENGINE_SPECS[input.engine].name,
         ...(input.slug !== undefined ? { slug: input.slug } : {}),
-        database: {
-          engine: input.engine,
-          ...(input.version !== undefined ? { version: input.version } : {}),
-          ...(input.size_mb !== undefined ? { size_mb: input.size_mb } : {}),
-        },
-      });
-    } catch (err) {
-      await db.delete(changeSets).where(eq(changeSets.id, set.id));
-      throw err;
-    }
-    await recordAudit(db, {
-      workspaceId: project.workspaceId,
-      ...caller.actor,
-      action: "change_set.created",
-      targetType: "change_set",
-      targetId: set.id,
-      metadata: {
-        project_id: project.id,
-        environment_id: environment.id,
-        source: "api",
-        ops: 1,
-        engine: input.engine,
+        deploy: input.deploy,
+        title: `Add a ${input.engine} database`,
       },
-      ip: clientIp(c),
-    });
-
-    const applied = await applySet({ c, db, env: c.env, project, environment }, set, {
-      expectedRevision: set.revision,
-      deploy: input.deploy ? "affected" : "none",
-      direct: true,
-    });
-    const [op] = await db.query.stagedChanges.findMany({
-      where: (t, { eq: e }) => e(t.changeSetId, set.id),
-    });
-    const serviceId = String(op?.result?.service_id ?? "");
-    const service = await db.query.services.findFirst({ where: eq(services.id, serviceId) });
-    if (!service) throw new ApiError(500, "internal", "The database was not created");
+    );
     const vols = await db
       .select()
       .from(volumes)
@@ -240,4 +249,323 @@ export const databaseRoutes = createRouter()
       ip: clientIp(c),
     });
     return c.json(await present(db, row), 200);
+  })
+  .openapi(listMigrationTargets, async (c) => {
+    const { volumeId } = c.req.valid("param");
+    const { volume, project } = await volumeScope(c, volumeId, "services:read");
+    return c.json(await migrationTargets(c.get("db"), volume, project.workspaceId), 200);
+  })
+  .openapi(migrateVolume, async (c) => {
+    const { volumeId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { volume, service, project, caller } = await volumeScope(c, volumeId, "services:manage");
+    if (!caller.allows("deployments:create")) {
+      throw new ApiError(
+        403,
+        "forbidden",
+        "Moving a volume redeploys its service: it needs deployments:create",
+      );
+    }
+    if (body.confirm !== service.slug) {
+      throw new ApiError(400, "invalid_request", "confirm must equal the service's slug");
+    }
+    const db = c.get("db");
+    if (!(await isBackupStorageConfigured(db))) throw storageNotConfigured();
+    if (!volume.nodeId || !MIGRATABLE_VOLUME_STATUSES.includes(volume.status)) {
+      throw conflict(
+        `The volume is ${volume.status.replace(/_/g, " ")}; only a ready volume moves`,
+      );
+    }
+    const [target] = await db
+      .select()
+      .from(nodes)
+      .where(
+        and(
+          eq(nodes.id, body.target_node_id),
+          eq(nodes.workspaceId, project.workspaceId),
+          isNull(nodes.deletedAt),
+        ),
+      )
+      .limit(1);
+    if (!target) throw notFound("Node");
+    const [source] = await db.select().from(nodes).where(eq(nodes.id, volume.nodeId)).limit(1);
+    if (!source || source.deletedAt || effectiveStatus(source) !== "online") {
+      throw conflict(
+        `The volume's node ${source?.name ?? volume.nodeId} is offline; the copy runs there, so bring it back first`,
+      );
+    }
+    if (source.protocolVersion < BACKUPS_PROTOCOL_VERSION) {
+      throw new ApiError(
+        409,
+        "agent_outdated",
+        `Upgrade the agent on ${source.name} to move volumes`,
+      );
+    }
+    const reason = targetIneligibility(target, await eligibilityContext(db, volume));
+    if (reason) throw new ApiError(422, "migration_target_ineligible", `${target.name}: ${reason}`);
+    let row: Awaited<ReturnType<typeof createMigrationRow>>;
+    try {
+      row = await createMigrationRow(db, {
+        volume,
+        targetNodeId: target.id,
+        requestedBy: caller.user.id,
+      });
+    } catch (err) {
+      if (isUniqueViolation(err, "volume_migrations"))
+        throw conflict("This volume is already moving");
+      throw err;
+    }
+    await recordAudit(db, {
+      workspaceId: project.workspaceId,
+      ...caller.actor,
+      action: "volume.migration_started",
+      targetType: "volume",
+      targetId: volume.id,
+      metadata: {
+        project_id: project.id,
+        service_id: volume.serviceId,
+        environment_id: volume.environmentId,
+        migration_id: row.id,
+        source_node_id: source.id,
+        target_node_id: target.id,
+        size_mb: volume.sizeMb,
+      },
+      ip: clientIp(c),
+    });
+    await startVolumeMigration(c.env, { migrationId: row.id, origin: publicOrigin(c) });
+    return c.json(toApiMigration(row, volume), 202);
+  })
+  .openapi(listVolumeMigrations, async (c) => {
+    const { volumeId } = c.req.valid("param");
+    const { volume } = await volumeScope(c, volumeId, "services:read");
+    const rows = await c
+      .get("db")
+      .select()
+      .from(volumeMigrations)
+      .where(eq(volumeMigrations.volumeId, volume.id))
+      .orderBy(desc(volumeMigrations.id))
+      .limit(20);
+    return c.json({ migrations: rows.map((m) => toApiMigration(m, volume)) }, 200);
+  })
+  .openapi(getVolumeMigration, async (c) => {
+    const { migrationId } = c.req.valid("param");
+    const db = c.get("db");
+    const [row] = await db
+      .select()
+      .from(volumeMigrations)
+      .where(eq(volumeMigrations.id, migrationId))
+      .limit(1);
+    if (!row) throw notFound("Volume migration");
+    let volume: VolumeRow;
+    try {
+      ({ volume } = await volumeScope(c, row.volumeId, "services:read"));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) throw notFound("Volume migration");
+      throw err;
+    }
+    return c.json(toApiMigration(row, volume), 200);
+  })
+  .openapi(getTcpProxy, async (c) => {
+    const { serviceId } = c.req.valid("param");
+    const { environment_id } = c.req.valid("query");
+    const { project } = await serviceScope(c, serviceId, "services:read", environment_id);
+    await environmentOf(c, project.id, environment_id);
+    const db = c.get("db");
+    const proxy = await tcpProxyOf(db, serviceId, environment_id);
+    if (!proxy) throw notFound("TCP proxy");
+    return c.json(await presentTcpProxy(db, proxy), 200);
+  })
+  .openapi(putTcpProxy, async (c) => {
+    const { serviceId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { service, project, caller } = await serviceScope(
+      c,
+      serviceId,
+      "services:manage",
+      body.environment_id,
+    );
+    const env = await environmentOf(c, project.id, body.environment_id);
+    const db = c.get("db");
+    const allowed = normalizeAllowlist(body.allowed_cidrs, body.acknowledge_open ?? false);
+    const config = await configAt(db, service.id, env.id);
+    if (!config) throw conflict(`${service.name} has no config in ${env.name}`);
+    if (config.deploy.replicas > 1) {
+      throw new ApiError(
+        422,
+        "volume_requires_single_replica",
+        "Only a single-replica service can publish a TCP port; scale it to one replica first",
+      );
+    }
+    const containerPort =
+      body.container_port ?? defaultContainerPort(service, config.networking.port);
+    const node = await proxyNode(db, service.id, env.id);
+    if (node && !enforcesTcpProxy(node)) {
+      throw new ApiError(
+        409,
+        "tcp_proxy_unsupported",
+        `The agent on ${node.name} can't enforce a source allowlist; upgrade it to publish ports`,
+      );
+    }
+    const existing = await tcpProxyOf(db, service.id, env.id);
+    const engine = service.databaseEngine;
+    if (engine && !existing && !caller.allows("variables:manage")) {
+      throw new ApiError(
+        403,
+        "forbidden",
+        "Publishing a database adds its DATABASE_PUBLIC_URL variable: it needs variables:manage",
+      );
+    }
+    const now = new Date();
+    let saved: typeof tcpProxies.$inferSelect | undefined;
+    if (existing) {
+      [saved] = await db
+        .update(tcpProxies)
+        .set({ containerPort, allowedCidrs: allowed, updatedAt: now })
+        .where(eq(tcpProxies.id, existing.id))
+        .returning();
+    } else {
+      for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+        try {
+          [saved] = await db
+            .insert(tcpProxies)
+            .values({
+              id: newId("tcpProxy"),
+              projectId: project.id,
+              serviceId: service.id,
+              environmentId: env.id,
+              containerPort,
+              publicPort: await allocatePublicPort(db),
+              allowedCidrs: allowed,
+              createdBy: caller.user.id,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .returning();
+        } catch (err) {
+          if (!isUniqueViolation(err, "tcp_proxies")) throw err;
+          // A concurrent PUT for this service won, or took the port; read again.
+          const raced = await tcpProxyOf(db, service.id, env.id);
+          if (raced) throw conflict("The TCP proxy changed at the same time; reload and retry");
+        }
+      }
+      if (!saved) throw conflict("Could not allocate a public port; retry");
+    }
+    const wroteUrl =
+      engine && !existing
+        ? await writeDatabasePublicUrl(
+            db,
+            await projectKey(db, requireKeys(c), project.id),
+            {
+              projectId: project.id,
+              environmentId: env.id,
+              scope: "service",
+              serviceId: service.id,
+            },
+            engine,
+            caller.user.id,
+          )
+        : false;
+    await auditInsert(db, {
+      workspaceId: project.workspaceId,
+      ...caller.actor,
+      action: existing ? "tcp_proxy.updated" : "tcp_proxy.enabled",
+      targetType: "service",
+      targetId: service.id,
+      metadata: {
+        project_id: project.id,
+        environment_id: env.id,
+        tcp_proxy_id: saved!.id,
+        container_port: containerPort,
+        public_port: saved!.publicPort,
+        allowed_cidrs: allowed,
+        open_to_all: allowed.some((x) => x.endsWith("/0")),
+        ...(existing ? { previous_cidrs: existing.allowedCidrs } : {}),
+        ...(wroteUrl ? { variables_set: [DATABASE_PUBLIC_URL_VARIABLE] } : {}),
+      },
+      ip: clientIp(c),
+    });
+    if (node) await refreshNodes(c.env, db, [node.id]);
+    return c.json(await presentTcpProxy(db, saved!), 200);
+  })
+  .openapi(deleteTcpProxy, async (c) => {
+    const { serviceId } = c.req.valid("param");
+    const { environment_id } = c.req.valid("query");
+    const { service, project, caller } = await serviceScope(
+      c,
+      serviceId,
+      "services:manage",
+      environment_id,
+    );
+    await environmentOf(c, project.id, environment_id);
+    const db = c.get("db");
+    const proxy = await tcpProxyOf(db, serviceId, environment_id);
+    if (!proxy) throw notFound("TCP proxy");
+    const node = await proxyNode(db, serviceId, environment_id);
+    const droppedUrl = service.databaseEngine
+      ? await deleteDatabasePublicUrl(
+          db,
+          await projectKey(db, requireKeys(c), project.id),
+          { projectId: project.id, environmentId: environment_id, scope: "service", serviceId },
+          service.databaseEngine,
+        )
+      : false;
+    await db.batch([
+      db.delete(tcpProxies).where(eq(tcpProxies.id, proxy.id)),
+      auditInsert(db, {
+        workspaceId: project.workspaceId,
+        ...caller.actor,
+        action: "tcp_proxy.disabled",
+        targetType: "service",
+        targetId: serviceId,
+        metadata: {
+          project_id: project.id,
+          environment_id,
+          tcp_proxy_id: proxy.id,
+          public_port: proxy.publicPort,
+          ...(droppedUrl ? { variables_deleted: [DATABASE_PUBLIC_URL_VARIABLE] } : {}),
+        },
+        ip: clientIp(c),
+      }),
+    ]);
+    if (node) await refreshNodes(c.env, db, [node.id]);
+    return c.body(null, 204);
+  })
+  .openapi(rotateDatabaseCredentials, async (c) => {
+    const { serviceId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { service, project, caller } = await serviceScope(
+      c,
+      serviceId,
+      policyOf(rotateDatabaseCredentials).action!,
+      body.environment_id,
+    );
+    for (const action of ["variables:manage", "deployments:create"] as const) {
+      if (!caller.allows(action)) {
+        throw new ApiError(
+          403,
+          "forbidden",
+          `Rotating credentials stores new variables and redeploys: it needs ${action}`,
+        );
+      }
+    }
+    if (body.confirm !== service.slug) {
+      throw new ApiError(400, "invalid_request", "confirm must equal the service's slug");
+    }
+    const environment = await environmentOf(c, project.id, body.environment_id);
+    const row = await rotateCredentials(c, {
+      service,
+      project,
+      environment,
+      caller,
+      ...(body.principals ? { principals: body.principals } : {}),
+    });
+    return c.json(toApiRotation(row), 200);
+  })
+  .openapi(listCredentialRotations, async (c) => {
+    const { serviceId } = c.req.valid("param");
+    const { environment_id } = c.req.valid("query");
+    const { project } = await serviceScope(c, serviceId, "services:read", environment_id);
+    await environmentOf(c, project.id, environment_id);
+    const rows = await listRotations(c.get("db"), serviceId, environment_id);
+    return c.json({ rotations: rows.map(toApiRotation) }, 200);
   });

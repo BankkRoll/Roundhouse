@@ -16,20 +16,24 @@ import { errorMessage } from "../../lib/api/client";
 import type { Volume } from "../../lib/api/data-client";
 import type { Environment, Service } from "../../lib/api/deploy-types";
 import { formatBytes, formatDuration, formatTimestamp } from "../../lib/format";
-import { usePermissions } from "../../lib/permissions";
 import {
+  migrationInFlight,
   useDeleteVolume,
   useResizeVolume,
   useUndeleteVolume,
   useVolume,
+  useVolumeMigrations,
 } from "../../queries/databases";
+import { useNodes } from "../../queries/nodes";
+import { useEnvironmentGate } from "../access/environment-gate";
+import { MigrationHistory, MigrationProgress, MoveVolumeDialog } from "./volume-migration";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "info";
 
 const STATUS: Record<Volume["status"], { label: string; tone: Tone }> = {
   pending: { label: "Pending", tone: "neutral" },
   ready: { label: "Ready", tone: "success" },
-  migrating: { label: "Migrating", tone: "info" },
+  migrating: { label: "Moving", tone: "info" },
   degraded: { label: "Degraded", tone: "warning" },
   pending_deletion: { label: "Pending deletion", tone: "danger" },
   deleted: { label: "Deleted", tone: "neutral" },
@@ -44,7 +48,10 @@ const QUOTA: Record<NonNullable<Volume["quota_mode"]>, string> = {
   none: "Not enforced",
 };
 
-const LIVE: readonly Volume["status"][] = ["pending", "ready", "migrating", "degraded"];
+/** Statuses in which the volume can be grown or deleted: not while it moves. */
+const EDITABLE: readonly Volume["status"][] = ["pending", "ready", "degraded"];
+/** Statuses the API moves a volume from. */
+const MOVABLE: readonly Volume["status"][] = ["ready", "degraded"];
 const MiB = 1024 * 1024;
 
 /** Parses a size in GiB (up to two decimals) into MiB. */
@@ -136,20 +143,34 @@ export interface VolumeSectionProps {
 /**
  * A service's volume in the selected environment, as settings rows: status, usage
  * against its size, a grow-only resize, how the node enforces the quota (with a warning
- * when it doesn't), and the node holding it. A deleted volume can be undeleted until its
- * grace period ends.
+ * when it doesn't), and the node holding it, with a move to another node, its progress
+ * and the recent moves. A deleted volume can be undeleted until its grace period ends.
  *
  * @param props - Workspace, the service and the selected environment.
  * @returns The section.
  */
 export function VolumeSection({ workspaceId, service, environment }: VolumeSectionProps) {
-  const { can } = usePermissions(workspaceId);
+  const { can } = useEnvironmentGate(workspaceId, service.project_id, environment);
   const volume = useVolume(service.id, environment?.id);
   const remove = useDeleteVolume();
   const undelete = useUndeleteVolume();
   const [confirming, setConfirming] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [startedId, setStartedId] = useState<string | null>(null);
   const canManage = can("services:manage");
+  const canMove = canManage && can("deployments:create");
   const data = volume.data;
+  const migrations = useVolumeMigrations(data?.id);
+  const nodes = useNodes(workspaceId, false);
+  const history = migrations.data?.migrations ?? [];
+  const runningId = history.find(migrationInFlight)?.id ?? null;
+  const progressId = runningId ?? startedId;
+  const nodeName = (nodeId: string | null) =>
+    nodeId === null
+      ? "an unknown server"
+      : (nodes.data?.find((node) => node.id === nodeId)?.name ??
+        (nodeId === data?.node_id ? data.node_name : null) ??
+        nodeId);
 
   return (
     <SettingsSection
@@ -238,7 +259,7 @@ export function VolumeSection({ workspaceId, service, environment }: VolumeSecti
               />
             </div>
           </SettingsRow>
-          <ResizeForm volume={data} disabled={!canManage || !LIVE.includes(data.status)} />
+          <ResizeForm volume={data} disabled={!canManage || !EDITABLE.includes(data.status)} />
           <SettingsRow
             label="Quota"
             description={
@@ -254,12 +275,40 @@ export function VolumeSection({ workspaceId, service, environment }: VolumeSecti
               {data.quota_mode ? QUOTA[data.quota_mode] : "Reported once placed"}
             </p>
           </SettingsRow>
-          <SettingsRow label="Server">
-            <p className="text-sm text-foreground md:text-right">
-              {data.node_name ?? "Placed on the first deploy"}
-            </p>
+          <SettingsRow
+            label="Server"
+            description={
+              data.status === "migrating"
+                ? "Moving to another server; the service is down until it starts there."
+                : canMove && data.node_id
+                  ? "Moving it stops the service for the whole copy."
+                  : undefined
+            }
+          >
+            <div className="flex items-center gap-3 md:justify-end">
+              <p className="text-sm text-foreground">
+                {data.node_name ?? "Placed on the first deploy"}
+              </p>
+              {canMove && data.node_id && MOVABLE.includes(data.status) && !runningId ? (
+                <Button variant="secondary" size="sm" onClick={() => setMoving(true)}>
+                  Move to server…
+                </Button>
+              ) : null}
+            </div>
           </SettingsRow>
-          {canManage && LIVE.includes(data.status) ? (
+          {progressId ? (
+            <MigrationProgress
+              key={progressId}
+              migrationId={progressId}
+              serviceName={service.name}
+              nodeName={nodeName}
+            />
+          ) : null}
+          <MigrationHistory
+            migrations={history.filter((row) => row.id !== progressId)}
+            nodeName={nodeName}
+          />
+          {canManage && EDITABLE.includes(data.status) ? (
             <SettingsRow
               label="Delete volume"
               description="Its data is removed from the server after 72 hours unless you undelete it. Stop the service in this environment first."
@@ -271,6 +320,13 @@ export function VolumeSection({ workspaceId, service, environment }: VolumeSecti
               </div>
             </SettingsRow>
           ) : null}
+          <MoveVolumeDialog
+            service={service}
+            volume={data}
+            open={moving}
+            onOpenChange={setMoving}
+            onStarted={(migration) => setStartedId(migration.id)}
+          />
           <ConfirmDialog
             open={confirming}
             onOpenChange={(open) => {

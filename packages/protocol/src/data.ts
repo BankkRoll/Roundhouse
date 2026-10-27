@@ -23,6 +23,7 @@ import {
   boundedString,
   Count,
   DB_NAME_RE,
+  DB_USER_RE,
   ETAG_RE,
   IdString,
   MAX_BACKUP_DATABASES,
@@ -319,6 +320,15 @@ export const DbOpSchema = z.discriminatedUnion("type", [
       path: ["params"],
     }),
   z.object({ type: z.literal("provision_readonly") }),
+  /**
+   * Sets `user`'s password to the credential box's `new_password`,
+   * connected as the admin (credential rotation, ADR 0004). The password
+   * travels only in the sealed box, never in the op. System use only.
+   */
+  z.object({
+    type: z.literal("set_password"),
+    user: z.string().regex(DB_USER_RE, "expected a database user name"),
+  }),
 ]);
 
 /** A data-browser operation. */
@@ -348,6 +358,10 @@ export const DbQuerySchema = z
   })
   .refine((q) => q.op.type !== "provision_readonly" || q.mode === "write", {
     message: "provision_readonly runs as the admin",
+    path: ["mode"],
+  })
+  .refine((q) => q.op.type !== "set_password" || q.mode === "write", {
+    message: "set_password runs as the admin",
     path: ["mode"],
   })
   .refine(isShortLived, SHORT_LIVED_ISSUE);

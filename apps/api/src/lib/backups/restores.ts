@@ -187,9 +187,19 @@ export async function auditRestore(
  *
  * @param slug - The backed-up service's slug.
  * @param at - Unix ms of the restore.
- * @returns `<slug>-restore-<yyyymmdd>`.
+ * @returns `<slug>-restore-<yyyymmdd>`, the slug shortened to stay within
+ *   {@link SERVICE_SLUG_MAX} with room for a `-2`, `-3`, … suffix.
+ * @example
+ * restoreServiceSlug("db", Date.UTC(2026, 9, 27)); // "db-restore-20261027"
  */
 export function restoreServiceSlug(slug: string, at: number): string {
-  const d = new Date(at).toISOString().slice(0, 10).replace(/-/g, "");
-  return `${slug}-restore-${d}`;
+  const suffix = `-restore-${new Date(at).toISOString().slice(0, 10).replace(/-/g, "")}`;
+  const room = SERVICE_SLUG_MAX - suffix.length - RESTORE_SLUG_SUFFIX_ROOM;
+  return `${slug.slice(0, room).replace(/-+$/, "") || "db"}${suffix}`;
 }
+
+/** Longest service slug (`SlugField`). */
+export const SERVICE_SLUG_MAX = 40;
+
+/** Characters kept free for the `-<n>` a taken slug gets. */
+const RESTORE_SLUG_SUFFIX_ROOM = 3;

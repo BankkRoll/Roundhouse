@@ -49,6 +49,7 @@ import {
 } from "../../../queries/services";
 import { LockedButton, LockedNote, useEnvironmentGate } from "../../access/environment-gate";
 import { DatabaseSection } from "../../databases/database-section";
+import { TcpProxySection } from "../../databases/tcp-proxy-section";
 import { VolumeSection } from "../../databases/volume-section";
 import {
   branchError,
@@ -102,6 +103,7 @@ const SECTIONS = [
   { id: "resources", label: "Resources" },
   { id: "healthcheck", label: "Healthcheck" },
   { id: "networking", label: "Networking" },
+  { id: "tcp-proxy", label: "TCP proxy" },
   { id: "domains", label: "Domains" },
   { id: "placement", label: "Placement" },
 ] as const;
@@ -1440,6 +1442,11 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
           <>
             <HealthcheckSection config={current} context={context} />
             <NetworkingSection config={current} context={context} />
+            <TcpProxySection
+              workspaceId={workspaceId}
+              service={service}
+              environment={environment}
+            />
             <DomainsSection workspaceId={workspaceId} projectId={projectId} serviceId={serviceId} />
           </>
         )}

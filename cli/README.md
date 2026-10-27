@@ -184,6 +184,7 @@ roundhouse db backups run --wait
 roundhouse db backups policy                # schedule, next runs, retention
 roundhouse db backups policy set --schedule "0 2 * * *" --keep-last 14 --max-age-days 30
 roundhouse db backups restore bak_01J9Z6Y4M0V8 --mode in_place --confirm postgres --wait
+roundhouse db backups restore bak_01J9Z6Y4M0V8 --mode new_service --slug postgres-copy
 roundhouse db backups download bak_01J9Z6Y4M0V8 --decrypt -o shop.rhbk.zst
 ```
 
@@ -194,7 +195,13 @@ sets one under Settings → Backups) backup commands exit 6 with
 
 `restore` asks for the database's slug (`--confirm` in scripts); `in_place`
 takes a safety backup first unless `--skip-safety-backup` is given.
-Restoring and decrypting need a recent sign-in: on `reauth_required` (exit 4) run `roundhouse login` again. API tokens never qualify.
+`new_service` adds a new database (`--slug`, default
+`<slug>-restore-<yyyymmdd>`; `--environment`, default the backup's) and
+restores into it, leaving the original untouched; only a dump restores this
+way, so a snapshot of a service that is not a database exits 7 with
+`restore_mode_unsupported`.
+Restoring and decrypting need a recent sign-in: on `reauth_required` (exit
+4) run `roundhouse login` again. API tokens never qualify.
 
 `download` fetches the encrypted object straight from object storage,
 without the control plane's credential, verifies its SHA-256, and writes it
@@ -204,6 +211,37 @@ decrypts with [age](https://age-encryption.org) as it downloads; the key is
 never printed or saved. The result is a zstd-compressed RHBK1 archive
 (`packages/protocol/rhbk.md`). `-o -` writes to stdout; an existing file is
 replaced only with `--force`.
+
+### Moving volumes, TCP proxies and credential rotation
+
+```sh
+roundhouse db volume move --list-targets    # servers, why not, estimated downtime
+roundhouse db volume move --to edge-2 --wait
+roundhouse db volume migrations
+roundhouse db tcp-proxy                     # endpoint, status, allowlist
+roundhouse db tcp-proxy enable --allow 203.0.113.7 --allow 198.51.100.0/24
+roundhouse db tcp-proxy disable --yes
+roundhouse db rotate-credentials --principal app --principal readonly
+roundhouse db rotations
+```
+
+`volume move` copies the volume to another server through the backup
+bucket and redeploys the service there; the service is down for the whole
+copy. A server that cannot take the volume is listed with its reason, and
+`--wait` prints each phase as the move goes. It asks for the service's slug
+(`--confirm` or `--yes` in scripts).
+
+`tcp-proxy enable` publishes the service's port on its server behind a
+source allowlist (`--allow`, repeatable; every other source is dropped).
+`0.0.0.0/0` is refused unless `--allow-open` is given, which prints a
+warning: the port is then reachable from the whole internet and
+unencrypted unless the client and the database negotiate TLS.
+
+`rotate-credentials` sets new passwords in the database, stores them as
+write-only secrets and redeploys the database and every service using them;
+no password is printed. A rotation left `running` by an interrupted call is
+finished by running the command again. Moving, publishing and rotating need
+a recent sign-in, like restores.
 
 ## Cron services
 
@@ -341,38 +379,40 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 
 ## Commands
 
-| Command                                             | Purpose                                                  |
-| --------------------------------------------------- | -------------------------------------------------------- |
-| `login`, `logout`, `whoami`                         | Manage the session of a profile                          |
-| `init`, `link`, `unlink`                            | Bind the directory to a project, environment and service |
-| `status`                                            | Linked project and service, latest deployment, domains   |
-| `open [--dashboard]`                                | Open the service URL or the dashboard                    |
-| `deploy [--wait]`                                   | Deploy the latest config                                 |
-| `logs [-f] [--build] [--deployment] [--since] [-n]` | Show and follow logs                                     |
-| `metrics [--range\|--from --to] [-m] [--replicas]`  | Service CPU, memory, network and disk over a range       |
-| `metrics summary`                                   | Every service's current CPU and memory                   |
-| `rollback [deployment]`, `cancel [deployment]`      | Steer deployments                                        |
-| `vars [get\|set\|unset\|import\|export]`            | Service (or `--shared`) variables                        |
-| `run -- <cmd>`                                      | Run a local command with the service's variables         |
-| `projects list\|create\|delete`                     | Projects; deletes need the typed slug                    |
-| `templates list\|show\|deploy`                      | Built-in templates; deploy as a new project or into one  |
-| `services list\|create\|delete`                     | Services; cron ones need `--schedule`; typed deletes     |
-| `domain [--all]`                                    | The service's domains                                    |
-| `servers list\|add [--provider]`                    | Servers; `add` prints the install command, or provisions |
-| `servers remove <server> [--keep-server] [-y]`      | Remove a server; deletes a provisioned cloud server too  |
-| `servers cancel <provision-id> [--no-wait]`         | Cancel a provisioning run and delete what it created     |
-| `servers metrics <server> [--range] [-m]`           | A server's CPU, memory, disk and load                    |
-| `db create\|list\|info\|query\|tables`              | Database services and read-only queries                  |
-| `db volume [resize\|delete\|undelete]`              | A database's volume                                      |
-| `db backups list\|run\|policy\|restore\|download`   | Backups, schedules, restores, decrypted downloads        |
-| `cron status\|runs\|run\|cancel\|logs`              | Cron services: schedule, run history, run now, output    |
-| `cron set [--schedule] [--timezone] [--retries] …`  | Change a cron service's schedule and run rules           |
-| `cron pause\|resume`, `cron preview <schedule>`     | Pause or resume scheduling; a schedule's next slots      |
-| `previews list [--all]`                             | The project's pull request previews                      |
-| `previews approve\|redeploy\|destroy <preview>`     | Approve a fork's commit, redeploy, or tear down          |
-| `tokens list\|create\|revoke`                       | Workspace API tokens for CI and scripts                  |
-| `version`, `completion`                             | Build info, shell completion                             |
-| `up`, `shell`, `db connect`                         | Not available on the control plane yet (exit 10)         |
+| Command                                                  | Purpose                                                   |
+| -------------------------------------------------------- | --------------------------------------------------------- |
+| `login`, `logout`, `whoami`                              | Manage the session of a profile                           |
+| `init`, `link`, `unlink`                                 | Bind the directory to a project, environment and service  |
+| `status`                                                 | Linked project and service, latest deployment, domains    |
+| `open [--dashboard]`                                     | Open the service URL or the dashboard                     |
+| `deploy [--wait]`                                        | Deploy the latest config                                  |
+| `logs [-f] [--build] [--deployment] [--since] [-n]`      | Show and follow logs                                      |
+| `metrics [--range\|--from --to] [-m] [--replicas]`       | Service CPU, memory, network and disk over a range        |
+| `metrics summary`                                        | Every service's current CPU and memory                    |
+| `rollback [deployment]`, `cancel [deployment]`           | Steer deployments                                         |
+| `vars [get\|set\|unset\|import\|export]`                 | Service (or `--shared`) variables                         |
+| `run -- <cmd>`                                           | Run a local command with the service's variables          |
+| `projects list\|create\|delete`                          | Projects; deletes need the typed slug                     |
+| `templates list\|show\|deploy`                           | Built-in templates; deploy as a new project or into one   |
+| `services list\|create\|delete`                          | Services; cron ones need `--schedule`; typed deletes      |
+| `domain [--all]`                                         | The service's domains                                     |
+| `servers list\|add [--provider]`                         | Servers; `add` prints the install command, or provisions  |
+| `servers remove <server> [--keep-server] [-y]`           | Remove a server; deletes a provisioned cloud server too   |
+| `servers cancel <provision-id> [--no-wait]`              | Cancel a provisioning run and delete what it created      |
+| `servers metrics <server> [--range] [-m]`                | A server's CPU, memory, disk and load                     |
+| `db create\|list\|info\|query\|tables`                   | Database services and read-only queries                   |
+| `db volume [resize\|move\|migrations\|delete\|undelete]` | A database's volume; moves it between servers             |
+| `db tcp-proxy [show\|enable\|disable]`                   | Publish a database's port behind a source allowlist       |
+| `db rotate-credentials`, `db rotations`                  | Rotate database passwords; redeploy everything using them |
+| `db backups list\|run\|policy\|restore\|download`        | Backups, schedules, restores, decrypted downloads         |
+| `cron status\|runs\|run\|cancel\|logs`                   | Cron services: schedule, run history, run now, output     |
+| `cron set [--schedule] [--timezone] [--retries] …`       | Change a cron service's schedule and run rules            |
+| `cron pause\|resume`, `cron preview <schedule>`          | Pause or resume scheduling; a schedule's next slots       |
+| `previews list [--all]`                                  | The project's pull request previews                       |
+| `previews approve\|redeploy\|destroy <preview>`          | Approve a fork's commit, redeploy, or tear down           |
+| `tokens list\|create\|revoke`                            | Workspace API tokens for CI and scripts                   |
+| `version`, `completion`                                  | Build info, shell completion                              |
+| `up`, `shell`, `db connect`                              | Not available on the control plane yet (exit 10)          |
 
 Every command takes `--json`, `--profile`, `--no-input`, `--no-color` and
 `--debug` (HTTP traces with credentials redacted). Run

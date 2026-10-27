@@ -122,6 +122,7 @@ import {
   type VariableTarget,
 } from "../variables";
 import {
+  assertNotMoving,
   assertSingleReplica,
   resizeVolume,
   singleReplicaError,
@@ -449,6 +450,7 @@ async function checkVolumeOp(
   if (found?.status === "pending_deletion") {
     throw conflict(`${service.name}'s volume is scheduled for deletion; undelete it first`);
   }
+  if (found) await assertNotMoving(db, found);
   if (op.type === "volume.delete") {
     if (!found || !live(found)) throw conflict(`${service.name} has no volume to delete here`);
     if (await volumeInUse(db, found)) {
