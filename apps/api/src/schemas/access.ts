@@ -174,6 +174,11 @@ export const EnvironmentProtectionSchema = z
       config: ProtectionRuleSchema,
       variables: ProtectionRuleSchema,
     }),
+    /**
+     * While protected, applying a change set also needs an approval from a
+     * project admin who neither staged it nor applies it (ADR 0006).
+     */
+    require_approval: z.boolean(),
   })
   .openapi("EnvironmentProtection");
 
@@ -189,6 +194,8 @@ export const PutEnvironmentProtectionBody = z
         variables: ProtectionRuleSchema.optional(),
       })
       .optional(),
+    /** Omitted keeps the current setting. */
+    require_approval: z.boolean().optional(),
   })
   .openapi("PutEnvironmentProtection");
 

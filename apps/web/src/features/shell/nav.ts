@@ -100,7 +100,16 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Settings",
     to: "/w/$workspaceId/settings",
     icon: SettingsIcon,
-    segments: ["settings", "members", "audit", "tokens", "platform", "domains-tls", "preferences"],
+    segments: [
+      "settings",
+      "members",
+      "teams",
+      "audit",
+      "tokens",
+      "platform",
+      "domains-tls",
+      "preferences",
+    ],
   },
 ];
 

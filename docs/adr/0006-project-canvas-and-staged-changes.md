@@ -437,6 +437,35 @@ React Flow, `@xyflow/react` 12.x (MIT), in
 - Two edit paths now coexist (staged and direct), so the conflict check
   carries real weight and is tested as such.
 
+## Implementation notes
+
+Decided while building it, where the text above left room:
+- **Review states.** A set carries `review_status` (`none`, `submitted`,
+  `approved`, `rejected`) besides `approved_by`. `POST …/submit` asks for a
+  review, and `POST …/reject` sits beside `…/approve` (both `changes:approve`,
+  audited as `change_set.submitted`/`approved`/`rejected`). A decision binds
+  `approved_revision`; any op change moves the set back to `submitted`. Nobody
+  who opened the set or staged a pending op in it may review it (403
+  `self_review`), and a rejected set never applies until it is edited.
+- **Approval on protected environments is opt-in.** ADR 0014 creates every
+  new project's production protected, so "protected means approval" would
+  leave a single-person workspace unable to apply its own production draft.
+  Approval is required when the environment is protected _and_ its protection
+  sets `require_approval` (`PUT /v1/environments/{id}/protection`), off by
+  default.
+- **API tokens.** A token applies without a person's approval only with
+  `changes:auto_apply`; otherwise the set needs an approval first (403
+  `approval_required`). MCP's `apply_changes` also requires the set to be the
+  token's own and the environment unprotected (0012); `submit_changes` asks
+  for the review.
+- **Volumes and domains** stage as `volume.set`/`volume.delete` and
+  `domain.add`/`domain.remove`, checked with `services:manage` like their
+  direct routes, and applied through the same functions (grow only, the
+  72 h deletion grace, hostname rules, the per-service cap).
+- **Workspace view.** `GET /v1/workspaces/{id}/change-sets` lists open sets
+  across the projects the caller can see; the dashboard's Canvas page shows
+  it as the review queue.
+
 ## Open questions
 
 - Should positions be per environment for previews whose services differ?

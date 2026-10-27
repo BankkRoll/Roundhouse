@@ -148,7 +148,6 @@ describe("home page", () => {
 
 describe("coming soon sections", () => {
   it.each([
-    ["canvas", "Canvas", "Phase 2"],
     ["logs", "Logs", "Later phase"],
     ["usage", "Usage", "Later phase"],
   ])("/%s explains which phase brings it", async (path, title, phase) => {

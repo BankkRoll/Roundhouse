@@ -37,6 +37,8 @@ export const SCOPE_LABELS: Record<ApiTokenScope, string> = {
   "data:write": "Run writing queries on databases",
   "backups:manage": "Change backup policies, back up and delete backups",
   "backups:restore": "Restore and download backups",
+  "changes:approve": "Approve or reject staged changes",
+  "changes:auto_apply": "Apply staged changes without a person's approval",
 };
 
 /** A choice in the create dialog: a preset, or picking scopes one by one. */

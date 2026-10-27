@@ -9,6 +9,7 @@ import { KEEP_FOCUS_ATTRIBUTE } from "../shell/focus";
 type SettingsPath =
   | "/w/$workspaceId/settings"
   | "/w/$workspaceId/members"
+  | "/w/$workspaceId/teams"
   | "/w/$workspaceId/audit"
   | "/w/$workspaceId/tokens"
   | "/w/$workspaceId/platform"
@@ -24,14 +25,17 @@ function Item({
   workspaceId,
   to,
   label,
+  exact = true,
 }: {
   workspaceId: string;
   to: SettingsPath;
   label: string;
+  /** Off for items whose pages have children, like a team under Teams. */
+  exact?: boolean;
 }) {
   return (
     <SettingsNavItem asChild>
-      <Link to={to} params={{ workspaceId }} activeOptions={{ exact: true }}>
+      <Link to={to} params={{ workspaceId }} activeOptions={{ exact }}>
         {label}
       </Link>
     </SettingsNavItem>
@@ -56,6 +60,9 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
         <Item workspaceId={workspaceId} to="/w/$workspaceId/settings" label="General" />
         {can("members:read") ? (
           <Item workspaceId={workspaceId} to="/w/$workspaceId/members" label="Members" />
+        ) : null}
+        {can("members:read") ? (
+          <Item workspaceId={workspaceId} to="/w/$workspaceId/teams" label="Teams" exact={false} />
         ) : null}
         {can("audit:read") ? (
           <Item workspaceId={workspaceId} to="/w/$workspaceId/audit" label="Audit log" />

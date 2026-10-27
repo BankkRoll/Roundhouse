@@ -11,16 +11,21 @@ import (
 func TestChangeSetTypesMatchSchemas(t *testing.T) {
 	doc := loadOpenAPI(t)
 	for name, v := range map[string]any{
-		"ChangeSetSummary": ChangeSetSummary{},
-		"ChangeSet":        ChangeSet{},
-		"StagedChange":     StagedChange{},
-		"DiffEntry":        DiffEntry{},
-		"StagedConflict":   StagedConflict{},
-		"ChangeSetReview":  ChangeSetReview{},
-		"PlannedDeploy":    PlannedDeploy{},
-		"AppliedChangeSet": AppliedChangeSet{},
-		"ApplyChangeSet":   ApplyChangeSetInput{},
-		"DiscardChangeSet": DiscardChangeSetInput{},
+		"ChangeSetSummary":  ChangeSetSummary{},
+		"ChangeSet":         ChangeSet{},
+		"StagedChange":      StagedChange{},
+		"DiffEntry":         DiffEntry{},
+		"StagedConflict":    StagedConflict{},
+		"ChangeSetReview":   ChangeSetReview{},
+		"PlannedDeploy":     PlannedDeploy{},
+		"AppliedChangeSet":  AppliedChangeSet{},
+		"ApplyChangeSet":    ApplyChangeSetInput{},
+		"DiscardChangeSet":  DiscardChangeSetInput{},
+		"ChangeSetApproval": ChangeSetApproval{},
+		"SubmitChangeSet":   SubmitChangeSetInput{},
+		"ReviewDecision":    ReviewDecisionInput{},
+		"RebaseChangeSet":   RebaseChangeSetInput{},
+		"RebasedChangeSet":  RebasedChangeSet{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
@@ -55,6 +60,9 @@ func TestChangeSetEnumsMatchAPI(t *testing.T) {
 	}
 	if got := enum("ChangeSetSummary", "status"); !slices.Equal(got, ChangeSetStatuses) {
 		t.Errorf("ChangeSetStatuses = %v\nAPI enum          = %v", ChangeSetStatuses, got)
+	}
+	if got := enum("ChangeSetSummary", "review_status"); !slices.Equal(got, ReviewStatuses) {
+		t.Errorf("ReviewStatuses = %v\nAPI enum       = %v", ReviewStatuses, got)
 	}
 	if got := enum("StagedChange", "status"); !slices.Equal(got, StagedChangeStatuses) {
 		t.Errorf("StagedChangeStatuses = %v\nAPI enum             = %v", StagedChangeStatuses, got)

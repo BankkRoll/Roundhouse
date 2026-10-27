@@ -235,6 +235,7 @@ function toApiProtection(env: typeof environments.$inferSelect) {
       config: toApiRule(rules.config),
       variables: toApiRule(rules.variables),
     },
+    require_approval: env.requireApproval,
   };
 }
 
@@ -778,7 +779,13 @@ export const accessRoutes = createRouter()
     const [updated] = await db.batch([
       db
         .update(environments)
-        .set({ protected: body.protected, protectionRules: rules })
+        .set({
+          protected: body.protected,
+          protectionRules: rules,
+          ...(body.require_approval !== undefined
+            ? { requireApproval: body.require_approval }
+            : {}),
+        })
         .where(eq(environments.id, environmentId))
         .returning(),
       auditInsert(db, {
@@ -789,8 +796,11 @@ export const accessRoutes = createRouter()
         targetId: environmentId,
         metadata: {
           project_id: project.id,
-          from: { protected: env.protected },
-          to: { protected: body.protected },
+          from: { protected: env.protected, require_approval: env.requireApproval },
+          to: {
+            protected: body.protected,
+            require_approval: body.require_approval ?? env.requireApproval,
+          },
           rules_changed: given,
         },
         ip: clientIp(c),

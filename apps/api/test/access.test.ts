@@ -318,6 +318,7 @@ describe("environment protection", () => {
         config: { roles: ["developer"], user_ids: [], team_ids: [] },
         variables: { roles: [], user_ids: [], team_ids: [] },
       },
+      require_approval: false,
     });
   });
 

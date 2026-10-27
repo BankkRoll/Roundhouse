@@ -331,6 +331,7 @@ describe("tools/list", () => {
       "set_variables",
       "stage_config_change",
       "list_changes",
+      "submit_changes",
       "apply_changes",
       "list_domains",
       "list_nodes",
@@ -344,6 +345,8 @@ describe("tools/list", () => {
       expect(t.inputSchema.type).toBe("object");
       expect(t.description?.length).toBeGreaterThan(20);
       expect(t.name).not.toMatch(/secret|shell|exec|delete|token|member/);
+      // Approving needs a person: no tool may approve or reject a change set.
+      expect(t.name).not.toMatch(/approve|reject/);
     }
     const byName = new Map(tools.map((t) => [t.name, t]));
     for (const name of [
@@ -361,6 +364,7 @@ describe("tools/list", () => {
       "rollback_deployment",
       "set_variables",
       "stage_config_change",
+      "submit_changes",
       "apply_changes",
     ]) {
       expect(byName.get(name)!.annotations?.readOnlyHint).toBe(false);
@@ -489,7 +493,9 @@ describe("staged changes", () => {
     // Production starts protected, where an agent's change set waits for a
     // person; this test is about staging, so it uses an open environment.
     await env.DB.prepare("UPDATE environments SET protected = 0 WHERE id = ?").bind(envId).run();
-    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.deploy));
+    const client = await connect(
+      await mint(owner, workspaceId, [...API_TOKEN_PRESETS.deploy, "changes:auto_apply"]),
+    );
     const target = { service_id: svc.service.id, environment_id: envId };
 
     const plain = await tool<{
@@ -623,6 +629,83 @@ describe("staged changes", () => {
     expect(config.body.version).toBe(1);
     await agent.close();
     await other.close();
+  });
+
+  it("submits its own set for review without changes:auto_apply, and applies once a person approves", async () => {
+    const { owner, workspaceId } = await install();
+    const project = await createProject(owner, workspaceId);
+    const svc = await createService(owner, project.id);
+    const envId = project.environments[0]!.id;
+    await env.DB.prepare("UPDATE environments SET protected = 0 WHERE id = ?").bind(envId).run();
+    const reviewer = await addMember(owner, workspaceId, "rae@example.com", "admin");
+    const agent = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.deploy));
+
+    const staged = await tool<{ change_set_id: string; revision: number; review_url: string }>(
+      agent,
+      "stage_config_change",
+      { service_id: svc.service.id, environment_id: envId, patch: { deploy: { replicas: 2 } } },
+    );
+    const waiting = await tool<{ status: string; review_status: string; reason: string }>(
+      agent,
+      "apply_changes",
+      { change_set_id: staged.body.change_set_id, expected_revision: staged.body.revision },
+    );
+    expect(waiting.body).toMatchObject({
+      status: "awaiting_confirmation",
+      review_status: "submitted",
+      reason: expect.stringMatching(/changes:auto_apply/),
+    });
+
+    // The token's owner staged it (through the token), so another person reviews it.
+    const approved = await reviewer.json<{ revision: number; review_status: string }>(
+      `/v1/change-sets/${staged.body.change_set_id}/approve`,
+      { method: "POST", json: { expected_revision: staged.body.revision } },
+    );
+    expect(approved.body.review_status).toBe("approved");
+    const applied = await tool<{ status: string }>(agent, "apply_changes", {
+      change_set_id: staged.body.change_set_id,
+      expected_revision: approved.body.revision,
+      deploy: "none",
+    });
+    expect(applied.body.status).toBe("applied");
+    const audit = await env.DB.prepare(
+      "SELECT action, actor_type FROM audit_logs WHERE action LIKE 'change_set.%' ORDER BY seq",
+    ).all<{ action: string; actor_type: string }>();
+    expect(audit.results).toEqual([
+      { action: "change_set.created", actor_type: "token" },
+      { action: "change_set.submitted", actor_type: "token" },
+      { action: "change_set.approved", actor_type: "user" },
+      { action: "change_set.applied", actor_type: "token" },
+    ]);
+    await agent.close();
+  });
+
+  it("waits for a person on a protected environment even with changes:auto_apply", async () => {
+    const { owner, workspaceId } = await install();
+    const project = await createProject(owner, workspaceId);
+    const svc = await createService(owner, project.id);
+    const envId = project.environments[0]!.id;
+    const agent = await connect(
+      await mint(owner, workspaceId, [...API_TOKEN_PRESETS.deploy, "changes:auto_apply"]),
+    );
+    const staged = await tool<{ change_set_id: string; revision: number }>(
+      agent,
+      "stage_config_change",
+      { service_id: svc.service.id, environment_id: envId, patch: { deploy: { replicas: 2 } } },
+    );
+    const submitted = await tool<{ status: string; review_status: string; review_url: string }>(
+      agent,
+      "submit_changes",
+      { change_set_id: staged.body.change_set_id, note: "Scale for the launch" },
+    );
+    expect(submitted.body).toMatchObject({ status: "submitted", review_status: "submitted" });
+    expect(submitted.body.review_url).toContain(`review=${staged.body.change_set_id}`);
+    const waiting = await tool<{ status: string }>(agent, "apply_changes", {
+      change_set_id: staged.body.change_set_id,
+      expected_revision: staged.body.revision,
+    });
+    expect(waiting.body.status).toBe("awaiting_confirmation");
+    await agent.close();
   });
 });
 

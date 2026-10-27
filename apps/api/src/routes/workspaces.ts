@@ -26,6 +26,7 @@ import {
 } from "../context";
 import { recordAudit } from "../lib/audit";
 import { ApiError, notFound } from "../lib/errors";
+import { requireFreshSession } from "../lib/fresh-session";
 import { revalidateWorkspace } from "../lib/realtime";
 import { createWorkspace } from "../lib/workspaces";
 import {
@@ -42,6 +43,24 @@ import {
 } from "../schemas";
 
 const WorkspaceName = z.object({ name: z.string().trim().min(1).max(100) });
+const WorkspacePatch = z
+  .object({
+    name: WorkspaceName.shape.name.optional(),
+    /** Stage canvas edits into each environment's draft (ADR 0006 "Rollout"). */
+    staged_changes: z.boolean().optional(),
+  })
+  .refine((b) => b.name !== undefined || b.staged_changes !== undefined, {
+    message: "nothing to update",
+  });
+
+const toApiWorkspace = (ws: typeof workspaces.$inferSelect, role: Role) => ({
+  id: ws.id,
+  name: ws.name,
+  slug: ws.slug,
+  role,
+  staged_changes: ws.stagedChanges,
+  created_at: +ws.createdAt,
+});
 const MemberParams = WorkspaceParams.extend({ memberId: z.string() });
 
 const me = createRoute({
@@ -113,9 +132,9 @@ const update = createRoute({
   method: "patch",
   path: "/v1/workspaces/{workspaceId}",
   tags: ["workspaces"],
-  summary: "Rename a workspace",
+  summary: "Rename a workspace or change its settings",
   security: sessionAuth,
-  request: { params: WorkspaceParams, ...body(WorkspaceName) },
+  request: { params: WorkspaceParams, ...body(WorkspacePatch) },
   responses: { 200: json(WorkspaceSchema), ...errors(400, 401, 403, 404) },
 });
 
@@ -251,16 +270,7 @@ export const workspaceRoutes = createRouter()
       targetId: ws.id,
       ip: clientIp(c),
     });
-    return c.json(
-      {
-        id: ws.id,
-        name: ws.name,
-        slug: ws.slug,
-        role: "owner" as const satisfies Role,
-        created_at: +ws.createdAt,
-      },
-      201,
-    );
+    return c.json(toApiWorkspace(ws, "owner"), 201);
   })
   .openapi(get, async (c) => {
     const { workspaceId } = c.req.valid("param");
@@ -269,35 +279,50 @@ export const workspaceRoutes = createRouter()
       .get("db")
       .query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (!ws) throw notFound("Workspace");
-    return c.json(
-      { id: ws.id, name: ws.name, slug: ws.slug, role: m.role, created_at: +ws.createdAt },
-      200,
-    );
+    return c.json(toApiWorkspace(ws, m.role), 200);
   })
   .openapi(update, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const m = await requireWorkspace(c, workspaceId, "workspace:update");
-    const { name } = c.req.valid("json");
-    const [ws] = await c
-      .get("db")
+    const { name, staged_changes } = c.req.valid("json");
+    const db = c.get("db");
+    const before = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+    if (!before) throw notFound("Workspace");
+    const [ws] = await db
       .update(workspaces)
-      .set({ name })
+      .set({
+        ...(name !== undefined ? { name } : {}),
+        ...(staged_changes !== undefined ? { stagedChanges: staged_changes } : {}),
+      })
       .where(eq(workspaces.id, workspaceId))
       .returning();
     if (!ws) throw notFound("Workspace");
-    await recordAudit(c.get("db"), {
-      workspaceId,
-      ...m.actor,
-      action: "workspace.renamed",
-      targetType: "workspace",
-      targetId: workspaceId,
-      metadata: { name },
-      ip: clientIp(c),
-    });
-    return c.json(
-      { id: ws.id, name: ws.name, slug: ws.slug, role: m.role, created_at: +ws.createdAt },
-      200,
-    );
+    if (name !== undefined && name !== before.name) {
+      await recordAudit(db, {
+        workspaceId,
+        ...m.actor,
+        action: "workspace.renamed",
+        targetType: "workspace",
+        targetId: workspaceId,
+        metadata: { name },
+        ip: clientIp(c),
+      });
+    }
+    if (staged_changes !== undefined && staged_changes !== before.stagedChanges) {
+      await recordAudit(db, {
+        workspaceId,
+        ...m.actor,
+        action: "workspace.settings_updated",
+        targetType: "workspace",
+        targetId: workspaceId,
+        metadata: {
+          from: { staged_changes: before.stagedChanges },
+          to: { staged_changes },
+        },
+        ip: clientIp(c),
+      });
+    }
+    return c.json(toApiWorkspace(ws, m.role), 200);
   })
   .openapi(listMembers, async (c) => {
     const { workspaceId } = c.req.valid("param");
@@ -314,6 +339,8 @@ export const workspaceRoutes = createRouter()
     const { workspaceId, memberId } = c.req.valid("param");
     const { role } = c.req.valid("json");
     const m = await requireWorkspace(c, workspaceId, "members:manage");
+    // SECURITY: Changing who holds which role needs a fresh session (ADR 0014).
+    await requireFreshSession(c);
     const db = c.get("db");
     const [target] = await memberQuery(db)
       .where(and(eq(workspaceMembers.id, memberId), eq(workspaceMembers.workspaceId, workspaceId)))
@@ -359,6 +386,8 @@ export const workspaceRoutes = createRouter()
     // A token never "leaves": removing its own creator needs members:manage.
     const isSelf = !principal.token && target?.user_id === principal.user.id;
     const m = await requireWorkspace(c, workspaceId, isSelf ? "workspace:read" : "members:manage");
+    // SECURITY: Removing someone else needs a fresh session (ADR 0014); leaving doesn't.
+    if (!isSelf) await requireFreshSession(c);
     if (!target) throw notFound("Member");
     if (target.role === "owner" && !isSelf && m.role !== "owner") {
       throw new ApiError(403, "forbidden", "Only owners can remove an owner");

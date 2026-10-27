@@ -191,6 +191,130 @@ function advance(domain: Domain) {
   }
 }
 
+/**
+ * Normalises a custom hostname and checks it the way adding a domain does.
+ *
+ * @param input - Hostname as the caller typed it.
+ * @returns The normalised hostname, or the 400/422 refusal.
+ */
+export function checkCustomHostname(input: string): { hostname: string } | Response {
+  const hostname = normalizeHostname(input);
+  const problem = hostname
+    ? customHostnameProblem(
+        hostname,
+        {
+          appsDomain: db.deploy.instance.apps_domain,
+          exact: [location.hostname, db.deploy.tls.ingress_hostname],
+        },
+        { allowWildcard: wildcardDomainsAllowed() },
+      )
+    : "invalid";
+  if (!hostname || problem === "invalid") return invalid(CUSTOM_HOSTNAME_PROBLEM_MESSAGES.invalid);
+  if (problem) {
+    return apiError(422, "hostname_not_allowed", CUSTOM_HOSTNAME_PROBLEM_MESSAGES[problem]);
+  }
+  return { hostname };
+}
+
+/** 409 `domain_taken` when a hostname is already on a service of this install. */
+export function hostnameTaken(hostname: string): Response | null {
+  return db.deploy.domains.some((row) => row.hostname === hostname)
+    ? apiError(409, "domain_taken", `${hostname} is already added to a service on this install`)
+    : null;
+}
+
+/**
+ * A new custom domain row waiting for DNS (or active at once for `ready.` names); the
+ * caller stores it.
+ *
+ * @param serviceId - Service it routes to.
+ * @param environmentId - Environment it routes in.
+ * @param hostname - Normalised hostname.
+ * @param port - Target port.
+ * @returns The domain.
+ */
+export function newCustomDomain(
+  serviceId: string,
+  environmentId: string,
+  hostname: string,
+  port: number,
+): Domain {
+  const appsDomain = db.deploy.instance.apps_domain;
+  const generated = db.deploy.domains.find(
+    (row) =>
+      row.service_id === serviceId &&
+      row.environment_id === environmentId &&
+      row.type === "generated",
+  );
+  const now = Date.now();
+  const ingressHostname = db.deploy.tls.ingress_hostname;
+  const target =
+    ingressHostname ??
+    generated?.hostname ??
+    (appsDomain ? `ingress.${appsDomain}` : "203.0.113.10");
+  const id = nextId("dom");
+  const wildcard = isWildcardHostname(hostname);
+  const delegation: DnsRecord[] =
+    wildcard && appsDomain
+      ? [
+          {
+            type: "CNAME",
+            name: acmeDelegationName(hostname),
+            value: acmeDelegationTarget(id, appsDomain),
+            purpose: "acme_delegation",
+            state: "missing",
+            note: "Lets this install answer the DNS-01 challenges of the wildcard certificate.",
+          },
+        ]
+      : [];
+  const domain: Domain = {
+    id,
+    service_id: serviceId,
+    environment_id: environmentId,
+    hostname,
+    url: `${db.deploy.instance.tls_mode === "off" ? "http" : "https"}://${hostname}`,
+    type: "custom",
+    target_port: port,
+    verification_status: "pending",
+    tls_status: db.deploy.instance.tls_mode === "off" ? "disabled" : "pending",
+    status: "pending_dns",
+    apex: !wildcard && hostname.split(".").length === 2,
+    wildcard,
+    hsts: { ...DEFAULT_HSTS },
+    tls: mockTls(db.deploy.instance.tls_mode === "off" ? "disabled" : "pending", now),
+    routing_nodes: [],
+    records: [
+      {
+        type: ingressHostname || generated || appsDomain ? "CNAME" : "A",
+        name: hostname,
+        value: target,
+        purpose: "routing",
+        state: "missing",
+        note: null,
+      },
+      {
+        type: "TXT",
+        name: ownershipRecordName(hostname),
+        value: ownershipRecordValue(token()),
+        purpose: "ownership",
+        state: "missing",
+        note: null,
+      },
+      ...delegation,
+    ],
+    error: `No CNAME or A/AAAA record found for ${hostname}. TXT ${ownershipRecordName(hostname)} not found.`,
+    last_checked_at: now,
+    next_check_at: now + 60_000,
+    verified_at: null,
+    created_at: now,
+  };
+  if (hostname.startsWith("ready.")) {
+    advance(domain);
+    advance(domain);
+  }
+  return domain;
+}
+
 /** Custom-domain handlers. */
 export const domainHandlers = [
   http.post(mswPath("addDomain"), async ({ request, params }) => {
@@ -203,20 +327,9 @@ export const domainHandlers = [
       (row) => row.id === body.environment_id && row.project_id === access.service.project_id,
     );
     if (!environment) return notFound("Environment");
-    const hostname = normalizeHostname(body.hostname);
-    const appsDomain = db.deploy.instance.apps_domain;
-    const problem = hostname
-      ? customHostnameProblem(
-          hostname,
-          { appsDomain, exact: [location.hostname, db.deploy.tls.ingress_hostname] },
-          { allowWildcard: wildcardDomainsAllowed() },
-        )
-      : "invalid";
-    if (!hostname || problem === "invalid")
-      return invalid(CUSTOM_HOSTNAME_PROBLEM_MESSAGES.invalid);
-    if (problem) {
-      return apiError(422, "hostname_not_allowed", CUSTOM_HOSTNAME_PROBLEM_MESSAGES[problem]);
-    }
+    const checked = checkCustomHostname(body.hostname);
+    if (checked instanceof Response) return checked;
+    const { hostname } = checked;
     const config = db.deploy.configs
       .filter(
         (row) => row.service_id === access.service.id && row.environment_id === environment.id,
@@ -239,87 +352,11 @@ export const domainHandlers = [
     if (siblings.length >= MAX_CUSTOM_DOMAINS_PER_SERVICE) {
       return apiError(409, "conflict", "Too many custom domains");
     }
-    if (db.deploy.domains.some((row) => row.hostname === hostname)) {
-      return apiError(
-        409,
-        "domain_taken",
-        `${hostname} is already added to a service on this install`,
-      );
-    }
-    const generated = db.deploy.domains.find(
-      (row) =>
-        row.service_id === access.service.id &&
-        row.environment_id === environment.id &&
-        row.type === "generated",
-    );
-    const now = Date.now();
-    const ingressHostname = db.deploy.tls.ingress_hostname;
-    const target =
-      ingressHostname ??
-      generated?.hostname ??
-      (appsDomain ? `ingress.${appsDomain}` : "203.0.113.10");
-    const id = nextId("dom");
-    const wildcard = isWildcardHostname(hostname);
-    const delegation: DnsRecord[] =
-      wildcard && appsDomain
-        ? [
-            {
-              type: "CNAME",
-              name: acmeDelegationName(hostname),
-              value: acmeDelegationTarget(id, appsDomain),
-              purpose: "acme_delegation",
-              state: "missing",
-              note: "Lets this install answer the DNS-01 challenges of the wildcard certificate.",
-            },
-          ]
-        : [];
-    const domain: Domain = {
-      id,
-      service_id: access.service.id,
-      environment_id: environment.id,
-      hostname,
-      url: `${db.deploy.instance.tls_mode === "off" ? "http" : "https"}://${hostname}`,
-      type: "custom",
-      target_port: port,
-      verification_status: "pending",
-      tls_status: db.deploy.instance.tls_mode === "off" ? "disabled" : "pending",
-      status: "pending_dns",
-      apex: !wildcard && hostname.split(".").length === 2,
-      wildcard,
-      hsts: { ...DEFAULT_HSTS },
-      tls: mockTls(db.deploy.instance.tls_mode === "off" ? "disabled" : "pending", now),
-      routing_nodes: [],
-      records: [
-        {
-          type: ingressHostname || generated || appsDomain ? "CNAME" : "A",
-          name: hostname,
-          value: target,
-          purpose: "routing",
-          state: "missing",
-          note: null,
-        },
-        {
-          type: "TXT",
-          name: ownershipRecordName(hostname),
-          value: ownershipRecordValue(token()),
-          purpose: "ownership",
-          state: "missing",
-          note: null,
-        },
-        ...delegation,
-      ],
-      error: `No CNAME or A/AAAA record found for ${hostname}. TXT ${ownershipRecordName(hostname)} not found.`,
-      last_checked_at: now,
-      next_check_at: now + 60_000,
-      verified_at: null,
-      created_at: now,
-    };
-    if (hostname.startsWith("ready.")) {
-      advance(domain);
-      advance(domain);
-    }
+    const taken = hostnameTaken(hostname);
+    if (taken) return taken;
+    const domain = newCustomDomain(access.service.id, environment.id, hostname, port);
     db.deploy.domains.push(domain);
-    syncCertificates(now);
+    syncCertificates(Date.now());
     recordAudit({
       workspaceId: access.workspaceId,
       actorType: "user",

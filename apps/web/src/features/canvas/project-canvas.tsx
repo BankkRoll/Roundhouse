@@ -24,6 +24,7 @@ import {
   type Viewport,
   zoomAt,
 } from "./layout";
+import { type PeerMark, peerSummary } from "./presence";
 
 /** Props for {@link ProjectCanvas}. */
 export interface ProjectCanvasProps {
@@ -37,6 +38,8 @@ export interface ProjectCanvasProps {
   onClearSelection: () => void;
   /** A node was dropped or moved with the keyboard; persist it. */
   onMove?: (id: string, position: Point) => void;
+  /** Other people's selections and edits, by node. */
+  peers?: ReadonlyMap<string, readonly PeerMark[]>;
   className?: string;
 }
 
@@ -66,7 +69,11 @@ function nodeStatusText(node: CanvasNode, view: ServiceView | undefined): string
  * markup keeps a space between those parts: flex layout ignores it, but without it
  * the text reads as one word ("webwebActive") to tools that check the match.
  */
-function nodeLabel(node: CanvasNode, view: ServiceView | undefined): string {
+function nodeLabel(
+  node: CanvasNode,
+  view: ServiceView | undefined,
+  peers: readonly PeerMark[] | undefined,
+): string {
   const visible = [node.name, nodeBadge(node), node.slug, nodeStatusText(node, view)]
     .filter(Boolean)
     .join(" ");
@@ -78,7 +85,10 @@ function nodeLabel(node: CanvasNode, view: ServiceView | undefined): string {
         : node.staged_ops
           ? `${node.staged_ops} staged change${node.staged_ops === 1 ? "" : "s"}`
           : null;
-  return [visible, `${node.kind} service`, staged].filter(Boolean).join(", ");
+  const kind = node.database
+    ? `${node.database.engine} ${node.database.version} database`
+    : `${node.kind} service`;
+  return [visible, kind, staged, peerSummary(peers)].filter(Boolean).join(", ");
 }
 
 interface NodeProps {
@@ -90,6 +100,7 @@ interface NodeProps {
   onPointerDown: (id: string, event: PointerEvent<HTMLButtonElement>) => void;
   onKeyDown: (id: string, event: KeyboardEvent<HTMLButtonElement>) => void;
   onClick: (id: string) => void;
+  peers: readonly PeerMark[] | undefined;
 }
 
 const ServiceNode = memo(function ServiceNode({
@@ -101,7 +112,10 @@ const ServiceNode = memo(function ServiceNode({
   onPointerDown,
   onKeyDown,
   onClick,
+  peers,
 }: NodeProps) {
+  const peer = peers?.[0];
+  const peerText = peerSummary(peers);
   const Icon = KIND_ICONS[node.kind] ?? BoxIcon;
   const status = view?.latest?.status;
   const badge = nodeBadge(node);
@@ -110,7 +124,7 @@ const ServiceNode = memo(function ServiceNode({
     <button
       type="button"
       data-node-id={node.id}
-      aria-label={nodeLabel(node, view)}
+      aria-label={nodeLabel(node, view, peers)}
       aria-pressed={selected}
       onPointerDown={(e) => onPointerDown(node.id, e)}
       onKeyDown={(e) => onKeyDown(node.id, e)}
@@ -119,6 +133,7 @@ const ServiceNode = memo(function ServiceNode({
         transform: `translate(${position.x}px, ${position.y}px)`,
         width: NODE_WIDTH,
         height: NODE_HEIGHT,
+        ...(peer ? { boxShadow: `0 0 0 2px ${peer.color}` } : {}),
       }}
       className={cn(
         "absolute top-0 left-0 flex flex-col justify-between rounded-md border bg-surface px-3 py-2.5 text-left shadow-sm outline-none transition-[border-color,box-shadow] select-none",
@@ -129,6 +144,15 @@ const ServiceNode = memo(function ServiceNode({
         node.staged === "delete" && "border-dashed border-danger/70 opacity-70",
       )}
     >
+      {peer && peerText ? (
+        <span
+          aria-hidden="true"
+          className="absolute -top-5 left-0 max-w-full truncate rounded-sm px-1.5 text-[10px] leading-4 font-medium text-black"
+          style={{ backgroundColor: peer.color }}
+        >
+          {peerText}
+        </span>
+      ) : null}
       <span className="flex min-w-0 items-center gap-2">
         <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span
@@ -184,7 +208,10 @@ const ServiceEdge = memo(function ServiceEdge({
       fill="none"
       markerEnd={`url(#canvas-arrow-${edge.state})`}
       strokeWidth={1.5}
-      strokeDasharray={edge.state === "current" ? undefined : "5 4"}
+      strokeDasharray={
+        edge.state !== "current" ? "5 4" : edge.kind === "explicit" ? "1.5 3" : undefined
+      }
+      strokeLinecap={edge.kind === "explicit" ? "round" : undefined}
       className={cn(
         edge.state === "removed"
           ? "stroke-danger/60"
@@ -192,11 +219,15 @@ const ServiceEdge = memo(function ServiceEdge({
             ? "stroke-accent"
             : edge.kind === "private_network"
               ? "stroke-info/70"
-              : "stroke-border-strong",
+              : edge.kind === "explicit"
+                ? "stroke-muted-foreground"
+                : "stroke-border-strong",
       )}
     >
       <title>
-        {`${edge.state === "staged" ? "Staged: " : edge.state === "removed" ? "Removed by staged changes: " : ""}${edge.variables.join(", ")}`}
+        {edge.kind === "explicit"
+          ? "Connects to (drawn)"
+          : `${edge.state === "staged" ? "Staged: " : edge.state === "removed" ? "Removed by staged changes: " : ""}${edge.variables.join(", ")}`}
       </title>
     </path>
   );
@@ -223,6 +254,7 @@ export function ProjectCanvas({
   onOpen,
   onClearSelection,
   onMove,
+  peers,
   className,
 }: ProjectCanvasProps) {
   const surface = useRef<HTMLDivElement>(null);
@@ -475,6 +507,7 @@ export function ProjectCanvas({
               onPointerDown={onNodePointerDown}
               onKeyDown={onNodeKeyDown}
               onClick={onNodeClick}
+              peers={peers?.get(node.id)}
             />
           ))}
         </div>
@@ -506,6 +539,13 @@ export function ProjectCanvas({
         <li className="flex items-center gap-1.5">
           <span aria-hidden="true" className="h-px w-4 bg-info/70" />
           private network
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span
+            aria-hidden="true"
+            className="h-0 w-4 border-t-2 border-dotted border-muted-foreground"
+          />
+          connects to
         </li>
         <li className="flex items-center gap-1.5">
           <span aria-hidden="true" className="h-0 w-4 border-t border-dashed border-accent" />

@@ -17,9 +17,9 @@ import { ErrorState } from "../../../components/error-state";
 import { errorMessage } from "../../../lib/api/client";
 import type { Deployment } from "../../../lib/api/deploy-types";
 import { formatRelativeTime, formatTimestamp } from "../../../lib/format";
-import { usePermissions } from "../../../lib/permissions";
 import { useNow } from "../../../lib/use-now";
 import { useDeployments } from "../../../queries/deployments";
+import { useEnvironmentGate } from "../../access/environment-gate";
 import { useProjectEnvironment } from "../../projects/use-project-environment";
 import type { ServicePageProps } from "../service-layout";
 import { DeploymentMenu, useDeploymentActions } from "./deployment-actions";
@@ -61,7 +61,7 @@ function What({ deployment }: { deployment: Deployment }) {
 export function DeploymentsTab({ workspaceId, projectId, serviceId }: ServicePageProps) {
   const { environment, envParam } = useProjectEnvironment(projectId);
   const deployments = useDeployments(serviceId, environment?.id);
-  const { can } = usePermissions(workspaceId);
+  const { can } = useEnvironmentGate(workspaceId, projectId, environment);
   const navigate = useNavigate();
   const now = useNow(1000);
   const context = { workspaceId, projectId, serviceId, envParam };
