@@ -29,6 +29,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PHASE1_ROUTES } from "../../../api/src/contracts";
 import { RealtimeServerMessageSchema } from "../../../api/src/schemas";
+import { ACCESS_SEED } from "./access-db";
 import { requireApprovalIn } from "./changes-handlers";
 import { DATA_SEED } from "./data-db";
 import {
@@ -93,6 +94,7 @@ const ROUTE_MODULES = [
   "signing-keys",
   "instance-admin",
   "auth-security",
+  "access",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -2353,7 +2355,9 @@ describe("MSW mocks match the API contract", () => {
         edges: { id: string; kind: string }[];
         nodes: { id: string; database: unknown; volume: unknown; domains: unknown[] }[];
       };
-      expect(body.environment_protected).toBe(true);
+      expect(body.environment_protected).toBe(
+        db.deploy.environments.find((e) => e.id === SEED.production)!.protected,
+      );
       expect(body.edges).toContainEqual({
         id: edgeId,
         from: SEED.web,
@@ -3153,6 +3157,305 @@ describe("MSW mocks match the API contract", () => {
       expect((await call("PUT", storage, body)).status).toBe(403);
       as(null);
       expect((await call("GET", storage)).status).toBe(401);
+    });
+  });
+
+  it("ADR 0014 access: settings, effective access, teams, grants, protection", async () => {
+    await fresh(async () => {
+      const settings = `${WS}/access-settings`;
+      expect(await call("GET", settings)).toMatchObject({
+        status: 200,
+        body: { member_default_project_role: "developer", viewer_default_project_role: "viewer" },
+      });
+      expect((await call("PATCH", settings, {})).status).toBe(400);
+      db.sessionStale = true;
+      expect(
+        await call("PATCH", settings, { member_default_project_role: "viewer" }),
+      ).toMatchObject({ status: 403, body: { error: { code: "reauth_required" } } });
+      db.sessionStale = false;
+      expect(
+        await call("PATCH", settings, { member_default_project_role: "deployer" }),
+      ).toMatchObject({ status: 200, body: { member_default_project_role: "deployer" } });
+
+      expect(await call("GET", `${WS}/access/me`)).toMatchObject({
+        status: 200,
+        body: { workspace_role: "owner", instance_admin: true },
+      });
+      as("member");
+      const member = (await call("GET", `${WS}/access/me`)).body as {
+        projects: { project_id: string; role: string; actions: string[] }[];
+      };
+      const store = member.projects.find((p) => p.project_id === SEED.project);
+      expect(store?.role).toBe("deployer");
+      expect(store?.actions).not.toContain("variables:manage");
+      expect((await call("GET", `${OTHER_WS}/access/me`)).status).toBe(404);
+      expect((await call("PATCH", settings, { viewer_default_project_role: "none" })).status).toBe(
+        403,
+      );
+
+      const teams = `${WS}/teams`;
+      expect(await call("GET", teams)).toMatchObject({
+        status: 200,
+        body: { teams: [{ id: ACCESS_SEED.platformTeam, member_count: 2 }] },
+      });
+      expect((await call("POST", teams, { name: "Ops" })).status).toBe(403);
+      as("owner");
+      expect((await call("POST", teams, { name: "" })).status).toBe(400);
+      expect((await call("POST", teams, { name: "Ops", user_ids: ["usr_nobody"] })).status).toBe(
+        400,
+      );
+      expect((await call("POST", teams, { name: "Platform" })).status).toBe(409);
+      const created = await call("POST", teams, {
+        name: "Ops",
+        description: "On call",
+        user_ids: [USERS.viewer.id],
+      });
+      expect(created).toMatchObject({
+        status: 201,
+        body: { slug: "ops", member_count: 1, members: [{ user_id: USERS.viewer.id }] },
+      });
+      const teamId = (created.body as { id: string }).id;
+      const team = `/v1/teams/${teamId}`;
+      expect((await call("GET", team)).status).toBe(200);
+      expect((await call("GET", "/v1/teams/team_nope")).status).toBe(404);
+      expect((await call("PATCH", team, {})).status).toBe(400);
+      expect((await call("PATCH", team, { slug: "platform" })).status).toBe(409);
+      expect(await call("PATCH", team, { name: "Operations" })).toMatchObject({
+        status: 200,
+        body: { name: "Operations", member_count: 1 },
+      });
+      expect((await call("PUT", `${team}/members`, { user_ids: ["usr_nobody"] })).status).toBe(400);
+      expect(
+        await call("PUT", `${team}/members`, { user_ids: [USERS.viewer.id, USERS.member.id] }),
+      ).toMatchObject({ status: 200, body: { member_count: 2 } });
+
+      const access = `/v1/projects/${SEED.project}/access`;
+      expect(await call("GET", access)).toMatchObject({
+        status: 200,
+        body: { grants: [], implied: { member: "deployer", viewer: "viewer" } },
+      });
+      const unknownTeam = { principal: { type: "team", id: "team_nope" }, role: "viewer" };
+      expect((await call("PUT", access, unknownTeam)).status).toBe(400);
+      expect(
+        (await call("PUT", access, { principal: { type: "user" }, role: "viewer" })).status,
+      ).toBe(400);
+      const granted = await call("PUT", access, {
+        principal: { type: "team", id: teamId },
+        role: "developer",
+      });
+      expect(granted).toMatchObject({
+        status: 200,
+        body: { principal: { type: "team", id: teamId }, principal_name: "Operations" },
+      });
+      expect(
+        await call("PUT", access, { principal: { type: "team", id: teamId }, role: "viewer" }),
+      ).toMatchObject({ status: 200, body: { role: "viewer" } });
+      const grantId = (granted.body as { id: string }).id;
+
+      const protection = `/v1/environments/${SEED.production}/protection`;
+      expect(await call("GET", protection)).toMatchObject({
+        status: 200,
+        body: { protected: false, rules: { variables: { roles: [] } } },
+      });
+      expect((await call("GET", "/v1/environments/env_nope/protection")).status).toBe(404);
+      expect((await call("PUT", protection, {})).status).toBe(400);
+      const badRule = { roles: [], user_ids: [], team_ids: ["team_nope"] };
+      expect(
+        (await call("PUT", protection, { protected: true, rules: { variables: badRule } })).status,
+      ).toBe(400);
+      expect(
+        await call("PUT", protection, {
+          protected: true,
+          rules: { variables: { roles: ["developer"], user_ids: [], team_ids: [teamId] } },
+        }),
+      ).toMatchObject({
+        status: 200,
+        body: {
+          protected: true,
+          rules: {
+            deploy: { roles: ["developer", "deployer"] },
+            variables: { team_ids: [teamId] },
+          },
+        },
+      });
+      expect(
+        await call("PUT", protection, { protected: true, require_approval: true }),
+      ).toMatchObject({ status: 200, body: { protected: true, require_approval: true } });
+      expect((await call("GET", protection)).body).toMatchObject({ require_approval: true });
+      expect(
+        (await call("PUT", protection, { protected: true, require_approval: "yes" })).status,
+      ).toBe(400);
+
+      as("member");
+      expect((await call("GET", access)).status).toBe(403);
+      const selfGrant = { principal: { type: "user", id: USERS.member.id }, role: "developer" };
+      expect((await call("PUT", access, selfGrant)).status).toBe(403);
+      expect((await call("DELETE", `${access}/${grantId}`)).status).toBe(403);
+      expect((await call("PUT", protection, { protected: false })).status).toBe(403);
+      expect((await call("GET", protection)).status).toBe(200);
+      expect((await call("DELETE", team)).status).toBe(403);
+      as("viewer");
+      expect((await call("GET", teams)).status).toBe(403);
+      expect((await call("GET", team)).status).toBe(403);
+      expect((await call("GET", settings)).status).toBe(403);
+      db.access.settings[WORKSPACE_ID]!.viewer_default_project_role = "none";
+      db.access.grants = [];
+      expect((await call("GET", protection)).status).toBe(404);
+      expect((await call("GET", access)).status).toBe(404);
+
+      as("owner");
+      const regrant = await call("PUT", access, selfGrant);
+      const regrantId = (regrant.body as { id: string }).id;
+      expect((await call("DELETE", `${access}/pag_nope`)).status).toBe(404);
+      db.sessionStale = true;
+      expect((await call("DELETE", `${access}/${regrantId}`)).status).toBe(403);
+      expect((await call("DELETE", team)).status).toBe(403);
+      db.sessionStale = false;
+      expect((await call("DELETE", `${access}/${regrantId}`)).status).toBe(204);
+      expect((await call("DELETE", team)).status).toBe(204);
+      expect(db.access.rules[SEED.production]?.variables.teamIds).toEqual([]);
+      expect((await call("DELETE", team)).status).toBe(404);
+      expect((await call("PUT", `${team}/members`, { user_ids: [] })).status).toBe(404);
+      expect((await call("PATCH", team, { name: "X" })).status).toBe(404);
+
+      as(null);
+      const anonymous: [string, string, unknown?][] = [
+        ["GET", settings],
+        ["PATCH", settings, { member_default_project_role: "viewer" }],
+        ["GET", `${WS}/access/me`],
+        ["GET", teams],
+        ["POST", teams, { name: "Ops" }],
+        ["GET", team],
+        ["PATCH", team, { name: "X" }],
+        ["DELETE", team],
+        ["PUT", `${team}/members`, { user_ids: [] }],
+        ["GET", access],
+        ["PUT", access, selfGrant],
+        ["DELETE", `${access}/${regrantId}`],
+        ["GET", protection],
+        ["PUT", protection, { protected: false }],
+      ];
+      for (const [method, path, body] of anonymous) {
+        expect((await call(method, path, body)).status).toBe(401);
+      }
+    });
+  });
+
+  it("ADR 0014 protection: deploys and variable writes in a protected environment", async () => {
+    await fresh(async () => {
+      const environment = db.deploy.environments.find((row) => row.id === SEED.production);
+      if (environment) environment.protected = true;
+      const variables = `/v1/services/${SEED.web}/variables?environment_id=${SEED.production}`;
+      const deploy = `/v1/services/${SEED.web}/deployments?environment_id=${SEED.production}`;
+      as("member");
+      expect(await call("PUT", variables, { set: [{ key: "A", value: "1" }] })).toMatchObject({
+        status: 403,
+        body: { error: { code: "forbidden" } },
+      });
+      expect((await call("POST", deploy, {})).status).toBe(201);
+      db.access.rules[SEED.production] = {
+        deploy: { roles: [], userIds: [], teamIds: [] },
+        config: { roles: [], userIds: [], teamIds: [] },
+        variables: { roles: [], userIds: [], teamIds: [] },
+      };
+      expect((await call("POST", deploy, {})).status).toBe(403);
+      as("owner");
+      expect(
+        await call("PUT", variables, { set: [{ key: "API_TOKEN", value: "x", tier: "secret" }] }),
+      ).toMatchObject({
+        status: 400,
+        body: { error: { code: "confirmation_required", details: [{ field: "API_TOKEN" }] } },
+      });
+      expect(
+        await call("PUT", variables, {
+          set: [
+            { key: "VITE_DB", value: "postgres://app:not-a-real-password@db.example.test/app" },
+          ],
+        }),
+      ).toMatchObject({ status: 400, body: { error: { code: "public_prefix_secret_value" } } });
+      expect(
+        (
+          await call("PUT", variables, {
+            set: [{ key: "API_TOKEN", value: "x", tier: "secret" }],
+            confirm_write_only: true,
+          })
+        ).status,
+      ).toBe(200);
+
+      // Config writes, deleting a service and cancelling are gated too.
+      as("member");
+      expect(
+        await call("PATCH", `/v1/services/${SEED.web}`, {
+          environment_id: SEED.production,
+          deploy: { replicas: 3 },
+        }),
+      ).toMatchObject({ status: 403, body: { error: { code: "forbidden" } } });
+      expect((await call("PATCH", `/v1/services/${SEED.web}`, { name: "web-2" })).status).toBe(200);
+      expect((await call("DELETE", `/v1/services/${SEED.worker}`)).status).toBe(403);
+      expect((await call("POST", `/v1/deployments/${SEED.workerDeploying}/cancel`)).status).toBe(
+        403,
+      );
+      db.access.rules[SEED.production]!.config.userIds = [USERS.member.id];
+      db.access.rules[SEED.production]!.deploy.teamIds = [ACCESS_SEED.platformTeam];
+      expect((await call("POST", `/v1/deployments/${SEED.workerDeploying}/cancel`)).status).toBe(
+        200,
+      );
+      expect((await call("DELETE", `/v1/services/${SEED.worker}`)).status).toBe(204);
+    });
+  });
+
+  it("ADR 0014 project roles: grants raise, defaults lower, no role is a 404", async () => {
+    await fresh(async () => {
+      const project = `/v1/projects/${SEED.project}`;
+      as("viewer");
+      expect((await call("PATCH", `/v1/services/${SEED.web}`, { name: "web-2" })).status).toBe(403);
+      db.access.grants.push({
+        id: "pag_viewer_dev",
+        project_id: SEED.project,
+        principal_type: "user",
+        user_id: USERS.viewer.id,
+        team_id: null,
+        role: "developer",
+        created_by: USERS.owner.id,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      });
+      expect((await call("PATCH", `/v1/services/${SEED.web}`, { name: "web-2" })).status).toBe(200);
+
+      db.access.settings[WORKSPACE_ID] = {
+        member_default_project_role: "none",
+        viewer_default_project_role: "viewer",
+      };
+      as("member");
+      expect((await call("GET", project)).status).toBe(404);
+      expect(await call("GET", `${WS}/projects`)).toMatchObject({
+        status: 200,
+        body: { projects: [] },
+      });
+      db.access.settings[WORKSPACE_ID]!.member_default_project_role = "viewer";
+      expect((await call("GET", project)).status).toBe(200);
+      expect(
+        await call(
+          "POST",
+          `/v1/services/${SEED.web}/deployments?environment_id=${SEED.production}`,
+          {},
+        ),
+      ).toMatchObject({ status: 403, body: { error: { code: "forbidden" } } });
+    });
+  });
+
+  it("ADR 0014 fresh sessions: member role changes and removals, but not leaving", async () => {
+    await fresh(async () => {
+      db.sessionStale = true;
+      const member = `${WS}/members/mem_member`;
+      expect(await call("PATCH", member, { role: "viewer" })).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      expect((await call("DELETE", member)).status).toBe(403);
+      as("viewer");
+      expect((await call("DELETE", `${WS}/members/mem_viewer`)).status).toBe(204);
+      db.sessionStale = false;
     });
   });
 

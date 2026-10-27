@@ -6,7 +6,13 @@
  *
  * @module
  */
-import { BUILTIN_VARIABLES, parseReferences, SHARED_NAMESPACE } from "@roundhouse/shared";
+import {
+  BUILTIN_VARIABLES,
+  classifyVariable,
+  parseReferences,
+  SHARED_NAMESPACE,
+  type VariableClassification,
+} from "@roundhouse/shared";
 import type { Variable, VariablesPutBody } from "../../../lib/api/deploy-types";
 
 /** A value staged for a key. */
@@ -131,23 +137,57 @@ export function mergeRows(saved: readonly Variable[], draft: VariablesDraft): Va
 }
 
 /**
+ * The tier a key and value must have, when the shared classifier (the same one the API
+ * runs) locks it: a recognised credential is always secret, and a framework's public
+ * prefix (`VITE_`, `NEXT_PUBLIC_`…) is always plain.
+ *
+ * @param key - Variable name.
+ * @param value - Value as typed.
+ * @returns The classification when it is locked, else `null`.
+ * @example
+ * lockedTier("VITE_API_URL", "https://api.example.test")?.tier; // "plain"
+ */
+export function lockedTier(key: string, value: string): VariableClassification | null {
+  if (!key) return null;
+  const classification = classifyVariable(key, value);
+  return classification.locked ? classification : null;
+}
+
+/** What the person agreed to after the API asked (ADR 0014 write flow). */
+export interface PutConsent {
+  /** Keys that become secret may be stored write-only. */
+  confirmWriteOnly?: boolean;
+  /** Public keys that look like credentials may be stored anyway. */
+  acknowledgePublic?: readonly string[];
+}
+
+/**
  * Builds the `PUT` body from the draft, in a stable order so API errors (`set.3.value`)
- * can be mapped back to a key.
+ * can be mapped back to a key. Nothing is confirmed up front: the API answers
+ * `confirmation_required` or `public_prefix_secret_value` with the keys concerned, the
+ * editor asks, and the save is resent with the consent given.
  *
  * @param draft - Staged changes.
+ * @param consent - What the person already agreed to.
  * @returns The body, and the key of each `set` entry by index.
  */
-export function toPutBody(draft: VariablesDraft): { body: VariablesPutBody; setKeys: string[] } {
+export function toPutBody(
+  draft: VariablesDraft,
+  consent: PutConsent = {},
+): { body: VariablesPutBody; setKeys: string[] } {
   const setKeys = [...draft.set.keys()].sort();
   return {
     body: {
       set: setKeys.map((key) => {
         const staged = draft.set.get(key)!;
-        return { key, value: staged.value, tier: staged.isSecret ? "secret" : "plain" };
+        const tier = lockedTier(key, staged.value)?.tier ?? (staged.isSecret ? "secret" : "plain");
+        return { key, value: staged.value, tier };
       }),
       delete: [...draft.remove].sort(),
-      // TODO(web): ask in a dialog listing the keys before confirming (ADR 0014).
-      confirm_write_only: true,
+      confirm_write_only: consent.confirmWriteOnly ?? false,
+      ...(consent.acknowledgePublic?.length
+        ? { acknowledge_public: [...consent.acknowledgePublic] }
+        : {}),
     },
     setKeys,
   };

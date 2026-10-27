@@ -26,6 +26,7 @@ import {
 } from "../context";
 import { recordAudit } from "../lib/audit";
 import { ApiError, notFound } from "../lib/errors";
+import { requireFreshSession } from "../lib/fresh-session";
 import { revalidateWorkspace } from "../lib/realtime";
 import { createWorkspace } from "../lib/workspaces";
 import {
@@ -338,6 +339,8 @@ export const workspaceRoutes = createRouter()
     const { workspaceId, memberId } = c.req.valid("param");
     const { role } = c.req.valid("json");
     const m = await requireWorkspace(c, workspaceId, "members:manage");
+    // SECURITY: Changing who holds which role needs a fresh session (ADR 0014).
+    await requireFreshSession(c);
     const db = c.get("db");
     const [target] = await memberQuery(db)
       .where(and(eq(workspaceMembers.id, memberId), eq(workspaceMembers.workspaceId, workspaceId)))
@@ -383,6 +386,8 @@ export const workspaceRoutes = createRouter()
     // A token never "leaves": removing its own creator needs members:manage.
     const isSelf = !principal.token && target?.user_id === principal.user.id;
     const m = await requireWorkspace(c, workspaceId, isSelf ? "workspace:read" : "members:manage");
+    // SECURITY: Removing someone else needs a fresh session (ADR 0014); leaving doesn't.
+    if (!isSelf) await requireFreshSession(c);
     if (!target) throw notFound("Member");
     if (target.role === "owner" && !isSelf && m.role !== "owner") {
       throw new ApiError(403, "forbidden", "Only owners can remove an owner");

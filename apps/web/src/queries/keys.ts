@@ -8,6 +8,9 @@ export const queryKeys = {
   invite: (token: string) => ["invites", token] as const,
   workspace: (workspaceId: string) => ["workspaces", workspaceId] as const,
   members: (workspaceId: string) => ["workspaces", workspaceId, "members"] as const,
+  teams: (workspaceId: string) => ["workspaces", workspaceId, "teams"] as const,
+  accessSettings: (workspaceId: string) => ["workspaces", workspaceId, "access-settings"] as const,
+  effectiveAccess: (workspaceId: string) => ["workspaces", workspaceId, "access", "me"] as const,
   invites: (workspaceId: string) => ["workspaces", workspaceId, "invites"] as const,
   nodes: (workspaceId: string) => ["workspaces", workspaceId, "nodes"] as const,
   node: (workspaceId: string, nodeId: string) =>
@@ -30,6 +33,9 @@ export const queryKeys = {
   template: (workspaceId: string, templateId: string) =>
     ["workspaces", workspaceId, "templates", templateId] as const,
   project: (projectId: string) => ["projects", projectId] as const,
+  projectAccess: (projectId: string) => ["projects", projectId, "access"] as const,
+  team: (teamId: string) => ["teams", teamId] as const,
+  protection: (environmentId: string) => ["environments", environmentId, "protection"] as const,
   /** Every summary of a project, whatever the environment; prefix of {@link projectSummary}. */
   projectSummaryAll: (projectId: string) => ["projects", projectId, "summary"] as const,
   projectSummary: (projectId: string, environmentId: string) =>

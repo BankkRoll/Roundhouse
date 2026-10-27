@@ -14,6 +14,7 @@ import { usePermissions } from "../../lib/permissions";
 import { useDeploy } from "../../queries/deployments";
 import { latestDeploymentQueryOptions } from "../../queries/projects";
 import { useDomains, useServiceConfig } from "../../queries/services";
+import { LockedButton, ProtectedBadge, useEnvironmentGate } from "../access/environment-gate";
 import { ProjectPresence } from "../projects/presence";
 import { describeSource } from "../projects/service-list";
 import { findService, useProjectEnvironment } from "../projects/use-project-environment";
@@ -46,6 +47,8 @@ export function ServiceLayout({ workspaceId, projectId, serviceId }: ServicePage
   });
   const deploy = useDeploy();
   const { can } = usePermissions(workspaceId);
+  const gate = useEnvironmentGate(workspaceId, projectId, environment);
+  const deployLocked = gate.locked("deployments:create");
 
   if (!service) {
     return (
@@ -105,6 +108,7 @@ export function ServiceLayout({ workspaceId, projectId, serviceId }: ServicePage
               {service.name}
             </h1>
             {latest.data ? <StatusBadge status={latest.data.status} kind="deployment" /> : null}
+            {gate.protected ? <ProtectedBadge /> : null}
           </div>
           <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground">
             {config.data ? (
@@ -128,7 +132,11 @@ export function ServiceLayout({ workspaceId, projectId, serviceId }: ServicePage
         </div>
         <div className="flex items-center gap-2">
           <ProjectPresence className="mr-2" />
-          {can("deployments:create") ? (
+          {deployLocked ? (
+            <LockedButton variant="primary" reason={deployLocked}>
+              Deploy
+            </LockedButton>
+          ) : gate.can("deployments:create") ? (
             <Button
               variant="primary"
               onClick={onDeploy}
