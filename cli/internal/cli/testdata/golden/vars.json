@@ -7,6 +7,7 @@
     "fingerprint": "b628e375",
     "available_at_build": true,
     "mount_as_file": false,
+    "withheld": false,
     "version": 1,
     "updated_at": 1792670400000,
     "updated_by": "usr_ada"
@@ -19,6 +20,7 @@
     "fingerprint": "48b4796f",
     "available_at_build": false,
     "mount_as_file": false,
+    "withheld": false,
     "version": 2,
     "updated_at": 1792670400000,
     "updated_by": "usr_ada"
@@ -31,6 +33,7 @@
     "fingerprint": "9a3c883e",
     "available_at_build": false,
     "mount_as_file": false,
+    "withheld": false,
     "version": 1,
     "updated_at": 1792670400000,
     "updated_by": "usr_ada"
@@ -43,6 +46,7 @@
     "fingerprint": "16cb4f13",
     "available_at_build": false,
     "mount_as_file": false,
+    "withheld": false,
     "version": 1,
     "updated_at": 1792670400000,
     "updated_by": "usr_ada"
@@ -55,6 +59,7 @@
     "fingerprint": "26327a9c",
     "available_at_build": false,
     "mount_as_file": false,
+    "withheld": false,
     "version": 1,
     "updated_at": 1792670400000,
     "updated_by": "usr_ada"

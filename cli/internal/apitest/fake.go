@@ -75,11 +75,13 @@ type Request struct {
 }
 
 type variable struct {
-	value     string
-	secret    bool
-	locked    bool
-	build     bool
-	file      bool
+	value  string
+	secret bool
+	locked bool
+	build  bool
+	file   bool
+	// withheld marks a preview placeholder; see [Fake.WithholdVariable].
+	withheld  bool
 	version   int
 	updatedBy string
 }
@@ -123,6 +125,9 @@ type Fake struct {
 
 	// cron holds cron schedule states and runs; see [Fake.cronState].
 	cron *cronState
+
+	// previews holds pull request previews; see [Fake.previewState].
+	previews *previewState
 
 	// templateDeployErrors maps a template service ref to the message its
 	// first deployment fails to start with; see [Fake.FailTemplateDeploy].
@@ -568,7 +573,7 @@ func (f *Fake) workspaceOf(r *http.Request) string {
 	if id := r.PathValue("workspaceId"); id != "" {
 		return id
 	}
-	projectID := r.PathValue("projectId")
+	projectID := cmp.Or(f.previewProjectOf(r), r.PathValue("projectId"))
 	serviceID := r.PathValue("serviceId")
 	if id := f.dataServiceOf(r); id != "" {
 		serviceID = id
@@ -717,6 +722,7 @@ func (f *Fake) routes(mux *http.ServeMux) {
 	}
 	f.dataRoutes(mux, handlers)
 	f.cronRoutes(handlers)
+	f.previewRoutes(handlers)
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
 	}
@@ -1138,7 +1144,7 @@ func (f *Fake) listed(key string, plain bool) []api.Variable {
 	for _, k := range slices.Sorted(mapKeys(vars)) {
 		v := vars[k]
 		item := api.Variable{Key: k, Tier: v.tier(), Locked: v.locked, Fingerprint: str(fingerprint(v.value)),
-			AvailableAtBuild: v.build, MountAsFile: v.file, Version: v.version, UpdatedAt: Now, UpdatedBy: str(cmp.Or(v.updatedBy, f.user.ID))}
+			AvailableAtBuild: v.build, MountAsFile: v.file, Withheld: v.withheld, Version: v.version, UpdatedAt: Now, UpdatedBy: str(cmp.Or(v.updatedBy, f.user.ID))}
 		if !v.secret && plain {
 			item.Value = str(v.value)
 		}

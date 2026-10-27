@@ -73,8 +73,10 @@ type Environment struct {
 	SourceBranch *string `json:"source_branch"`
 	// Protected is true when protection rules narrow deploys, config and
 	// variable changes here; production starts protected.
-	Protected bool  `json:"protected"`
-	CreatedAt int64 `json:"created_at"`
+	Protected bool `json:"protected"`
+	// PreviewID is the pull request preview this environment belongs to.
+	PreviewID *string `json:"preview_id"`
+	CreatedAt int64   `json:"created_at"`
 }
 
 // Service is a service of a project. Its config lives per environment.
@@ -181,9 +183,12 @@ type Variable struct {
 	AvailableAtBuild bool `json:"available_at_build"`
 	// MountAsFile delivers the value as the file /run/secrets/KEY instead
 	// of an environment variable.
-	MountAsFile bool  `json:"mount_as_file"`
-	Version     int   `json:"version"`
-	UpdatedAt   int64 `json:"updated_at"`
+	MountAsFile bool `json:"mount_as_file"`
+	// Withheld marks a preview placeholder: the base environment's value
+	// was a secret or derived from one, so the preview got an empty value.
+	Withheld  bool  `json:"withheld"`
+	Version   int   `json:"version"`
+	UpdatedAt int64 `json:"updated_at"`
 	// UpdatedBy is the ID of the user who last wrote the variable.
 	UpdatedBy *string `json:"updated_by"`
 }
@@ -542,6 +547,7 @@ var APITokenScopes = []string{
 	"variables:read", "variables:read_plain", "variables:manage",
 	"data:read", "data:write", "backups:manage", "backups:restore",
 	"changes:approve", "changes:auto_apply",
+	"environments:manage", "previews:manage",
 }
 
 // APITokenPresets are the named scope sets of API_TOKEN_PRESETS.

@@ -124,6 +124,8 @@ func (a *App) runVarsGet(ctx context.Context, args []string, flags varsFlags) er
 	for _, v := range vars {
 		value := deref(v.Value)
 		switch {
+		case v.Withheld:
+			value = c.Dim(withheldValue)
 		case v.Secret() || v.Value == nil:
 			value = c.Dim(maskedValue(v))
 		case strings.ContainsAny(value, "\n\r"):
@@ -154,6 +156,9 @@ func tierLabel(v api.Variable) string {
 	return v.Tier + " (" + strings.Join(notes, ", ") + ")"
 }
 
+// withheldValue stands in for a preview placeholder's empty value.
+const withheldValue = "<withheld from preview>"
+
 // maskedValue stands in for a value the caller can't read: <secret fp:…>
 // for a secret, <hidden fp:…> for a plain value without
 // variables:read_plain.
@@ -178,6 +183,10 @@ func (a *App) printOneVariable(vt *varsTarget, vars []api.Variable, key string) 
 		return a.printJSON(v)
 	}
 	switch {
+	case v.Withheld:
+		fmt.Fprintln(a.IO.Out, withheldValue)
+		a.IO.Info("%s was withheld from this preview: its value in the base environment is a secret or derived from one, so the preview got an empty value.", key)
+		return nil
 	case v.Secret():
 		fmt.Fprintln(a.IO.Out, maskedValue(v))
 		a.IO.Info("%s is a secret: its value is write-only and can't be shown.", key)
@@ -559,9 +568,11 @@ their keys listed on stderr. ` + "`roundhouse run`" + ` reads them from a local 
 				return err
 			}
 			var entries []dotenv.Entry
-			var secrets, hidden []string
+			var secrets, hidden, withheld []string
 			for _, v := range vars {
 				switch {
+				case v.Withheld:
+					withheld = append(withheld, v.Key)
 				case v.Secret():
 					secrets = append(secrets, v.Key)
 				case v.Value == nil:
@@ -585,6 +596,10 @@ their keys listed on stderr. ` + "`roundhouse run`" + ` reads them from a local 
 			if len(hidden) > 0 {
 				a.IO.Info("Left out %s whose values need the variables:read_plain permission: %s",
 					plural(len(hidden), "variable", "variables"), strings.Join(hidden, ", "))
+			}
+			if len(withheld) > 0 {
+				a.IO.Info("Left out %s withheld from this preview: %s",
+					plural(len(withheld), "variable", "variables"), strings.Join(withheld, ", "))
 			}
 			return err
 		},

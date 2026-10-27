@@ -237,6 +237,33 @@ applies on the next `roundhouse deploy`; until then `cron status` shows the
 saved schedule next to the armed one. An invalid schedule or zone exits 7
 with the same underline as `cron preview`.
 
+## Pull request previews
+
+```sh
+roundhouse previews list                     # open previews; --all adds closed ones
+roundhouse previews approve 12               # shows the PR and commit, then asks
+roundhouse previews redeploy 12
+roundhouse previews destroy 12               # asks; --yes in scripts
+```
+
+The control plane creates a preview when a pull request is opened or
+pushed to, and tears it down when the pull request closes or the preview
+expires. `previews` acts on the linked project or `--project`. A preview is
+named by its ID (`prv_…`) or its pull request number (`12`, `#12`, or
+`acme/shop#12` when the project builds several repositories). `SECRETS` in
+`previews list` is `withheld` when the preview's secrets were replaced by
+empty placeholders; `vars` shows those as `<withheld from preview>` and
+`vars export` leaves them out.
+
+A fork's pull request waits in `pending_approval` until a maintainer
+approves its exact head commit. `previews approve` prints the pull request,
+its author, branch and full commit SHA to stderr and asks before approving;
+without a terminal it refuses unless `--yes` is given. Only the commit shown
+is approved: if the pull request moves on before the approval lands, nothing
+is approved and the command exits 6. Approving needs `previews:manage`,
+`destroy` needs `environments:manage` and `redeploy` needs
+`deployments:create`.
+
 ## Variables
 
 ```sh
@@ -341,6 +368,8 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `cron status\|runs\|run\|cancel\|logs`              | Cron services: schedule, run history, run now, output    |
 | `cron set [--schedule] [--timezone] [--retries] …`  | Change a cron service's schedule and run rules           |
 | `cron pause\|resume`, `cron preview <schedule>`     | Pause or resume scheduling; a schedule's next slots      |
+| `previews list [--all]`                             | The project's pull request previews                      |
+| `previews approve\|redeploy\|destroy <preview>`     | Approve a fork's commit, redeploy, or tear down          |
 | `tokens list\|create\|revoke`                       | Workspace API tokens for CI and scripts                  |
 | `version`, `completion`                             | Build info, shell completion                             |
 | `up`, `shell`, `db connect`                         | Not available on the control plane yet (exit 10)         |

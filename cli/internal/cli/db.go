@@ -708,12 +708,13 @@ func formatCell(v any) string {
 	return sanitizeCell(string(data), maxCellWidth)
 }
 
-// sanitizeCell makes database text safe for one table cell, shortened to
+// sanitizeCell makes untrusted text safe for one table cell, shortened to
 // width runes.
 //
-// SECURITY: values come from the database, which anyone with write access
-// to it controls; escape sequences in them could rewrite the terminal, so
-// control characters are shown escaped instead.
+// SECURITY: values come from a database, which anyone with write access to
+// it controls, or from a pull request, which anyone can open; escape sequences in them could rewrite the terminal, so
+// control characters are shown escaped instead, as are bidirectional
+// overrides, which could make text read differently from what it is.
 func sanitizeCell(s string, width int) string {
 	var b strings.Builder
 	n := 0
@@ -729,7 +730,7 @@ func sanitizeCell(s string, width int) string {
 			b.WriteString(`\t`)
 		case r == '\r':
 			b.WriteString(`\r`)
-		case unicode.IsControl(r) || r == ' ' || r == ' ':
+		case unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) || r == ' ' || r == ' ':
 			fmt.Fprintf(&b, `\u%04x`, r)
 		default:
 			b.WriteRune(r)

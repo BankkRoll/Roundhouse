@@ -190,6 +190,9 @@ func TestWireTypesMatchSchemas(t *testing.T) {
 		"CronEnvironment":           CronEnvironmentInput{},
 		"UpdateService":             UpdateServiceInput{},
 		"UpdatedService":            UpdatedService{},
+		"Preview":                   Preview{},
+		"PreviewService":            PreviewService{},
+		"ApprovePreview":            ApprovePreviewInput{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
@@ -287,7 +290,8 @@ func TestQueryParamsExist(t *testing.T) {
 		{RouteListBackups, "cursor"}, {RouteListBackups, "limit"},
 		{RouteCronState, "environment_id"}, {RouteListCronRuns, "environment_id"}, {RouteListCronRuns, "cursor"},
 		{RouteListCronRuns, "limit"}, {RouteListCronRuns, "status"}, {RouteCronRunLogs, "cursor"}, {RouteCronRunLogs, "limit"},
-		{RouteCronPreview, "schedule"}, {RouteCronPreview, "timezone"}, {RouteCronPreview, "count"}} {
+		{RouteCronPreview, "schedule"}, {RouteCronPreview, "timezone"}, {RouteCronPreview, "count"},
+		{RouteListPreviews, "status"}} {
 		op := doc.Paths[c.route.Path][strings.ToLower(c.route.Method)]
 		if !slices.Contains(op.Parameters, param{In: "query", Name: c.param}) {
 			t.Errorf("%s: no query parameter %q", c.route, c.param)
@@ -424,6 +428,7 @@ func TestDataEnumsMatchAPI(t *testing.T) {
 		{"RestoreBackup", "mode", RestoreModes},
 		{"CronRun", "status", CronRunStatuses},
 		{"CronRun", "trigger", CronRunTriggers},
+		{"Preview", "status", PreviewStatuses},
 	} {
 		s := doc.Components.Schemas[c.schema]
 		if s == nil || s.Properties[c.prop] == nil {
