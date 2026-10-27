@@ -341,3 +341,56 @@ describe("schedule with volumes (ADR 0004)", () => {
     });
   });
 });
+
+describe("schedule across the mesh (ADR 0005)", () => {
+  it("keeps an environment on its node when the mesh isn't ready", () => {
+    const result = schedule(request({ replicas: 2, environmentNodeIds: ["b"] }), [
+      node("a"),
+      node("b"),
+    ]);
+    expect(result).toEqual({
+      ok: true,
+      placements: [
+        { replica: 0, nodeId: "b" },
+        { replica: 1, nodeId: "b" },
+      ],
+    });
+  });
+
+  it("spreads an environment over nodes that are all mesh-ready", () => {
+    const result = schedule(request({ replicas: 2, environmentNodeIds: ["b"] }), [
+      node("a", { meshReady: true }),
+      node("b", { meshReady: true }),
+    ]);
+    expect(result.ok && result.placements.map((p) => p.nodeId).sort()).toEqual(["a", "b"]);
+  });
+
+  it("refuses a ready node when the environment lives on an unready one", () => {
+    const result = schedule(request({ environmentNodeIds: ["b"], nodeSelector: { pick: "a" } }), [
+      node("a", { meshReady: true, labels: { pick: "a" } }),
+      node("b", { meshReady: false }),
+    ]);
+    expect(result).toMatchObject({ ok: false, reason: "mesh_unready" });
+  });
+
+  it("counts the replicas it places itself", () => {
+    // A brand-new environment lands on one node unless the mesh is ready.
+    const result = schedule(request({ replicas: 2, environmentNodeIds: [] }), [
+      node("a"),
+      node("b"),
+    ]);
+    expect(result.ok && new Set(result.placements.map((p) => p.nodeId)).size).toBe(1);
+  });
+
+  it("ignores hosts it doesn't know, such as removed nodes", () => {
+    const result = schedule(request({ environmentNodeIds: ["gone"] }), [
+      node("a", { meshReady: true }),
+    ]);
+    expect(result).toEqual({ ok: true, placements: [{ replica: 0, nodeId: "a" }] });
+  });
+
+  it("is unchanged when the request names no environment nodes", () => {
+    const result = schedule(request({ replicas: 2 }), [node("a"), node("b")]);
+    expect(result.ok && result.placements.map((p) => p.nodeId).sort()).toEqual(["a", "b"]);
+  });
+});

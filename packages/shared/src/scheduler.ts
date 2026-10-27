@@ -4,8 +4,10 @@
  *
  * Filters, in order: node online, the pinned node (a service whose volume
  * lives there), agent protocol recent enough, Docker available, node
- * selector matches, the node can pull from the builder's registry
- * (git-built images), volume disk fits, memory fits, CPU fits. Memory is never overcommitted; CPU limits may add up to
+ * selector matches, the environment may span to the node (its nodes and
+ * this one are all on a ready mesh, ADR 0005), the node can pull from the
+ * builder's registry (git-built images), volume disk fits, memory fits,
+ * CPU fits. Memory is never overcommitted; CPU limits may add up to
  * {@link CPU_OVERCOMMIT_RATIO} times a node's cores.
  *
  * Scoring, for each replica in turn: fewest replicas of the same service on
@@ -53,6 +55,11 @@ export interface SchedulerNode {
   diskMb?: number;
   /** Sum of the quotas of the volumes the node already holds (ADR 0004). */
   allocatedDiskMb?: number;
+  /**
+   * The node is on the WireGuard mesh and reported it ready (ADR 0005), so
+   * an environment may span it and other ready nodes.
+   */
+  meshReady?: boolean;
 }
 
 /** What to place. */
@@ -73,6 +80,13 @@ export interface ScheduleRequest {
   pinnedNodeId?: string | null;
   /** Quota of a volume created with this placement, in MiB; 0 when none. */
   diskMb?: number;
+  /**
+   * Nodes already running other services of the replica's environment.
+   * When given, a node outside them is taken only if it and all of them are
+   * `meshReady`, since replicas reach each other across nodes only over the
+   * mesh. Replicas placed by this call count too.
+   */
+  environmentNodeIds?: readonly string[];
 }
 
 /** One replica's node. */
@@ -89,6 +103,7 @@ export const SCHEDULE_FAILURE_REASONS = [
   "agent_outdated",
   "no_docker",
   "selector_mismatch",
+  "mesh_unready",
   "registry_unreachable",
   "insufficient_disk",
   "insufficient_memory",
@@ -121,6 +136,8 @@ function rejection(
   node: SchedulerNode,
   req: ScheduleRequest,
   alloc: { cpu: number; mem: number },
+  hosts: ReadonlySet<string> | null,
+  ready: ReadonlyMap<string, boolean>,
 ): NodeRejection | null {
   if (node.status !== "online") return "offline";
   if (req.pinnedNodeId && node.id !== req.pinnedNodeId) return "pinned_elsewhere";
@@ -134,6 +151,12 @@ function rejection(
   if (!node.docker) return "no_docker";
   for (const [key, value] of Object.entries(req.nodeSelector)) {
     if (!Object.hasOwn(node.labels, key) || node.labels[key] !== value) return "selector_mismatch";
+  }
+  if (hosts && [...hosts].some((h) => h !== node.id)) {
+    // Unknown hosts (removed nodes) don't block: their replicas are going away.
+    const spannable =
+      node.meshReady === true && [...hosts].every((h) => h === node.id || ready.get(h) !== false);
+    if (!spannable) return "mesh_unready";
   }
   if (req.requiresRegistry && !node.reachesRegistry) return "registry_unreachable";
   if (
@@ -199,13 +222,15 @@ export function schedule(
     ]),
   );
   const placements: Placement[] = [];
+  const hosts = request.environmentNodeIds ? new Set(request.environmentNodeIds) : null;
+  const ready = new Map(sorted.map((n) => [n.id, n.meshReady === true]));
 
   for (let replica = 0; replica < request.replicas; replica++) {
     let best: { node: SchedulerNode; score: number } | undefined;
     const rejected: { nodeId: string; reason: NodeRejection }[] = [];
     for (const node of sorted) {
       const a = alloc.get(node.id)!;
-      const reason = rejection(node, request, a);
+      const reason = rejection(node, request, a, hosts, ready);
       if (reason) {
         rejected.push({ nodeId: node.id, reason });
         continue;
@@ -227,6 +252,7 @@ export function schedule(
     a.mem += request.memoryMb;
     a.same += 1;
     placements.push({ replica, nodeId: best.node.id });
+    hosts?.add(best.node.id);
   }
   return { ok: true, placements };
 }
