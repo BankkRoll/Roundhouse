@@ -1,0 +1,14 @@
+Private network: on, supernet 10.200.0.0/16
+
+NAME     ADDRESS      MODE        NAT      ENDPOINT             NOTES   READY
+edge-1   10.200.1.1   kernel      public   203.0.113.10:51820   relay   ready
+web-1    10.200.2.1   kernel      public   203.0.113.11:51820   -       ready
+nat-1    10.200.3.1   userspace   nat      -                    -       not ready: wg0: firewall rules not applied
+old-1    -            -           -        -                    -       unsupported agent
+
+1 server runs an agent without mesh support; upgrade the agent to join the network.
+
+SERVERS            LAST HANDSHAKE   PATH
+edge-1 <-> web-1   1m ago           direct
+nat-1 <-> web-1    30s ago          relayed via edge-1
+edge-1 <-> nat-1   never            down

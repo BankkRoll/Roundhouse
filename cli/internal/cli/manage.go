@@ -115,7 +115,8 @@ func (a *App) serversCmd() *cobra.Command {
 		Short:   "List, add and remove servers, and show their usage",
 		Example: `  roundhouse servers list
   roundhouse servers add
-  roundhouse servers remove web-1`,
+  roundhouse servers remove web-1
+  roundhouse servers mesh`,
 		Args: noArgs,
 	}
 	var workspace string
@@ -223,7 +224,7 @@ API tokens cannot provision.`,
 	}
 	add.Flags().StringVarP(&addWorkspace, "workspace", "w", "", "workspace ID, slug or name")
 	pf.register(add)
-	cmd.AddCommand(list, add, a.serversMetricsCmd(), a.serversRemoveCmd(), a.serversCancelCmd())
+	cmd.AddCommand(list, add, a.serversMetricsCmd(), a.serversRemoveCmd(), a.serversCancelCmd(), a.serversMeshCmd())
 	return cmd
 }
 

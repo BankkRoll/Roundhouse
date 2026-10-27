@@ -335,6 +335,7 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `servers remove <server> [--keep-server] [-y]`      | Remove a server; deletes a provisioned cloud server too  |
 | `servers cancel <provision-id> [--no-wait]`         | Cancel a provisioning run and delete what it created     |
 | `servers metrics <server> [--range] [-m]`           | A server's CPU, memory, disk and load                    |
+| `servers mesh [rotate-key <server> [-y]]`           | The private network between servers; rotate a WG key     |
 | `db create\|list\|info\|query\|tables`              | Database services and read-only queries                  |
 | `db volume [resize\|delete\|undelete]`              | A database's volume                                      |
 | `db backups list\|run\|policy\|restore\|download`   | Backups, schedules, restores, decrypted downloads        |
@@ -372,6 +373,22 @@ cloud server as well, unless `--keep-server` is given. If the provider is no
 longer connected the API refuses with `provider_not_connected` and keeps the
 server listed: reconnect the provider, or pass `--keep-server` and delete the
 cloud server in the provider's console.
+
+### Private network
+
+`servers mesh` shows the WireGuard mesh between the workspace's servers:
+each server's mesh address, kernel or userspace WireGuard, public or behind
+NAT, and whether it is ready (with the agent's error when not), then every
+pair of servers with its path (`direct`, `relayed via <server>` or `down`)
+and last handshake. Servers whose agent predates the mesh are listed as
+unsupported. The mesh itself is an instance setting: turn it on in the
+dashboard (Settings → Platform → Network) or with
+`PATCH /v1/instance/settings` `{"mesh_enabled": true}`.
+
+`servers mesh rotate-key <server>` gives a server a new WireGuard key; its
+tunnels pause for about two seconds. It asks for confirmation (pass `-y` in
+scripts), and only one server rotates at a time: a second rotation is refused
+with `mesh_rotation_in_progress` until the first finishes.
 
 ## Scripting
 

@@ -190,6 +190,10 @@ func TestWireTypesMatchSchemas(t *testing.T) {
 		"CronEnvironment":           CronEnvironmentInput{},
 		"UpdateService":             UpdateServiceInput{},
 		"UpdatedService":            UpdatedService{},
+		"Mesh":                      Mesh{},
+		"MeshNode":                  MeshNode{},
+		"MeshPeerView":              MeshPeerView{},
+		"MeshPair":                  MeshPair{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
@@ -431,6 +435,31 @@ func TestDataEnumsMatchAPI(t *testing.T) {
 			continue
 		}
 		if got := s.Properties[c.prop].Enum; !slices.Equal(got, c.want) {
+			t.Errorf("%s.%s: CLI = %v\nAPI enum = %v", c.schema, c.prop, c.want, got)
+		}
+	}
+}
+
+// TestMeshEnumsMatchAPI keeps the pair paths, wg0 modes and reachability
+// kinds `servers mesh` renders in step with the API. Nullable enums list
+// null, which decodes to "" here.
+func TestMeshEnumsMatchAPI(t *testing.T) {
+	doc := loadOpenAPI(t)
+	for _, c := range []struct {
+		schema, prop string
+		want         []string
+	}{
+		{"MeshPair", "path", MeshPaths},
+		{"MeshNode", "mode", MeshModes},
+		{"MeshNode", "nat", MeshNATKinds},
+	} {
+		s := doc.Components.Schemas[c.schema]
+		if s == nil || s.Properties[c.prop] == nil {
+			t.Errorf("%s.%s missing from the OpenAPI document", c.schema, c.prop)
+			continue
+		}
+		got := slices.DeleteFunc(slices.Clone(s.Properties[c.prop].Enum), func(v string) bool { return v == "" })
+		if !slices.Equal(got, c.want) {
 			t.Errorf("%s.%s: CLI = %v\nAPI enum = %v", c.schema, c.prop, c.want, got)
 		}
 	}

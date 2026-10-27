@@ -84,6 +84,7 @@ var Routes = []Route{
 	RouteBackupDownload, RouteBackupKey, RouteRestoreBackup, RouteGetRestore,
 	RouteCronState, RouteListCronRuns, RouteTriggerCron, RouteGetCronRun, RouteCronRunLogs,
 	RouteCancelCronRun, RoutePauseCron, RouteResumeCron, RouteCronPreview,
+	RouteGetMesh, RouteRotateMeshKey,
 }
 
 // AuthRoutes lists the Better Auth routes the client calls.

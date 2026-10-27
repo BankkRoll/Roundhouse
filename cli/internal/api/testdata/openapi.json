@@ -401,7 +401,9 @@
               "cron.run_triggered",
               "cron.run_cancelled",
               "cron.paused",
-              "cron.resumed"
+              "cron.resumed",
+              "node.mesh_joined",
+              "node.mesh_key_rotated"
             ],
             "type": "string"
           },
@@ -1549,7 +1551,9 @@
               "cron.run_triggered",
               "cron.run_cancelled",
               "cron.paused",
-              "cron.resumed"
+              "cron.resumed",
+              "node.mesh_joined",
+              "node.mesh_key_rotated"
             ],
             "type": "string"
           },
@@ -4796,6 +4800,15 @@
           "mcp_enabled": {
             "type": "boolean"
           },
+          "mesh_enabled": {
+            "type": "boolean"
+          },
+          "mesh_supernet": {
+            "type": "string"
+          },
+          "mesh_supernet_locked": {
+            "type": "boolean"
+          },
           "tls_mode": {
             "$ref": "#/components/schemas/TlsMode"
           }
@@ -4805,7 +4818,10 @@
           "tls_mode",
           "log_retention_days",
           "mcp_enabled",
-          "ingress_nodes"
+          "ingress_nodes",
+          "mesh_enabled",
+          "mesh_supernet",
+          "mesh_supernet_locked"
         ],
         "type": "object"
       },
@@ -4827,6 +4843,13 @@
           },
           "mcp_enabled": {
             "type": "boolean"
+          },
+          "mesh_enabled": {
+            "type": "boolean"
+          },
+          "mesh_supernet": {
+            "pattern": "^10\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.0\\.0\\/16$",
+            "type": "string"
           },
           "tls_mode": {
             "$ref": "#/components/schemas/TlsMode"
@@ -5076,6 +5099,273 @@
           "image",
           "role",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "Mesh": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/MeshNode"
+            },
+            "type": "array"
+          },
+          "pairs": {
+            "items": {
+              "$ref": "#/components/schemas/MeshPair"
+            },
+            "type": "array"
+          },
+          "supernet": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "supernet",
+          "nodes",
+          "pairs"
+        ],
+        "type": "object"
+      },
+      "MeshNode": {
+        "properties": {
+          "accept_fwmark": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "docker_firewall": {
+            "enum": [
+              "iptables",
+              "nftables",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "key_epoch": {
+            "type": "integer"
+          },
+          "key_rotated_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "listen_port": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mesh_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "kernel",
+              "userspace",
+              "unavailable",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "nat": {
+            "enum": [
+              "public",
+              "nat",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "relay": {
+            "type": "boolean"
+          },
+          "rotating": {
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "online",
+              "degraded",
+              "offline",
+              "draining",
+              "maintenance"
+            ],
+            "type": "string"
+          },
+          "status_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "supported": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "supported",
+          "mesh_index",
+          "address",
+          "public_key",
+          "mode",
+          "nat",
+          "endpoint",
+          "listen_port",
+          "docker_firewall",
+          "accept_fwmark",
+          "ready",
+          "error",
+          "key_epoch",
+          "key_rotated_at",
+          "rotating",
+          "relay",
+          "status_at"
+        ],
+        "type": "object"
+      },
+      "MeshPair": {
+        "properties": {
+          "last_handshake_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "nodes": {
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "path": {
+            "enum": [
+              "direct",
+              "relayed",
+              "down"
+            ],
+            "type": "string"
+          },
+          "relay_node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sides": {
+            "items": {
+              "$ref": "#/components/schemas/MeshPeerView"
+            },
+            "maxItems": 2,
+            "type": "array"
+          }
+        },
+        "required": [
+          "nodes",
+          "path",
+          "relay_node_id",
+          "last_handshake_at",
+          "sides"
+        ],
+        "type": "object"
+      },
+      "MeshPeerView": {
+        "properties": {
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_handshake_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "rx_bytes": {
+            "type": "integer"
+          },
+          "tx_bytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "node_id",
+          "endpoint",
+          "last_handshake_at",
+          "rx_bytes",
+          "tx_bytes"
         ],
         "type": "object"
       },
@@ -14434,7 +14724,9 @@
                 "cron.run_triggered",
                 "cron.run_cancelled",
                 "cron.paused",
-                "cron.resumed"
+                "cron.resumed",
+                "node.mesh_joined",
+                "node.mesh_key_rotated"
               ],
               "type": "string"
             }
@@ -23595,6 +23887,79 @@
         ]
       }
     },
+    "/v1/workspaces/{workspaceId}/mesh": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Mesh"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get the private network between servers",
+        "tags": [
+          "nodes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/workspaces/{workspaceId}/node-provisions": {
       "get": {
         "parameters": [
@@ -24321,6 +24686,99 @@
         "tags": [
           "nodes"
         ]
+      }
+    },
+    "/v1/workspaces/{workspaceId}/nodes/{nodeId}/mesh/rotate-key": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshNode"
+                }
+              }
+            },
+            "description": "Rotation started"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Rotate a server's WireGuard key",
+        "tags": [
+          "nodes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [
+            "node.mesh_key_rotated"
+          ],
+          "auth": "session"
+        }
       }
     },
     "/v1/workspaces/{workspaceId}/nodes/{nodeId}/metrics": {

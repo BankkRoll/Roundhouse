@@ -121,6 +121,9 @@ type Fake struct {
 	// data holds databases, volumes and backups; see [Fake.dataState].
 	data *dataState
 
+	// mesh is the workspace's WireGuard mesh; see [Fake.SetMesh].
+	mesh *api.Mesh
+
 	// cron holds cron schedule states and runs; see [Fake.cronState].
 	cron *cronState
 
@@ -717,6 +720,7 @@ func (f *Fake) routes(mux *http.ServeMux) {
 	}
 	f.dataRoutes(mux, handlers)
 	f.cronRoutes(handlers)
+	f.meshRoutes(handlers)
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
 	}
