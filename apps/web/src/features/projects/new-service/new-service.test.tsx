@@ -146,6 +146,58 @@ describe("new service flow", () => {
     expect(screen.queryByText(/Missing queryFn/)).not.toBeInTheDocument();
   });
 
+  it("creates a cron job with a previewed schedule, zone and timeout", async () => {
+    const { user, dialog, router } = await openFlow();
+    await user.click(within(dialog).getByRole("radio", { name: /Cron job/ }));
+    expect(within(dialog).getByRole("radio", { name: "Docker image" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await user.type(within(dialog).getByLabelText("Image"), "ghcr.io/acme/cleanup:2");
+    await user.click(within(dialog).getByRole("button", { name: "Continue" }));
+
+    expect(within(dialog).getByText("cron · image · ghcr.io/acme/cleanup:2")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Port")).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("switch", { name: "Generated domain" }),
+    ).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("switch", { name: "Deploy now" }));
+    await user.click(within(dialog).getByRole("button", { name: "Create service" }));
+    expect(within(dialog).getByText("Enter a schedule.")).toBeInTheDocument();
+    expect(db.deploy.services.some((row) => row.name === "cleanup")).toBe(false);
+
+    const schedule = within(dialog).getByLabelText("Schedule");
+    await user.type(schedule, "0 3 * *");
+    expect(within(dialog).getByText("Expected 5 fields, got 4.")).toBeInTheDocument();
+    await user.type(schedule, " *");
+    await user.selectOptions(within(dialog).getByLabelText("Time zone"), "Europe/Berlin");
+    expect(document.getElementById(schedule.getAttribute("aria-describedby")!)).toHaveTextContent(
+      /^At 03:00, every day \(Europe\/Berlin\) · next: /,
+    );
+    const timeout = within(dialog).getByLabelText("Timeout (seconds)");
+    await user.clear(timeout);
+    await user.type(timeout, "5");
+    await user.click(within(dialog).getByRole("button", { name: "Create service" }));
+    expect(within(dialog).getByText(/from 10 to 86400/)).toBeInTheDocument();
+    await user.clear(timeout);
+    await user.type(timeout, "600");
+    await user.click(within(dialog).getByRole("button", { name: "Create service" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/\/s\/svc_mock\d+\/runs$/));
+    const service = db.deploy.services.at(-1)!;
+    expect(service).toMatchObject({ name: "cleanup", kind: "cron" });
+    expect(db.deploy.configs.find((c) => c.service_id === service.id)).toMatchObject({
+      source: { type: "image", image: "ghcr.io/acme/cleanup:2" },
+      networking: { port: null, generated_domain: false },
+      cron: {
+        schedule: "0 3 * * *",
+        timezone: "Europe/Berlin",
+        timeout_s: 600,
+        concurrency: "forbid",
+      },
+    });
+  });
+
   it("is keyboard operable and closes with Escape", async () => {
     const { user, dialog } = await openFlow();
     expect(within(dialog).getByLabelText("Image")).toHaveFocus();

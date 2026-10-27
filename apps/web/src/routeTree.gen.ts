@@ -48,6 +48,7 @@ import { Route as AppWWorkspaceIdPProjectIdSServiceIdDataRouteImport } from './r
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdDomainsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/domains'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdLogsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/logs'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdMetricsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/metrics'
+import { Route as AppWWorkspaceIdPProjectIdSServiceIdRunsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/runs'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdSettingsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdVariablesRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/index'
@@ -267,6 +268,12 @@ const AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute =
     path: '/metrics',
     getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
   } as any)
+const AppWWorkspaceIdPProjectIdSServiceIdRunsRoute =
+  AppWWorkspaceIdPProjectIdSServiceIdRunsRouteImport.update({
+    id: '/runs',
+    path: '/runs',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
+  } as any)
 const AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute =
   AppWWorkspaceIdPProjectIdSServiceIdSettingsRouteImport.update({
     id: '/settings',
@@ -330,6 +337,7 @@ export interface FileRoutesByFullPath {
   '/w/$workspaceId/p/$projectId/s/$serviceId/domains': typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/logs': typeof AppWWorkspaceIdPProjectIdSServiceIdLogsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/metrics': typeof AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/runs': typeof AppWWorkspaceIdPProjectIdSServiceIdRunsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/settings': typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/variables': typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/': typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
@@ -371,6 +379,7 @@ export interface FileRoutesByTo {
   '/w/$workspaceId/p/$projectId/s/$serviceId/domains': typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/logs': typeof AppWWorkspaceIdPProjectIdSServiceIdLogsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/metrics': typeof AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/runs': typeof AppWWorkspaceIdPProjectIdSServiceIdRunsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/settings': typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/variables': typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId': typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
@@ -417,6 +426,7 @@ export interface FileRoutesById {
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/domains': typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/logs': typeof AppWWorkspaceIdPProjectIdSServiceIdLogsRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/metrics': typeof AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute
+  '/_app/w/$workspaceId/p/$projectId/s/$serviceId/runs': typeof AppWWorkspaceIdPProjectIdSServiceIdRunsRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings': typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables': typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/': typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
@@ -463,6 +473,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/p/$projectId/s/$serviceId/domains'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/logs'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/metrics'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/runs'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/settings'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/variables'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/'
@@ -504,6 +515,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/p/$projectId/s/$serviceId/domains'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/logs'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/metrics'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/runs'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/settings'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/variables'
     | '/w/$workspaceId/p/$projectId/s/$serviceId'
@@ -549,6 +561,7 @@ export interface FileRouteTypes {
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/domains'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/logs'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/metrics'
+    | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/runs'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/'
@@ -839,6 +852,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdMetricsRouteImport
       parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
     }
+    '/_app/w/$workspaceId/p/$projectId/s/$serviceId/runs': {
+      id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/runs'
+      path: '/runs'
+      fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId/runs'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRunsRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
+    }
     '/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings': {
       id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings'
       path: '/settings'
@@ -876,6 +896,7 @@ interface AppWWorkspaceIdPProjectIdSServiceIdRouteRouteChildren {
   AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
   AppWWorkspaceIdPProjectIdSServiceIdLogsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdLogsRoute
   AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute
+  AppWWorkspaceIdPProjectIdSServiceIdRunsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRunsRoute
   AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
   AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
   AppWWorkspaceIdPProjectIdSServiceIdIndexRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
@@ -895,6 +916,8 @@ const AppWWorkspaceIdPProjectIdSServiceIdRouteRouteChildren: AppWWorkspaceIdPPro
       AppWWorkspaceIdPProjectIdSServiceIdLogsRoute,
     AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute:
       AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute,
+    AppWWorkspaceIdPProjectIdSServiceIdRunsRoute:
+      AppWWorkspaceIdPProjectIdSServiceIdRunsRoute,
     AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute:
       AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute,
     AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute:

@@ -36,6 +36,7 @@ import {
   requireWorkspace,
   unauthorized,
 } from "./common";
+import { cronHandlers } from "./cron-handlers";
 import { dataHandlers } from "./data-handlers";
 import { type DbAuditEntry, type DbInvite, type DbMembership, db, nextId } from "./db";
 import { deployHandlers } from "./deploy-handlers";
@@ -752,6 +753,7 @@ export const handlers = [
   ...changeHandlers,
   ...metricsHandlers,
   ...dataHandlers,
+  ...cronHandlers,
   ...signingKeyHandlers,
   ...securityHandlers,
   ...accountSecurityHandlers,

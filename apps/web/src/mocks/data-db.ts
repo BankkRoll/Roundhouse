@@ -297,7 +297,8 @@ export function seedData(deploy: DeployDb, now = Date.now()): DataDb {
         policy_id: null,
         requested_by: "usr_ada",
         scheduled_for: null,
-        created_at: now - 2 * HOUR,
+        // NOTE: Newest in every hour of the day, including the first hours after the 03:00 slot.
+        created_at: Math.max(now - 2 * HOUR, lastSlot + Math.floor((now - lastSlot) / 2)),
         bytes_raw: 418 * MiB,
         bytes_stored: 98 * MiB,
       }),

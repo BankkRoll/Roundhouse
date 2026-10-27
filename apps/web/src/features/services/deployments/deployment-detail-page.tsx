@@ -22,8 +22,9 @@ import {
   type LucideIcon,
   RouteIcon,
   ServerIcon,
+  TerminalIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { ErrorState } from "../../../components/error-state";
 import { SectionHeader } from "../../../components/section-header";
 import { errorMessage, isApiError } from "../../../lib/api/client";
@@ -33,6 +34,7 @@ import { usePermissions } from "../../../lib/permissions";
 import { useNow } from "../../../lib/use-now";
 import { useDeployment, useDeployments } from "../../../queries/deployments";
 import { useProjectEnvironment } from "../../projects/use-project-environment";
+import { RunLogsDialog } from "../cron/runs-tab";
 import type { ServicePageProps } from "../service-layout";
 import { DeploymentMenu, useDeploymentActions } from "./deployment-actions";
 import {
@@ -52,8 +54,25 @@ const EVENT_ICONS: Record<DeploymentEvent["type"], { icon: LucideIcon; tone: str
   replica_status: { icon: CircleDotIcon, tone: "text-info" },
   route_switched: { icon: RouteIcon, tone: "text-accent-text" },
   rollout_finished: { icon: CircleCheckIcon, tone: "text-success" },
+  pre_deploy_started: { icon: TerminalIcon, tone: "text-info" },
+  pre_deploy_finished: { icon: TerminalIcon, tone: "text-success" },
   error: { icon: CircleAlertIcon, tone: "text-danger" },
 };
+
+/** The pre-deploy run an event is about, from its `data` (`{ run_id, status }`). */
+function preDeployRun(event: DeploymentEvent): { runId: string; status: unknown } | null {
+  if (event.type !== "pre_deploy_started" && event.type !== "pre_deploy_finished") return null;
+  const runId = event.data?.run_id;
+  return typeof runId === "string" ? { runId, status: event.data?.status } : null;
+}
+
+function eventIcon(event: DeploymentEvent): { icon: LucideIcon; tone: string } {
+  const meta = EVENT_ICONS[event.type] ?? EVENT_ICONS.status_changed;
+  if (event.type === "pre_deploy_finished" && event.data?.status !== "succeeded") {
+    return { ...meta, tone: "text-danger" };
+  }
+  return meta;
+}
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -64,14 +83,24 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Timeline({ events, now }: { events: DeploymentEvent[]; now: number }) {
+function Timeline({
+  events,
+  now,
+  onOpenRun,
+}: {
+  events: DeploymentEvent[];
+  now: number;
+  /** Opens a pre-deploy command's output. */
+  onOpenRun: (runId: string) => void;
+}) {
   if (events.length === 0) {
     return <p className="text-sm text-muted-foreground">No events yet.</p>;
   }
   return (
     <ol className="relative grid gap-3.5 before:absolute before:top-2 before:bottom-2 before:left-[9px] before:w-px before:bg-border">
       {events.map((event) => {
-        const { icon: Icon, tone } = EVENT_ICONS[event.type] ?? EVENT_ICONS.status_changed;
+        const { icon: Icon, tone } = eventIcon(event);
+        const run = preDeployRun(event);
         return (
           <li key={event.id} className="relative flex items-start gap-3">
             <span className="relative z-10 flex size-5 shrink-0 items-center justify-center rounded-full border border-border bg-background">
@@ -87,6 +116,18 @@ function Timeline({ events, now }: { events: DeploymentEvent[]; now: number }) {
                 >
                   {formatRelativeTime(event.created_at, now)}
                 </time>
+                {run ? (
+                  <>
+                    {" · "}
+                    <button
+                      type="button"
+                      onClick={() => onOpenRun(run.runId)}
+                      className="rounded-sm text-foreground underline-offset-2 outline-none hover:underline focus-visible:underline"
+                    >
+                      View output
+                    </button>
+                  </>
+                ) : null}
               </p>
             </div>
           </li>
@@ -116,6 +157,7 @@ export function DeploymentDetailPage({
   const navigate = useNavigate();
   const now = useNow(1000);
   const actions = useDeploymentActions({ workspaceId, projectId, serviceId, envParam });
+  const [openRun, setOpenRun] = useState<string | null>(null);
   const currentId = currentDeploymentId(list.data?.pages.flatMap((page) => page.deployments) ?? []);
 
   const back = (
@@ -260,7 +302,7 @@ export function DeploymentDetailPage({
       <div className="grid gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] lg:gap-10">
         <section aria-labelledby="timeline-heading">
           <SectionHeader id="timeline-heading" title="Timeline" />
-          <Timeline events={deployment.events} now={now} />
+          <Timeline events={deployment.events} now={now} onOpenRun={setOpenRun} />
         </section>
         <section aria-labelledby="replicas-heading">
           <SectionHeader
@@ -315,6 +357,13 @@ export function DeploymentDetailPage({
         </section>
       </div>
       {actions.dialog}
+      <RunLogsDialog
+        runId={openRun}
+        onOpenChange={(open) => {
+          if (!open) setOpenRun(null);
+        }}
+        canCancel={can("deployments:create")}
+      />
     </>
   );
 }

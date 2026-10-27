@@ -1,6 +1,13 @@
 import { Button, cn, StatusBadge } from "@roundhouse/ui";
 import { Link } from "@tanstack/react-router";
-import { BoxIcon, ContainerIcon, GitBranchIcon, RocketIcon, ScrollTextIcon } from "lucide-react";
+import {
+  BoxIcon,
+  ClockIcon,
+  ContainerIcon,
+  GitBranchIcon,
+  RocketIcon,
+  ScrollTextIcon,
+} from "lucide-react";
 import type {
   Deployment,
   Environment,
@@ -71,8 +78,21 @@ export function describeSource(source: ServiceSource): string {
   return `${repo}@${source.branch}${dir}`;
 }
 
-function SourceIcon({ source }: { source: ServiceSource | null | undefined }) {
-  const Icon = !source ? BoxIcon : source.type === "git" ? GitBranchIcon : ContainerIcon;
+function SourceIcon({
+  source,
+  kind,
+}: {
+  source: ServiceSource | null | undefined;
+  kind: Service["kind"];
+}) {
+  const Icon =
+    kind === "cron"
+      ? ClockIcon
+      : !source
+        ? BoxIcon
+        : source.type === "git"
+          ? GitBranchIcon
+          : ContainerIcon;
   return <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />;
 }
 
@@ -136,7 +156,7 @@ export function ServiceList({
           >
             <div className="min-w-0">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                <SourceIcon source={source} />
+                <SourceIcon source={source} kind={service.kind} />
                 <Link
                   to="/w/$workspaceId/p/$projectId/s/$serviceId"
                   params={{ workspaceId, projectId, serviceId: service.id }}

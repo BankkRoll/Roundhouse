@@ -128,6 +128,10 @@ const VERBS: Record<AuditAction, string> = {
   "key.rollover_scheduled": "scheduled a signing key rollover",
   "key.rollover_completed": "completed a signing key rollover",
   "key.rollover_cancelled": "cancelled a signing key rollover",
+  "cron.run_triggered": "ran a cron job now",
+  "cron.run_cancelled": "cancelled a cron run",
+  "cron.paused": "paused a cron job",
+  "cron.resumed": "resumed a cron job",
 };
 
 /**

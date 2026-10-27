@@ -17,6 +17,7 @@ import type {
   Workspace,
 } from "../lib/api/types";
 import { type ChangesDb, emptyChanges } from "./changes-db";
+import { type CronDb, emptyCron, seedCron } from "./cron-db";
 import { type DataDb, emptyData, seedData } from "./data-db";
 import { type DeployDb, emptyDeploy, seedDeploy } from "./deploy-db";
 import { emptyProviders, type ProvidersDb } from "./providers-db";
@@ -88,6 +89,8 @@ export interface MockDb {
   changes: ChangesDb;
   /** Volumes, backups, backup storage and the data browser's rows. */
   data: DataDb;
+  /** Cron schedule state, runs and their output. */
+  cron: CronDb;
   /** Two-factor, sessions and lockouts. */
   security: SecurityDb;
   signingKeys: DbSigningKeys;
@@ -283,6 +286,7 @@ function seed(): MockDb {
     ].map((entry) => ({ ...entry, workspace_id: WORKSPACE_ID })),
     deploy,
     data: seedData(deploy, now),
+    cron: seedCron(deploy, now),
     providers: emptyProviders(),
     changes: emptyChanges(),
     security: seedSecurity(USERS.owner.id, now),
@@ -326,6 +330,7 @@ export function seedFreshInstall(masterKeyConfigured = true): void {
     audit: [],
     deploy: emptyDeploy(),
     data: emptyData(),
+    cron: emptyCron(),
   };
 }
 

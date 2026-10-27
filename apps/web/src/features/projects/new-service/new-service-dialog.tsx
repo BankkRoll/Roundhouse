@@ -1,3 +1,4 @@
+import { CRON_LIMITS, DEFAULT_CRON_CONFIG } from "@roundhouse/shared";
 import {
   Button,
   cn,
@@ -12,8 +13,8 @@ import {
 } from "@roundhouse/ui";
 import { SegmentedControl, Switch } from "@roundhouse/ui/controls";
 import { useNavigate } from "@tanstack/react-router";
-import { ContainerIcon, DatabaseIcon } from "lucide-react";
-import { type FormEvent, type ReactNode, useId, useState } from "react";
+import { ClockIcon, ContainerIcon, DatabaseIcon } from "lucide-react";
+import { type FormEvent, type ReactNode, useId, useMemo, useState } from "react";
 import { FormField } from "../../../components/form-field";
 import { GithubIcon } from "../../../components/github-mark";
 import { errorMessage } from "../../../lib/api/client";
@@ -29,6 +30,8 @@ import {
   initialDatabaseDraft,
   parseVolumeSize,
 } from "../../databases/new-database";
+import { previewSchedule, timeZones } from "../../services/cron/cron-format";
+import { ScheduleField, TimezoneField } from "../../services/cron/schedule-field";
 import { StepIndicator } from "../../setup/step-indicator";
 import { RepoPicker } from "./repo-picker";
 import {
@@ -41,8 +44,18 @@ import {
   suggestServiceName,
 } from "./source";
 
-type SourceKind = "image" | "git" | "database";
+type SourceKind = "image" | "git" | "database" | "cron";
+type CodeSource = "image" | "git";
 type GitMode = "connected" | "url";
+
+/** The browser's own zone, the likeliest one a new schedule is meant in. */
+function localTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
 
 /** Props for {@link NewServiceDialog}. */
 export interface NewServiceDialogProps {
@@ -96,7 +109,9 @@ function SourceOption({
 /**
  * The new-service flow: pick a source (a Docker image, or a GitHub repository from the
  * workspace's installations or any public HTTPS URL), then name it, set its port and
- * generated domain, and optionally deploy it straight away.
+ * generated domain, and optionally deploy it straight away. A cron job takes the same
+ * sources, then a schedule (previewed as it is typed), its time zone and a timeout
+ * instead of a port.
  *
  * @param props - Workspace, project and controlled open state.
  * @returns The dialog.
@@ -124,6 +139,11 @@ export function NewServiceDialog({
   const [port, setPort] = useState("8080");
   const [generatedDomain, setGeneratedDomain] = useState(true);
   const [deployNow, setDeployNow] = useState(can("deployments:create"));
+  const [cronSource, setCronSource] = useState<CodeSource>("image");
+  const [schedule, setSchedule] = useState("");
+  const [timezone, setTimezone] = useState(localTimeZone);
+  const [timeout, setTimeoutValue] = useState(String(DEFAULT_CRON_CONFIG.timeout_s));
+  const zones = useMemo(() => timeZones(localTimeZone()), []);
   const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const sourceName = useId();
@@ -134,22 +154,23 @@ export function NewServiceDialog({
   const canAddDatabase = can("variables:manage");
   const environments = project.data?.environments ?? [];
 
-  const github = useGithubStatus(workspaceId, kind === "git");
+  const code = kind === "cron" ? cronSource : kind;
+  const github = useGithubStatus(workspaceId, code === "git");
   const configured = github.data?.configured ?? false;
-  const repositories = useGithubRepositories(workspaceId, kind === "git" && configured);
+  const repositories = useGithubRepositories(workspaceId, code === "git" && configured);
   const mode: GitMode = configured ? gitMode : "url";
   const sourceText =
-    kind === "image" ? image : mode === "connected" ? (repo?.full_name ?? "") : repoUrl;
+    code === "image" ? image : mode === "connected" ? (repo?.full_name ?? "") : repoUrl;
   const serviceName = name ?? suggestServiceName(sourceText);
   const pending = create.isPending || deploy.isPending;
 
   function buildSource(): ServiceSource | null {
     const next: Record<string, string | undefined> = {};
     let source: ServiceSource | null = null;
-    if (kind === "image") {
+    if (code === "image") {
       next.image = imageReferenceError(image) ?? undefined;
       source = { type: "image", image: image.trim() };
-    } else if (kind === "database") {
+    } else if (code === "database") {
       return null;
     } else if (mode === "connected") {
       if (!repo) next.repo = "Choose a repository.";
@@ -196,22 +217,45 @@ export function NewServiceDialog({
       setStep(1);
       return;
     }
-    const parsedPort = parsePort(port);
+    const cron = kind === "cron";
+    const parsedPort = cron ? null : parsePort(port);
     const nameError = serviceName.trim() ? undefined : "Enter a service name.";
     const portError = typeof parsedPort === "string" ? parsedPort : undefined;
-    setErrors({ name: nameError, port: portError });
-    if (nameError || portError) return;
+    const timeoutS = Number(timeout);
+    const { min, max } = CRON_LIMITS.timeout_s;
+    const timeoutError =
+      cron && (!Number.isInteger(timeoutS) || timeoutS < min || timeoutS > max)
+        ? `Enter a whole number of seconds from ${min} to ${max}.`
+        : undefined;
+    const scheduleInvalid = cron && previewSchedule(schedule, timezone).error !== null;
+    setErrors({
+      name: nameError,
+      port: portError,
+      timeout: timeoutError,
+      schedule: cron && !schedule.trim() ? "Enter a schedule." : undefined,
+    });
+    if (nameError || portError || timeoutError || scheduleInvalid) return;
     setSubmitError(null);
     try {
       const { service } = await create.mutateAsync({
         name: serviceName.trim(),
         source,
-        config: {
-          networking: {
-            port: parsedPort as number | null,
-            generated_domain: parsedPort !== null && generatedDomain,
-          },
-        },
+        ...(cron
+          ? {
+              kind: "cron" as const,
+              config: {
+                cron: { schedule: schedule.trim(), timezone, timeout_s: timeoutS },
+                networking: { port: null, generated_domain: false },
+              },
+            }
+          : {
+              config: {
+                networking: {
+                  port: parsedPort as number | null,
+                  generated_domain: parsedPort !== null && generatedDomain,
+                },
+              },
+            }),
       });
       const environment = project.data ? pickEnvironment(project.data.environments) : undefined;
       let deployed = false;
@@ -233,7 +277,9 @@ export function NewServiceDialog({
       });
       onOpenChange(false);
       await navigate({
-        to: "/w/$workspaceId/p/$projectId/s/$serviceId/deployments",
+        to: cron
+          ? "/w/$workspaceId/p/$projectId/s/$serviceId/runs"
+          : "/w/$workspaceId/p/$projectId/s/$serviceId/deployments",
         params: { workspaceId, projectId, serviceId: service.id },
       });
     } catch (cause) {
@@ -262,9 +308,7 @@ export function NewServiceDialog({
 
         {step === 1 ? (
           <form onSubmit={onNext} className="grid gap-4" noValidate>
-            <fieldset
-              className={cn("grid gap-2 sm:grid-cols-2", canAddDatabase && "sm:grid-cols-3")}
-            >
+            <fieldset className="grid gap-2 sm:grid-cols-2">
               <legend className="sr-only">Source</legend>
               <SourceOption
                 name={sourceName}
@@ -284,6 +328,15 @@ export function NewServiceDialog({
                 title="GitHub repository"
                 description="Build with Railpack or your Dockerfile."
               />
+              <SourceOption
+                name={sourceName}
+                value="cron"
+                checked={kind === "cron"}
+                onChange={setKind}
+                icon={<ClockIcon />}
+                title="Cron job"
+                description="Run an image or repository on a schedule."
+              />
               {canAddDatabase ? (
                 <SourceOption
                   name={sourceName}
@@ -297,7 +350,18 @@ export function NewServiceDialog({
               ) : null}
             </fieldset>
 
-            {kind === "database" ? (
+            {kind === "cron" ? (
+              <SegmentedControl<CodeSource>
+                label="Cron job source"
+                value={cronSource}
+                onValueChange={setCronSource}
+                options={[
+                  { value: "image", label: "Docker image" },
+                  { value: "git", label: "GitHub repository" },
+                ]}
+              />
+            ) : null}
+            {code === "database" ? (
               <DatabaseFields
                 draft={database}
                 onChange={setDatabase}
@@ -307,7 +371,7 @@ export function NewServiceDialog({
                     : null
                 }
               />
-            ) : kind === "image" ? (
+            ) : code === "image" ? (
               <FormField
                 label="Image"
                 value={image}
@@ -412,9 +476,10 @@ export function NewServiceDialog({
         ) : (
           <form onSubmit={onCreate} className="grid gap-4" noValidate>
             <p className="truncate rounded-md border border-border bg-background px-3 py-2 font-mono text-xs text-muted-foreground">
-              {kind === "image" ? "image" : "git"} · {sourceText}
+              {kind === "cron" ? "cron · " : ""}
+              {code === "image" ? "image" : "git"} · {sourceText}
             </p>
-            <div className="grid gap-3 sm:grid-cols-[1fr_8rem]">
+            <div className={cn("grid gap-3", kind !== "cron" && "sm:grid-cols-[1fr_8rem]")}>
               <FormField
                 label="Service name"
                 value={serviceName}
@@ -424,31 +489,61 @@ export function NewServiceDialog({
                 hint={`Other services reference its variables as \${{${suggestServiceName(serviceName) || "name"}.VAR}}.`}
                 autoFocus
               />
-              <FormField
-                label="Port"
-                value={port}
-                onChange={(event) => setPort(event.target.value)}
-                error={errors.port}
-                inputMode="numeric"
-                hint="Empty for workers."
-              />
+              {kind === "cron" ? null : (
+                <FormField
+                  label="Port"
+                  value={port}
+                  onChange={(event) => setPort(event.target.value)}
+                  error={errors.port}
+                  inputMode="numeric"
+                  hint="Empty for workers."
+                />
+              )}
             </div>
-            <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-background px-3 py-2.5">
-              <div className="grid gap-0.5">
-                <Label htmlFor={domainId} className="text-sm text-foreground">
-                  Generated domain
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  A public https hostname under the instance's apps domain.
-                </p>
+            {kind === "cron" ? (
+              <>
+                <ScheduleField
+                  value={schedule}
+                  onChange={setSchedule}
+                  timezone={timezone}
+                  layout="stacked"
+                  blankError={errors.schedule}
+                />
+                <div className="grid gap-3 sm:grid-cols-[1fr_10rem]">
+                  <TimezoneField
+                    value={timezone}
+                    onChange={setTimezone}
+                    zones={zones}
+                    layout="stacked"
+                  />
+                  <FormField
+                    label="Timeout (seconds)"
+                    value={timeout}
+                    onChange={(event) => setTimeoutValue(event.target.value)}
+                    error={errors.timeout}
+                    inputMode="numeric"
+                    hint="Longer runs are stopped."
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-background px-3 py-2.5">
+                <div className="grid gap-0.5">
+                  <Label htmlFor={domainId} className="text-sm text-foreground">
+                    Generated domain
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    A public https hostname under the instance's apps domain.
+                  </p>
+                </div>
+                <Switch
+                  id={domainId}
+                  checked={generatedDomain && parsePort(port) !== null}
+                  disabled={parsePort(port) === null}
+                  onCheckedChange={setGeneratedDomain}
+                />
               </div>
-              <Switch
-                id={domainId}
-                checked={generatedDomain && parsePort(port) !== null}
-                disabled={parsePort(port) === null}
-                onCheckedChange={setGeneratedDomain}
-              />
-            </div>
+            )}
             {can("deployments:create") ? (
               <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-background px-3 py-2.5">
                 <div className="grid gap-0.5">
