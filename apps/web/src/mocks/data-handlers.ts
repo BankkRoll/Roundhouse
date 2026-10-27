@@ -422,6 +422,8 @@ function addDatabase(input: AddDatabaseInput) {
     slug: freeSlug(taken, input.slug, RESERVED_SERVICE_SLUGS),
     kind: "database",
     icon: DATABASE_ENGINE_SPECS[input.engine].icon,
+    health: "ok",
+    health_reason: null,
     database: { engine: input.engine, version: input.version },
     created_at: now,
     updated_at: now,

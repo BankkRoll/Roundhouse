@@ -11,7 +11,7 @@
  *
  * @module
  */
-import type { MeshNode, MeshPair } from "../lib/api/mesh-client";
+import type { MeshNode, MeshPair, NodeDrain } from "../lib/api/mesh-client";
 import type { Node } from "../lib/api/types";
 
 /** A server's mesh state, without the fields its node row already has. */
@@ -22,6 +22,8 @@ export interface MeshDb {
   /** Mesh state by node id; a node without a row never reported any. */
   nodes: Record<string, DbMeshNode>;
   pairs: MeshPair[];
+  /** Each server's latest drain, by node id. */
+  drains: Record<string, NodeDrain>;
 }
 
 /** Ids of the servers {@link seedMeshNetwork} adds or joins, for tests. */
@@ -65,7 +67,7 @@ export function unjoinedMeshNode(node: Pick<Node, "agent_version">): DbMeshNode 
 
 /** @returns Empty mesh tables. */
 export function emptyMesh(): MeshDb {
-  return { nodes: {}, pairs: [] };
+  return { nodes: {}, pairs: [], drains: {} };
 }
 
 const MINUTE = 60_000;
@@ -130,6 +132,7 @@ export const MESH_SEED_NODES: { id: string; name: string; public_ip: string | nu
 export function seededMesh(now: number): MeshDb {
   const { hel, nbg, home, lab, office } = MESH_SEED;
   return {
+    drains: {},
     nodes: {
       [hel]: joined(1, now, { endpoint: "203.0.113.10:51820", relay: true }),
       [nbg]: joined(2, now, {

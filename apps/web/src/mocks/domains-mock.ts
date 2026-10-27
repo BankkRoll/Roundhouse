@@ -274,6 +274,8 @@ export function newCustomDomain(
     hostname,
     url: `${db.deploy.instance.tls_mode === "off" ? "http" : "https"}://${hostname}`,
     type: "custom",
+    mode: "direct",
+    cf: null,
     target_port: port,
     verification_status: "pending",
     tls_status: db.deploy.instance.tls_mode === "off" ? "disabled" : "pending",

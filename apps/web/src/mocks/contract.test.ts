@@ -609,6 +609,32 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
+  it("drain: start, read, resume, and the refusals", async () => {
+    await fresh(async () => {
+      const node = `${WS}/nodes/node_hel1`;
+      expect(await call("GET", `${node}/drain`)).toMatchObject({
+        status: 200,
+        body: { drain: null },
+      });
+      expect((await call("POST", `${node}/resume`)).body).toMatchObject({
+        error: { code: "node_not_draining" },
+      });
+      const started = await call("POST", `${node}/drain`, { force: false });
+      expect(started).toMatchObject({ status: 202, body: { status: "completed", force: false } });
+      expect(await call("GET", `${node}/drain`)).toMatchObject({
+        body: { drain: { node_id: "node_hel1", status: "completed" } },
+      });
+      expect(await call("GET", node)).toMatchObject({ body: { status: "maintenance" } });
+      expect(await call("POST", `${node}/resume`)).toMatchObject({
+        status: 200,
+        body: { status: "online" },
+      });
+      expect((await call("POST", `${WS}/nodes/node_nope/drain`, {})).status).toBe(404);
+      as(null);
+      expect((await call("POST", `${node}/drain`, {})).status).toBe(401);
+    });
+  });
+
   it("metrics: service series, project summary, node series", async () => {
     await fresh(async () => {
       const env = `environment_id=${SEED.production}`;

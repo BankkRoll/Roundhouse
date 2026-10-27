@@ -973,6 +973,8 @@ function applySet(
         slug: freeSlug(taken, op.slug ?? slugify(op.name, 40, "service"), RESERVED_SERVICE_SLUGS),
         kind: op.kind,
         icon: op.icon ?? null,
+        health: "ok",
+        health_reason: null,
         created_at: now,
         updated_at: now,
       };

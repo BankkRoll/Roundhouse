@@ -58,6 +58,8 @@ const service = {
   slug: "web",
   kind: "app" as const,
   icon: null,
+  health: "ok" as const,
+  health_reason: null,
   created_at: 1,
   updated_at: 1,
 };

@@ -309,6 +309,8 @@ function write(
       slug: s.slug,
       kind: s.kind,
       icon: s.icon,
+      health: "ok",
+      health_reason: null,
       created_at: now,
       updated_at: now,
     };

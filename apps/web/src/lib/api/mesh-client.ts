@@ -15,10 +15,12 @@ import type {
   Mesh,
   MeshNode,
   MeshPair,
+  NodeDrain,
 } from "../../../../api/src/contracts";
 import { request } from "./client";
+import type { Node } from "./types";
 
-export type { Mesh, MeshNode, MeshPair };
+export type { Mesh, MeshNode, MeshPair, NodeDrain };
 
 /** How two servers reach each other: direct, through a relay, or not at all. */
 export type MeshPath = (typeof MESH_PATH_VALUES)[number];
@@ -54,4 +56,19 @@ export const meshApi = {
       "POST",
       `/v1/workspaces/${seg(workspaceId)}/nodes/${seg(nodeId)}/mesh/rotate-key`,
     ),
+  /** The server's latest drain, `null` when it was never drained. */
+  drain: (workspaceId: string, nodeId: string, signal?: AbortSignal) =>
+    request<{ drain: NodeDrain | null }>(
+      "GET",
+      `/v1/workspaces/${seg(workspaceId)}/nodes/${seg(nodeId)}/drain`,
+      { signal },
+    ),
+  /** Starts draining a server; `force` stops volume services instead of blocking on them. */
+  startDrain: (workspaceId: string, nodeId: string, force: boolean) =>
+    request<NodeDrain>("POST", `/v1/workspaces/${seg(workspaceId)}/nodes/${seg(nodeId)}/drain`, {
+      body: { force },
+    }),
+  /** Takes a draining or maintenance server back into service. */
+  resume: (workspaceId: string, nodeId: string) =>
+    request<Node>("POST", `/v1/workspaces/${seg(workspaceId)}/nodes/${seg(nodeId)}/resume`),
 };

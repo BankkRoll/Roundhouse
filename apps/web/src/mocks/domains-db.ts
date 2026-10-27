@@ -6,7 +6,7 @@
  */
 import { DEFAULT_HSTS } from "@roundhouse/shared";
 import type { Domain } from "../lib/api/deploy-types";
-import type { Certificate } from "../lib/api/tls-client";
+import type { Certificate, InstanceDomainSettings } from "../lib/api/tls-client";
 
 /** Let's Encrypt's lifetime for a certificate. */
 export const MOCK_CERTIFICATE_LIFETIME_MS = 90 * 86_400_000;
@@ -101,6 +101,12 @@ export interface DbTls {
    */
   managed_problems: string[];
   certificates: Certificate[];
+  /** How custom domains are served (ADR 0009). */
+  custom_domains_mode: "direct" | "cloudflare_saas";
+  /** The Cloudflare for SaaS zone; the token is kept to mirror the API but never returned. */
+  saas:
+    | (NonNullable<InstanceDomainSettings["custom_domains"]["saas"]> & { api_token: string })
+    | null;
 }
 
 /**
@@ -120,5 +126,7 @@ export function seedTls(): DbTls {
     cloudflare_dns: null,
     managed_problems: [],
     certificates: [],
+    custom_domains_mode: "direct",
+    saas: null,
   };
 }

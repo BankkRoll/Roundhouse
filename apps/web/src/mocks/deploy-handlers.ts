@@ -892,6 +892,8 @@ export function ensureGeneratedDomain(service: Service, config: ServiceConfig) {
     hostname,
     url: `${db.deploy.instance.tls_mode === "off" ? "http" : "https"}://${hostname}`,
     type: "generated",
+    mode: "direct",
+    cf: null,
     target_port: config.networking.port,
     verification_status: "verified",
     ...generatedDomainState(db.deploy.instance.tls_mode === "off" ? "disabled" : "pending"),
@@ -1277,6 +1279,8 @@ export const deployHandlers = [
       slug,
       kind: input.body.kind as Service["kind"],
       icon: (input.body.icon as string | undefined) ?? null,
+      health: "ok",
+      health_reason: null,
       created_at: now,
       updated_at: now,
     };

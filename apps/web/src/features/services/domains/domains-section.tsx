@@ -86,6 +86,7 @@ const PURPOSE: Record<DnsRecord["purpose"], string> = {
   routing: "Routing",
   ownership: "Ownership",
   acme_delegation: "Certificate delegation",
+  cf_dcv: "Cloudflare validation",
 };
 
 /** Copy-button label of a record, distinct when a domain needs two CNAMEs. */

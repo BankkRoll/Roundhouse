@@ -16,6 +16,8 @@ export const MESH_POLL_INTERVAL_MS = 15_000;
 /** Query keys of the mesh; they sit under the workspace key. */
 export const meshKeys = {
   mesh: (workspaceId: string) => ["workspaces", workspaceId, "mesh"] as const,
+  drain: (workspaceId: string, nodeId: string) =>
+    ["workspaces", workspaceId, "nodes", nodeId, "drain"] as const,
 };
 
 /**
@@ -80,5 +82,65 @@ export function useRotateMeshKey(workspaceId: string) {
       upsertMeshNode(queryClient, workspaceId, node);
       void queryClient.invalidateQueries({ queryKey: meshKeys.mesh(workspaceId) });
     },
+  });
+}
+
+/** Poll interval of a drain that is still moving replicas. */
+export const DRAIN_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * A server's latest drain, polled while it runs.
+ *
+ * @param workspaceId - The workspace.
+ * @param nodeId - The server.
+ * @returns The query.
+ */
+export function useNodeDrain(workspaceId: string, nodeId: string) {
+  return useQuery({
+    queryKey: meshKeys.drain(workspaceId, nodeId),
+    queryFn: ({ signal }) => meshApi.drain(workspaceId, nodeId, signal),
+    refetchInterval: (query) =>
+      query.state.data?.drain?.status === "running" ? DRAIN_POLL_INTERVAL_MS : false,
+  });
+}
+
+/** Refetches what a drain or resume changes: the drain, the server and the mesh. */
+function invalidateDrain(queryClient: QueryClient, workspaceId: string, nodeId: string) {
+  void queryClient.invalidateQueries({ queryKey: meshKeys.drain(workspaceId, nodeId) });
+  void queryClient.invalidateQueries({
+    predicate: (query) => query.queryKey[0] === "workspaces" && query.queryKey[1] === workspaceId,
+  });
+}
+
+/**
+ * Starts draining a server.
+ *
+ * @param workspaceId - The workspace.
+ * @param nodeId - The server.
+ * @returns The mutation; its variable is `force`.
+ */
+export function useDrainNode(workspaceId: string, nodeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (force: boolean) => meshApi.startDrain(workspaceId, nodeId, force),
+    onSuccess: (drain) => {
+      queryClient.setQueryData(meshKeys.drain(workspaceId, nodeId), { drain });
+      invalidateDrain(queryClient, workspaceId, nodeId);
+    },
+  });
+}
+
+/**
+ * Takes a draining or maintenance server back into service.
+ *
+ * @param workspaceId - The workspace.
+ * @param nodeId - The server.
+ * @returns The mutation.
+ */
+export function useResumeNode(workspaceId: string, nodeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => meshApi.resume(workspaceId, nodeId),
+    onSuccess: () => invalidateDrain(queryClient, workspaceId, nodeId),
   });
 }

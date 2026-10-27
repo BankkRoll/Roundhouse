@@ -12,7 +12,7 @@
  */
 import { HttpResponse, http } from "msw";
 import { MESH_ROUTES } from "../../../api/src/contracts";
-import type { Mesh, MeshNode } from "../lib/api/mesh-client";
+import type { Mesh, MeshNode, NodeDrain } from "../lib/api/mesh-client";
 import type { Node } from "../lib/api/types";
 import { apiError, notFound, recordAudit, requireWorkspace } from "./common";
 import { db, makeNode, WORKSPACE_ID } from "./db";
@@ -92,8 +92,82 @@ export function seedMeshNetwork(now = Date.now()): void {
   db.deploy.instance.mesh_enabled = true;
 }
 
-/** Every mesh route. */
+/** Every mesh and node-lifecycle route. */
 export const meshHandlers = [
+  http.get(mswPath("getNodeDrain"), ({ params }) => {
+    const workspaceId = String(params.workspaceId);
+    const access = requireWorkspace(workspaceId, "nodes:read");
+    if (!access.ok) return access.response;
+    const node = workspaceNodes(workspaceId).find((row) => row.id === params.nodeId);
+    if (!node) return notFound("Server");
+    return HttpResponse.json({ drain: db.mesh.drains[node.id] ?? null });
+  }),
+
+  // A mock drain finishes at once: it has no replicas to move.
+  http.post(mswPath("drainNode"), async ({ params, request }) => {
+    const workspaceId = String(params.workspaceId);
+    const access = requireWorkspace(workspaceId, "nodes:manage");
+    if (!access.ok) return access.response;
+    const node = workspaceNodes(workspaceId).find((row) => row.id === params.nodeId);
+    if (!node) return notFound("Server");
+    if (node.status === "pending") {
+      return apiError(409, "node_not_drainable", "This server hasn't connected yet.");
+    }
+    if (db.mesh.drains[node.id]?.status === "running") {
+      return apiError(409, "drain_in_progress", "This server is already draining.");
+    }
+    const body = ((await request.json().catch(() => ({}))) ?? {}) as { force?: boolean };
+    const now = Date.now();
+    const drain: NodeDrain = {
+      id: `drn_${now.toString(36)}`,
+      node_id: node.id,
+      status: "completed",
+      force: body.force === true,
+      moves: [],
+      blocked: [],
+      error: null,
+      started_by: access.user.id,
+      started_at: now,
+      finished_at: now,
+    };
+    db.mesh.drains[node.id] = drain;
+    node.status = "maintenance";
+    recordAudit({
+      workspaceId,
+      actorType: "user",
+      actorId: access.user.id,
+      action: "node.drain_started",
+      targetType: "node",
+      targetId: node.id,
+      metadata: { name: node.name, force: drain.force },
+    });
+    return HttpResponse.json(drain, { status: 202 });
+  }),
+
+  http.post(mswPath("resumeNode"), ({ params }) => {
+    const workspaceId = String(params.workspaceId);
+    const access = requireWorkspace(workspaceId, "nodes:manage");
+    if (!access.ok) return access.response;
+    const node = workspaceNodes(workspaceId).find((row) => row.id === params.nodeId);
+    if (!node) return notFound("Server");
+    if (node.status !== "draining" && node.status !== "maintenance") {
+      return apiError(409, "node_not_draining", "This server isn't draining or in maintenance.");
+    }
+    const drain = db.mesh.drains[node.id];
+    if (drain?.status === "running") drain.status = "cancelled";
+    node.status = "online";
+    recordAudit({
+      workspaceId,
+      actorType: "user",
+      actorId: access.user.id,
+      action: "node.resumed",
+      targetType: "node",
+      targetId: node.id,
+      metadata: { name: node.name },
+    });
+    return HttpResponse.json(node);
+  }),
+
   http.get(mswPath("getMesh"), ({ params }) => {
     const workspaceId = String(params.workspaceId);
     const access = requireWorkspace(workspaceId, "nodes:read");

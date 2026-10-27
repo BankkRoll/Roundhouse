@@ -74,6 +74,14 @@ export function domainSettingsView(): InstanceDomainSettings {
       apps_wildcard: dns01(),
       wildcard_domains: instance.tls_mode === "managed" && dns01(),
     },
+    custom_domains: {
+      mode: tls.custom_domains_mode,
+      saas: tls.saas ? (({ api_token: _, ...rest }) => rest)(tls.saas) : null,
+      quota: {
+        used: db.deploy.domains.filter((d) => d.mode === "cloudflare_saas").length,
+        included: 100,
+      },
+    },
   };
 }
 

@@ -29,6 +29,7 @@ import { usePermissions } from "../../lib/permissions";
 import { useNow } from "../../lib/use-now";
 import { forgetNode, useDeleteNode, useNode } from "../../queries/nodes";
 import { COST_ESTIMATE_NOTE, formatCostEstimate } from "./cost-estimate";
+import { DrainSection } from "./drain-section";
 import { MeshSection } from "./mesh-section";
 import { nodeMeterRows, nodeSubtitle } from "./node-metrics";
 import { managedProvider, ProviderBadges } from "./provider-badge";
@@ -259,6 +260,12 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
             )}
           </div>
         </section>
+        <DrainSection
+          workspaceId={workspaceId}
+          node={data}
+          canManage={can("nodes:manage")}
+          now={now}
+        />
         <MeshSection
           workspaceId={workspaceId}
           nodeId={data.id}
