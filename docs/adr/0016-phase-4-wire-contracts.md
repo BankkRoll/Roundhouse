@@ -70,6 +70,45 @@ frame and one plain fixture per agent frame.
   agent integration test can push to a local `registry:3`; the control
   plane is the only sender and signs every frame.
 
+### Behaviour decided while implementing
+
+These depart from, or settle, what 0011, 0012 and 0014 left open.
+- **No 30 s grace after the terminal leaves.** 0012 keeps a session alive
+  for 30 s after its browser socket closes, and also says there is no
+  resume in v1. Without resume nothing can ever reattach in those 30 s, so
+  the grace would only leave a privileged process running that nobody
+  sees or can type into, still counting toward the node's 4 sessions. The
+  relay sends `exec_close { reason: "user" }` as soon as the socket
+  closes. The grace comes back together with resume tokens, if ever.
+- **A gap in input ends the session.** 0012 says gaps are dropped; the
+  agent instead ends the session with `error` ("input out of order"),
+  because skipping a lost batch would run a different command line than
+  the one typed.
+- **No shells over plaintext.** An agent connected over `ws://` outside
+  dev mode refuses `exec_open`, like workloads and builds: output is not
+  sealed.
+- **Lost connection or shutdown** ends sessions with reason `error` and a
+  message; neither `closed` nor a timeout fits.
+- **Killing needs the host PID namespace.** Docker does not end a TTY exec
+  when its client goes away and never closes its stdin, so only SIGHUP and
+  SIGKILL by host PID stop a shell. The systemd install runs the agent on
+  the host. An agent run in a container must use `--pid=host`; otherwise
+  closed shells keep running until they exit, and the agent logs a warning
+  naming the session.
+- **No `shell` protection rule.** 0014 §15 adds one, but only
+  `project_admin` holds `shell:open` and project admins always pass
+  protection rules, so the key could never change an outcome. Protected
+  environments narrow the shell another way: API tokens, which can never
+  be fresh, are refused there (`shellGate`).
+- **Warm-ups are single-use.** The runtime Worker claims each verified
+  `RH-Warm` header in instance 0's storage: a header is accepted only when
+  newer than every header claimed for the generation, and none after the
+  generation answered healthy (0011's "once per generation"). The deploy
+  workflow can still retry an unhealthy warm-up with a fresh header.
+- **Push progress** arrives as `task` log lines whose `task_id` is the
+  `psh_` ID; the control plane files them under the deployment's build
+  log, only from the node the push was sent to.
+
 ## Consequences
 
 - An agent at 7 advertises the shell and push before the control plane
