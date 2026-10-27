@@ -83,7 +83,7 @@ func (r *Runtime) collectImages(ctx context.Context, o GCOptions) (int, error) {
 	r.mu.Lock()
 	var refs []string
 	if ds := r.desired; ds != nil {
-		for _, s := range r.wantSpecs(ds) {
+		for _, s := range r.wantSpecs(ds, r.blocked) {
 			refs = append(refs, s.Image)
 		}
 	}

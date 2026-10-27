@@ -75,11 +75,11 @@ func admitRoute(w *protocol.WorkloadSpec, mesh *protocol.MeshConfig, self string
 
 // routeSpecs lists the admitted route-only workloads of ds. They have no
 // container and report no status; they only add routes.
-func (r *Runtime) routeSpecs(ds *protocol.DesiredState) []*wantSpec {
+func (r *Runtime) routeSpecs(ds *protocol.DesiredState, blocked map[string]string) []*wantSpec {
 	var out []*wantSpec
 	for i := range ds.Workloads {
 		w := ds.Workloads[i]
-		if w.Kind != protocol.WorkloadRouteOnly || r.blocked[w.ID] != "" {
+		if w.Kind != protocol.WorkloadRouteOnly || blocked[w.ID] != "" {
 			continue
 		}
 		out = append(out, &wantSpec{WorkloadSpec: w, generation: ds.Generation})

@@ -95,7 +95,7 @@ func (r *Runtime) listOwn(ctx context.Context) ([]docker.ContainerSummary, error
 	defer r.mu.Unlock()
 	var wanted map[string]bool
 	if ds := r.desired; ds != nil {
-		specs := r.wantSpecs(ds)
+		specs := r.wantSpecs(ds, r.blocked)
 		wanted = make(map[string]bool, len(specs))
 		for _, s := range specs {
 			wanted[s.ID] = true

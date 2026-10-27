@@ -550,21 +550,21 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 	r.mu.Lock()
 	r.passSeq = seq
 	r.lastErr = ""
-	ds := r.desired
+	ds, blocked := r.desired, r.blocked
 	r.mu.Unlock()
 
 	if ds == nil {
 		r.publish(nil)
 		return next
 	}
-	specs := withoutRoutes(r.wantSpecs(ds))
+	specs := withoutRoutes(r.wantSpecs(ds, blocked))
 	r.ensureNetworks(ctx, specs)
 	r.collectNetworks(ctx, specs)
 	r.applyAllowlist(ctx, specs)
 
 	now := time.Now()
 	r.mu.Lock()
-	routes := r.routeSpecs(ds)
+	routes := r.routeSpecs(ds, blocked)
 	assignLabelAliases(specs)
 	conflicts := r.markRouteConflicts(append(slices.Clip(specs), routes...))
 	wanted := make(map[string]*wantSpec, len(specs))
@@ -614,16 +614,19 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 		r.mu.Unlock()
 	}
 	r.publish(specs)
+	r.pruneRegistryAuth(specs)
 	return max(next, 10*time.Millisecond)
 }
 
-// wantSpecs lists every workload the node should run.
-func (r *Runtime) wantSpecs(ds *protocol.DesiredState) []*wantSpec {
+// wantSpecs lists every workload the node should run. blocked is the
+// admission verdicts of ds, read with it under r.mu: Apply replaces both
+// together, so a later read could pair ds with a newer state's verdicts.
+func (r *Runtime) wantSpecs(ds *protocol.DesiredState, blocked map[string]string) []*wantSpec {
 	specs := make([]*wantSpec, 0, len(ds.Workloads)+1)
 	for i := range ds.Workloads {
 		w := &ds.Workloads[i]
 		specs = append(specs, &wantSpec{
-			WorkloadSpec: *w, generation: ds.Generation, blocked: r.blocked[w.ID],
+			WorkloadSpec: *w, generation: ds.Generation, blocked: blocked[w.ID],
 			stopFirst: w.Rollout == protocol.RolloutStopFirst || len(w.Mounts) > 0,
 			hostPorts: publishBindings(w),
 			exclusive: publishes(w),
