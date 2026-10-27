@@ -81,6 +81,9 @@ var Routes = []Route{
 	RouteDatabaseQuery, RouteDatabaseSchema,
 	RouteBackupPolicy, RoutePutBackupPolicy, RouteListBackups, RouteCreateBackup, RouteGetBackup,
 	RouteBackupDownload, RouteBackupKey, RouteRestoreBackup, RouteGetRestore,
+	RouteMigrationTargets, RouteMigrateVolume, RouteVolumeMigrations, RouteGetVolumeMigration,
+	RouteGetTCPProxy, RoutePutTCPProxy, RouteDeleteTCPProxy,
+	RouteRotateCredentials, RouteCredentialRotations,
 }
 
 // AuthRoutes lists the Better Auth routes the client calls.
