@@ -80,6 +80,16 @@ type MeshAddress struct {
 	NodeID string `json:"node_id"`
 	// RoutedPorts have an ingress route and are admitted from node addresses.
 	RoutedPorts []int `json:"routed_ports"`
+	// PrivateDomain is the replica's "<service>.<environment>.<project>.internal"
+	// name; private DNS answers it only to askers of the same EnvTag.
+	PrivateDomain string `json:"private_domain,omitempty"`
+	// Healthy is the replica's last reported health; nil when unknown.
+	Healthy *bool `json:"healthy,omitempty"`
+}
+
+// IsMeshPrivateDomain reports whether s is a four-label name under ".internal".
+func IsMeshPrivateDomain(s string) bool {
+	return IsHostname(s) && strings.HasSuffix(s, ".internal") && strings.Count(s, ".") == 3
 }
 
 // MeshConfig is [DesiredState].Mesh (ADR 0005).
@@ -181,7 +191,8 @@ func (m *MeshConfig) validate() error {
 			return fmt.Errorf("mesh.addresses: %q is outside the supernet or duplicated", a.IP)
 		}
 		ips[a.IP] = true
-		if a.EnvTag < 1 || a.EnvTag > 65_535 || !nodeIDRE.MatchString(a.NodeID) || len(a.RoutedPorts) > MaxPorts {
+		if a.EnvTag < 1 || a.EnvTag > 65_535 || !nodeIDRE.MatchString(a.NodeID) || len(a.RoutedPorts) > MaxPorts ||
+			(a.PrivateDomain != "" && !IsMeshPrivateDomain(a.PrivateDomain)) {
 			return fmt.Errorf("mesh.addresses: invalid entry for %s", a.IP)
 		}
 		for _, p := range a.RoutedPorts {

@@ -587,8 +587,22 @@ await writeSigned("signed-desired-state-phase2.json", {
     node_addresses: ["10.200.1.1", "10.200.2.1", "10.200.3.1"],
     addresses: [
       { ip: "10.200.1.10", env_tag: 7, node_id: NODE_ID, routed_ports: [] },
-      { ip: "10.200.2.10", env_tag: 7, node_id: PEER_A, routed_ports: [3000] },
-      { ip: "10.200.2.11", env_tag: 7, node_id: PEER_A, routed_ports: [3000] },
+      {
+        ip: "10.200.2.10",
+        env_tag: 7,
+        node_id: PEER_A,
+        routed_ports: [3000],
+        private_domain: "api.production.shop.internal",
+        healthy: true,
+      },
+      {
+        ip: "10.200.2.11",
+        env_tag: 7,
+        node_id: PEER_A,
+        routed_ports: [3000],
+        private_domain: "api.production.shop.internal",
+        healthy: false,
+      },
     ],
   },
 });

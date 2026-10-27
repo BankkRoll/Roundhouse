@@ -15,6 +15,7 @@ import { SealedBoxSchema } from "./box";
 import {
   boundedString,
   Count,
+  HostnameString,
   HostPortString,
   Ipv4CidrString,
   Ipv4String,
@@ -29,6 +30,12 @@ import {
   PortNumber,
   UnixMillis,
 } from "./limits";
+
+/** A four-label private name under `.internal`, e.g. `api.production.shop.internal`. */
+export const PrivateDomainString = HostnameString.refine(
+  (h) => h.endsWith(".internal") && h.split(".").length === 4,
+  { message: "expected <service>.<environment>.<project>.internal" },
+);
 
 const Base64Key32 = z.string().regex(/^[A-Za-z0-9+/]{43}=$/, "expected a base64 32-byte key");
 
@@ -80,6 +87,13 @@ export const MeshAddressSchema = z.object({
   node_id: NodeIdString,
   /** Ports with an ingress route, admitted from other nodes' `.1` addresses. */
   routed_ports: z.array(PortNumber).max(MAX_PORTS),
+  /**
+   * The replica's private name, `<service>.<environment>.<project>.internal`.
+   * The agent's private DNS answers it only to askers of the same `env_tag`.
+   */
+  private_domain: PrivateDomainString.optional(),
+  /** The replica's last reported state is `healthy`; private DNS answers healthy replicas first. */
+  healthy: z.boolean().optional(),
 });
 
 /** A mesh IP this node must know. */
