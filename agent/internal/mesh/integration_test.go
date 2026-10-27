@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/BankkRoll/Roundhouse/agent/internal/sealtest"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 	"github.com/coder/websocket"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // dindImage runs each test node: its own Docker engine, kernel network
@@ -55,7 +57,14 @@ const (
 	intruder  = "10.200.2.11"
 	webDomain = "web.production.proj.internal"
 	routeHost = "web.example.test"
+	// pullUser pulls from node 1's mesh registry listener as node 2.
+	pullUser = "node_mesh2"
+	// pushedRepo is the repository pushed to node 1 and pulled on node 2.
+	pushedRepo = "127.0.0.1:5000/" + project + "/svc_web"
 )
+
+// ingressSources is node 1's allowed_sources: neither node is in it.
+var ingressSources = []string{"198.51.100.0/24", "2001:db8::/32"}
 
 // TestMeshTwoNodes runs the real agent on two Docker-in-Docker nodes, one
 // with kernel WireGuard and one with wireguard-go, against a fake control
@@ -193,6 +202,101 @@ func TestMeshTwoNodes(t *testing.T) {
 		return code == 0 && strings.TrimSpace(out) == webIP, out
 	})
 
+	// 5. Registry over the mesh: an image pushed to node 1's primary is
+	// pulled by digest on node 2 through its proxy, and node 1's listener
+	// wants credentials and is out of the containers' reach.
+	waitContainer(t, c, node1, "sys_registry")
+	waitContainer(t, c, node1, "sys_registry_mesh")
+	waitContainer(t, c, node2, "sys_registry")
+	var digest string
+	eventually(t, 90*time.Second, "a push to node 1's registry", func() (bool, string) {
+		out, code := node1.sh(t, c, "docker tag "+workloadImage+" "+pushedRepo+":it && docker push "+pushedRepo+":it")
+		digest = pushedDigest(out)
+		return code == 0 && digest != "", out
+	})
+	eventually(t, 90*time.Second, "node 2 to pull "+digest+" through its proxy", func() (bool, string) {
+		out, code := node2.sh(t, c, "docker pull "+pushedRepo+"@"+digest)
+		return code == 0, out
+	})
+	if out, code := node2.sh(t, c, "docker image inspect --format '{{.Id}}' "+pushedRepo+"@"+digest); code != 0 {
+		t.Errorf("pulled image missing on node 2: %s", out)
+	}
+	registry := "http://" + node1.meshAddr() + ":5000/v2/"
+	if out, _ := node2.sh(t, c, "wget -S -T 5 -O- "+registry+" 2>&1"); !strings.Contains(out, "401") {
+		t.Errorf("unauthenticated pull from node 2's host was not refused with 401:\n%s", out)
+	}
+	authed := "http://" + pullUser + ":" + cp.pullPassword + "@" + node1.meshAddr() + ":5000/v2/"
+	if out, code := node2.sh(t, c, "wget -q -T 5 -O- "+authed); code != 0 {
+		t.Errorf("node 2 with its pull credentials: %d %s", code, out)
+	}
+	if out, _ := node2.sh(t, c, "wget -q -T 5 --post-data= -O- "+strings.TrimSuffix(authed, "/v2/")+"/v2/"+project+"/svc_web/blobs/uploads/ 2>&1"); !strings.Contains(out, "405") {
+		t.Errorf("the mesh listener accepted an upload:\n%s", out)
+	}
+	for _, w := range []string{"wl_client", "wl_intruder"} {
+		if out, code := node2.inContainer(t, c, w, "wget -T 4 -O- "+registry+" 2>&1"); code == 0 || strings.Contains(out, "401") {
+			t.Errorf("%s reached node 1's registry listener: %s", w, out)
+		}
+	}
+
+	// 6. Ingress filter: with allowed_sources, node 1 admits 80 and 443 only
+	// from them (and loopback); other ports are untouched; without, all.
+	if out, code := node1.sh(t, c, "mkdir -p /tmp/www && echo ingress-ok >/tmp/www/index.html && httpd -p 80 -h /tmp/www && httpd -p 8081 -h /tmp/www"); code != 0 {
+		t.Fatalf("start httpd on node 1: %s", out)
+	}
+	node1Web := "http://" + node1.ip
+	if out, code := node2.sh(t, c, "wget -q -T 5 -O- "+node1Web+"/"); code != 0 || !strings.Contains(out, "ingress-ok") {
+		t.Fatalf("node 1:80 before the filter: %d %s", code, out)
+	}
+	cp.mu.Lock()
+	cp.filtered = true
+	cp.mu.Unlock()
+	cp.send(node1.nodeID)
+	eventually(t, 30*time.Second, "node 1's ingress filter", func() (bool, string) {
+		out, code := node1.sh(t, c, "nft list chain inet roundhouse ingress_filter")
+		return code == 0, out
+	})
+	if out, code := node2.sh(t, c, "wget -q -T 4 -O- "+node1Web+"/"); code == 0 {
+		t.Errorf("node 2 reached node 1:80 from outside the allowed sources: %s", out)
+	}
+	if out, code := node2.sh(t, c, "wget -q -T 5 -O- "+node1Web+":8081/"); code != 0 {
+		t.Errorf("the filter closed another port: %d %s", code, out)
+	}
+	if out, code := node1.sh(t, c, "wget -q -T 5 -O- http://127.0.0.1/"); code != 0 {
+		t.Errorf("loopback to 80 under the filter: %d %s", code, out)
+	}
+	// The mesh still works under the filter.
+	if out, code := node2.inContainer(t, c, "wl_client", "wget -q -T 5 -O- http://"+webDomain+"/"); code != 0 {
+		t.Errorf("env A over the mesh under the filter: %d %s", code, out)
+	}
+	cp.mu.Lock()
+	cp.filtered = false
+	cp.mu.Unlock()
+	cp.send(node1.nodeID)
+	eventually(t, 30*time.Second, "node 1's ingress filter to go", func() (bool, string) {
+		out, code := node2.sh(t, c, "wget -q -T 3 -O- "+node1Web+"/")
+		return code == 0 && strings.Contains(out, "ingress-ok"), out
+	})
+	if out, code := node1.sh(t, c, "nft list chain inet roundhouse ingress_filter"); code == 0 {
+		t.Errorf("ingress_filter left behind:\n%s", out)
+	}
+
+	// 7. Every golden table of netpol passes nft's check on a real kernel.
+	goldens, err := filepath.Glob(filepath.Join("..", "netpol", "testdata", "*.nft"))
+	if err != nil || len(goldens) == 0 {
+		t.Fatalf("golden tables: %v %v", goldens, err)
+	}
+	for _, g := range goldens {
+		script, err := os.ReadFile(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		code, err := c.RunExec(ctx, node1.id, docker.ExecRun{Cmd: []string{"nft", "-c", "-f", "-"}, Stdin: bytes.NewReader(script), Stdout: &out, Stderr: &out})
+		if err != nil || code != 0 {
+			t.Errorf("nft -c %s: %d %v\n%s", filepath.Base(g), code, err, out.String())
+		}
+	}
+
 	// Finally a mesh_status with the peer's handshake (sent every 30 s).
 	for _, n := range nodes {
 		cp.waitStatus(t, n.nodeID, 75*time.Second, "a peer handshake", func(s protocol.MeshStatus) bool {
@@ -257,7 +361,7 @@ func (n *node) provision(ctx context.Context, c *docker.Client, bin []byte, imag
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if out, code := exec1(ctx, c, n.id, "apk add --no-cache -q nftables bind-tools wireguard-tools"); code != 0 {
+	if out, code := exec1(ctx, c, n.id, "apk add --no-cache -q nftables bind-tools wireguard-tools busybox-extras"); code != 0 {
 		return fmt.Errorf("apk add: %s", out)
 	}
 	img, err := c.SaveImages(ctx, imageID)
@@ -467,6 +571,11 @@ type fakeCP struct {
 	mu    sync.Mutex
 	nodes map[string]*cpNode
 	psk   []byte
+	// pullPassword is node 2's password on node 1's mesh registry
+	// listener; pullHash its bcrypt hash.
+	pullPassword, pullHash string
+	// filtered turns node 1's ingress filter on.
+	filtered bool
 }
 
 type cpNode struct {
@@ -490,7 +599,15 @@ func newFakeCP(t *testing.T, ip string) *fakeCP {
 	}
 	psk := make([]byte, 32)
 	_, _ = rand.Read(psk)
-	cp := &fakeCP{t: t, ip: ip, port: ln.Addr().(*net.TCPAddr).Port, pub: pub, priv: priv, nodes: map[string]*cpNode{}, psk: psk}
+	password := randomHex(32)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp := &fakeCP{
+		t: t, ip: ip, port: ln.Addr().(*net.TCPAddr).Port, pub: pub, priv: priv, nodes: map[string]*cpNode{}, psk: psk,
+		pullPassword: password, pullHash: string(hash),
+	}
 	cp.srv = &http.Server{Handler: http.HandlerFunc(cp.serve), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = cp.srv.Serve(ln) }()
 	t.Cleanup(func() { _ = cp.srv.Close() })
@@ -693,7 +810,21 @@ func (cp *fakeCP) plan(nodes []*node) {
 		web.Healthcheck = &protocol.Healthcheck{Type: protocol.HealthcheckHTTP, Path: "/", Port: 80, IntervalS: 1, TimeoutS: 2, Retries: 3}
 		web.Ports = []protocol.WorkloadPort{{ContainerPort: 80, Protocol: protocol.PortHTTP}, {ContainerPort: 8080, Protocol: protocol.PortHTTP}}
 		web.Routes = []protocol.WorkloadRoute{{Hostname: routeHost, ContainerPort: 80}}
-		return ds(n1, gen, meshFor(n1, n2, gen, addrA), rehash(web))
+		d := ds(n1, gen, meshFor(n1, n2, gen, addrA), rehash(web))
+		// The builder: a filesystem primary that node 2 pulls from over the
+		// mesh.
+		d.Registry = &protocol.RegistryConfig{
+			Listen: protocol.RegistryListen, Storage: protocol.RegistryStorage{Type: protocol.StorageFilesystem},
+			MeshListen: n1.meshAddr() + ":5000",
+			PullUsers:  []protocol.RegistryPullUser{{Username: pullUser, Bcrypt: cp.pullHash}},
+		}
+		cp.mu.Lock()
+		if cp.filtered {
+			sources := slices.Clone(ingressSources)
+			d.Ingress = &protocol.IngressSettings{AllowedSources: &sources, ManagedHosts: []string{}}
+		}
+		cp.mu.Unlock()
+		return d
 	}
 	cp.nodes[n2.nodeID].desired = func(gen int64) *protocol.DesiredState {
 		client := service("wl_client", "svc_client", envA, clientIP, []string{"sleep", "3600"})
@@ -703,7 +834,18 @@ func (cp *fakeCP) plan(nodes []*node) {
 		route.Ports = []protocol.WorkloadPort{{ContainerPort: 80, Protocol: protocol.PortHTTP}}
 		route.Routes = []protocol.WorkloadRoute{{Hostname: routeHost, ContainerPort: 80}}
 		route.Upstreams = []protocol.Upstream{{IP: webIP, Port: 80}}
-		return ds(n2, gen, meshFor(n2, n1, gen, append(addrA[:2:2], addrB)), rehash(client), rehash(intr), rehash(route))
+		d := ds(n2, gen, meshFor(n2, n1, gen, append(addrA[:2:2], addrB)), rehash(client), rehash(intr), rehash(route))
+		pt, _ := json.Marshal(protocol.SealedRegistryUpstream{Password: cp.pullPassword})
+		box, err := protocol.SealBox(n2.enc.PublicKey(), pt, protocol.BoxPurposeRegistryUpstream, protocol.RegistryUpstreamAAD(n2.nodeID, gen))
+		if err != nil {
+			cp.t.Errorf("seal upstream password: %v", err)
+		}
+		d.Registry = &protocol.RegistryConfig{
+			Listen: protocol.RegistryListen, Mode: protocol.RegistryProxy,
+			Storage:  protocol.RegistryStorage{Type: protocol.StorageFilesystem},
+			Upstream: &protocol.RegistryUpstream{URL: "http://" + n1.meshAddr() + ":5000", Username: pullUser, PasswordSealed: *box},
+		}
+		return d
 	}
 }
 
@@ -730,4 +872,17 @@ func rehash(w protocol.WorkloadSpec) protocol.WorkloadSpec {
 	}
 	w.SpecHash = h
 	return w
+}
+
+// pushedDigest finds the manifest digest in docker push's output
+// ("it: digest: sha256:… size: …").
+func pushedDigest(out string) string {
+	for line := range strings.Lines(out) {
+		if _, rest, ok := strings.Cut(line, "digest: "); ok {
+			if d, _, _ := strings.Cut(strings.TrimSpace(rest), " "); strings.HasPrefix(d, "sha256:") && len(d) == 71 {
+				return d
+			}
+		}
+	}
+	return ""
 }
