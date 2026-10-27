@@ -68,6 +68,7 @@ export function seedCron(deploy: DeployDb, now = Date.now()): CronDb {
     icon: null,
     health: "ok",
     health_reason: null,
+    health_node: null,
     created_at: now - 8 * DAY,
     updated_at: now - 8 * DAY,
   };

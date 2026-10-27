@@ -9048,6 +9048,24 @@
             ],
             "type": "string"
           },
+          "health_node": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "health_reason": {
             "enum": [
               "node_offline",
@@ -9100,6 +9118,7 @@
           "icon",
           "health",
           "health_reason",
+          "health_node",
           "created_at",
           "updated_at"
         ],

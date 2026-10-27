@@ -11,11 +11,13 @@
  *
  * Domains are listed read-only (`list_domains`); adding, changing (HSTS,
  * preload consent) and removing them need a human. The private network
- * between servers is read-only too (`get_mesh`).
+ * between servers is read-only too (`get_mesh`). Of a server's lifecycle,
+ * only draining and resuming it are tools (`./node-tools`, `nodes:manage`).
  *
  * Deliberately absent: reading secret values (there is no API for it),
- * deleting anything, the shell, database access, domain mutations, node,
- * token and member management. Those need a human in the dashboard.
+ * deleting anything, the shell, database access, domain mutations, adding
+ * or removing servers, token and member management. Those need a human in
+ * the dashboard.
  *
  * @module
  */
@@ -84,12 +86,8 @@ import {
   projectScope,
   serviceScope,
 } from "../lib/scope";
-import {
-  toApiDeployment,
-  toApiDeploymentEvent,
-  toApiPlacement,
-  toApiService,
-} from "../lib/serialize";
+import { toApiDeployment, toApiDeploymentEvent, toApiPlacement } from "../lib/serialize";
+import { toApiServiceWithHealth } from "../lib/service-health";
 import { getIngressSettings } from "../lib/settings";
 import { projectSummaries } from "../lib/summaries";
 import { listVariables, projectKey, type VariableTarget } from "../lib/variables";
@@ -97,6 +95,7 @@ import { CHANGE_TOOLS } from "./change-tools";
 import { CRON_TOOLS } from "./cron-tools";
 import { DATA_TOOLS } from "./data-tools";
 import { MESH_TOOLS } from "./mesh-tools";
+import { NODE_TOOLS } from "./node-tools";
 import { PREVIEW_TOOLS } from "./preview-tools";
 import { deployTemplateTool, listTemplatesTool } from "./template-tools";
 
@@ -393,7 +392,7 @@ const getServiceTool = defineTool({
       : await productionOf(c, project.id);
     const page = await deploymentPage(c, project.id, service.id, environment.id, input.limit);
     return {
-      service: toApiService(service),
+      service: await toApiServiceWithHealth(c.get("db"), service),
       environment_id: environment.id,
       deployments: page.deployments,
     };
@@ -813,6 +812,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   listDomainsTool,
   listNodesTool,
   ...MESH_TOOLS,
+  ...NODE_TOOLS,
   ...DATA_TOOLS,
   ...CRON_TOOLS,
   ...PREVIEW_TOOLS,

@@ -103,7 +103,9 @@ describe("API tokens page", () => {
     expect(
       within(scopes).getByRole("checkbox", { name: /Delete the workspace.*can't grant/ }),
     ).toBeDisabled();
-    expect(within(scopes).getByRole("checkbox", { name: "Add and remove servers" })).toBeEnabled();
+    expect(
+      within(scopes).getByRole("checkbox", { name: "Add, remove, drain and resume servers" }),
+    ).toBeEnabled();
   });
 
   it("creates a token that never expires", async () => {

@@ -424,6 +424,7 @@ function addDatabase(input: AddDatabaseInput) {
     icon: DATABASE_ENGINE_SPECS[input.engine].icon,
     health: "ok",
     health_reason: null,
+    health_node: null,
     database: { engine: input.engine, version: input.version },
     created_at: now,
     updated_at: now,

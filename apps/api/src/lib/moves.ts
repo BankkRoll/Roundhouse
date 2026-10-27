@@ -17,6 +17,9 @@
  * - {@link recoverNodeServices}: a node back online (or resumed) clears the
  *   health it caused.
  *
+ * Health changes are published to the project's room as `service.updated`,
+ * so the dashboard's Degraded badges follow without a reload.
+ *
  * Only replicas of settled deployments (`active`, `crashed`) move: a
  * deployment still rolling out decides its own fate.
  *
@@ -43,7 +46,12 @@ import {
 import { and, eq, inArray, isNull, notInArray } from "drizzle-orm";
 import { recordAudit } from "./audit";
 import { type RefreshEnv, refreshNodes } from "./desired-state";
+import { publish } from "./realtime";
 import { builderOfDeployment, environmentNodeIds, schedulerSnapshot } from "./scheduling";
+import { toApiService } from "./serialize";
+
+/** Bindings that publish health changes to project rooms. */
+export type HealthEnv = Parameters<typeof publish>[0];
 
 /** Deployments whose replicas move: settled ones. */
 export const MOVABLE_DEPLOYMENT_STATUSES = ["active", "crashed"] as const;
@@ -192,8 +200,9 @@ export async function placeReplacement(
 }
 
 /**
- * Marks a service `degraded` (once) and audits it.
+ * Marks a service `degraded` (once), audits it and tells its project.
  *
+ * @param env - Bindings with the project rooms.
  * @param db - Database client.
  * @param r - The stateful replica.
  * @param reason - Why.
@@ -201,6 +210,7 @@ export async function placeReplacement(
  * @returns Whether its health changed.
  */
 export async function degradeService(
+  env: HealthEnv,
   db: Db,
   r: Pick<MovableReplica, "serviceId" | "environmentId" | "workspaceId">,
   reason: ServiceHealthReason,
@@ -210,7 +220,7 @@ export async function degradeService(
     .update(services)
     .set({ health: "degraded", healthReason: reason })
     .where(and(eq(services.id, r.serviceId), eq(services.health, "ok")))
-    .returning({ id: services.id });
+    .returning();
   if (!changed) return false;
   await recordAudit(db, {
     workspaceId: r.workspaceId,
@@ -221,19 +231,31 @@ export async function degradeService(
     targetId: r.serviceId,
     metadata: { reason, node_id: nodeId, environment_id: r.environmentId },
   });
+  const [node] = await db
+    .select({ id: nodes.id, name: nodes.name })
+    .from(nodes)
+    .where(eq(nodes.id, nodeId))
+    .limit(1);
+  await publish(env, changed.projectId, {
+    type: "service.updated",
+    service: toApiService(changed, node ?? null),
+  });
   return true;
 }
 
 /**
  * Clears the health a node caused: services degraded with `reasons` whose
- * stateful replica runs on it again. Audited as `service.recovered`.
+ * stateful replica runs on it again. Audited as `service.recovered` and
+ * published to the project.
  *
+ * @param env - Bindings with the project rooms.
  * @param db - Database client.
  * @param nodeId - The node back online or resumed.
  * @param reasons - Which degradations it ends.
  * @returns IDs of the services that recovered.
  */
 export async function recoverNodeServices(
+  env: HealthEnv,
   db: Db,
   nodeId: string,
   reasons: readonly ServiceHealthReason[],
@@ -257,7 +279,7 @@ export async function recoverNodeServices(
       .update(services)
       .set({ health: "ok", healthReason: null })
       .where(and(eq(services.id, r.serviceId), eq(services.health, "degraded")))
-      .returning({ id: services.id });
+      .returning();
     if (!done) continue;
     out.push(r.serviceId);
     await recordAudit(db, {
@@ -268,6 +290,10 @@ export async function recoverNodeServices(
       targetType: "service",
       targetId: r.serviceId,
       metadata: { node_id: nodeId },
+    });
+    await publish(env, done.projectId, {
+      type: "service.updated",
+      service: toApiService(done, null),
     });
   }
   return out;
@@ -288,7 +314,7 @@ export async function recoverNodeServices(
  * @returns What happened.
  */
 export async function rescheduleOfflineNode(
-  env: RefreshEnv,
+  env: RefreshEnv & HealthEnv,
   db: Db,
   nodeId: string,
   now = Date.now(),
@@ -310,7 +336,7 @@ export async function rescheduleOfflineNode(
   const targets = new Set<string>();
   for (const r of await replicasOnNode(db, nodeId)) {
     if (r.stateful) {
-      if (await degradeService(db, r, "node_offline", nodeId)) out.degraded++;
+      if (await degradeService(env, db, r, "node_offline", nodeId)) out.degraded++;
       continue;
     }
     const [lost] = await db

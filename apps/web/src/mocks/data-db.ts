@@ -216,6 +216,7 @@ export function seedData(deploy: DeployDb, now = Date.now()): DataDb {
     icon: "builtin:postgres",
     health: "ok",
     health_reason: null,
+    health_node: null,
     database: { engine: "postgres", version: "18" },
     created_at: now - 6 * DAY,
     updated_at: now - 6 * DAY,

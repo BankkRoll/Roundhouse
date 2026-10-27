@@ -5,9 +5,11 @@
  * caps, and the periodic session, token and membership re-check.
  */
 import { env, introspectWorkflow, runDurableObjectAlarm, SELF } from "cloudflare:test";
+import { createDb } from "@roundhouse/db";
 import { PRESENCE_UPDATES_PER_SECOND, presenceColor } from "@roundhouse/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MAX_SOCKETS_PER_USER, RoomCloseCode } from "../src/durable/project-room";
+import { degradeService, recoverNodeServices } from "../src/lib/moves";
 import { addMember, type Client, eventually, install, ORIGIN } from "./helpers";
 import { createProject, deploy, type Stage, stage, waitForStatus } from "./pipeline-helpers";
 
@@ -299,6 +301,36 @@ describe("realtime messages", () => {
     }
     a.ws.close();
     b.ws.close();
+  });
+
+  it("announces a service turning degraded and recovering, with the server it waits on", async () => {
+    const s = await stage();
+    const d = await deploy(s.owner, s.serviceId, s.envId);
+    await waitForStatus(s.owner, d.id, ["active"]);
+    const sock = await open(s.project.id, s.owner);
+    const db = createDb(env.DB);
+    const nodeId = s.joined.node_id;
+    const replica = {
+      serviceId: s.serviceId,
+      environmentId: s.envId,
+      workspaceId: s.workspaceId,
+    };
+    expect(await degradeService(env, db, replica, "node_maintenance", nodeId)).toBe(true);
+    const degraded = await sock.waitFor(
+      (m) =>
+        m.type === "service.updated" && (m.service as { health: string }).health === "degraded",
+    );
+    expect(degraded.service).toMatchObject({
+      id: s.serviceId,
+      health_reason: "node_maintenance",
+      health_node: { id: nodeId, name: expect.any(String) },
+    });
+    expect(await recoverNodeServices(env, db, nodeId, ["node_maintenance"])).toEqual([s.serviceId]);
+    const recovered = await sock.waitFor(
+      (m) => m.type === "service.updated" && (m.service as { health: string }).health === "ok",
+    );
+    expect(recovered.service).toMatchObject({ health_reason: null, health_node: null });
+    sock.ws.close();
   });
 
   it("sends log lines only to sockets subscribed to them", async () => {
