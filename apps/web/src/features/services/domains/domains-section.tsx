@@ -57,6 +57,7 @@ import { useProjectEnvironment } from "../../projects/use-project-environment";
 import type { ServicePageProps } from "../service-layout";
 import {
   CertificateDetails,
+  CloudflareDetails,
   certificateConcern,
   certificateSummary,
   HstsPanel,
@@ -316,6 +317,7 @@ function DomainRow({
           className="grid gap-5 border-l-2 border-border/70 pl-4 md:ml-7"
         >
           {custom && domain.status === "active" ? <DomainStepper domain={domain} /> : null}
+          <CloudflareDetails domain={domain} />
           <CertificateDetails domain={domain} />
           {showRecords ? null : <RoutingGuidance domain={domain} mesh={mesh} />}
           <HstsPanel domain={domain} canManage={canManage && custom} />

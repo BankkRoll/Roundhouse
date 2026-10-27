@@ -20,6 +20,7 @@ import { LOCAL_APPS_DOMAIN, normalizeHostname, type TlsMode } from "@roundhouse/
 import {
   Badge,
   Button,
+  Checkbox,
   EmptyState,
   SaveBar,
   Select,
@@ -614,6 +615,234 @@ function CloudflareDnsSection({ settings }: { settings: InstanceDomainSettings }
 }
 
 // -----------------------------------------------------------------------------
+// Cloudflare for SaaS
+// -----------------------------------------------------------------------------
+
+/** Why switching to or saving Cloudflare for SaaS was refused, in words. */
+function saasErrorMessage(cause: unknown): string {
+  if (isApiError(cause, "saas_requires_mesh")) {
+    return "Every ingress server must be on a ready private network first (Settings → Platform → Network), since Cloudflare may send a hostname's traffic to any of them.";
+  }
+  if (isApiError(cause, "saas_requires_managed_tls")) {
+    return "Switch the TLS mode to managed first: the control plane issues the origin certificates.";
+  }
+  return saveErrorMessage(cause);
+}
+
+/**
+ * Cloudflare for SaaS (ADR 0009): customers CNAME their hostnames to the zone's
+ * `customers.` name and Cloudflare fronts them. The zone token is write-only.
+ */
+function CloudflareSaasSection({ settings }: { settings: InstanceDomainSettings }) {
+  const save = useSaveInstanceDomains();
+  const switching = useSaveInstanceDomains();
+  const custom = settings.custom_domains;
+  const saas = custom.saas;
+  const saasOn = custom.mode === "cloudflare_saas";
+  const [zoneId, setZoneId] = useState("");
+  const [token, setToken] = useState("");
+  const [enterprise, setEnterprise] = useState(false);
+  const [cloudflareOnly, setCloudflareOnly] = useState(false);
+  const [errors, setErrors] = useState<{ zoneId?: string; token?: string }>({});
+  const [error, setError] = useState<string | null>(null);
+  const enterpriseId = useId();
+  const firewallId = useId();
+  const dirty = zoneId.trim() !== "" || token !== "";
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    const id = zoneId.trim().toLowerCase();
+    const next: typeof errors = {};
+    if (!ZONE_ID.test(id)) next.zoneId = "Enter the 32-character zone ID from the zone's overview.";
+    if (!saas && token.trim().length < 20) next.token = "Enter the API token.";
+    setErrors(next);
+    if (next.zoneId || next.token) return;
+    setError(null);
+    save.mutate(
+      {
+        saas: {
+          zone_id: id,
+          ...(token.trim() ? { api_token: token.trim() } : {}),
+          enterprise,
+          ingress_firewall: cloudflareOnly ? "cloudflare_only" : "off",
+        },
+      },
+      {
+        onSuccess: () => {
+          setZoneId("");
+          setToken("");
+          toast({ title: "Cloudflare for SaaS zone saved", tone: "success" });
+        },
+        onError: (cause) => setError(saasErrorMessage(cause)),
+      },
+    );
+  }
+
+  function setMode(mode: "direct" | "cloudflare_saas") {
+    setError(null);
+    switching.mutate(
+      { custom_domains_mode: mode },
+      {
+        onSuccess: () =>
+          toast({
+            title:
+              mode === "cloudflare_saas"
+                ? "Custom domains now go through Cloudflare for SaaS"
+                : "Custom domains point at the ingress servers again",
+            tone: "success",
+          }),
+        onError: (cause) => setError(saasErrorMessage(cause)),
+      },
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} noValidate aria-label="Cloudflare for SaaS">
+      <SettingsSection
+        title="Cloudflare for SaaS"
+        description="Instead of pointing DNS at your servers, customers CNAME their domains to a name in your Cloudflare zone and Cloudflare fronts them, with its certificates and DDoS protection. Needs managed TLS and every ingress server on the private network."
+        actions={
+          <Badge tone={saasOn ? "success" : "neutral"}>
+            {saasOn ? "Cloudflare for SaaS" : "Direct"}
+          </Badge>
+        }
+      >
+        {saas ? (
+          <>
+            <SettingsRow
+              label="Zone"
+              description={
+                <>
+                  <span className="font-mono">{saas.zone_id}</span>. The token is stored sealed and
+                  never shown.
+                </>
+              }
+            >
+              <span className="font-mono text-sm text-foreground">{saas.zone_name}</span>
+            </SettingsRow>
+            <SettingsRow
+              label="Customers CNAME to"
+              description="What each customer's hostname points at."
+            >
+              <span className="font-mono text-sm text-foreground">{saas.cname_target}</span>
+            </SettingsRow>
+            <SettingsRow
+              label="Fallback origin"
+              description={
+                saas.fallback_errors.length
+                  ? saas.fallback_errors.join(" ")
+                  : "Hostnames serve once it is active."
+              }
+            >
+              <span className="font-mono text-sm text-foreground">
+                {saas.fallback_origin} · {saas.fallback_status ?? "pending"}
+              </span>
+            </SettingsRow>
+            <SettingsRow
+              label="Origin firewall"
+              description="With Cloudflare only, servers admit ports 80 and 443 from Cloudflare's addresses alone."
+            >
+              <span className="text-sm text-foreground">
+                {saas.ingress_firewall === "cloudflare_only" ? "Cloudflare only" : "Off"}
+              </span>
+            </SettingsRow>
+            <SettingsRow
+              label="Custom domains"
+              description={
+                saasOn
+                  ? "Served through Cloudflare. Switching back makes customers point DNS at the servers again."
+                  : "Point at the servers. Switching moves new custom domains to Cloudflare."
+              }
+            >
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={switching.isPending}
+                onClick={() => setMode(saasOn ? "direct" : "cloudflare_saas")}
+              >
+                {saasOn ? "Use direct DNS" : "Use Cloudflare for SaaS"}
+              </Button>
+            </SettingsRow>
+          </>
+        ) : null}
+        <SettingsRow
+          label="Hostnames"
+          description="Cloudflare's plan includes 100 custom hostnames, then $0.10 per hostname a month."
+        >
+          <span className="text-sm text-foreground">
+            {custom.quota.used} of {custom.quota.included} included
+          </span>
+        </SettingsRow>
+        <SettingsField
+          label={saas ? "Replace zone ID" : "Zone ID"}
+          description="The SaaS zone's ID, from its Overview page in Cloudflare."
+          value={zoneId}
+          onChange={(event) => setZoneId(event.target.value)}
+          placeholder="0123456789abcdef0123456789abcdef"
+          error={errors.zoneId}
+          autoComplete="off"
+          inputClassName="font-mono"
+          spellCheck={false}
+        />
+        <SettingsField
+          label="API token"
+          description={
+            saas
+              ? "Stored and never shown. Leave empty to keep it (same zone only)."
+              : "With SSL and Certificates → Edit and DNS → Edit on the zone. Stored write-only."
+          }
+          type="password"
+          value={token}
+          onChange={(event) => setToken(event.target.value)}
+          error={errors.token}
+          autoComplete="new-password"
+          inputClassName="font-mono"
+        />
+        <div className="flex flex-wrap gap-6 py-3">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={enterpriseId}
+              checked={enterprise}
+              onChange={(event) => setEnterprise(event.target.checked)}
+            />
+            <label htmlFor={enterpriseId} className="text-sm text-foreground">
+              Enterprise zone (wildcard hostnames)
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={firewallId}
+              checked={cloudflareOnly}
+              onChange={(event) => setCloudflareOnly(event.target.checked)}
+            />
+            <label htmlFor={firewallId} className="text-sm text-foreground">
+              Admit 80/443 from Cloudflare only
+            </label>
+          </div>
+        </div>
+      </SettingsSection>
+      {error ? (
+        <p role="alert" className="mt-3 text-sm text-danger">
+          {error}
+        </p>
+      ) : null}
+      <SaveBar
+        dirty={dirty}
+        saving={save.isPending}
+        saveLabel={saas ? "Save zone" : "Connect zone"}
+        onDiscard={() => {
+          setZoneId("");
+          setToken("");
+          setErrors({});
+          setError(null);
+        }}
+      />
+    </form>
+  );
+}
+
+// -----------------------------------------------------------------------------
 // Certificates
 // -----------------------------------------------------------------------------
 
@@ -808,6 +1037,7 @@ export function DomainsTlsPage({ workspaceId }: { workspaceId: string }) {
             settings={settings.data}
           />
           <CloudflareDnsSection settings={settings.data} />
+          <CloudflareSaasSection settings={settings.data} />
           <CertificatesSection settings={settings.data} />
         </SettingsStack>
       )}

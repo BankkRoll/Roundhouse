@@ -221,6 +221,61 @@ export const tlsHandlers = [
       tls.cloudflare_dns = null;
       changed.push("cloudflare_dns");
     }
+    if (body.saas) {
+      if (body.saas.api_token?.includes("invalid")) {
+        return apiError(
+          422,
+          "cloudflare_saas_invalid",
+          "The token can't manage custom hostnames on that zone",
+        );
+      }
+      if (!tls.saas && !body.saas.api_token) return invalid("saas.api_token: required");
+      const zoneName = "saas.example.com";
+      tls.saas = {
+        zone_id: body.saas.zone_id,
+        zone_name: zoneName,
+        cname_target: `customers.${zoneName}`,
+        fallback_origin: `origin.${zoneName}`,
+        fallback_status: "active",
+        fallback_errors: [],
+        enterprise: body.saas.enterprise ?? tls.saas?.enterprise ?? false,
+        ingress_firewall: body.saas.ingress_firewall ?? tls.saas?.ingress_firewall ?? "off",
+        updated_at: Date.now(),
+        api_token: body.saas.api_token ?? tls.saas?.api_token ?? "",
+      };
+      changed.push("saas");
+    } else if (body.saas === null && tls.saas) {
+      if (db.deploy.domains.some((d) => d.mode === "cloudflare_saas")) {
+        return apiError(409, "saas_in_use", "Custom domains still use Cloudflare for SaaS");
+      }
+      tls.saas = null;
+      tls.custom_domains_mode = "direct";
+      changed.push("saas");
+    }
+    if (
+      body.custom_domains_mode !== undefined &&
+      body.custom_domains_mode !== tls.custom_domains_mode
+    ) {
+      if (body.custom_domains_mode === "cloudflare_saas") {
+        if (!tls.saas) return invalid("custom_domains_mode: set saas first");
+        if (db.deploy.instance.tls_mode !== "managed") {
+          return apiError(
+            409,
+            "saas_requires_managed_tls",
+            "Cloudflare for SaaS needs managed TLS",
+          );
+        }
+        if (!db.deploy.instance.mesh_enabled) {
+          return apiError(
+            409,
+            "saas_requires_mesh",
+            "Every ingress server must be on a ready private network",
+          );
+        }
+      }
+      tls.custom_domains_mode = body.custom_domains_mode;
+      changed.push("custom_domains_mode");
+    }
     if (body.ingress_hostname !== undefined && body.ingress_hostname !== tls.ingress_hostname) {
       tls.ingress_hostname = body.ingress_hostname;
       changed.push("ingress_hostname");

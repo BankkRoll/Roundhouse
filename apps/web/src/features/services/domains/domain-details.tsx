@@ -112,6 +112,42 @@ function Fact({ term, children }: { term: string; children: ReactNode }) {
  * @param props - The domain.
  * @returns The facts.
  */
+/**
+ * Cloudflare's view of a Cloudflare for SaaS domain (ADR 0009): the custom hostname's
+ * status and certificate status as Cloudflare words them, and its errors verbatim. The
+ * DCV records it asks for are listed with the other DNS records.
+ *
+ * @param props - The domain.
+ * @returns Nothing for a direct-mode domain.
+ */
+export function CloudflareDetails({ domain }: { domain: Domain }) {
+  if (domain.mode !== "cloudflare_saas" || !domain.cf) return null;
+  const { cf } = domain;
+  const active = cf.status === "active" && cf.ssl_status === "active";
+  return (
+    <div className="grid gap-1">
+      <h3 className="text-sm font-medium text-foreground">Cloudflare for SaaS</h3>
+      <dl aria-label="Cloudflare for SaaS" className="divide-y divide-border/50">
+        <Fact term="Hostname">
+          <Badge tone={active ? "success" : "warning"}>{cf.status ?? "pending"}</Badge>
+        </Fact>
+        <Fact term="Certificate">{cf.ssl_status ?? "pending"}</Fact>
+      </dl>
+      {cf.errors.length ? (
+        <ul
+          role="alert"
+          aria-label="Cloudflare errors"
+          className="grid gap-0.5 text-sm text-danger"
+        >
+          {cf.errors.map((e) => (
+            <li key={e}>{e}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 export function CertificateDetails({ domain }: { domain: Domain }) {
   const { tls } = domain;
   const now = Date.now();
