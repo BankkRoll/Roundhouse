@@ -428,7 +428,11 @@
               "preview.expired",
               "preview.closed",
               "preview.deleted",
-              "node.labels_updated"
+              "node.labels_updated",
+              "environment.created",
+              "environment.cloned",
+              "environment.deleted",
+              "environment.promote_proposed"
             ],
             "type": "string"
           },
@@ -1008,7 +1012,17 @@
       "Canvas": {
         "properties": {
           "draft": {
-            "$ref": "#/components/schemas/ChangeSetSummary"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChangeSetSummary"
+              },
+              {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            ]
           },
           "edges": {
             "items": {
@@ -1589,7 +1603,11 @@
               "preview.expired",
               "preview.closed",
               "preview.deleted",
-              "node.labels_updated"
+              "node.labels_updated",
+              "environment.created",
+              "environment.cloned",
+              "environment.deleted",
+              "environment.promote_proposed"
             ],
             "type": "string"
           },
@@ -1982,10 +2000,7 @@
           "created_at",
           "updated_at"
         ],
-        "type": [
-          "object",
-          "null"
-        ]
+        "type": "object"
       },
       "ClearSignInLockout": {
         "properties": {
@@ -2262,6 +2277,41 @@
       },
       "CreateEnvironment": {
         "properties": {
+          "clone": {
+            "properties": {
+              "from_environment_id": {
+                "type": "string"
+              },
+              "services": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "variables": {
+                "default": "all",
+                "enum": [
+                  "all",
+                  "non_secret",
+                  "none"
+                ],
+                "type": "string"
+              },
+              "volumes": {
+                "default": "empty",
+                "enum": [
+                  "empty",
+                  "latest_backup"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "from_environment_id"
+            ],
+            "type": "object"
+          },
           "copy_from_environment_id": {
             "type": "string"
           },
@@ -3632,7 +3682,8 @@
               "template",
               "change_set",
               "migration",
-              "recovery"
+              "recovery",
+              "promote"
             ],
             "type": "string"
           },
@@ -4472,6 +4523,35 @@
           "object",
           "null"
         ]
+      },
+      "EnvironmentDiff": {
+        "properties": {
+          "base_environment_id": {
+            "type": "string"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceComparison"
+            },
+            "type": "array"
+          },
+          "shared_variables": {
+            "items": {
+              "$ref": "#/components/schemas/VariableComparison"
+            },
+            "type": "array"
+          },
+          "target_environment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_environment_id",
+          "target_environment_id",
+          "services",
+          "shared_variables"
+        ],
+        "type": "object"
       },
       "EnvironmentProtection": {
         "properties": {
@@ -6513,7 +6593,8 @@
           },
           "database_seed": {
             "enum": [
-              "empty"
+              "empty",
+              "latest_backup"
             ],
             "type": "string"
           },
@@ -6624,7 +6705,8 @@
           "database_seed": {
             "default": "empty",
             "enum": [
-              "empty"
+              "empty",
+              "latest_backup"
             ],
             "type": "string"
           },
@@ -6904,6 +6986,64 @@
             "type": "object"
           }
         ]
+      },
+      "PromoteEnvironment": {
+        "properties": {
+          "from_environment_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "include": {
+            "default": {
+              "config": true,
+              "image": true,
+              "variables": "non_secret"
+            },
+            "properties": {
+              "config": {
+                "default": true,
+                "type": "boolean"
+              },
+              "image": {
+                "default": true,
+                "type": "boolean"
+              },
+              "variables": {
+                "default": "non_secret",
+                "enum": [
+                  "none",
+                  "non_secret",
+                  "all"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "services": {
+            "anyOf": [
+              {
+                "enum": [
+                  "all"
+                ],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              }
+            ],
+            "default": "all"
+          }
+        },
+        "required": [
+          "from_environment_id"
+        ],
+        "type": "object"
       },
       "ProtectionRule": {
         "properties": {
@@ -7901,6 +8041,76 @@
           "icon",
           "created_at",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "ServiceComparison": {
+        "properties": {
+          "config": {
+            "items": {
+              "properties": {
+                "after": {},
+                "before": {},
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "image": {
+            "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "target": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "base",
+              "target"
+            ],
+            "type": "object"
+          },
+          "presence": {
+            "enum": [
+              "both",
+              "only_base",
+              "only_target"
+            ],
+            "type": "string"
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/VariableComparison"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "service_id",
+          "slug",
+          "presence",
+          "config",
+          "variables",
+          "image"
         ],
         "type": "object"
       },
@@ -9261,6 +9471,36 @@
               "domain_id",
               "hostname",
               "service"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "from_deployment_id": {
+                "type": "string"
+              },
+              "from_environment_id": {
+                "type": "string"
+              },
+              "image": {
+                "type": "string"
+              },
+              "service_id": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "deployment.promote"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service_id",
+              "from_deployment_id",
+              "from_environment_id",
+              "image"
             ],
             "type": "object"
           }
@@ -10636,6 +10876,31 @@
           "version",
           "updated_at",
           "updated_by"
+        ],
+        "type": "object"
+      },
+      "VariableComparison": {
+        "properties": {
+          "change": {
+            "enum": [
+              "added",
+              "removed",
+              "changed",
+              "same"
+            ],
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "change",
+          "secret"
         ],
         "type": "object"
       },
@@ -14117,6 +14382,104 @@
         }
       }
     },
+    "/v1/environments/{environmentId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "confirm",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Delete an environment",
+        "tags": [
+          "environments"
+        ],
+        "x-roundhouse-policy": {
+          "action": "environments:manage",
+          "audit": [
+            "environment.deleted"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
     "/v1/environments/{environmentId}/change-sets": {
       "get": {
         "parameters": [
@@ -14508,6 +14871,112 @@
         "x-roundhouse-policy": {
           "action": "projects:read",
           "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/environments/{environmentId}/promote": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteEnvironment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Propose a promotion",
+        "tags": [
+          "environments"
+        ],
+        "x-roundhouse-policy": {
+          "action": "environments:manage",
+          "audit": [
+            "environment.promote_proposed",
+            "change_set.created"
+          ],
           "auth": "session"
         }
       }
@@ -15553,7 +16022,11 @@
                 "preview.expired",
                 "preview.closed",
                 "preview.deleted",
-                "node.labels_updated"
+                "node.labels_updated",
+                "environment.created",
+                "environment.cloned",
+                "environment.deleted",
+                "environment.promote_proposed"
               ],
               "type": "string"
             }
@@ -19294,10 +19767,112 @@
           "environments"
         ],
         "x-roundhouse-policy": {
-          "action": "projects:manage",
+          "action": "environments:manage",
           "audit": [
-            "project.updated"
+            "environment.created",
+            "environment.cloned"
           ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/projects/{projectId}/environments/diff": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "base",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentDiff"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Compare two environments",
+        "tags": [
+          "environments"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
           "auth": "session"
         }
       }

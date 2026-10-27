@@ -576,7 +576,7 @@ func (f *Fake) workspaceOf(r *http.Request) string {
 	if id := r.PathValue("workspaceId"); id != "" {
 		return id
 	}
-	projectID := cmp.Or(f.previewProjectOf(r), r.PathValue("projectId"))
+	projectID := cmp.Or(f.previewProjectOf(r), f.environmentProjectOf(r), r.PathValue("projectId"))
 	serviceID := r.PathValue("serviceId")
 	if id := f.dataServiceOf(r); id != "" {
 		serviceID = id
@@ -727,6 +727,7 @@ func (f *Fake) routes(mux *http.ServeMux) {
 	f.dataRoutes(mux, handlers)
 	f.cronRoutes(handlers)
 	f.previewRoutes(handlers)
+	f.environmentRoutes(handlers)
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
 	}
