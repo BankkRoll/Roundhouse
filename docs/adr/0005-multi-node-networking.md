@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted; implemented 2026-10-27 (see "Implementation notes").
 - Date: 2026-10-22
 - Phase: 2
 - Protocol: version 4 (see "Rollout and compat")
@@ -686,6 +686,138 @@ New audit actions: `node.drain_started`, `node.drained`, `node.resumed`,
 - Installs where every node is behind NAT get no mesh. They still run,
   with each environment confined to one node.
 
+## Implementation notes
+
+Built (2026-10-27): the address plan, keys and pair paths
+(`apps/api/src/lib/mesh.ts`), `desired_state.mesh` with route-only
+workloads (`lib/desired-state.ts`), `hello.mesh`, `mesh_status` and
+`mesh_key` (`durable/node-connection.ts`), `GET /mesh` and key rotation,
+the agent's WireGuard device, nftables table and private DNS
+(`agent/internal/{mesh,netpol,ingress}`); then cron runs on the mesh, the
+registry over the mesh, drain and offline rescheduling, and the scheduler
+additions. Where the build differs from the decision above:
+
+**Protocol and contracts**
+- **Version.** The mesh shipped at protocol 5 (`MESH_PROTOCOL_VERSION = 5`),
+  not 4: protocol 4 went to sealed environments first (ADR 0014).
+- **Preshared keys** travel as one box per frame (`mesh.psks_sealed`,
+  sealed to the node's X25519 key with AAD `meshPsksAad(node, generation)`)
+  instead of a `preshared_key` per peer, so the frame's plaintext never
+  holds one.
+- **`MeshAddress`** gained `private_domain` and `healthy`, which the
+  agent's private DNS needs to answer names and order replicas.
+
+**Reachability**
+- **NAT inference** is the agent's: `nat: "public"` when `mesh.endpoint` is
+  set, or when an up interface (not Docker's, `wg0`, `rh-dns0` or
+  loopback) holds a global IPv4 that is not RFC 1918, CGNAT or link-local;
+  else `nat`. The control plane then builds the endpoint from the override,
+  or from `CF-Connecting-IP` and the listen port for a public node. A node
+  is public for path selection exactly when it has an endpoint.
+- **Both public** pairs get each other's endpoint and no keepalive; the
+  roaming-only rule applies to the public side of a public/NAT pair.
+
+**Isolation and DNS (agent)**
+- The `fwd` chain starts with `ct state established,related` (marked
+  and accepted), so replies of cross-node connections pass before
+  `iifname "wg0" drop`; `wg0` traffic with a source outside the supernet
+  is dropped in `fwd` and `in`.
+- **Names other than `*.internal`** are forwarded to the host's resolvers
+  for local askers, not `REFUSED`: `HostConfig.Dns` replaces Docker's
+  upstreams, so a refusal would leave containers without public DNS.
+- **`ROUNDHOUSE_PRIVATE_DOMAIN` keeps the three-label form**
+  `<service>.<environment>.internal`. The private DNS answers both forms
+  (the three-label one inferring the project from the asker), so nothing
+  that already reads the variable breaks; the four-label form is what the
+  mesh addresses carry.
+
+**Cross-node ingress**
+- A service with a local replica also gets a route-only workload listing
+  its replicas on other nodes; the agent serves them only while no local
+  replica is healthy, so an ingress node fails over instead of answering
+  "no route".
+
+**Data model**
+- **No `ended_at`.** A mesh IP is cleared when its deployment stops being
+  live, and `placements_node_mesh_ip_uq` is unique on `(node_id, mesh_ip)`
+  where `mesh_ip` is set. A move (drain, offline rescheduling) inserts a
+  second placement for the replica (`replaces_workload_id`) and **deletes**
+  the old row once the new one is healthy; `placements_deployment_replica_uq`
+  became a plain index. No reader needs an `ended_at IS NULL` filter; the
+  ones that collapse replicas (deployment health) count a replica healthy
+  when either of its rows is.
+- **Placement-only states** are `lost` (rescheduled away from an offline
+  node) and `parked` (stopped by a forced drain). Desired state, serving,
+  the mesh and the scheduler leave both out; agent reports never overwrite
+  them.
+- Rotation state lives on the node row (`wg_key_epoch`, `wg_key_next_epoch`,
+  `mesh_rotate_*`, `mesh_activate_epoch`) and the reported mesh state in
+  `mesh_mode`, `mesh_endpoint_override`, `mesh_listen_port`,
+  `mesh_docker_firewall`, `mesh_accept_fwmark`, `mesh_error` and
+  `mesh_status_at`. `mesh_paths` keeps each side's last report (`sides`)
+  and `configured_at`. Everything is in migration 0021.
+
+**Cron runs**
+- A run placed on a meshed node gets `cron_runs.mesh_ip` from the node's
+  /24, live while it is `starting` or `running` (a partial unique index
+  frees it the moment it ends). Runs take addresses from the top of the
+  range down and replicas from the bottom up; a collision found after the
+  write gives the run's address back. The `job_run` workload carries
+  `mesh_ip` and `private_dns`; every meshed node lists the run's address
+  under its cron service's private name, and is refreshed when the run
+  starts and ends. Runs follow the environment span rule like replicas.
+
+**Registry over the mesh**
+- **Pull credentials** live on the node row: user `node-<ULID lowercase>`,
+  32 random bytes sealed under the KEK (`registry_pull`, field = node ID),
+  and the bcrypt hash computed once with `bcryptjs` when the password is
+  made. Key rotation re-seals them.
+- **One builder per workspace** with filesystem storage: the oldest
+  builder-capable node is the designated builder; only it gets builds and
+  runs `primary` (with `mesh_listen` and `pull_users` once other meshed
+  nodes exist). Other builder-capable nodes pull like any node. The 409
+  `registry_requires_s3` is answered where a builder is chosen by the
+  operator: provisioning a builder server while the workspace already has
+  one, and going back to filesystem storage while a workspace has two. A
+  hand-joined agent reports its capability itself, so it is never refused,
+  only not designated.
+- **S3 storage** is the `registry_storage` instance setting
+  (`GET/PUT/DELETE /v1/instance/registry-storage`, instance admins, fresh
+  session) with both secrets sealed and write-only, re-wrapped by key
+  rotation; both key pairs are probed before saving. Builders run `primary`
+  on the bucket with the read-write keys; other nodes at protocol 5 run
+  `replica` with the read-only keys.
+- **`reachesRegistry`** follows the rule above, reading handshakes from
+  `mesh_paths`: a relayed pair counts when both legs (node to relay, relay
+  to builder) handshook within 180 s.
+
+**Node lifecycle**
+- **Drain progress** is a `node_drains` row (moves, blocked services,
+  status `running | blocked | failed | completed | cancelled`), read with
+  `GET /v1/workspaces/{ws}/nodes/{id}/drain`. A move that finds no node or
+  never becomes healthy ends the drain `failed` with the node still
+  `draining` (the old replica keeps serving); resume cancels a running
+  drain.
+- **Forced drains park** volume services' replicas instead of removing
+  them, and mark the services `degraded` (`node_maintenance`); resume
+  restarts them on the node that holds their data and clears the health.
+- **Only settled deployments move** (`active`, `crashed`); a deployment
+  still rolling out decides its own fate.
+- **Offline rescheduling** runs once per outage (`nodes.rescheduled_at`,
+  cleared at the next hello), from the node Durable Object's alarm at
+  `OFFLINE_AFTER_MS + RESCHEDULE_AFTER_MS` of silence. A returning node's
+  `node_offline` services recover at its hello; its `lost` rows go when
+  their replacement is healthy or the agent reports them `removed`. The
+  alert ADR 0008 would fire is the `service.degraded` audit entry for now.
+- **Zones.** The zone term counts the node's own replicas too, as the text
+  says ("+0.5 per same-service replica in the same zone").
+
+**Not built here**
+- The dashboard parts (Network view, drain buttons and progress, degraded
+  badges) and the CLI belong to the web and CLI work.
+- The relayed-pair and key-rotation integration tests, and the
+  `e2e/phase2` real-stack run.
+
 ## Open questions
 
 - Should a Roundhouse-run relay (UDP over WebSocket through the node DO) be
@@ -695,7 +827,8 @@ New audit actions: `node.drain_started`, `node.drained`, `node.resumed`,
 - IPv6 inside the mesh: the address plan is IPv4 only. IPv6 endpoints for
   the outer tunnel are supported.
 - Does the registry's `proxy` mode accept an `http://` `remoteurl` on every
-  version we pin? Confirm in the integration test before relying on it.
+  version we pin? The control plane sends `http://<builder .1>:5000`; the
+  agent's two-node integration test is where it is confirmed.
 - Once the nftables firewall backend leaves experimental, re-verify the
   mark override on each Docker minor release. CI runs the isolation test
   against both backends.

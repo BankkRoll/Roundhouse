@@ -96,6 +96,7 @@ the first deploy; there are no IDs to copy.
 | `VOLUME_MIGRATION_WORKFLOW` | Workflow         | One move of a volume between nodes per instance                         |
 | `CERT_WORKFLOW`             | Workflow         | One certificate order per attempt (managed TLS, ADR 0009)               |
 | `CRON_RUN_WORKFLOW`         | Workflow         | One cron run per instance (ADR 0010)                                    |
+| `DRAIN_WORKFLOW`            | Workflow         | One drain of a server per instance (ADR 0005)                           |
 | `AUTH_LIMITER`              | Rate limit       | 10 a minute per IP on secret-accepting endpoints and agent connects     |
 | `WEBHOOK_LIMITER`           | Rate limit       | 300 a minute per IP on the GitHub webhook receiver                      |
 | `MCP_LIMITER`               | Rate limit       | 60 a minute per token on MCP tool calls                                 |
@@ -105,8 +106,10 @@ the first deploy; there are no IDs to copy.
 Two cron triggers run in the same Worker: hourly retention (`17 * * * *`),
 which also applies backup retention, and a minute tick that seals the audit
 chain, checks custom domains, starts certificate orders and renewals (managed
-TLS), starts scheduled backups and sends volume deletions past their grace
-period.
+TLS), starts scheduled backups, sends volume deletions past their grace
+period, moves mesh key rotations along and, in Cloudflare for SaaS mode,
+keeps the origin records, the fallback origin and Cloudflare's IP ranges
+current.
 
 ### Stored in the database, not in the environment
 
@@ -137,6 +140,17 @@ Settings → Domains & TLS holds the TLS settings (ADR 0009):
 - **Ingress hostname.** The name customers CNAME their domains to, kept by
   you as A/AAAA records of the ingress servers. Without it they CNAME to the
   service's generated hostname.
+- **Custom domains mode** (`custom_domains_mode`, `direct` by default).
+  `cloudflare_saas` serves new custom domains through Cloudflare for SaaS
+  ([details](cloudflare-for-saas.md)). It needs the `saas` setting: a SaaS
+  zone ID and an API token with SSL and Certificates → Edit and DNS → Edit on
+  it (sealed, write-only), `enterprise` (wildcard custom hostnames) and
+  `ingress_firewall` (`off`, or `cloudflare_only` to admit HTTP and HTTPS
+  only from Cloudflare's published ranges, re-read daily). Switching to it
+  needs the `managed` TLS mode and every ingress server on a ready mesh.
+  The control plane writes `origin.<zone>`, `origin-<workspace>.<zone>`
+  and `customers.<zone>` in that zone itself; customers CNAME to
+  `customers.<zone>`.
 
 Settings → Platform → Network holds the private network between servers
 (ADR 0005):
@@ -150,6 +164,26 @@ Settings → Platform → Network holds the private network between servers
 - **Supernet** (`mesh_supernet`, default `10.200.0.0/16`). A private
   `10.x.0.0/16`; each server gets a `/24` of it. It cannot change once a
   server has joined.
+
+Settings → Platform → Registry holds where builds are stored
+(`registry_storage`, ADR 0005):
+- **Filesystem** (the default). Each workspace's first builder keeps
+  images on its disk, and only it builds. With the mesh on, every other
+  server pulls through it over WireGuard with its own generated credential;
+  without the mesh, only the builder can run git-built services. Provisioning
+  a second builder for a workspace is refused (`registry_requires_s3`).
+- **S3** (an S3-compatible bucket, R2 included). Builders write with a
+  read-write key pair; every other server reads with a read-only pair. Both
+  secrets are sealed and write-only. Any number of builders, and no mesh
+  needed. Images built before the switch stay on the builders' disks:
+  redeploy to move a service's image into the bucket.
+
+A server can be drained (Servers → server → Drain, or
+`POST /v1/workspaces/{ws}/nodes/{id}/drain`): its stateless replicas move
+to other servers and it ends in `maintenance`; services with a volume block
+the drain unless it is forced. A server silent for 30 s is `offline`; two
+minutes later its stateless replicas are rescheduled elsewhere and services
+with data on it are marked `degraded`.
 
 Every ingress server runs Caddy. Without the mesh a server routes a hostname
 only to replicas running on it, so DNS for a custom domain must point at
@@ -225,8 +259,8 @@ Unknown keys are rejected. An annotated example is
 | `builder`             | no       | `true` on build nodes (`join --builder`)                                                         |
 | `insecure`            | no       | `true` allows plaintext to a non-loopback control plane (`join --insecure`). Testing only        |
 | `ingress.certs_dir`   | no       | Where managed-TLS certificates are written for Caddy. Default `/var/lib/roundhouse-certs`        |
-| `mesh.mode`           | no       | `auto` (default: kernel WireGuard, else userspace), `kernel`, `userspace` or `off`              |
-| `mesh.listen_port`    | no       | UDP port of `wg0`. Default `51820`                                                                |
+| `mesh.mode`           | no       | `auto` (default: kernel WireGuard, else userspace), `kernel`, `userspace` or `off`               |
+| `mesh.listen_port`    | no       | UDP port of `wg0`. Default `51820`                                                               |
 | `mesh.endpoint`       | no       | `host:port` peers reach this server at, when only a port forward makes it reachable              |
 
 The secret files live in `/var/lib/roundhouse` (`--data-dir` to change it).

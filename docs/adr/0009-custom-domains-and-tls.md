@@ -501,26 +501,57 @@ agent's certificate store. Where the build differs from the decision above:
   `PUBLIC_ORIGIN` (422 `managed_tls_unavailable` otherwise).
 - **HTTPS probe.** Kept only as the fallback for servers older than
   `CERTS_PROTOCOL_VERSION`, which send no `cert_status`.
-- **Cloudflare for SaaS** is not built; see
-  [the implementation spec](../cloudflare-for-saas.md). The mesh removed
-  the routing blocker (any meshed, ready ingress server can be the
-  fallback origin); the origin firewall chain, the fake Cloudflare API and
-  the open questions remain.
+- **Cloudflare for SaaS** is built (2026-10-27); see
+  [how it works](../cloudflare-for-saas.md). Where it differs from the
+  section above:
+  - **Gates.** It needs the `managed` TLS mode (409
+    `saas_requires_managed_tls`) and every ingress server of the install
+    meshed, ready, online and with a public IP (409 `saas_requires_mesh`):
+    Cloudflare may send any hostname to any server in the origin record.
+  - **One origin per workspace.** Besides the fallback origin
+    `origin.<zone>`, each workspace gets `origin-<workspace>.<zone>` with
+    its own ingress servers, and its hostnames are created with it as
+    `custom_origin_server`. With one shared fallback, a server would get
+    hostnames of workspaces it can't route (workspaces never share servers).
+  - **No setup workflow.** Setup writes the records and sets the fallback
+    origin in the request; the minute tick follows the fallback until
+    `active` (and sets it again after a failed setup), rewrites origin
+    records when the eligible servers change, and re-reads Cloudflare's IP
+    ranges daily. `SAAS_SETUP_WORKFLOW` was not needed.
+  - **Data model.** `domains` gains `cf_custom_hostname_id`, `cf_status`,
+    `cf_ssl_status`, `cf_errors` and `cf_dcv` (migration 0021); the zone,
+    sealed token, fallback state and last written origin records live in the
+    `saas` instance setting, the mode in `custom_domains_mode`, the ranges
+    in `cloudflare_ips`.
+  - **Removal fails closed.** A domain whose custom hostname Cloudflare
+    can't delete stays (502 `cloudflare_unavailable`), so nothing is left
+    billing and pointing at the install.
+  - **Origin firewall.** `desired_state.ingress.allowed_sources` (already
+    in protocol 6) carries the ranges; the agent enforces them in
+    `inet roundhouse`.
 - **Tests.** The order pipeline runs against Pebble
   (`apps/api/test-node`) and against an in-process CA in the Workers
   suite. Cross-node routing is covered by the mesh tests (API unit tests
   for route-only workloads and the agent's two-node integration test).
 
+## Decided after the fact
+
+- **Apex hostnames in SaaS mode** are accepted, with a warning on the
+  routing record that they work only with CNAME flattening or ALIAS at the
+  customer's DNS provider, as Cloudflare's own documentation says (it calls
+  apex A records "not a supported setup"). The live check before release
+  covers a flattened apex.
+- **Authenticated Origin Pulls** are not in v1. Full (strict) already
+  binds Cloudflare's connection to a certificate for the hostname, and with
+  `ingress_firewall: "cloudflare_only"` only Cloudflare's ranges reach
+  80/443. AOP would also stop another Cloudflare account from reaching the
+  origin through Cloudflare's ranges; it needs Cloudflare's client CA in
+  Caddy's TLS connection policy, and is the next step if that matters.
+
 ## Open questions
 
-- Should SaaS-mode origins use Authenticated Origin Pulls in addition to
-  Full (strict)? It costs nothing on the edge, but the agent would need
-  Cloudflare's client CA in Caddy's TLS connection policy.
 - Should `www` ↔ apex redirects be offered as a domain type? Users ask for
   it; it is a small Caddy handler.
-- Is apex flattening actually reliable for Cloudflare for SaaS custom
-  hostnames, given that the docs call A records unsupported? This needs a
-  live check.
 - Short-lived (6-day) certificates would remove revocation concerns, at
   the cost of constant distribution. Revisit once lifetimes drop to 45
   days in 2028.

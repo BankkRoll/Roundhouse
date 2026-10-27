@@ -1,156 +1,160 @@
-# Cloudflare for SaaS custom domains: implementation spec
+# Cloudflare for SaaS custom domains
 
-Status: not implemented. This spec turns ADR 0009 ("Custom domains:
-Cloudflare for SaaS mode") into a buildable plan, and records why it was
-not built together with the direct mode and `managed` TLS, and what the
-WireGuard mesh (ADR 0005, built 2026-10-27) changed.
+Status: implemented (2026-10-27). This page describes how ADR 0009's
+"Cloudflare for SaaS mode" works as built, and what it needs. The control
+plane side is `apps/api/src/lib/domains/saas.ts`; the origin firewall is the
+agent's `inet roundhouse` table (`agent/internal/netpol`).
 
-## What the mesh solved, and what still waits
+In this mode a customer points their hostname at Cloudflare instead of at
+the ingress servers. Cloudflare terminates TLS at its edge, issues the edge
+certificate, absorbs attacks, and connects to the install's servers with
+the customer's hostname as SNI and `Host`.
 
-1. **Routing: solved, with a precondition.** The fallback origin is a
-   proxied record with A/AAAA records of _every_ ingress server, so
-   Cloudflare may connect to any of them. With the mesh on, every meshed,
-   ready ingress server of a workspace routes every hostname of it: a
-   service without a local replica arrives as a route-only workload whose
-   upstreams are its replicas' mesh IPs (`lib/desired-state.ts`,
-   `routeWorkloads`). A server that isn't on the mesh, or isn't ready,
-   still routes only its own replicas. So the SaaS mode must stay refused
-   with 409 `saas_requires_mesh` unless `mesh_enabled` is on and every
-   ingress server named in `origin.<zone>` is meshed and ready; the
-   record should name only such servers (`servingNodes` in
-   `lib/domains/serving.ts` already computes them), and be rewritten when
-   readiness changes (the `mesh_status` handler refreshes on readiness
-   transitions, which is the hook to use).
-2. **Origin firewall: the table exists, the chain doesn't.** The agent
-   now owns an `inet roundhouse` nftables table (`agent/internal/netpol`,
-   replaced atomically on every change, verified every 30 s). The
-   `cloudflare_only` rule belongs there as an `input`-hook chain at
-   priority `filter - 1`: accept `tcp dport { 80, 443 }` from a
-   `cloudflare` set (IPv4 and IPv6, from `desired_state.ingress.allowed_sources`),
-   from loopback and from `@nodes` over `wg0`, and drop the rest of 80/443.
-   A drop in our table is final, so Docker's rules can't undo it; the
-   control-plane connection is outbound and unaffected. Still to design:
-   the protocol field (an `IngressSettings` addition gated on a protocol
-   version), how a server without the table (agent below
-   `MESH_PROTOCOL_VERSION`) is refused, and the daily refresh of
-   Cloudflare's ranges.
-3. **Test doubles: still missing.** The ADR's tests use
-   `e2e/lib/fake-cloudflare.mjs` and recorded fixtures shared with ADR
-   0011. Neither exists. The custom hostname, fallback origin and DNS
-   record endpoints need a fake with the documented status sequences before
-   any of the API below is written.
-4. **Open questions: still open.** Whether apex hostnames work through
-   CNAME flattening (Cloudflare calls A records "not a supported setup")
-   and whether origins should require Authenticated Origin Pulls.
+## What it needs
 
-Items 2 to 4, plus the setup workflow and the dashboard below, are the
-remaining work; none of them depends on anything else unbuilt.
+- **A SaaS zone** in the operator's Cloudflare account, on a plan with
+  Cloudflare for SaaS, and an API token with SSL and Certificates → Edit and
+  DNS → Edit on that zone.
+- **The `managed` TLS mode.** The zone runs Full (strict), so each server
+  presents a certificate for the custom hostname. The control plane issues
+  it over HTTP-01 (Cloudflare passes `/.well-known/acme-challenge/` through
+  for tokens it did not issue) and hands it to every ingress server.
+  Otherwise: 409 `saas_requires_managed_tls`.
+- **The mesh, ready on every ingress server.** Cloudflare may send a
+  hostname's traffic to any server in the origin record, so every ingress
+  server must route every hostname of its workspace, which only meshed,
+  ready servers do (ADR 0005, route-only workloads). Every live ingress
+  server of the install must be meshed, ready, online, at
+  `CERTS_PROTOCOL_VERSION` and have a public IP. Otherwise: 409
+  `saas_requires_mesh`, naming each server and why.
 
-## What it builds on
+## Setting it up
 
-Everything below already exists and is reused unchanged:
-- The ownership TXT `_roundhouse.<host>` and the checker schedule
-  (`apps/api/src/lib/domains/check.ts`). The ADR keeps the TXT mandatory in
-  SaaS mode as well.
-- The `managed` certificate pipeline (`apps/api/src/lib/certificates`):
-  the origin certificate for each custom hostname is issued over HTTP-01
-  and distributed to every ingress server. Cloudflare passes
-  `/.well-known/acme-challenge/` through to the origin for tokens it did not
-  issue.
-- The Cloudflare API client pattern in
-  `apps/api/src/lib/certificates/cloudflare-dns.ts` (injectable transport,
-  error messages that are safe to show).
+`PUT /v1/instance/domains` (Settings → Domains & TLS; instance admins, a
+fresh browser session):
 
-## Data model (the next migration after 0021)
-
-```sql
--- domains.mode already exists ('direct' | 'cloudflare_saas').
-ALTER TABLE domains ADD COLUMN cf_custom_hostname_id TEXT;
-ALTER TABLE domains ADD COLUMN cf_status TEXT;
-ALTER TABLE domains ADD COLUMN cf_ssl_status TEXT;
-ALTER TABLE domains ADD COLUMN cf_errors TEXT; -- JSON string[]
-ALTER TABLE domains ADD COLUMN cf_dcv TEXT;    -- JSON records
+```json
+{
+  "custom_domains_mode": "cloudflare_saas",
+  "saas": {
+    "zone_id": "<32 hex>",
+    "api_token": "<token>",
+    "enterprise": false,
+    "ingress_firewall": "off"
+  }
+}
 ```
 
-The instance setting `saas` is
-`{ zone_id, zone_name, api_token (sealed, field api_token), cname_target, fallback_origin, enterprise: boolean, ingress_firewall: "off" | "cloudflare_only" }`.
-`api_token` is added to `INSTANCE_SECRET_FIELDS` so key rotation re-wraps
-it.
+1. The token is checked against the zone: the zone, its custom hostnames
+   and its DNS records must all be readable (422 `cloudflare_saas_invalid`).
+   It is sealed under the master key (setting `saas`, field `api_token`),
+   never returned, never audited, and re-wrapped by key rotation.
+2. The gates above run.
+3. The control plane writes proxied records in the SaaS zone:
+   - `origin.<zone>`: A/AAAA of every eligible ingress server of the
+     install. This is the fallback origin.
+   - `origin-<workspace>.<zone>`: A/AAAA of that workspace's eligible
+     ingress servers. Each custom hostname is created with it as
+     `custom_origin_server`, so a hostname only ever reaches its own
+     workspace's servers (workspaces never share servers).
+   - `customers.<zone>`: CNAME to `origin.<zone>`. Customers CNAME to it.
+4. `PUT /zones/{zone}/custom_hostnames/fallback_origin` with
+   `origin.<zone>`. Activation takes minutes; the minute tick reads it
+   until Cloudflare reports `active`, and sets it again if setup failed at
+   Cloudflare.
 
-## API
+`GET /v1/instance/domains` reports `custom_domains`: the mode, the zone
+(without its token), `cname_target`, `fallback_origin`, the fallback's
+status and errors, and `quota: { used, included: 100 }` for the "N of 100
+included hostnames used; then $0.10/hostname/month" meter.
 
-- `GET /v1/instance/domains` gains `custom_domains: { mode: "direct" | "cloudflare_saas", saas: {...without token} | null, quota: { used, included: 100 } }`.
-- `PUT /v1/instance/domains` accepts `custom_domains_mode` and
-  `saas: { zone_id, api_token, enterprise?, ingress_firewall? } | null`.
-  Switching to `cloudflare_saas`:
-  1. Checks the token on the zone (`GET /zones/{id}`), with SSL and
-     Certificates → Edit and DNS → Edit; 422 `cloudflare_saas_invalid`
-     otherwise.
-  2. Creates or updates the proxied records `origin.<zone>` (A/AAAA of
-     every ingress server, rewritten whenever the set of ingress servers
-     changes) and `customers.<zone>` (CNAME to `origin.<zone>`).
-  3. `PUT /zones/{id}/custom_hostnames/fallback_origin`, then polls
-     `GET` on it until `status: "active"`, from a workflow
-     (`SAAS_SETUP_WORKFLOW`), since activation takes minutes.
-  4. Refused with 409 `saas_requires_mesh` unless the mesh is on and
-     every ingress server is meshed and ready (see item 1 above).
-- Adding a domain in SaaS mode:
-  1. `POST /zones/{id}/custom_hostnames` with
-     `{ hostname, ssl: { method: "http", type: "dv", settings: { min_tls_version: "1.2" } } }`,
-     then `GET` it, because the POST response may omit the DCV records.
-     Stores `cf_custom_hostname_id` and `cf_dcv`.
-  2. Wildcards: 422 `wildcard_requires_enterprise` unless `saas.enterprise`.
-  3. Apex hostnames are accepted with a warning that they need CNAME
-     flattening or ALIAS at the customer's DNS provider.
-- Removing a domain deletes the custom hostname
-  (`DELETE /zones/{id}/custom_hostnames/{cf_id}`; 404 counts as deleted).
-- `GET /v1/domains/{id}` returns
-  `cf: { status, ssl_status, errors }` and records with purpose `cf_dcv`.
+`saas: null` removes the zone and returns to `direct`; it is refused with
+409 `saas_in_use` while any custom domain is still served through it.
+Existing domains keep their mode when `custom_domains_mode` changes.
 
-## State machine
+## Adding a domain
 
-The checker polls `GET /custom_hostnames/{id}` on the direct-mode schedule,
-at most 200 hostnames a minute (Cloudflare allows 1,200 requests per 5
-minutes per token), and maps:
+In SaaS mode, `POST /v1/services/{id}/domains` (and change sets) does:
+1. `POST /zones/{zone}/custom_hostnames` with
+   `{ hostname, ssl: { method: "http", type: "dv", settings: { min_tls_version: "1.2" } }, custom_origin_server: "origin-<workspace>.<zone>" }`,
+   then `GET` it, because the create answer may omit the validation
+   records. A Cloudflare failure is 502 `cloudflare_unavailable` and
+   nothing is stored.
+2. Stores `cf_custom_hostname_id`, `cf_status`, `cf_ssl_status`,
+   `cf_errors` and `cf_dcv`, with `mode: "cloudflare_saas"`.
+3. Wildcards: 422 `wildcard_requires_enterprise` unless `saas.enterprise`.
+4. Apex hostnames are accepted. The CNAME record's note warns that this
+   works only with CNAME flattening or ALIAS at the customer's DNS provider
+   (Cloudflare calls apex A records an unsupported setup).
 
-| Cloudflare                                    | Ownership TXT | Domain `status`                               |
-| --------------------------------------------- | ------------- | --------------------------------------------- |
-| `status` pending, any `ssl.status`            | any           | `pending_dns`                                 |
-| `status` active, `ssl.status` not active      | missing       | `pending_verification`                        |
-| `status` active, `ssl.status` not active      | ok            | `issuing` (routes go out; origin cert issued) |
-| both active, origin certificate on every node | ok            | `active`                                      |
-| `status` blocked/moved/deleted, or 72 h pass  | any           | `failed` with `cf.errors`                     |
+The domain's `records` ask for:
+- `CNAME <host> → customers.<zone>` (`routing`);
+- the ownership TXT `_roundhouse.<host>` (`ownership`), still required:
+  routing on the servers trusts only the control plane's verification;
+- Cloudflare's pre-validation records (`cf_dcv`): the
+  `ownership_verification` TXT and any certificate TXT, optional, for a
+  cutover without downtime.
+
+`GET /v1/domains/{id}` also returns `mode` and
+`cf: { status, ssl_status, errors }`, Cloudflare's words for the customer.
+
+Removing a domain deletes its custom hostname first (404 counts as
+deleted). Any other failure is 502 `cloudflare_unavailable` and the domain
+stays, so a hostname is never left billing and pointing at the install.
+
+## Checks
+
+The domain checker polls `GET /custom_hostnames/{id}` on the direct-mode
+schedule (at most `DOMAIN_CHECK_BATCH` domains a minute, far under
+Cloudflare's 1,200 requests per 5 minutes per token), resolves the
+ownership TXT, and maps:
+
+| Cloudflare                                              | Ownership TXT | Domain `status`                     |
+| ------------------------------------------------------- | ------------- | ----------------------------------- |
+| `status` pending, any `ssl.status`                      | any           | `pending_dns`                       |
+| `status` active                                         | missing       | `pending_verification`              |
+| `status` active                                         | ok            | verified, `issuing` (routes go out) |
+| `ssl.status` active, origin certificate on every server | ok            | `active`                            |
+| `status` blocked/moved/deleted, or 72 h pass            | any           | `failed` with `cf.errors`           |
 
 `verification_errors` and `ssl.validation_errors` are copied into
-`cf.errors` verbatim (they are Cloudflare's words for the customer).
+`cf.errors` verbatim. A Cloudflare outage never fails a domain; the check
+retries with backoff. The certificate pipeline moves a SaaS domain to
+`active` only once Cloudflare's edge certificate is active too.
 
-## Agent
+## Origin records over time
 
-- `desired_state.ingress.allowed_sources` carries Cloudflare's published
-  IPv4 and IPv6 ranges (fetched daily from `https://api.cloudflare.com/client/v4/ips`)
-  when `ingress_firewall` is `cloudflare_only`.
-- The agent admits 80/443 only from those ranges, in its own chain, with a
-  final drop for the rest of 80/443. Loopback and the control-plane
-  connection (outbound) are unaffected.
+The minute tick recomputes the eligible servers and rewrites only the
+records whose servers changed (the last written set is kept in the
+setting), so a server that joins, leaves or stops being ready is added or
+dropped within a minute. A record with no eligible server left keeps its
+last addresses: stale addresses beat none while a server is briefly
+unready.
 
-## Dashboard
+## Origin firewall
 
-- Settings → Domains & TLS: the mode switch, SaaS zone and token
-  (write-only), the "N of 100 included hostnames used; then
-  $0.10/hostname/month" meter, and the fallback origin's state.
-- Domain details: the DCV records with copy buttons and Cloudflare's
-  status and errors.
+With `ingress_firewall: "cloudflare_only"`, the control plane fetches
+Cloudflare's published ranges (`GET https://api.cloudflare.com/client/v4/ips`,
+no token) when the setting is turned on (422 `cloudflare_saas_invalid` if
+it can't) and then daily, keeps the last good list if a fetch fails or
+returns nothing, and sends them in `desired_state.ingress.allowed_sources`
+to every server at `CERTS_PROTOCOL_VERSION`. The agent admits TCP 80/443
+only from those ranges, from loopback and from other servers over `wg0`, in
+an input chain of `inet roundhouse` at priority `filter - 1`, and drops the
+rest of 80/443 for IPv4 and IPv6. A drop in that table is final, so
+Docker's rules can't undo it. The control-plane connection is outbound and
+unaffected.
 
 ## Tests
 
-- A fake Cloudflare API covering custom hostnames, the fallback origin and
-  DNS records, with the documented status sequences
-  (`pending → active`, DCV records appearing only on `GET`).
-- Unit tests for the state table above, the rate budget and the quota
-  meter.
-- An e2e run against the fake API on the two-node mesh stack
-  (`e2e/phase3`): a custom hostname goes `pending → active`, the
-  fallback origin is set, the dashboard shows the DCV records, and a
-  request reaching the server without the replica is served over the mesh.
+- `apps/api/test/saas.test.ts` runs against an in-process fake of the
+  Cloudflare API (`apps/api/test/fake-cloudflare.ts`) with the documented
+  status sequences: `pending → active` for hostnames and the fallback
+  origin, validation records only on `GET`, 404 on delete counting as
+  deleted. It covers the state table, the gates, setup, record moves, the
+  hostname lifecycle, failure handling and the firewall ranges.
+- `e2e/lib/fake-cloudflare.mjs` is the same fake as an HTTP server for
+  end-to-end runs. Pointing a running control plane at it needs an
+  override of the API base, which does not exist yet.
 - Live verification on a maintainer account before release
-  (`scripts/verify-domains-live.mjs`), as the ADR requires.
+  (`scripts/verify-domains-live.mjs`), as ADR 0009 requires, is still owed.
