@@ -288,6 +288,49 @@ describe("removing a node", () => {
   });
 });
 
+describe("node labels", () => {
+  it("replaces a server's labels for nodes:manage, validates them and audits the change", async () => {
+    const { owner, workspaceId } = await install();
+    const joined = await joinNode(owner, workspaceId);
+    const path = `/v1/workspaces/${workspaceId}/nodes/${joined.node_id}/labels`;
+    const put = (labels: Record<string, string>, c = owner) =>
+      c.json<{ labels: Record<string, string> }>(path, { method: "PUT", json: { labels } });
+
+    const saved = await put({ pool: "untrusted", "example.com/zone": "eu-1" });
+    expect(saved.status).toBe(200);
+    expect(saved.body.labels).toEqual({ pool: "untrusted", "example.com/zone": "eu-1" });
+    const listed = await owner.json<{ nodes: { id: string; labels: Record<string, string> }[] }>(
+      `/v1/workspaces/${workspaceId}/nodes`,
+    );
+    expect(listed.body.nodes[0]!.labels).toEqual(saved.body.labels);
+
+    expect((await put({ Pool: "x" })).status).toBe(400);
+    expect((await put({ pool: "a b" })).status).toBe(400);
+    expect(
+      (await put(Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`k${i}`, "v"])))).status,
+    ).toBe(400);
+    const member = await addMember(owner, workspaceId, "member@example.com", "member");
+    expect((await put({}, member)).status).toBe(403);
+    expect((await put({}, owner)).body.labels).toEqual({});
+    expect(
+      (
+        await owner.json(`/v1/workspaces/${workspaceId}/nodes/node_nope/labels`, {
+          method: "PUT",
+          json: { labels: {} },
+        })
+      ).status,
+    ).toBe(404);
+
+    const audit = await env.DB.prepare(
+      "SELECT metadata FROM audit_logs WHERE action = 'node.labels_updated' ORDER BY seq",
+    ).all<{ metadata: string }>();
+    expect(audit.results.map((r) => JSON.parse(r.metadata).after)).toEqual([
+      { pool: "untrusted", "example.com/zone": "eu-1" },
+      {},
+    ]);
+  });
+});
+
 describe("install.sh", () => {
   it("is served with this control plane's URL substituted", async () => {
     const res = await call("/install.sh");

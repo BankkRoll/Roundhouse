@@ -145,6 +145,7 @@ export const AUDIT_ACTIONS = [
   "preview.expired",
   "preview.closed",
   "preview.deleted",
+  "node.labels_updated",
 ] as const;
 
 /** An audited action name. */

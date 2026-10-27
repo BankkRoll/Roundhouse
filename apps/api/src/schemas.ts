@@ -195,6 +195,11 @@ export const NodeSchema = z
      */
     workloads_blocked: z.enum(["upgrade_agent", "no_encryption_key"]).nullable(),
     capabilities: CapabilitiesSchema.nullable(),
+    /**
+     * Operator-set labels that placement and build selectors match, such as
+     * a dedicated builder for fork previews (ADR 0007).
+     */
+    labels: z.record(z.string(), z.string()),
     cpu_total: z.number().nullable(),
     mem_total: z.number().nullable(),
     disk_total: z.number().nullable(),

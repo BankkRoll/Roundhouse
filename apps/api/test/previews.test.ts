@@ -184,9 +184,12 @@ async function stage(settings: Record<string, unknown> = {}, labels?: Record<str
   );
   const joined = await joinNode(owner, workspaceId, { name: "builder-1" });
   if (labels) {
-    await env.DB.prepare("UPDATE nodes SET labels = ? WHERE id = ?")
-      .bind(JSON.stringify(labels), joined.node_id)
-      .run();
+    await ok(
+      owner.json(`/v1/workspaces/${workspaceId}/nodes/${joined.node_id}/labels`, {
+        method: "PUT",
+        json: { labels },
+      }),
+    );
   }
   const agent = await connectWorkloadAgent(
     joined,
@@ -930,9 +933,12 @@ describe("fork pull requests", () => {
 
       // A dedicated node for forks: the fork builds there, production never does.
       const joined = await joinNode(s.owner, s.workspaceId, { name: "fork-builder" });
-      await env.DB.prepare("UPDATE nodes SET labels = ? WHERE id = ?")
-        .bind(JSON.stringify({ pool: "untrusted" }), joined.node_id)
-        .run();
+      await ok(
+        s.owner.json(`/v1/workspaces/${s.workspaceId}/nodes/${joined.node_id}/labels`, {
+          method: "PUT",
+          json: { labels: { pool: "untrusted" } },
+        }),
+      );
       const forkAgent = await connectWorkloadAgent(
         joined,
         {},

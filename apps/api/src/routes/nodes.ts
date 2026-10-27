@@ -73,6 +73,38 @@ const createJoinToken = createRoute({
   },
 });
 
+/** Lowercase label keys like Kubernetes' name part: letters, digits, `-`, `_`, `.`, `/`. */
+const LabelKey = z
+  .string()
+  .regex(/^[a-z0-9]([a-z0-9._/-]{0,61}[a-z0-9])?$/, "expected a lowercase label key");
+const LabelValue = z.string().regex(/^([A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?)?$/, {
+  message: "expected a label value",
+});
+
+/** Body of `PUT …/nodes/{nodeId}/labels`: the complete new set. */
+export const NodeLabelsBody = z
+  .object({
+    labels: z
+      .record(LabelKey, LabelValue)
+      .refine((l) => Object.keys(l).length <= 16, { message: "at most 16 labels" }),
+  })
+  .openapi("NodeLabels");
+
+const putLabels = createRoute({
+  method: "put",
+  path: "/v1/workspaces/{workspaceId}/nodes/{nodeId}/labels",
+  tags: ["nodes"],
+  summary: "Replace a server's labels",
+  description:
+    "Labels are matched by placement selectors and by a project's preview build node selector. Changing them never moves running workloads.",
+  security: sessionAuth,
+  request: {
+    params: NodeParams,
+    body: { content: { "application/json": { schema: NodeLabelsBody } }, required: true },
+  },
+  responses: { 200: json(NodeSchema), ...errors(400, 401, 403, 404) },
+});
+
 const liveNode = (workspaceId: string, nodeId: string) =>
   and(eq(nodes.id, nodeId), eq(nodes.workspaceId, workspaceId), isNull(nodes.deletedAt));
 
@@ -152,6 +184,31 @@ export const nodeRoutes = createRouter()
       });
     }
     return c.body(null, 204);
+  })
+  .openapi(putLabels, async (c) => {
+    const { workspaceId, nodeId } = c.req.valid("param");
+    const { labels } = c.req.valid("json");
+    const m = await requireWorkspace(c, workspaceId, "nodes:manage");
+    const db = c.get("db");
+    const [before] = await db.select().from(nodes).where(liveNode(workspaceId, nodeId));
+    if (!before) throw notFound("Server");
+    const [row] = await db
+      .update(nodes)
+      .set({ labels, updatedAt: new Date() })
+      .where(liveNode(workspaceId, nodeId))
+      .returning();
+    if (!row) throw notFound("Server");
+    await recordAudit(db, {
+      workspaceId,
+      ...m.actor,
+      action: "node.labels_updated",
+      targetType: "node",
+      targetId: nodeId,
+      metadata: { name: row.name, before: before.labels ?? {}, after: labels },
+      ip: clientIp(c),
+    });
+    const [node] = withCostEstimates([toApiNode(row)], await nodeCostEstimates(db, workspaceId));
+    return c.json(node!, 200);
   })
   .openapi(createJoinToken, async (c) => {
     const { workspaceId } = c.req.valid("param");
