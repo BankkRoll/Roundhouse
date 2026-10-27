@@ -1079,6 +1079,97 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
+  it("variables: build-time and file flags, flags-only writes and build refusals", async () => {
+    await fresh(async () => {
+      const V = `/v1/services/${SEED.web}/variables?environment_id=${SEED.production}`;
+      const row = (key: string) =>
+        db.deploy.variables.find((v) => v.owner_id === SEED.web && v.key === key);
+      const before = { ...row("SESSION_SECRET")! };
+
+      const flagsOnly = await call("PUT", V, {
+        set: [{ key: "SESSION_SECRET", available_at_build: true, mount_as_file: true }],
+      });
+      expect(flagsOnly.status).toBe(200);
+      expect(
+        (flagsOnly.body as { variables: { key: string }[] }).variables.find(
+          (v) => v.key === "SESSION_SECRET",
+        ),
+      ).toMatchObject({
+        tier: "secret",
+        value: null,
+        available_at_build: true,
+        mount_as_file: true,
+        version: before.version + 1,
+      });
+      expect(row("SESSION_SECRET")).toMatchObject({ value: before.value, tier: "secret" });
+      expect((await call("GET", V)).body as { variables: { key: string }[] }).toMatchObject({
+        variables: expect.arrayContaining([
+          expect.objectContaining({ key: "SESSION_SECRET", available_at_build: true }),
+        ]),
+      });
+      expect(
+        (await call("PUT", V, { set: [{ key: "SESSION_SECRET", mount_as_file: false }] })).status,
+      ).toBe(200);
+      expect(row("SESSION_SECRET")).toMatchObject({
+        available_at_build: true,
+        mount_as_file: false,
+      });
+
+      expect(
+        await call("PUT", V, { set: [{ key: "NOPE", available_at_build: true }] }),
+      ).toMatchObject({ status: 400, body: { error: { code: "value_required" } } });
+      expect(
+        await call("PUT", V, { set: [{ key: "PATH", value: "/bin", available_at_build: true }] }),
+      ).toMatchObject({
+        status: 400,
+        body: {
+          error: { code: "invalid_request", details: [{ field: "PATH", code: "reserved_name" }] },
+        },
+      });
+      expect(row("PATH")).toBeUndefined();
+
+      expect(
+        await call("PUT", V, {
+          set: [{ key: "DB_ARG", value: `\${{DATABASE_URL}}`, available_at_build: true }],
+        }),
+      ).toMatchObject({
+        status: 400,
+        body: {
+          error: {
+            code: "build_arg_secret",
+            details: [
+              {
+                field: "DB_ARG",
+                message: expect.stringContaining("RUN --mount=type=secret,id=DB_ARG"),
+              },
+            ],
+          },
+        },
+      });
+      expect(
+        await call("PUT", V, {
+          set: [
+            {
+              key: "DB_ARG",
+              value: `\${{DATABASE_URL}}`,
+              available_at_build: true,
+              tier: "secret",
+            },
+          ],
+          confirm_write_only: true,
+        }),
+      ).toMatchObject({ status: 200 });
+      expect(
+        (await call("PUT", V, { set: [{ key: "NODE_ENV", available_at_build: true }] })).status,
+      ).toBe(200);
+      expect(
+        await call("PUT", V, {
+          set: [{ key: "DB_ARG", tier: "plain", value: `\${{DATABASE_URL}}` }],
+        }),
+      ).toMatchObject({ status: 400, body: { error: { code: "build_arg_secret" } } });
+    });
+  });
+
   it("deployments: page, deploy, detail, rollback, cancel", async () => {
     await fresh(async () => {
       const S = `/v1/services/${SEED.web}`;

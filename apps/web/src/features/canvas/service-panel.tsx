@@ -1,4 +1,4 @@
-import type { PresenceEditPart } from "@roundhouse/shared";
+import { isReservedBuildName, type PresenceEditPart } from "@roundhouse/shared";
 import { Badge, Button, Checkbox, Label, StatusBadge } from "@roundhouse/ui";
 import { Link } from "@tanstack/react-router";
 import { ExternalLinkIcon, Trash2Icon, XIcon } from "lucide-react";
@@ -52,7 +52,15 @@ interface ConfigForm {
   start: string;
 }
 
-const EMPTY_VAR = { key: "", value: "", secret: false, confirm: false };
+/** The quick-add variable form; a `null` flag follows what is stored for the key. */
+const EMPTY_VAR: {
+  key: string;
+  value: string;
+  secret: boolean;
+  confirm: boolean;
+  build: boolean | null;
+  file: boolean | null;
+} = { key: "", value: "", secret: false, confirm: false, build: null, file: null };
 
 /**
  * Side panel for one service on the canvas: its status, a few quick config edits and a
@@ -91,6 +99,10 @@ export function ServicePanel({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"stage" | "apply" | null>(null);
   const titleId = useId();
+  const buildHintId = useId();
+  const fileHintId = useId();
+  const stored = variables.data?.find((v) => v.key === variable.key.trim());
+  const flagKey = variable.key.trim() || "KEY";
 
   useEffect(() => {
     if (!config.data) return;
@@ -136,6 +148,8 @@ export function ServicePanel({
         return "Variable names look like DATABASE_URL";
       if (variable.secret && !variable.confirm)
         return "Confirm that the secret can never be read back";
+      if (variable.build && isReservedBuildName(variable.key.trim()))
+        return `${variable.key.trim()} is reserved for the builder's own environment and can't be passed to a build`;
       ops.push({
         type: "variable.set",
         scope: "service",
@@ -143,6 +157,8 @@ export function ServicePanel({
         key: variable.key.trim(),
         value: variable.value,
         ...(variable.secret ? { tier: "secret" as const, confirm_write_only: true } : {}),
+        ...(variable.build !== null ? { available_at_build: variable.build } : {}),
+        ...(variable.file !== null ? { mount_as_file: variable.file } : {}),
       });
     }
     return ops;
@@ -313,6 +329,37 @@ export function ServicePanel({
                     Nobody can read this value back, including you
                   </Label>
                 ) : null}
+                <Label className="flex items-start gap-2 font-normal">
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={variable.build ?? stored?.available_at_build ?? false}
+                    aria-describedby={buildHintId}
+                    onChange={(e) => setVariable((v) => ({ ...v, build: e.target.checked }))}
+                  />
+                  <span className="grid gap-0.5">
+                    Available at build
+                    <span id={buildHintId} className="text-xs text-muted-foreground">
+                      {variable.secret
+                        ? `A BuildKit secret, read with RUN --mount=type=secret,id=${flagKey}; never in image layers or fork and PR preview builds.`
+                        : "A build arg, recorded in the image, so it can't reference a secret."}
+                    </span>
+                  </span>
+                </Label>
+                <Label className="flex items-start gap-2 font-normal">
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={variable.file ?? stored?.mount_as_file ?? false}
+                    aria-describedby={fileHintId}
+                    onChange={(e) => setVariable((v) => ({ ...v, file: e.target.checked }))}
+                  />
+                  <span className="grid gap-0.5">
+                    Mount as file
+                    <span id={fileHintId} className="text-xs text-muted-foreground">
+                      A read-only file at /run/secrets/{flagKey} instead of an environment variable,
+                      kept out of docker inspect. No {flagKey}_FILE is injected.
+                    </span>
+                  </span>
+                </Label>
               </div>
             </fieldset>
 

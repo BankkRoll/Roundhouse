@@ -91,6 +91,33 @@ describe("project canvas", () => {
     expect(document.body.innerHTML).not.toContain(STAGED_SECRET);
   });
 
+  it("stages a variable's build-time and file flags with it", async () => {
+    const { canvas, user } = await openCanvas();
+    await user.click(within(canvas).getByRole("button", { name: /^api / }));
+    const panel = await screen.findByRole("complementary", { name: "api" });
+    await user.type(within(panel).getByLabelText("Name"), "NPM_TOKEN");
+    await user.type(within(panel).getByLabelText("Value"), STAGED_SECRET);
+    await user.click(within(panel).getByLabelText("Secret (write-only)"));
+    await user.click(within(panel).getByLabelText(/Nobody can read this value back/));
+    const build = within(panel).getByRole("checkbox", { name: /Available at build/ });
+    expect(build).toHaveAccessibleDescription(/RUN --mount=type=secret,id=NPM_TOKEN/);
+    await user.click(build);
+    const file = within(panel).getByRole("checkbox", { name: /Mount as file/ });
+    expect(file).toHaveAccessibleDescription(/\/run\/secrets\/NPM_TOKEN/);
+    await user.click(file);
+    await user.click(within(panel).getByRole("button", { name: "Stage" }));
+
+    await screen.findByRole("region", { name: "Staged changes" });
+    const op = db.changes.sets
+      .flatMap((set) => set.changes)
+      .find((change) => change.op.type === "variable.set" && change.op.key === "NPM_TOKEN")?.op;
+    expect(op).toMatchObject({
+      staged_tier: "secret",
+      available_at_build: true,
+      mount_as_file: true,
+    });
+  });
+
   it("moves a node with the arrow keys and saves the layout", async () => {
     const { canvas, user } = await openCanvas();
     within(canvas)
