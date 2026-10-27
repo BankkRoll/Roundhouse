@@ -20,9 +20,8 @@ import {
   isForkPullRequest,
   newId,
   type PreviewStatus,
-  RUNNING_PREVIEW_STATUSES,
 } from "@roundhouse/shared";
-import { and, asc, count, eq, inArray, lte, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Env } from "../../env";
 import { recordAudit } from "../audit";
 import type { KeyEnv } from "../crypto";
@@ -367,27 +366,28 @@ export async function admitPreview(
       .where(eq(previewEnvironments.id, preview.id));
     return { status: "active", step: "deploy" };
   }
-  const [running] = await db
-    .select({ n: count() })
-    .from(previewEnvironments)
+  // The slot count and the claim are one statement, which D1 runs alone, so
+  // two admissions at the same instant can never both take the last slot.
+  const [claimed] = await db
+    .update(previewEnvironments)
+    .set({ status: "creating", expiresAt, error: null, closedAt: null, updatedAt: new Date(now) })
     .where(
       and(
-        eq(previewEnvironments.projectId, preview.projectId),
-        inArray(previewEnvironments.status, [...RUNNING_PREVIEW_STATUSES]),
-        ne(previewEnvironments.id, preview.id),
+        eq(previewEnvironments.id, preview.id),
+        sql`(SELECT count(*) FROM preview_environments p2
+              WHERE p2.project_id = ${preview.projectId}
+                AND p2.status IN ('creating', 'active')
+                AND p2.id <> ${preview.id}) < ${settings.maxActive}`,
       ),
-    );
-  if ((running?.n ?? 0) >= settings.maxActive) {
+    )
+    .returning({ id: previewEnvironments.id });
+  if (!claimed) {
     await db
       .update(previewEnvironments)
       .set({ status: "queued_limit", updatedAt: new Date(now) })
       .where(eq(previewEnvironments.id, preview.id));
     return { status: "queued_limit", step: "none" };
   }
-  await db
-    .update(previewEnvironments)
-    .set({ status: "creating", expiresAt, error: null, closedAt: null, updatedAt: new Date(now) })
-    .where(eq(previewEnvironments.id, preview.id));
   return { status: "creating", step: "create" };
 }
 

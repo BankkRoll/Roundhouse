@@ -28,9 +28,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PREVIEW_ROUTES, policyOf } from "../src/contracts";
 import { app } from "../src/index";
 import { runMinuteTick } from "../src/lib/dispatch";
+import { admitPreview } from "../src/lib/previews/engine";
 import { parsePullRequestEvent } from "../src/lib/previews/events";
 import { renderPreviewComment } from "../src/lib/previews/github";
+import { loadPreviewSettings } from "../src/lib/previews/settings";
 import { planPreviewVariables } from "../src/lib/previews/variables";
+import { findPreview } from "../src/lib/previews/view";
 import { openVariable, projectKey } from "../src/lib/variables";
 import {
   deliver,
@@ -1143,6 +1146,40 @@ describe("teardown and limits", () => {
       ).first<{ actor_type: string }>();
       expect(audit?.actor_type).toBe("user");
       expect((await viewer.json(`/v1/previews/prv_nope`)).status).toBe(404);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "never admits more than max_active, however many arrive at once",
+    async () => {
+      const s = await stage({ max_active: 2 });
+      const db = createDb(env.DB);
+      const settings = (await loadPreviewSettings(db, s.projectId))!;
+      const ids: string[] = [];
+      for (let n = 1; n <= 6; n++) {
+        const id = `prv_TESTADMIT${n}`;
+        ids.push(id);
+        await env.DB.prepare(
+          `INSERT INTO preview_environments (id, project_id, repo_full_name, pr_number, installation_ref,
+             head_ref, head_sha, is_fork, author_login, author_association, status,
+             last_event_at, last_activity_at, created_at, updated_at)
+           VALUES (?, ?, 'acme/shop', ?, ?, 'b', ?, 0, 'mara', 'MEMBER', 'queued_limit', 0, 0, 0, 0)`,
+        )
+          .bind(id, s.projectId, 100 + n, s.ghi, HEAD)
+          .run();
+      }
+      const rows = await Promise.all(ids.map((id) => findPreview(db, id)));
+      const results = await Promise.all(
+        rows.map((row) => admitPreview(db, row!, settings, Date.now())),
+      );
+      expect(results.filter((r) => r.step === "create")).toHaveLength(2);
+      const creating = await env.DB.prepare(
+        "SELECT count(*) AS n FROM preview_environments WHERE project_id = ? AND status = 'creating'",
+      )
+        .bind(s.projectId)
+        .first<{ n: number }>();
+      expect(creating?.n).toBe(2);
     },
     TEST_TIMEOUT_MS,
   );

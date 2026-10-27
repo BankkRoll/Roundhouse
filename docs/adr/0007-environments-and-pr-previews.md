@@ -454,8 +454,8 @@ top. Where the build differs from the text above:
   the environment lifecycle half (clone options, diff, promote,
   `DELETE /v1/environments`), and the real-stack e2e suite.
   `environments:manage` exists but only guards preview teardown.
-  `max_active` is checked without a lock, so two previews admitted at the
-  same instant can exceed it by one until one ends.
+- **`max_active` is hard.** Admission counts the running previews and
+  claims the slot in one conditional `UPDATE`, which D1 runs alone.
 - Previews never get TCP proxies or credential rotations: both routes
   answer 409 in a preview environment.
 
