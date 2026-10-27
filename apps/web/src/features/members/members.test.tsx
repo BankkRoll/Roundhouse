@@ -2,7 +2,7 @@ import type { Role } from "@roundhouse/shared";
 import { screen, waitFor, within } from "@testing-library/react";
 import { http } from "msw";
 import { describe, expect, it } from "vitest";
-import { db, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
+import { db, PASSWORD, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
 import { apiError } from "../../mocks/handlers";
 import { server } from "../../mocks/server";
 import { renderApp } from "../../test/render";
@@ -90,6 +90,47 @@ describe("member management", () => {
       expect(db.memberships.find((m) => m.id === "mem_member")?.role).toBe("admin"),
     );
     expect(await screen.findByText("Cara Mel is now admin")).toBeInTheDocument();
+  });
+
+  it("asks for the password before changing a role with a stale session, then retries", async () => {
+    db.sessionStale = true;
+    const { user } = await renderAs("owner");
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Role for Cara Mel" }),
+      "viewer",
+    );
+    const reauth = await screen.findByRole("dialog", { name: "Confirm it's you" });
+    expect(within(reauth).getByLabelText("Password")).toHaveFocus();
+    await user.type(within(reauth).getByLabelText("Password"), PASSWORD);
+    await user.click(within(reauth).getByRole("button", { name: "Confirm" }));
+    await waitFor(() =>
+      expect(db.memberships.find((m) => m.id === "mem_member")?.role).toBe("viewer"),
+    );
+  });
+
+  it("leaves the role unchanged when the password prompt is cancelled", async () => {
+    db.sessionStale = true;
+    const { user } = await renderAs("owner");
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Role for Cara Mel" }),
+      "viewer",
+    );
+    const reauth = await screen.findByRole("dialog", { name: "Confirm it's you" });
+    await user.click(within(reauth).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Could not change role")).toBeInTheDocument();
+    expect(db.memberships.find((m) => m.id === "mem_member")?.role).toBe("member");
+  });
+
+  it("asks for the password before removing someone with a stale session", async () => {
+    db.sessionStale = true;
+    const { user } = await renderAs("owner");
+    await user.click(await screen.findByRole("button", { name: "Remove Dan Viewer" }));
+    const dialog = await screen.findByRole("dialog", { name: "Remove Dan Viewer?" });
+    await user.click(within(dialog).getByRole("button", { name: "Remove member" }));
+    const reauth = await screen.findByRole("dialog", { name: "Confirm it's you" });
+    await user.type(within(reauth).getByLabelText("Password"), PASSWORD);
+    await user.click(within(reauth).getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(db.memberships.some((m) => m.id === "mem_viewer")).toBe(false));
   });
 
   it("reports a failed role change", async () => {
