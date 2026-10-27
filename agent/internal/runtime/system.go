@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"net/url"
 	"os"
@@ -333,4 +334,30 @@ func systemHash(s *wantSpec) string {
 	}{s.hostPorts, s.binds, files})
 	sum := sha256.Sum256(append([]byte(base+"\n"), extras...))
 	return hex.EncodeToString(sum[:])
+}
+
+// pruneRegistryAuth removes the mesh listener's htpasswd once the listener
+// is neither wanted nor running, so the pull users' hashes don't outlive
+// mesh_listen on disk.
+func (r *Runtime) pruneRegistryAuth(specs []*wantSpec) {
+	if r.opts.DataDir == "" || slices.ContainsFunc(specs, func(s *wantSpec) bool { return s.ID == RegistryMeshWorkloadID }) {
+		return
+	}
+	r.mu.Lock()
+	running := slices.ContainsFunc(slices.Collect(maps.Values(r.instances)), func(inst *instance) bool {
+		return inst.meta.workloadID == RegistryMeshWorkloadID
+	})
+	r.mu.Unlock()
+	if running {
+		return
+	}
+	dir := filepath.Join(r.opts.DataDir, registryAuthDir)
+	if _, err := os.Stat(dir); err != nil {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		r.log.Warn("remove the registry's htpasswd", "dir", dir, "err", err)
+		return
+	}
+	r.log.Info("removed the registry mesh listener's htpasswd", "dir", dir)
 }
