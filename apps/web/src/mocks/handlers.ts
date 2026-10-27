@@ -25,6 +25,8 @@ import {
 } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
 import type { AuditLogPage, Invite, Me, Member, Node, Workspace } from "../lib/api/types";
+import { accessHandlers } from "./access-handlers";
+import { forgetMember } from "./access-resolve";
 import { accountSecurityHandlers } from "./account-security-handlers";
 import { changeHandlers } from "./changes-handlers";
 import {
@@ -33,6 +35,7 @@ import {
   invalid,
   notFound,
   recordAudit,
+  requireFreshSession,
   requireWorkspace,
   unauthorized,
 } from "./common";
@@ -396,6 +399,8 @@ const phase0Handlers = [
     const workspaceId = String(params.workspaceId);
     const access = requireWorkspace(workspaceId, "members:manage");
     if (!access.ok) return access.response;
+    const stale = requireFreshSession();
+    if (stale) return stale;
     const target = db.memberships.find(
       (row) => row.id === params.memberId && row.workspace_id === workspaceId,
     );
@@ -430,6 +435,8 @@ const phase0Handlers = [
     const isSelf = target?.user_id === user.id;
     const access = requireWorkspace(workspaceId, isSelf ? "workspace:read" : "members:manage");
     if (!access.ok) return access.response;
+    const stale = isSelf ? null : requireFreshSession();
+    if (stale) return stale;
     if (!target) return notFound("Member");
     if (target.role === "owner" && !isSelf && access.membership.role !== "owner") {
       return apiError(403, "forbidden", "Only owners can remove an owner");
@@ -437,6 +444,7 @@ const phase0Handlers = [
     if (target.role === "owner" && ownerCount(workspaceId) <= 1) return lastOwner();
     const removed = toMember(target);
     db.memberships = db.memberships.filter((row) => row !== target);
+    forgetMember(workspaceId, target.user_id);
     recordAudit({
       workspaceId,
       actorType: "user",
@@ -755,4 +763,5 @@ export const handlers = [
   ...signingKeyHandlers,
   ...securityHandlers,
   ...accountSecurityHandlers,
+  ...accessHandlers,
 ];
