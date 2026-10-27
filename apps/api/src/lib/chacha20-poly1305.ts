@@ -100,6 +100,15 @@ export function chacha20(
   if (nonce.byteLength !== CHACHA20_POLY1305_NONCE_BYTES) {
     throw new Error("ChaCha20 nonces are 12 bytes");
   }
+  // SECURITY: the block counter is 32 bits; running past it would silently
+  // wrap and reuse keystream under the same nonce.
+  if (
+    !Number.isInteger(counter) ||
+    counter < 0 ||
+    counter + Math.ceil(input.byteLength / 64) > 2 ** 32
+  ) {
+    throw new Error("ChaCha20 block counter out of range");
+  }
   const k = words(key, 8);
   const n = words(nonce, 3);
   const out = new Uint8Array(input.byteLength);
