@@ -8,10 +8,12 @@ import {
   MASKED_VALUE,
   MAX_STAGED_OPS,
   mergeConfigPatches,
+  opAction,
   patchPointers,
   pointersOverlap,
   type StagedEntry,
   type StagedOp,
+  serviceOfOp,
   stageOp,
   targetKeyOf,
 } from "./changes";
@@ -207,5 +209,50 @@ describe("describeOp", () => {
         () => "api",
       ),
     ).toBe("patch api config (deploy.replicas)");
+  });
+});
+
+describe("volume and domain ops", () => {
+  const volumeSet: StagedOp = { type: "volume.set", service: "svc_1", size_mb: 2048 };
+  const domainAdd: StagedOp = {
+    type: "domain.add",
+    service: "svc_1",
+    hostname: "shop.example.com",
+  };
+  const domainRemove: StagedOp = {
+    type: "domain.remove",
+    domain_id: "dom_1",
+    hostname: "shop.example.com",
+    service: "svc_1",
+  };
+
+  it("keys volumes by service and domains by hostname, all as services:manage", () => {
+    expect(targetKeyOf(volumeSet)).toBe("volume:svc_1");
+    expect(targetKeyOf({ type: "volume.delete", service: "svc_1" })).toBe("volume:svc_1");
+    expect(targetKeyOf(domainAdd)).toBe(targetKeyOf(domainRemove));
+    expect(opAction(volumeSet)).toBe("services:manage");
+    expect(opAction(domainRemove)).toBe("services:manage");
+    expect(serviceOfOp(domainRemove)).toBe("svc_1");
+  });
+
+  it("lets a volume delete replace a staged resize of the same service", () => {
+    const result = stageOp([entry(volumeSet)], { type: "volume.delete", service: "svc_1" });
+    expect(result).toMatchObject({ ok: true, replaces: true, drop: [] });
+  });
+
+  it("drops a service's volume and domain ops when the service is deleted", () => {
+    const result = stageOp([entry(volumeSet), entry(domainAdd)], {
+      type: "service.delete",
+      service_id: "svc_1",
+    });
+    expect(result.ok && result.drop.sort()).toEqual(["domain:shop.example.com", "volume:svc_1"]);
+  });
+
+  it("summarises without anything beyond names and sizes", () => {
+    const name = () => "api";
+    expect(describeOp(volumeSet, name)).toBe("set api volume to 2048 MiB");
+    expect(describeOp({ type: "volume.delete", service: "svc_1" }, name)).toBe("delete api volume");
+    expect(describeOp(domainAdd, name)).toBe("add domain shop.example.com to api");
+    expect(describeOp(domainRemove, name)).toBe("remove domain shop.example.com from api");
   });
 });
