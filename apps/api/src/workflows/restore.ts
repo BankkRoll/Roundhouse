@@ -2,10 +2,13 @@
  * One restore as a Cloudflare Workflow (ADR 0004, "Restore"); the instance
  * ID is the `rst_…` restore ID.
  *
- * Steps (`in_place`):
+ * Steps:
  * 1. `start`: check the backup is restorable, find the target volume, its
  *    node and (for a dump) the running replica, and mark the restore
- *    `running`.
+ *    `running`. A `new_service` restore first waits, polling every
+ *    {@link TARGET_POLL}, until the database the route added is deployed
+ *    and healthy, for at most {@link NEW_SERVICE_READY_TIMEOUT_MS}; a
+ *    failed deployment fails the restore.
  * 2. When the route took a safety backup (`trigger: pre_restore`), wait for
  *    it; its failure fails the restore before anything is touched.
  * 3. `send-job`: presign a one-hour `GET` of the object, unseal the
@@ -16,15 +19,20 @@
  * 5. `finish`: mark it `succeeded` and audit `restore.succeeded` as the
  *    system. Any failure marks it `failed` and audits `restore.failed`.
  *
+ * A dump of a whole Postgres instance or MongoDB deployment carries its
+ * principals' passwords; the agent puts the target's own back after
+ * restoring it, so a new service keeps the fresh credentials it was created
+ * with.
+ *
  * SECURITY: the identity and URL exist in plaintext only inside the
  * `send-job` step; no step returns them.
  *
  * @module
  */
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { backups, createDb, type Db, nodes, restores } from "@roundhouse/db";
+import { backups, createDb, type Db, deployments, nodes, restores } from "@roundhouse/db";
 import type { DatabaseEngine } from "@roundhouse/protocol";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { Env } from "../env";
 import { BACKUP_TIMEOUT_S, BACKUP_WAIT_GRACE_S } from "../lib/backups/backups";
 import { loadBackupIdentity } from "../lib/backups/keys";
@@ -60,6 +68,12 @@ const NETWORK_STEP = {
 } as const;
 
 const MAX_WAKEUPS = 20;
+
+/** How long a `new_service` restore waits for its database to run healthy. */
+export const NEW_SERVICE_READY_TIMEOUT_MS = 15 * 60 * 1000;
+
+/** Poll interval while waiting for that database, whose deployment sends no event. */
+const TARGET_POLL = "2 seconds";
 
 /** Everything later steps need. Serialisable and secret-free. */
 interface Plan {
@@ -113,6 +127,25 @@ export class RestoreWorkflow extends WorkflowEntrypoint<Env, RestoreParams> {
   }
 
   private async pipeline(step: WorkflowStep, restoreId: string): Promise<Verdict> {
+    const mode = await step.do("mode", DB_STEP, () => this.modeOf(restoreId));
+    if (mode.kind !== "ok") return mode;
+    if (mode.mode === "new_service") {
+      const readyBy = await step.do(
+        "target-deadline",
+        async () => Date.now() + NEW_SERVICE_READY_TIMEOUT_MS,
+      );
+      for (let i = 0; ; i++) {
+        const ready = await step.do(`check-target-${i}`, DB_STEP, () =>
+          this.checkNewTarget(restoreId),
+        );
+        if (ready.kind === "ok") break;
+        if (ready.kind !== "pending") return ready;
+        if (Date.now() > readyBy) {
+          return fail("target_not_ready: the new database didn't become healthy in time");
+        }
+        await step.sleep(`target-wait-${i}`, TARGET_POLL);
+      }
+    }
     const started = await step.do("start", DB_STEP, () => this.start(restoreId));
     if (started.kind !== "ok") return started;
     const plan = started.plan;
@@ -170,6 +203,62 @@ export class RestoreWorkflow extends WorkflowEntrypoint<Env, RestoreParams> {
   // Steps
   // ---------------------------------------------------------------------------
 
+  private async modeOf(restoreId: string): Promise<Verdict<{ mode: "in_place" | "new_service" }>> {
+    const [row] = await this.db()
+      .select({ mode: restores.mode, status: restores.status })
+      .from(restores)
+      .where(eq(restores.id, restoreId))
+      .limit(1);
+    if (!row || (row.status !== "queued" && row.status !== "running")) return { kind: "stop" };
+    return { kind: "ok", mode: row.mode };
+  }
+
+  /**
+   * Whether the database a `new_service` restore added runs healthy: its
+   * latest deployment in the environment is active and its volume is ready
+   * on a node.
+   */
+  private async checkNewTarget(restoreId: string): Promise<Check> {
+    const db = this.db();
+    const [row] = await db
+      .select({ restore: restores, method: backups.method })
+      .from(restores)
+      .innerJoin(backups, eq(backups.id, restores.backupId))
+      .where(eq(restores.id, restoreId))
+      .limit(1);
+    if (!row) return { kind: "stop" };
+    const { restore } = row;
+    if (restore.status !== "queued" && restore.status !== "running") return { kind: "stop" };
+    if (!restore.targetServiceId || !restore.targetEnvironmentId) {
+      return fail("target_missing: the new service is gone");
+    }
+    const [deployment] = await db
+      .select({ status: deployments.status, failure: deployments.failureReason })
+      .from(deployments)
+      .where(
+        and(
+          eq(deployments.serviceId, restore.targetServiceId),
+          eq(deployments.environmentId, restore.targetEnvironmentId),
+        ),
+      )
+      .orderBy(desc(deployments.id))
+      .limit(1);
+    if (!deployment) return fail("target_not_deployed: the new database has no deployment");
+    if (["failed", "cancelled", "crashed"].includes(deployment.status)) {
+      return fail(
+        `target_failed: the new database's deployment is ${deployment.status}${deployment.failure ? `: ${deployment.failure}` : ""}`,
+      );
+    }
+    if (deployment.status !== "active") return { kind: "pending" };
+    const found = await findDataTarget(
+      db,
+      restore.targetServiceId,
+      restore.targetEnvironmentId,
+      row.method,
+    );
+    return found.ok ? { kind: "ok" } : { kind: "pending" };
+  }
+
   private async start(restoreId: string): Promise<Verdict<{ plan: Plan }>> {
     const db = this.db();
     const [row] = await db
@@ -181,7 +270,6 @@ export class RestoreWorkflow extends WorkflowEntrypoint<Env, RestoreParams> {
     if (!row) return { kind: "stop" };
     const { restore, backup } = row;
     if (restore.status !== "queued" && restore.status !== "running") return { kind: "stop" };
-    if (restore.mode !== "in_place") return fail("restore_mode_unsupported");
     if (backup.status !== "succeeded" || !backup.sha256 || !backup.bytesStored) {
       return fail("backup_not_restorable: the backup hasn't succeeded");
     }

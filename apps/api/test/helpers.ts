@@ -103,6 +103,12 @@ export async function markTwoFactorEnrolled(where: { id: string } | { email: str
   ]);
 }
 
+/** Length of a TOTP step. */
+const TOTP_STEP_MS = 30_000;
+
+/** How close to a step boundary a code from the previous step is too risky to send. */
+const TOTP_BOUNDARY_MARGIN_MS = 3000;
+
 /**
  * A TOTP code for {@link TEST_TOTP_SECRET} that the user hasn't used yet:
  * the step after the last one the control plane accepted, inside the
@@ -117,8 +123,16 @@ export async function nextTotpCode(email: string): Promise<string> {
   )
     .bind(email)
     .first<{ last: number | null }>();
-  const current = totpStep(Date.now());
-  const step = Math.max(current - 1, (row?.last ?? current - 2) + 1);
+  let current = totpStep(Date.now());
+  let step = Math.max(current - 1, (row?.last ?? current - 2) + 1);
+  // The previous step leaves the window when the current one ends; one that
+  // is about to, waits for the next step instead of racing the boundary.
+  const left = (current + 1) * TOTP_STEP_MS - Date.now();
+  if (step === current - 1 && left < TOTP_BOUNDARY_MARGIN_MS) {
+    await new Promise((r) => setTimeout(r, left + 50));
+    current = totpStep(Date.now());
+    step = Math.max(current - 1, (row?.last ?? current - 2) + 1);
+  }
   if (step > current + 1) throw new Error("no unused TOTP step left in the window");
   return hotp(TEST_TOTP_SECRET, step);
 }

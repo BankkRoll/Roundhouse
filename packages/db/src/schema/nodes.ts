@@ -3,7 +3,7 @@
  *
  * @module
  */
-import type { Capabilities } from "@roundhouse/protocol";
+import type { Capabilities, VolumeQuotaMode } from "@roundhouse/protocol";
 import type { NodeStatus } from "@roundhouse/shared";
 import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
@@ -40,6 +40,11 @@ export const nodes = sqliteTable(
       .notNull()
       .$defaultFn(() => ({})),
     publicIp: text("public_ip"),
+    /**
+     * DNS name clients reach the node at, for TCP proxy endpoints; the public
+     * IP is used when unset.
+     */
+    publicHostname: text("public_hostname"),
     /** The node's mesh address (`wg0`, its `.1`); set when it joins the mesh. */
     wgIp: text("wg_ip"),
     /** Current WireGuard public key, base64, from `hello.mesh`; the private key never leaves the node. */
@@ -96,6 +101,11 @@ export const nodes = sqliteTable(
      * rollover, and shows which nodes would need a re-join after one.
      */
     pinnedSigningKids: json<string[]>("pinned_signing_kids"),
+    /**
+     * How the node enforces volume quotas, from `hello.volume_quota`; a volume
+     * migration refuses an enforcing source moving to a `none` target.
+     */
+    volumeQuota: text("volume_quota").$type<VolumeQuotaMode>(),
     /** SHA-256 of the bearer credential the agent uses to connect. */
     credentialHash: text("credential_hash").notNull().unique(),
     status: text("status").$type<NodeStatus>().notNull().default("pending"),

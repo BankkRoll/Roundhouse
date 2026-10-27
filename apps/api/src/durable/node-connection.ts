@@ -144,6 +144,7 @@ import {
   loadSigningKeys,
   signingKeyFor,
 } from "../lib/signing-keys";
+import { onMigrationVolumeReports } from "../lib/volume-migrations";
 import { type BackupJobFrameBody, onBackupFrame } from "./node/handlers/backups";
 import { onCertFrame } from "./node/handlers/certs";
 import { MAX_QUERIES_PER_NODE, PendingQueries, UserQueryLimiter } from "./node/handlers/data";
@@ -492,6 +493,7 @@ export class NodeConnection extends DurableObject<Env> {
       case "volume_status":
         if (attachment.protocolVersion < VOLUMES_PROTOCOL_VERSION) return;
         await onVolumeStatus(this.db, this.env, attachment.nodeId, message);
+        await onMigrationVolumeReports(this.env, this.db, attachment.nodeId, message.volumes);
         // The 60 s report doubles as the retry tick for read-only principals.
         this.provisionReadonlySoon(attachment.nodeId);
         return;
@@ -894,6 +896,7 @@ export class NodeConnection extends DurableObject<Env> {
         observedGeneration: hello.observed_generation,
         lastHeartbeatAt: new Date(now),
         ...(reportsPins(hello) ? { pinnedSigningKids: hello.pinned_kids } : {}),
+        ...(hello.volume_quota ? { volumeQuota: hello.volume_quota } : {}),
       })
       .where(and(eq(nodes.id, attachment.nodeId), isNull(nodes.deletedAt)))
       .returning({

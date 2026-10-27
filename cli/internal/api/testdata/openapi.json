@@ -380,12 +380,17 @@
               "database.query_executed",
               "database.browser_opened",
               "database.credentials_rotated",
+              "database.credentials_rotation_failed",
               "volume.created",
               "volume.resized",
               "volume.deleted",
               "volume.undeleted",
               "volume.migration_started",
               "volume.migrated",
+              "volume.migration_failed",
+              "tcp_proxy.enabled",
+              "tcp_proxy.updated",
+              "tcp_proxy.disabled",
               "backup.policy_updated",
               "backup.requested",
               "backup.deleted",
@@ -1530,12 +1535,17 @@
               "database.query_executed",
               "database.browser_opened",
               "database.credentials_rotated",
+              "database.credentials_rotation_failed",
               "volume.created",
               "volume.resized",
               "volume.deleted",
               "volume.undeleted",
               "volume.migration_started",
               "volume.migrated",
+              "volume.migration_failed",
+              "tcp_proxy.enabled",
+              "tcp_proxy.updated",
+              "tcp_proxy.disabled",
               "backup.policy_updated",
               "backup.requested",
               "backup.deleted",
@@ -2705,6 +2715,115 @@
         ],
         "type": "object"
       },
+      "CredentialRotation": {
+        "properties": {
+          "applied": {
+            "items": {
+              "enum": [
+                "admin",
+                "app",
+                "readonly"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "change_set_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          },
+          "deployment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "principals": {
+            "items": {
+              "enum": [
+                "admin",
+                "app",
+                "readonly"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "requested_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "service_id",
+          "environment_id",
+          "status",
+          "principals",
+          "applied",
+          "change_set_id",
+          "deployment_ids",
+          "error",
+          "requested_by",
+          "created_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "CredentialRotationList": {
+        "properties": {
+          "rotations": {
+            "items": {
+              "$ref": "#/components/schemas/CredentialRotation"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rotations"
+        ],
+        "type": "object"
+      },
       "CronConfig": {
         "properties": {
           "concurrency": {
@@ -3483,7 +3602,8 @@
               "rollback",
               "api",
               "template",
-              "change_set"
+              "change_set",
+              "migration"
             ],
             "type": "string"
           },
@@ -5431,6 +5551,92 @@
         ],
         "type": "object"
       },
+      "MigrateVolume": {
+        "properties": {
+          "confirm": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "target_node_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_node_id",
+          "confirm"
+        ],
+        "type": "object"
+      },
+      "MigrationTarget": {
+        "properties": {
+          "eligible": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "quota_mode": {
+            "enum": [
+              "xfs_project",
+              "ext4_project",
+              "loop",
+              "none",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "node_id",
+          "name",
+          "eligible",
+          "reason",
+          "quota_mode"
+        ],
+        "type": "object"
+      },
+      "MigrationTargets": {
+        "properties": {
+          "estimated_downtime_ms": {
+            "type": "integer"
+          },
+          "source_node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/MigrationTarget"
+            },
+            "type": "array"
+          },
+          "volume_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "volume_id",
+          "source_node_id",
+          "estimated_downtime_ms",
+          "targets"
+        ],
+        "type": "object"
+      },
       "NetworkingConfig": {
         "properties": {
           "generated_domain": {
@@ -5470,6 +5676,9 @@
               "builder": {
                 "type": "boolean"
               },
+              "db_set_password": {
+                "type": "boolean"
+              },
               "docker": {
                 "type": "boolean"
               },
@@ -5477,6 +5686,9 @@
                 "type": "boolean"
               },
               "ingress": {
+                "type": "boolean"
+              },
+              "tcp_proxy": {
                 "type": "boolean"
               }
             },
@@ -6846,6 +7058,36 @@
         ],
         "type": "object"
       },
+      "PutTcpProxy": {
+        "properties": {
+          "acknowledge_open": {
+            "type": "boolean"
+          },
+          "allowed_cidrs": {
+            "items": {
+              "maxLength": 64,
+              "minLength": 2,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array"
+          },
+          "container_port": {
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "environment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment_id",
+          "allowed_cidrs"
+        ],
+        "type": "object"
+      },
       "PutTeamMembers": {
         "properties": {
           "user_ids": {
@@ -7122,6 +7364,13 @@
           "skip_safety_backup": {
             "type": "boolean"
           },
+          "slug": {
+            "description": "Suffixed with -2, -3, … when taken or reserved (shared)",
+            "example": "api",
+            "maxLength": 40,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          },
           "target_environment_id": {
             "type": "string"
           }
@@ -7157,6 +7406,36 @@
           "viewer"
         ],
         "type": "string"
+      },
+      "RotateCredentials": {
+        "properties": {
+          "confirm": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "principals": {
+            "items": {
+              "enum": [
+                "admin",
+                "app",
+                "readonly"
+              ],
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "environment_id",
+          "confirm"
+        ],
+        "type": "object"
       },
       "ScheduleError": {
         "properties": {
@@ -9215,6 +9494,79 @@
         },
         "type": "object"
       },
+      "TcpProxy": {
+        "properties": {
+          "allowed_cidrs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "container_port": {
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "open_to_all": {
+            "type": "boolean"
+          },
+          "public_port": {
+            "type": "integer"
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "pending",
+              "unsupported"
+            ],
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "service_id",
+          "environment_id",
+          "container_port",
+          "public_port",
+          "allowed_cidrs",
+          "host",
+          "node_id",
+          "status",
+          "open_to_all",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "Team": {
         "properties": {
           "created_at": {
@@ -10213,6 +10565,149 @@
         ],
         "type": "object"
       },
+      "VolumeMigration": {
+        "properties": {
+          "backup_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cleanup_after": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "copied_bytes": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          },
+          "deployment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "queued",
+              "preparing_target",
+              "stopping",
+              "copying_out",
+              "copying_in",
+              "starting",
+              "done",
+              "rolling_back"
+            ],
+            "type": "string"
+          },
+          "requested_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "source_node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "target_node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "volume_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "volume_id",
+          "service_id",
+          "environment_id",
+          "source_node_id",
+          "target_node_id",
+          "status",
+          "phase",
+          "backup_id",
+          "deployment_id",
+          "copied_bytes",
+          "error",
+          "requested_by",
+          "cleanup_after",
+          "started_at",
+          "finished_at",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "VolumeMigrationList": {
+        "properties": {
+          "migrations": {
+            "items": {
+              "$ref": "#/components/schemas/VolumeMigration"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "migrations"
+        ],
+        "type": "object"
+      },
       "Workspace": {
         "properties": {
           "created_at": {
@@ -11074,7 +11569,7 @@
             },
             "description": "Error"
           },
-          "501": {
+          "422": {
             "content": {
               "application/json": {
                 "schema": {
@@ -14703,12 +15198,17 @@
                 "database.query_executed",
                 "database.browser_opened",
                 "database.credentials_rotated",
+                "database.credentials_rotation_failed",
                 "volume.created",
                 "volume.resized",
                 "volume.deleted",
                 "volume.undeleted",
                 "volume.migration_started",
                 "volume.migrated",
+                "volume.migration_failed",
+                "tcp_proxy.enabled",
+                "tcp_proxy.updated",
+                "tcp_proxy.disabled",
                 "backup.policy_updated",
                 "backup.requested",
                 "backup.deleted",
@@ -16239,6 +16739,9 @@
                       "builder": {
                         "type": "boolean"
                       },
+                      "db_set_password": {
+                        "type": "boolean"
+                      },
                       "docker": {
                         "type": "boolean"
                       },
@@ -16246,6 +16749,9 @@
                         "type": "boolean"
                       },
                       "ingress": {
+                        "type": "boolean"
+                      },
+                      "tcp_proxy": {
                         "type": "boolean"
                       }
                     },
@@ -20207,6 +20713,87 @@
         }
       }
     },
+    "/v1/services/{serviceId}/database/credential-rotations": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialRotationList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List a database's credential rotations",
+        "tags": [
+          "databases"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/services/{serviceId}/database/query": {
       "post": {
         "description": "`mode: write` also needs `data:write` and a fresh session (403 `reauth_required`). 409 when the service is not a database or has no running replica; 429 over 2 queries a second per user or 4 at once per server; 503 when its server is offline; 504 when the server does not answer within 35 s.",
@@ -20340,6 +20927,155 @@
             "database.query_executed"
           ],
           "auth": "session"
+        }
+      }
+    },
+    "/v1/services/{serviceId}/database/rotate-credentials": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateCredentials"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialRotation"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Rotate a database's credentials",
+        "tags": [
+          "databases"
+        ],
+        "x-roundhouse-policy": {
+          "action": "data:write",
+          "audit": [
+            "database.credentials_rotated",
+            "database.credentials_rotation_failed",
+            "change_set.created",
+            "change_set.applied"
+          ],
+          "auth": "session",
+          "reauth": true
         }
       }
     },
@@ -21047,6 +21783,276 @@
           "action": "services:read",
           "audit": [],
           "auth": "session"
+        }
+      }
+    },
+    "/v1/services/{serviceId}/tcp-proxies": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Stop publishing a TCP port",
+        "tags": [
+          "services"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "tcp_proxy.disabled"
+          ],
+          "auth": "session"
+        }
+      },
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TcpProxy"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a service's TCP proxy",
+        "tags": [
+          "services"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutTcpProxy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TcpProxy"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Publish a TCP port",
+        "tags": [
+          "services"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "tcp_proxy.enabled",
+            "tcp_proxy.updated"
+          ],
+          "auth": "session",
+          "reauth": true
         }
       }
     },
@@ -21926,6 +22932,79 @@
         }
       }
     },
+    "/v1/volume-migrations/{migrationId}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "migrationId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VolumeMigration"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a volume migration",
+        "tags": [
+          "volumes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/volumes/{volumeId}": {
       "delete": {
         "parameters": [
@@ -22120,6 +23199,268 @@
           "audit": [
             "volume.resized"
           ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/volumes/{volumeId}/migrate": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "volumeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateVolume"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VolumeMigration"
+                }
+              }
+            },
+            "description": "Started"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Move a volume to another node",
+        "tags": [
+          "volumes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "volume.migration_started"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/volumes/{volumeId}/migration-targets": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "volumeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationTargets"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List nodes a volume can move to",
+        "tags": [
+          "volumes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/volumes/{volumeId}/migrations": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "volumeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VolumeMigrationList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List a volume's migrations",
+        "tags": [
+          "volumes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
           "auth": "session"
         }
       }

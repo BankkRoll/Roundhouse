@@ -20,6 +20,7 @@ import { claimDueCronRuns } from "./cron/schedule";
 import { refreshNodes } from "./desired-state";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
 import { progressRotations } from "./mesh";
+import { claimMigrationCleanups } from "./volume-migrations";
 import { claimVolumeDeletions } from "./volumes";
 
 /** The Cron Trigger expression of the minute tick; it must match `wrangler.jsonc`. */
@@ -62,6 +63,7 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
   },
   { name: "volume_deletions", run: claimVolumeDeletions },
   { name: "backup_policies", run: claimDueBackups },
+  { name: "migration_cleanups", run: claimMigrationCleanups },
   { name: "cron", run: claimDueCronRuns },
   {
     // Activates rotations whose peers had their time, and starts the

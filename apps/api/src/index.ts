@@ -12,9 +12,10 @@
  *   (`AuditChain`), and the deploy and key rotation workflows
  *   (`DeployWorkflow`, `KeyRotationWorkflow`), and one-click server
  *   provisioning (`ProvisionWorkflow`), and backups and restores
- *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), cron runs
- *   (`CronRunWorkflow`, ADR 0010) and certificate orders
- *   (`CertificateWorkflow`, ADR 0009), exported for their bindings
+ *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), volume moves
+ *   (`VolumeMigrationWorkflow`, ADR 0004), cron runs (`CronRunWorkflow`,
+ *   ADR 0010) and certificate orders (`CertificateWorkflow`, ADR 0009),
+ *   exported for their bindings
  * - The public ACME HTTP-01 responder (`routes/acme.ts`) and the Domains &
  *   TLS settings (`routes/tls.ts`)
  * - `Cache-Control: no-store` on every API and auth response, and the
@@ -88,6 +89,7 @@ export { DeployWorkflow } from "./workflows/deploy";
 export { KeyRotationWorkflow } from "./workflows/key-rotation";
 export { ProvisionWorkflow } from "./workflows/provision";
 export { RestoreWorkflow } from "./workflows/restore";
+export { VolumeMigrationWorkflow } from "./workflows/volume-migration";
 
 /** Version of the REST API advertised in the OpenAPI document. */
 const API_VERSION = "0.1.0";

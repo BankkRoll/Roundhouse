@@ -96,7 +96,8 @@ const (
 // 0004). Sources outside [WorkloadSpec].PublishAllowedCIDRs are dropped.
 type PortPublish struct {
 	HostPort int `json:"host_port"`
-	// HostIP is "0.0.0.0" or "::".
+	// HostIP is "0.0.0.0" (IPv4 only) or "::" (dual stack: bound on both
+	// 0.0.0.0 and ::, with the allowlist in iptables and ip6tables).
 	HostIP string `json:"host_ip"`
 }
 

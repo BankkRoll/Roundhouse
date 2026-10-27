@@ -226,12 +226,14 @@ func cmdRun(args []string, logger *slog.Logger, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	f.Capabilities.TCPProxy = a.tcpProxy
 	client.Hello = func(ctx context.Context, observed int64) protocol.Hello {
 		h := f.Hello(ctx, cfg.NodeID, version, observed)
 		h.Mesh = a.mesh.Hello()
 		h.Statuses = a.runtime.Statuses()
 		h.VolumeQuota = a.volumes.Mode()
 		h.EncryptionKey = &encryptionKey
+		h.Capabilities.DBSetPassword = a.data.SetsPasswords()
 		return h
 	}
 	start := time.Now()

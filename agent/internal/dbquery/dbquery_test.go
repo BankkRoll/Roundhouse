@@ -171,6 +171,12 @@ func TestQuote(t *testing.T) {
 	if got := quoteMySQLString(pw, true); got != "'a''b\\c\x00d\ne\x1a'" {
 		t.Errorf("mysql string (no backslash escapes) %q", got)
 	}
+	if got := quotePostgresString("it's"); got != `'it''s'` {
+		t.Errorf("postgres string %s", got)
+	}
+	if got := quotePostgresString(`a\'b`); got != `E'a\\''b'` {
+		t.Errorf("postgres escape string %s", got)
+	}
 	op := &protocol.DBOp{Namespace: `s"x`, Table: "t", OrderBy: `c"; DROP`, Descending: ptr(true), Offset: ptr(5)}
 	rel, err := pgRelation(op)
 	if err != nil {
@@ -522,6 +528,125 @@ func TestRedisAgainstFake(t *testing.T) {
 	res = run(ro, "read", protocol.DBOp{Type: "describe", Table: "k"})
 	if res.OK {
 		t.Fatalf("describe: %+v", res)
+	}
+}
+
+const testNewPassword = "Nw-pass_0123456789.abcdefghij~XYZ"
+
+func TestSetPasswordRefusals(t *testing.T) {
+	r := New(Options{})
+	ctx := context.Background()
+	admin := Credential{Username: "postgres", Password: "admin-password", NewPassword: testNewPassword}
+	pg := Target{Engine: EnginePostgres, Host: "127.0.0.1", Port: 1}
+	my := Target{Engine: EngineMySQL, Host: "127.0.0.1", Port: 1, AppUser: "app"}
+	setPw := func(user string) protocol.DBOp { return protocol.DBOp{Type: protocol.DBOpSetPassword, User: user} }
+	cases := []struct {
+		name   string
+		target Target
+		cred   Credential
+		mode   string
+		op     protocol.DBOp
+		want   string
+	}{
+		{"read mode", pg, admin, "read", setPw("postgres"), "runs as the admin"},
+		{"no new password", pg, Credential{Username: "postgres", Password: "admin-password"}, "write", setPw("postgres"), "new password"},
+		{"short new password", pg, Credential{Username: "postgres", Password: "admin-password", NewPassword: "short"}, "write", setPw("postgres"), "new password"},
+		{"quote in new password", pg, Credential{Username: "postgres", Password: "admin-password", NewPassword: testNewPassword + "'"}, "write", setPw("postgres"), "new password"},
+		{"no user", pg, admin, "write", setPw(""), "needs a user"},
+		{"another role", pg, admin, "write", setPw("someone_else"), "changes only"},
+		{"app user outside mysql", Target{Engine: EnginePostgres, Host: "127.0.0.1", Port: 1, AppUser: "app"}, admin, "write", setPw("app"), "changes only"},
+		{"another mysql user", my, Credential{Username: "root", Password: "admin-password", NewPassword: testNewPassword}, "write", setPw("mysql.sys"), "changes only"},
+	}
+	for _, c := range cases {
+		res := r.Run(ctx, c.target, c.cred, query(c.target.Engine, c.mode, c.op))
+		if res.OK || !strings.Contains(res.Error, c.want) {
+			t.Errorf("%s: %+v, want an error containing %q", c.name, res, c.want)
+		}
+		if strings.Contains(res.Error, testNewPassword) || strings.Contains(res.Error, "admin-password") {
+			t.Errorf("%s: error carries a password: %s", c.name, res.Error)
+		}
+	}
+	// The admin itself, roundhouse_ro and MySQL's application user pass the
+	// checks and fail only on connecting.
+	for _, c := range []struct {
+		target Target
+		cred   Credential
+		user   string
+	}{
+		{pg, admin, "postgres"},
+		{pg, admin, ReadonlyUser},
+		{my, Credential{Username: "root", Password: "admin-password", NewPassword: testNewPassword}, "app"},
+	} {
+		res := r.Run(ctx, c.target, c.cred, query(c.target.Engine, "write", setPw(c.user)))
+		if res.OK || strings.Contains(res.Error, "set_password") {
+			t.Errorf("%s on %s: %+v", c.user, c.target.Engine, res)
+		}
+	}
+}
+
+func TestSetPasswordAgainstFakeRedis(t *testing.T) {
+	f := newFakeRedis(t, map[string]string{
+		"AUTH default admin-pass-1":                               "+OK\r\n",
+		"ACL GETUSER roundhouse_ro":                               "*2\r\n$5\r\nflags\r\n*1\r\n$2\r\non\r\n",
+		"ACL SETUSER roundhouse_ro resetpass >" + testNewPassword: "+OK\r\n",
+		"ACL GETUSER default":                                     "*2\r\n$5\r\nflags\r\n*1\r\n$2\r\non\r\n",
+		"CONFIG SET requirepass " + testNewPassword:               "+OK\r\n",
+	})
+	missing := newFakeRedis(t, map[string]string{
+		"AUTH default admin-pass-1": "+OK\r\n",
+		"ACL GETUSER roundhouse_ro": "*-1\r\n",
+	})
+	r := New(Options{})
+	ctx := context.Background()
+	run := func(f *fakeRedis, cred Credential, user string) *protocol.DBQueryResult {
+		t.Helper()
+		res := r.Run(ctx, f.target(), cred, query("redis", "write", protocol.DBOp{Type: protocol.DBOpSetPassword, User: user}))
+		if err := res.Validate(); err != nil {
+			t.Fatalf("invalid result %+v: %v", res, err)
+		}
+		b, _ := json.Marshal(res)
+		for _, pw := range []string{testNewPassword, cred.Password} {
+			if strings.Contains(string(b), pw) {
+				t.Fatalf("result carries a password: %s", b)
+			}
+		}
+		return res
+	}
+	admin := Credential{Username: "default", Password: "admin-pass-1", NewPassword: testNewPassword}
+	res := run(f, admin, ReadonlyUser)
+	if !res.OK || res.Notice != "password set for roundhouse_ro" {
+		t.Fatalf("set roundhouse_ro: %+v", res)
+	}
+	// The fake answers CONFIG SET requirepass for the admin and nothing
+	// else, so this also proves "default" does not go through ACL SETUSER.
+	res = run(f, admin, "default")
+	if !res.OK || res.Notice != "password set for default" {
+		t.Fatalf("set default: %+v", res)
+	}
+	res = run(missing, admin, ReadonlyUser)
+	if res.OK || !strings.Contains(res.Error, "does not exist") {
+		t.Fatalf("missing user: %+v", res)
+	}
+}
+
+// TestSetPasswordErrorsAreScrubbed has the server echo both passwords in
+// its error: neither may reach the result.
+func TestSetPasswordErrorsAreScrubbed(t *testing.T) {
+	echo := "-ERR CONFIG SET failed for '" + testNewPassword + "' after AUTH admin-pass-3\r\n"
+	f := newFakeRedis(t, map[string]string{
+		"AUTH default admin-pass-3":                 "+OK\r\n",
+		"ACL GETUSER default":                       "*0\r\n",
+		"CONFIG SET requirepass " + testNewPassword: echo,
+	})
+	cred := Credential{Username: "default", Password: "admin-pass-3", NewPassword: testNewPassword}
+	res := New(Options{}).Run(context.Background(), f.target(), cred,
+		query("redis", "write", protocol.DBOp{Type: protocol.DBOpSetPassword, User: "default"}))
+	if res.OK || !strings.Contains(res.Error, "[redacted]") {
+		t.Fatalf("result %+v", res)
+	}
+	b, _ := json.Marshal(res)
+	if strings.Contains(string(b), testNewPassword) || strings.Contains(string(b), "admin-pass-3") {
+		t.Fatalf("result carries a password: %s", b)
 	}
 }
 

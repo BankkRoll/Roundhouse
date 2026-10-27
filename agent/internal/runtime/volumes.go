@@ -39,15 +39,13 @@ type ExecRunner interface {
 // may). It repeats the protocol's validation, so a gap there can't bind one
 // service's volume into another.
 func (r *Runtime) admitData(w *protocol.WorkloadSpec, volumes map[string]*protocol.VolumeSpec) string {
-	for _, p := range w.Ports {
-		if p.Publish != nil {
-			// SECURITY: ADR 0004 publishes a port only behind a final nftables
-			// drop of every source outside publish_allowed_cidrs. This agent
-			// does not install that allowlist yet, so it refuses rather than
-			// publish a database to the whole internet.
-			return fmt.Sprintf("refusing to publish port %d on the host: this agent does not enforce the TCP proxy's "+
-				"source allowlist yet, and will not publish a port without it", p.ContainerPort)
-		}
+	// SECURITY: ADR 0004 publishes a port only behind a final drop of every
+	// source outside publish_allowed_cidrs. A node that cannot install that
+	// allowlist refuses rather than publish a database to the whole
+	// internet; one that can still waits for it on every create and start
+	// ([Runtime.publishWait]).
+	if publishes(w) && r.opts.Publish == nil {
+		return noPublishReason(w)
 	}
 	if w.Healthcheck != nil && w.Healthcheck.Type == protocol.HealthcheckExec && r.opts.Exec == nil {
 		return "refusing an exec health check: this node cannot run commands in containers"

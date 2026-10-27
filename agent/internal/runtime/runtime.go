@@ -20,8 +20,9 @@
 //     project, environment and service;
 //   - bind each workload's volumes, never letting two containers mount one
 //     volume, with stop_first rollouts, exec health probes and holds that
-//     keep a workload stopped for a backup or restore (ADR 0004); refuse
-//     published ports until the TCP proxy's allowlist is enforced;
+//     keep a workload stopped for a backup or restore (ADR 0004);
+//   - publish TCP proxy ports only behind their source allowlist, applied
+//     on every pass before any container is created or started;
 //   - keep one bridge network per environment, remove the ones no longer
 //     used, serve no route that two projects claim, report workload_status
 //     on every state change, and garbage-collect unused images under disk
@@ -49,6 +50,7 @@ import (
 	"time"
 
 	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
+	"github.com/BankkRoll/Roundhouse/agent/internal/firewall"
 	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
 	protocol "github.com/BankkRoll/Roundhouse/packages/protocol/go"
 )
@@ -173,6 +175,9 @@ type Options struct {
 	Volumes VolumeSource
 	// Exec runs exec health probes; nil refuses workloads that use them.
 	Exec ExecRunner
+	// Publish enforces the TCP proxy's source allowlist; nil refuses
+	// workloads that publish a port.
+	Publish PublishFirewall
 }
 
 // Runtime is the reconciler. Create it with [New], feed it desired states
@@ -218,6 +223,10 @@ type Runtime struct {
 	holds map[*hold]bool
 	// heldStops are the IDs of containers a hold stopped ([heldStopsFile]).
 	heldStops map[string]bool
+	// publishUsed is set once the TCP proxy allowlist was first applied;
+	// publishStatus is the outcome of the latest apply.
+	publishUsed   bool
+	publishStatus firewall.PublishStatus
 }
 
 // instance is one managed container.
@@ -460,6 +469,11 @@ func (r *Runtime) watchEvents(ctx context.Context) {
 			delay = time.Second
 		}
 		r.log.Debug("docker event stream ended; reconnecting", "err", err, "retry_in", delay)
+		// NOTE: the stream ends when the daemon restarts, which may have
+		// rebuilt its chains without the allowlist's jumps.
+		if r.opts.Publish != nil {
+			r.opts.Publish.Invalidate()
+		}
 		if !sleep(ctx, delay) {
 			return
 		}
@@ -524,6 +538,7 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 	specs := withoutRoutes(r.wantSpecs(ds))
 	r.ensureNetworks(ctx, specs)
 	r.collectNetworks(ctx, specs)
+	r.applyAllowlist(ctx, specs)
 
 	now := time.Now()
 	r.mu.Lock()
@@ -581,9 +596,12 @@ func (r *Runtime) reconcile(ctx context.Context) time.Duration {
 func (r *Runtime) wantSpecs(ds *protocol.DesiredState) []*wantSpec {
 	specs := make([]*wantSpec, 0, len(ds.Workloads)+1)
 	for i := range ds.Workloads {
+		w := &ds.Workloads[i]
 		specs = append(specs, &wantSpec{
-			WorkloadSpec: ds.Workloads[i], generation: ds.Generation, blocked: r.blocked[ds.Workloads[i].ID],
-			stopFirst: ds.Workloads[i].Rollout == protocol.RolloutStopFirst || len(ds.Workloads[i].Mounts) > 0,
+			WorkloadSpec: *w, generation: ds.Generation, blocked: r.blocked[w.ID],
+			stopFirst: w.Rollout == protocol.RolloutStopFirst || len(w.Mounts) > 0,
+			hostPorts: publishBindings(w),
+			exclusive: publishes(w),
 		})
 	}
 	if ds.Registry != nil {
@@ -712,6 +730,10 @@ func (r *Runtime) reconcileWorkload(s *wantSpec, wanted map[string]*wantSpec, no
 			ws.phase, ws.message = protocol.StatePending, why
 			return 0
 		}
+		if why := r.publishWait(s); why != "" {
+			ws.phase, ws.message = protocol.StatePending, why
+			return 0
+		}
 		if s.exclusive && r.hasObsolete(s) {
 			return 0
 		}
@@ -739,6 +761,14 @@ func (r *Runtime) reconcileWorkload(s *wantSpec, wanted map[string]*wantSpec, no
 		if cur.running {
 			r.stopAsync(cur)
 		}
+		return 0
+	}
+	if cur.running {
+		if note := r.publishNote(s); note != "" {
+			s.note = appendNote(s.note, note)
+		}
+	} else if why := r.publishWait(s); why != "" {
+		s.note = appendNote(s.note, why)
 		return 0
 	}
 	if cur.heldStop {

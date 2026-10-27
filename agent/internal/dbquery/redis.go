@@ -125,6 +125,14 @@ func runRedis(ctx context.Context, req *request) (*resultSet, error) {
 	if op.Type == protocol.DBOpDescribe {
 		return nil, usageError("describe is not supported for redis")
 	}
+	if op.Type == protocol.DBOpSetPassword {
+		c, err := dialRedis(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		defer c.close()
+		return redisSetPassword(c, req)
+	}
 	db := namespaceOr(op.Namespace, namespaceOr(req.target.Database, "0"))
 	if !validRedisDB(db) {
 		return nil, usageError("namespace must be a database index")
@@ -162,6 +170,38 @@ func runRedis(ctx context.Context, req *request) (*resultSet, error) {
 		return set, redisReplyRows(set, strings.ToUpper(argv[0]), v)
 	}
 	return nil, usageError("unsupported operation")
+}
+
+// redisSetPassword replaces an existing ACL user's passwords with the new
+// one. The change is runtime only: the server starts from --requirepass and
+// --user rules built from the container's environment, so the control plane
+// redeploys the database with the new password after a rotation.
+//
+// NOTE: for "default" it sets requirepass, which the server applies as
+// ACL SETUSER default resetpass >new and which keeps CONFIG GET requirepass
+// in step with the ACL. Either way, connections that already authenticated
+// (this one included) stay authenticated.
+//
+// SECURITY: both commands travel over the connection, never in an argv,
+// and the server redacts their arguments from SLOWLOG and MONITOR.
+func redisSetPassword(c *redisConn, req *request) (*resultSet, error) {
+	user := req.op.User
+	v, err := c.do("ACL", "GETUSER", user)
+	if err != nil {
+		return nil, err
+	}
+	if v.null {
+		return nil, usageError(fmt.Sprintf("user %q does not exist", user))
+	}
+	if user == "default" {
+		_, err = c.do("CONFIG", "SET", "requirepass", req.cred.NewPassword)
+	} else {
+		_, err = c.do("ACL", "SETUSER", user, "resetpass", ">"+req.cred.NewPassword)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return passwordSet(req), nil
 }
 
 func validRedisDB(s string) bool {
