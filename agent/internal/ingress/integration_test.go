@@ -40,6 +40,11 @@ type env struct {
 // manager whose upstream DNS server runs in this test process, as it runs in
 // the agent. refresh overrides Caddy's upstream cache interval when set.
 func setup(t *testing.T, refresh time.Duration) *env {
+	return setupBinds(t, refresh, nil)
+}
+
+// setupBinds is setup with bind mounts into the Caddy container.
+func setupBinds(t *testing.T, refresh time.Duration, binds []string) *env {
 	c := dockertest.Client(t)
 	network := dockertest.Unique("roundhouse-it-ing-")
 	dockertest.Network(t, c, network, nil)
@@ -50,7 +55,7 @@ func setup(t *testing.T, refresh time.Duration) *env {
 	})
 	caddy := dockertest.Unique("roundhouse-it-caddy-")
 	caddyID := dockertest.Run(t, c, caddy, docker.ContainerCreate{
-		Image: dockertest.CaddyImage, Entrypoint: caddyCmd, HostConfig: docker.HostConfig{NetworkMode: network},
+		Image: dockertest.CaddyImage, Entrypoint: caddyCmd, HostConfig: docker.HostConfig{NetworkMode: network, Binds: binds},
 	})
 
 	// NOTE: ListenDNS insists on loopback; here Caddy runs in another

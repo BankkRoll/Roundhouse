@@ -15,6 +15,7 @@ import (
 	"github.com/BankkRoll/Roundhouse/agent/internal/backup"
 	"github.com/BankkRoll/Roundhouse/agent/internal/builder"
 	"github.com/BankkRoll/Roundhouse/agent/internal/builds"
+	"github.com/BankkRoll/Roundhouse/agent/internal/certs"
 	"github.com/BankkRoll/Roundhouse/agent/internal/config"
 	"github.com/BankkRoll/Roundhouse/agent/internal/conn"
 	"github.com/BankkRoll/Roundhouse/agent/internal/dataplane"
@@ -57,6 +58,10 @@ type agent struct {
 	builder bool
 	// firewall keeps containers away from the cloud metadata endpoint.
 	firewall *firewall.Rules
+	// certs holds the control plane's certificates (managed TLS mode).
+	certs *certs.Store
+	// tlsStatus reports Caddy's on-demand certificates.
+	tlsStatus *certs.Tracker
 }
 
 // newAgent wires the agent's components. encryption is the node's X25519
@@ -73,10 +78,34 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	}
 	a := &agent{log: log, client: client, docker: dc, refusal: refusal, builder: cfg.Builder,
 		firewall: firewall.New(nil, log.With("component", "firewall"))}
+	certsEnabled := func() bool { return client.PeerProtocolVersion() >= protocol.CertsProtocolVersion }
+	a.tlsStatus = certs.NewTracker(certs.TrackerOptions{
+		Send:    client.Send,
+		Enabled: certsEnabled,
+		Logger:  log.With("component", "tls-status"),
+	})
 	a.ingress = ingress.New(ingress.Options{
 		Logger:        log.With("component", "ingress"),
 		UpstreamsPath: filepath.Join(dataDir, "ingress-upstreams.json"),
+		OnLoaded: func(l ingress.Loaded) {
+			a.certs.Loaded(l)
+			a.tlsStatus.Loaded(l)
+		},
 	})
+	a.certs, err = certs.NewStore(certs.StoreOptions{
+		Dir:       certsDir(cfg, dataDir),
+		IndexPath: filepath.Join(dataDir, "certs.json"),
+		NodeID:    cfg.NodeID,
+		Key:       encryption,
+		Ingress:   a.ingress,
+		Send:      client.Send,
+		Enabled:   certsEnabled,
+		Logger:    log.With("component", "certs"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	client.Certs = a.certs
 	a.logs, err = logship.New(logship.Options{
 		Docker: dc,
 		Send:   func(ctx context.Context, l *protocol.Logs) error { return client.Send(ctx, l) },
@@ -170,6 +199,8 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	client.OnConnect = func() {
 		a.logs.Connected()
 		a.builds.Connected()
+		a.certs.Connected()
+		a.tlsStatus.Connected()
 	}
 	a.metrics = metrics.New(metrics.Options{
 		Send: func(ctx context.Context, m *protocol.Metrics) error {
@@ -185,6 +216,10 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	client.OnPeerProtocol = func(v int) {
 		if v >= protocol.VolumesProtocolVersion {
 			a.volumes.Connected()
+		}
+		if v >= protocol.CertsProtocolVersion {
+			a.certs.Connected()
+			a.tlsStatus.Connected()
 		}
 	}
 	a.backups = backup.New(backup.Options{
@@ -210,6 +245,19 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	})
 	client.Data = a.data
 	return a, nil
+}
+
+// certsDir is the configured certificates directory, or the default: one
+// Caddy can read on Linux, a directory in the data directory elsewhere
+// (local development only).
+func certsDir(cfg config.Config, dataDir string) string {
+	if cfg.Ingress.CertsDir != "" {
+		return cfg.Ingress.CertsDir
+	}
+	if goruntime.GOOS == "linux" {
+		return certs.DefaultDir
+	}
+	return filepath.Join(dataDir, "certs")
 }
 
 // volumesRoot is the configured volumes root, or the default: the node
@@ -314,6 +362,15 @@ func (a *agent) run(ctx context.Context) error {
 	goRun("logs", a.logs.Run)
 	goRun("builds", a.builds.Run)
 	goRun("metrics", a.metrics.Run)
+	goRun("certs", a.certs.Run)
+	goRun("tls-status", a.tlsStatus.Run)
+	if ln, err := certs.ListenLog(ingress.DefaultTLSLogListen); err != nil {
+		// NOTE: only cert_status error details depend on Caddy's tls log;
+		// handshakes still report issued certificates.
+		a.log.Error("cannot receive Caddy's tls log; certificate errors will be less detailed", "addr", ingress.DefaultTLSLogListen, "err", err)
+	} else {
+		goRun("tls-log", func(ctx context.Context) error { return certs.ServeLogOn(ctx, ln, a.tlsStatus.HandleEvent) })
+	}
 	if ln, err := ingress.ListenAsk(ingress.DefaultAskListen); err != nil {
 		// NOTE: only on-demand ACME certificates depend on this endpoint;
 		// everything else keeps working without it.
@@ -375,7 +432,11 @@ func (h handler) ApplyDesiredState(m *protocol.DesiredState) bool {
 	// Volumes first, so the runtime's first pass over this state finds them.
 	// Both ignore a generation they have seen.
 	h.a.volumes.Apply(m.Generation, m.Volumes)
-	return h.a.runtime.Apply(m)
+	if !h.a.runtime.Apply(m) {
+		return false
+	}
+	h.a.certs.SetManifest(m.Certificates)
+	return true
 }
 
 // reportRefused reports each workload of a refused desired state as pending

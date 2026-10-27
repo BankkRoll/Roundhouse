@@ -905,6 +905,7 @@ func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec, co
 	old := map[key][]string{}
 	degraded := map[key][]string{}
 	ports := map[key][]int{}
+	hsts := map[key]*protocol.RouteHSTS{}
 	var keys []key
 	var hosts []string
 	seen := map[key]bool{}
@@ -934,6 +935,9 @@ func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec, co
 			k := key{rt.Hostname, rt.PathPrefix}
 			note(k)
 			ports[k] = append(ports[k], rt.ContainerPort)
+			if rt.HSTS != nil {
+				hsts[k] = rt.HSTS
+			}
 		}
 		cur := r.current(s)
 		if cur == nil || !cur.running || cur.busy {
@@ -971,6 +975,9 @@ func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec, co
 	}
 
 	cfg := ingress.Config{TLSMode: ds.TLSMode, AllowedHosts: hosts}
+	if in := ds.Ingress; in != nil {
+		cfg.ManagedHosts, cfg.ChallengeUpstream = in.ManagedHosts, in.ACMEChallengeUpstream
+	}
 	for _, k := range keys {
 		if conflicts[keyOf(k.host, k.prefix)] {
 			continue
@@ -982,7 +989,7 @@ func (r *Runtime) ingressConfig(ds *protocol.DesiredState, specs []*wantSpec, co
 		if len(ups) == 0 {
 			ups = degraded[k]
 		}
-		cfg.Routes = append(cfg.Routes, ingress.Route{Host: k.host, PathPrefix: k.prefix, Upstreams: ups, Ports: ports[k]})
+		cfg.Routes = append(cfg.Routes, ingress.Route{Host: k.host, PathPrefix: k.prefix, Upstreams: ups, Ports: ports[k], HSTS: hsts[k]})
 	}
 	return cfg
 }
