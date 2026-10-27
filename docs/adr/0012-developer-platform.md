@@ -177,8 +177,9 @@ so.
 | `apply_change_set`    | every op's action + `changes:auto_apply` | destructive                  | see below                                                                     |
 
 Never exposed: revealing secrets, deleting anything, the shell, database
-queries, domains, nodes, tokens and members. These need a human in the
-dashboard.
+queries, domains, adding or removing nodes, tokens and members. These need
+a human in the dashboard. (Draining and resuming a node became tools with
+`nodes:manage`; see ADR 0005's implementation notes.)
 
 **Confirmation.** Staging tools return
 `{ change_set_id, revision, summary, review_url }`, where `review_url` is
