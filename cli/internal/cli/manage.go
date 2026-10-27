@@ -842,12 +842,3 @@ func (a *App) upCmd() *cobra.Command {
 This needs a source upload endpoint the control plane does not offer yet.`,
 		`  roundhouse up`, noArgs)
 }
-
-func (a *App) shellCmd() *cobra.Command {
-	// TODO(phase-3): needs an exec endpoint that relays a TTY to a replica
-	// through its node agent.
-	return a.stub("shell", "Open a shell in a running replica (not available yet)",
-		`Open an interactive shell inside one of the service's running containers.
-This needs an exec relay the control plane does not offer yet.`,
-		`  roundhouse shell --service api`, noArgs)
-}

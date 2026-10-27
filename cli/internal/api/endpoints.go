@@ -87,6 +87,7 @@ var Routes = []Route{
 	RouteRotateCredentials, RouteCredentialRotations,
 	RouteCronState, RouteListCronRuns, RouteTriggerCron, RouteGetCronRun, RouteCronRunLogs,
 	RouteCancelCronRun, RoutePauseCron, RouteResumeCron, RouteCronPreview,
+	RouteShellTargets, RouteShell, RouteServiceCloudflare,
 }
 
 // AuthRoutes lists the Better Auth routes the client calls.

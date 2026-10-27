@@ -120,7 +120,7 @@ func TestVersion(t *testing.T) {
 
 func TestStubsAreUnavailable(t *testing.T) {
 	h := newHarness(t)
-	for _, args := range [][]string{{"up"}, {"shell"}, {"db", "connect"}, {"db", "connect", "postgres"}} {
+	for _, args := range [][]string{{"up"}, {"db", "connect"}, {"db", "connect", "postgres"}} {
 		r := h.expect(exitcode.Unavailable, "", args...)
 		contains(t, r.stderr, "not available on this control plane yet")
 	}
