@@ -340,6 +340,10 @@
               "domain.verified",
               "domain.failed",
               "domain.removed",
+              "domain.updated",
+              "certificate.issued",
+              "certificate.renewed",
+              "certificate.failed",
               "mcp_client.authorized",
               "mcp_client.revoked",
               "template.deployed",
@@ -1125,6 +1129,134 @@
         },
         "type": "object"
       },
+      "Certificate": {
+        "properties": {
+          "challenge": {
+            "enum": [
+              "http-01",
+              "dns-01"
+            ],
+            "type": "string"
+          },
+          "domain_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failures": {
+            "type": "integer"
+          },
+          "hostnames": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "apps_wildcard",
+              "generated",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "next_attempt_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "nodes": {
+            "properties": {
+              "acked": {
+                "type": "integer"
+              },
+              "sent": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "acked",
+              "sent"
+            ],
+            "type": "object"
+          },
+          "not_after": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "not_before": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "renew_after": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "issued",
+              "renewing",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "hostnames",
+          "challenge",
+          "domain_id",
+          "status",
+          "issuer",
+          "not_before",
+          "not_after",
+          "renew_after",
+          "error",
+          "failures",
+          "next_attempt_at",
+          "nodes",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "ChainedAuditLog": {
         "properties": {
           "action": {
@@ -1204,6 +1336,10 @@
               "domain.verified",
               "domain.failed",
               "domain.removed",
+              "domain.updated",
+              "certificate.issued",
+              "certificate.renewed",
+              "certificate.failed",
               "mcp_client.authorized",
               "mcp_client.revoked",
               "template.deployed",
@@ -2863,7 +2999,8 @@
           "purpose": {
             "enum": [
               "routing",
-              "ownership"
+              "ownership",
+              "acme_delegation"
             ],
             "type": "string"
           },
@@ -2921,6 +3058,9 @@
           "hostname": {
             "type": "string"
           },
+          "hsts": {
+            "$ref": "#/components/schemas/DomainHsts"
+          },
           "id": {
             "type": "string"
           },
@@ -2946,6 +3086,12 @@
             },
             "type": "array"
           },
+          "routing_nodes": {
+            "items": {
+              "$ref": "#/components/schemas/DomainRoutingNode"
+            },
+            "type": "array"
+          },
           "service_id": {
             "type": "string"
           },
@@ -2961,6 +3107,9 @@
           },
           "target_port": {
             "type": "integer"
+          },
+          "tls": {
+            "$ref": "#/components/schemas/DomainTls"
           },
           "tls_status": {
             "enum": [
@@ -2996,6 +3145,9 @@
               "integer",
               "null"
             ]
+          },
+          "wildcard": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -3012,10 +3164,39 @@
           "apex",
           "records",
           "error",
+          "wildcard",
+          "hsts",
+          "tls",
+          "routing_nodes",
           "last_checked_at",
           "next_check_at",
           "verified_at",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "DomainHsts": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "include_subdomains": {
+            "type": "boolean"
+          },
+          "max_age": {
+            "maximum": 63072000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "preload": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "max_age",
+          "include_subdomains",
+          "preload"
         ],
         "type": "object"
       },
@@ -3036,6 +3217,128 @@
           "object",
           "null"
         ]
+      },
+      "DomainRoutingNode": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "public_ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "serves": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "public_ip",
+          "serves"
+        ],
+        "type": "object"
+      },
+      "DomainTls": {
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issuer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/DomainTlsNode"
+            },
+            "type": "array"
+          },
+          "not_after": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "not_before": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "issued",
+              "failed",
+              "disabled"
+            ],
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "issuer",
+          "not_before",
+          "not_after",
+          "error",
+          "updated_at",
+          "nodes"
+        ],
+        "type": "object"
+      },
+      "DomainTlsNode": {
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "issued",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "name",
+          "state",
+          "error"
+        ],
+        "type": "object"
       },
       "Draft": {
         "properties": {
@@ -3702,6 +4005,113 @@
         ],
         "type": "object"
       },
+      "InstanceDomainSettings": {
+        "properties": {
+          "acme": {
+            "properties": {
+              "account_url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "directory_url": {
+                "type": "string"
+              },
+              "email": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "directory_url",
+              "email",
+              "account_url"
+            ],
+            "type": "object"
+          },
+          "apps_domain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cloudflare_dns": {
+            "properties": {
+              "updated_at": {
+                "description": "Unix time in milliseconds",
+                "example": 1767225600000,
+                "type": "integer"
+              },
+              "zone_id": {
+                "type": "string"
+              },
+              "zone_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "zone_id",
+              "zone_name",
+              "updated_at"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "ingress_hostname": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ingress_nodes": {
+            "type": "integer"
+          },
+          "managed": {
+            "properties": {
+              "apps_wildcard": {
+                "type": "boolean"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "problems": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "wildcard_domains": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "available",
+              "problems",
+              "apps_wildcard",
+              "wildcard_domains"
+            ],
+            "type": "object"
+          },
+          "tls_mode": {
+            "$ref": "#/components/schemas/TlsMode"
+          }
+        },
+        "required": [
+          "tls_mode",
+          "apps_domain",
+          "ingress_hostname",
+          "ingress_nodes",
+          "acme",
+          "cloudflare_dns",
+          "managed"
+        ],
+        "type": "object"
+      },
       "InstanceSettings": {
         "properties": {
           "apps_domain": {
@@ -3709,6 +4119,9 @@
               "string",
               "null"
             ]
+          },
+          "ingress_nodes": {
+            "type": "integer"
           },
           "log_retention_days": {
             "maximum": 365,
@@ -3726,7 +4139,8 @@
           "apps_domain",
           "tls_mode",
           "log_retention_days",
-          "mcp_enabled"
+          "mcp_enabled",
+          "ingress_nodes"
         ],
         "type": "object"
       },
@@ -5402,6 +5816,54 @@
         "required": [
           "instance_admin"
         ],
+        "type": "object"
+      },
+      "PutInstanceDomains": {
+        "properties": {
+          "acme_directory_url": {
+            "maxLength": 2048,
+            "pattern": "^https:\\/\\/[^\\s]+$",
+            "type": "string"
+          },
+          "acme_email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cloudflare_dns": {
+            "properties": {
+              "api_token": {
+                "maxLength": 256,
+                "minLength": 20,
+                "type": "string"
+              },
+              "zone_id": {
+                "pattern": "^[a-f0-9]{32}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "zone_id",
+              "api_token"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "ingress_hostname": {
+            "example": "apps.example.com",
+            "maxLength": 253,
+            "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "PutProjectGrant": {
@@ -7774,6 +8236,7 @@
       "TlsMode": {
         "enum": [
           "acme",
+          "managed",
           "internal",
           "off"
         ],
@@ -7805,6 +8268,21 @@
         "required": [
           "positions",
           "expected_version"
+        ],
+        "type": "object"
+      },
+      "UpdateDomain": {
+        "properties": {
+          "confirm_preload": {
+            "maxLength": 300,
+            "type": "string"
+          },
+          "hsts": {
+            "$ref": "#/components/schemas/DomainHsts"
+          }
+        },
+        "required": [
+          "hsts"
         ],
         "type": "object"
       },
@@ -10365,6 +10843,119 @@
           "audit": [],
           "auth": "session"
         }
+      },
+      "patch": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDomain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Domain"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Update a custom domain",
+        "tags": [
+          "domains"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "domain.updated"
+          ],
+          "auth": "session"
+        }
       }
     },
     "/v1/domains/{domainId}/check": {
@@ -11825,6 +12416,10 @@
                 "domain.verified",
                 "domain.failed",
                 "domain.removed",
+                "domain.updated",
+                "certificate.issued",
+                "certificate.renewed",
+                "certificate.failed",
                 "mcp_client.authorized",
                 "mcp_client.revoked",
                 "template.deployed",
@@ -12135,6 +12730,198 @@
         }
       }
     },
+    "/v1/instance/certificates": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "certificates": {
+                      "items": {
+                        "$ref": "#/components/schemas/Certificate"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "certificates"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "List certificates",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [],
+          "auth": "session_only"
+        }
+      }
+    },
+    "/v1/instance/domains": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceDomainSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Get domain and TLS settings",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [],
+          "auth": "session_only"
+        }
+      },
+      "put": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutInstanceDomains"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceDomainSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Update domain and TLS settings",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "instance.settings_updated"
+          ],
+          "auth": "session_only",
+          "reauth": true
+        }
+      }
+    },
     "/v1/instance/keys": {
       "get": {
         "responses": {
@@ -12346,6 +13133,26 @@
             "description": "Error"
           },
           "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
             "content": {
               "application/json": {
                 "schema": {

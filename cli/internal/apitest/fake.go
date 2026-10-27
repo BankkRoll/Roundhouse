@@ -100,15 +100,18 @@ type Fake struct {
 	logs        map[string][]api.LogEntry
 	domains     []api.Domain
 	dns         map[string]DNSState
-	nodes       []api.Node
-	providers   map[string]bool
-	offers      []api.ProviderOffer
-	provisions  []*api.NodeProvision
-	requests    []Request
-	seq         int
-	tokens      []*apiToken
-	tokenSeq    int
-	changeSets  []*changeSet
+	// routingNodes are what new domains report as their routing_nodes; see
+	// [Fake.SetRoutingNodes].
+	routingNodes []api.DomainRoutingNode
+	nodes        []api.Node
+	providers    map[string]bool
+	offers       []api.ProviderOffer
+	provisions   []*api.NodeProvision
+	requests     []Request
+	seq          int
+	tokens       []*apiToken
+	tokenSeq     int
+	changeSets   []*changeSet
 
 	serviceMetrics map[string]ServiceMetricsData
 	nodeMetrics    map[string]NodeMetricsData
@@ -263,6 +266,14 @@ func (f *Fake) seed() {
 		{ID: "dom_0002", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "shop.example.com", URL: "https://shop.example.com", Type: "custom", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 1000), CreatedAt: Now - 1000},
 		{ID: "dom_0001", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "api-production-x7k2.apps.example.com", URL: "https://api-production-x7k2.apps.example.com", Type: "generated", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 86400000), CreatedAt: Now - 86400000},
 		{ID: "dom_0003", ServiceID: APIServiceID, EnvironmentID: StagingID, Hostname: "api-staging-q9p1.apps.example.com", URL: "https://api-staging-q9p1.apps.example.com", Type: "generated", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 86400000), CreatedAt: Now - 86400000},
+	}
+	f.routingNodes = []api.DomainRoutingNode{{ID: NodeID, Name: "edge-1", PublicIP: str("203.0.113.10"), Serves: true}}
+	for i := range f.domains {
+		d := &f.domains[i]
+		d.TLSStatus = "issued"
+		d.HSTS = DefaultHSTS
+		d.TLS = issuedTLS(*d.VerifiedAt)
+		d.RoutingNodes = slices.Clone(f.routingNodes)
 	}
 	f.nodes = []api.Node{{ID: NodeID, Name: "edge-1", Hostname: str("edge-1"), Status: "online", Provider: "manual", PublicIP: str("203.0.113.10"),
 		OS: str("linux"), Arch: str("amd64"), AgentVersion: str("0.4.0"), Capabilities: json.RawMessage(`{"docker":true,"builder":true}`),
@@ -664,6 +675,7 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteListDomains:     {"services:read", f.listDomains},
 		api.RouteAddDomain:       {"services:manage", f.addDomain},
 		api.RouteGetDomain:       {"services:read", f.getDomain},
+		api.RouteUpdateDomain:    {"services:manage", f.updateDomain},
 		api.RouteCheckDomain:     {"services:manage", f.recheckDomain},
 		api.RouteRemoveDomain:    {"services:manage", f.removeDomain},
 		api.RouteListNodes:       {"nodes:read", f.listNodes},

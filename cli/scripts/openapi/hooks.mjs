@@ -1,12 +1,15 @@
 // Module hooks that let the API's source load under Node, outside workerd:
-// `cloudflare:workers` resolves to a stub (the dump only reads route
-// registries; no Durable Object or Workflow is constructed), and `*.sh`
-// imports load as text, as wrangler's Text rule does.
+// `cloudflare:workers` and `cloudflare:workflows` resolve to stubs (the dump
+// only reads route registries; no Durable Object or Workflow is constructed),
+// and `*.sh` imports load as text, as wrangler's Text rule does.
 import { readFile } from "node:fs/promises";
 
 export async function resolve(specifier, context, next) {
   if (specifier === "cloudflare:workers") {
     return { url: new URL("./cloudflare-workers.mjs", import.meta.url).href, shortCircuit: true };
+  }
+  if (specifier === "cloudflare:workflows") {
+    return { url: new URL("./cloudflare-workflows.mjs", import.meta.url).href, shortCircuit: true };
   }
   return next(specifier, context);
 }

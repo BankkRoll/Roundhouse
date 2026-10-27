@@ -69,7 +69,7 @@ var Routes = []Route{
 	RouteSharedVars, RoutePutSharedVars,
 	RouteListDeployments, RouteCreateDeploy, RouteGetDeployment, RouteRollback, RouteCancel,
 	RouteDeploymentLogs, RouteBuildLogs, RouteListDomains, RouteListNodes, RouteJoinToken,
-	RouteAddDomain, RouteGetDomain, RouteCheckDomain, RouteRemoveDomain,
+	RouteAddDomain, RouteGetDomain, RouteUpdateDomain, RouteCheckDomain, RouteRemoveDomain,
 	RouteIntegrations, RouteProviderOffers, RouteProvisionNode, RouteNodeProvision,
 	RouteCancelProvision, RouteRemoveNode,
 	RouteRealtime, RouteListTokens, RouteCreateToken, RouteRevokeToken,

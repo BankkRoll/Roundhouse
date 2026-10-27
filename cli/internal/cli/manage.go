@@ -84,14 +84,15 @@ func (a *App) domainCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "domain",
 		Aliases: []string{"domains"},
-		Short:   "List, add, verify and remove the service's domains",
+		Short:   "List and manage the service's domains",
 		Long: `List the domains routed to the linked service in its environment, or in
 every environment with --all. The subcommands add your own hostnames, check
-their DNS and remove them.`,
+their DNS, set their HSTS policy and remove them.`,
 		Example: `  roundhouse domain
   roundhouse domain --all --json
   roundhouse domain add shop.example.com
-  roundhouse domain verify shop.example.com --wait`,
+  roundhouse domain verify shop.example.com --wait
+  roundhouse domain hsts shop.example.com --max-age 2y`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return a.runDomainList(cmd.Context(), f, all)
@@ -99,7 +100,7 @@ their DNS and remove them.`,
 	}
 	f.register(cmd, true)
 	cmd.Flags().BoolVar(&all, "all", false, "list domains in every environment")
-	cmd.AddCommand(a.domainListCmd(), a.domainAddCmd(), a.domainVerifyCmd(), a.domainRemoveCmd())
+	cmd.AddCommand(a.domainListCmd(), a.domainAddCmd(), a.domainVerifyCmd(), a.domainHSTSCmd(), a.domainRemoveCmd())
 	return cmd
 }
 

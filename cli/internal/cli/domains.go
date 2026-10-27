@@ -47,8 +47,9 @@ func (a *App) runDomainList(ctx context.Context, f targetFlags, all bool) error 
 		envName[e.ID] = e.Name
 	}
 	tb := a.newTable("url", "environment", "type", "port", "tls", "status")
+	now := a.Now()
 	for _, d := range domains {
-		tb.row(d.URL, orDash(envName[d.EnvironmentID]), d.Type, fmt.Sprint(d.TargetPort), d.TLSStatus, orDash(d.Status))
+		tb.row(d.URL, orDash(envName[d.EnvironmentID]), d.Type, fmt.Sprint(d.TargetPort), tlsSummary(&d, now), orDash(d.Status))
 	}
 	tb.flush()
 	return nil
@@ -73,6 +74,110 @@ func (a *App) domainListCmd() *cobra.Command {
 	return cmd
 }
 
+// untilShort renders how far ahead a timestamp is, e.g. "63d" or "5h".
+func untilShort(now time.Time, ms int64) string {
+	d := millis(ms).Sub(now)
+	switch {
+	case d >= 48*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dm", max(0, int(d.Minutes())))
+	}
+}
+
+// tlsStatus is the certificate status, falling back to the older top-level
+// field for an API that doesn't send tls yet.
+func tlsStatus(d *api.Domain) string {
+	if d.TLS.Status != "" {
+		return d.TLS.Status
+	}
+	return d.TLSStatus
+}
+
+// tlsSummary is the certificate column of `domain list`, e.g.
+// "issued, expires in 63d".
+func tlsSummary(d *api.Domain, now time.Time) string {
+	status := tlsStatus(d)
+	if status != "issued" || d.TLS.NotAfter == nil {
+		return orDash(status)
+	}
+	exp := *d.TLS.NotAfter
+	if millis(exp).After(now) {
+		return "issued, expires in " + untilShort(now, exp)
+	}
+	return "expired " + ago(now, exp)
+}
+
+// printCertificate prints a verified domain's certificate state and the
+// nodes that failed to get or load it.
+func (a *App) printCertificate(d *api.Domain) {
+	c := a.IO.OutColor()
+	now := a.Now()
+	line := tlsStatus(d)
+	switch line {
+	case "issued":
+		line = c.Green(line)
+		if d.TLS.Issuer != nil && *d.TLS.Issuer != "" {
+			line += " by " + *d.TLS.Issuer
+		}
+		if d.TLS.NotAfter != nil {
+			exp := millis(*d.TLS.NotAfter)
+			if exp.After(now) {
+				line += fmt.Sprintf(", expires %s (in %s)", exp.Format("2006-01-02"), untilShort(now, *d.TLS.NotAfter))
+			} else {
+				line += ", " + c.Red("expired "+ago(now, *d.TLS.NotAfter))
+			}
+		}
+	case "failed":
+		line = c.Red(line)
+	case "disabled":
+		line = c.Dim("off (this install serves plain HTTP)")
+	default:
+		line = c.Yellow(orDash(line))
+	}
+	fmt.Fprintf(a.IO.Out, "Certificate: %s\n", line)
+	if d.TLS.Error != nil && *d.TLS.Error != "" {
+		fmt.Fprintf(a.IO.Out, "%s\n", c.Dim(*d.TLS.Error))
+	}
+	for _, n := range d.TLS.Nodes {
+		if n.State == "failed" {
+			fmt.Fprintf(a.IO.Out, "  %s: %s %s\n", n.Name, c.Red("failed"), c.Dim(deref(n.Error)))
+		}
+	}
+}
+
+// printRoutingNote explains which servers answer for a domain when only
+// some run a replica of the service.
+func (a *App) printRoutingNote(d *api.Domain) {
+	var serving, idle []string
+	for _, n := range d.RoutingNodes {
+		name := n.Name
+		if n.PublicIP != nil && *n.PublicIP != "" {
+			name += " (" + *n.PublicIP + ")"
+		}
+		if n.Serves {
+			serving = append(serving, name)
+		} else {
+			idle = append(idle, n.Name)
+		}
+	}
+	if len(idle) == 0 {
+		return
+	}
+	c := a.IO.OutColor()
+	fmt.Fprintln(a.IO.Out)
+	if len(serving) == 0 {
+		fmt.Fprintf(a.IO.Out, "%s\n", c.Yellow("No server runs a replica of this service yet, so nothing answers for "+d.Hostname+". Deploy it first."))
+		return
+	}
+	fmt.Fprintf(a.IO.Out, "%s\n", c.Yellow(fmt.Sprintf(
+		"Only servers running a replica of this service answer for %s: %s. Point DNS at those, not at %s. "+
+			"Servers can't yet route to each other's replicas (that needs the WireGuard mesh, which isn't built yet).",
+		d.Hostname, strings.Join(serving, ", "), strings.Join(idle, ", "))))
+}
+
 // printDomainRecords prints a custom domain's status and the records to create.
 func (a *App) printDomainRecords(d *api.Domain) {
 	c := a.IO.OutColor()
@@ -89,6 +194,10 @@ func (a *App) printDomainRecords(d *api.Domain) {
 	if d.Error != nil && *d.Error != "" {
 		fmt.Fprintf(a.IO.Out, "%s\n", c.Dim(*d.Error))
 	}
+	if d.VerificationStatus == "verified" {
+		a.printCertificate(d)
+	}
+	a.printRoutingNote(d)
 	if len(d.Records) == 0 || d.Status == "active" {
 		return
 	}

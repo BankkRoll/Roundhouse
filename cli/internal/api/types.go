@@ -324,11 +324,62 @@ type Domain struct {
 	// Records are the DNS records a custom domain needs, with what was found.
 	Records []DNSRecord `json:"records"`
 	Error   *string     `json:"error"`
+	// Wildcard is set for *.example.com.
+	Wildcard bool `json:"wildcard"`
+	// HSTS is the policy in effect: a custom domain's own, else the default.
+	HSTS DomainHSTS `json:"hsts"`
+	// TLS is the certificate serving the domain, with each node's state.
+	TLS DomainTLS `json:"tls"`
+	// RoutingNodes are the ingress servers in the service's workspace that
+	// DNS may point at.
+	RoutingNodes []DomainRoutingNode `json:"routing_nodes"`
 	// LastCheckedAt, NextCheckAt and VerifiedAt are millisecond timestamps.
 	LastCheckedAt *int64 `json:"last_checked_at"`
 	NextCheckAt   *int64 `json:"next_check_at"`
 	VerifiedAt    *int64 `json:"verified_at"`
 	CreatedAt     int64  `json:"created_at"`
+}
+
+// DomainHSTS is a domain's Strict-Transport-Security policy.
+type DomainHSTS struct {
+	Enabled bool `json:"enabled"`
+	// MaxAge is in seconds.
+	MaxAge            int  `json:"max_age"`
+	IncludeSubdomains bool `json:"include_subdomains"`
+	Preload           bool `json:"preload"`
+}
+
+// DomainTLS is the certificate serving a domain.
+type DomainTLS struct {
+	// Status is "pending", "issued", "failed" or "disabled".
+	Status string  `json:"status"`
+	Issuer *string `json:"issuer"`
+	// NotBefore, NotAfter and UpdatedAt are millisecond timestamps.
+	NotBefore *int64  `json:"not_before"`
+	NotAfter  *int64  `json:"not_after"`
+	Error     *string `json:"error"`
+	UpdatedAt *int64  `json:"updated_at"`
+	// Nodes is each serving node's state; empty in internal and off modes.
+	Nodes []DomainTLSNode `json:"nodes"`
+}
+
+// DomainTLSNode is one ingress node's certificate state for a domain.
+type DomainTLSNode struct {
+	NodeID string `json:"node_id"`
+	Name   string `json:"name"`
+	// State is "pending", "issued" or "failed".
+	State string  `json:"state"`
+	Error *string `json:"error"`
+}
+
+// DomainRoutingNode is a server a domain's DNS may point at.
+type DomainRoutingNode struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	PublicIP *string `json:"public_ip"`
+	// Serves is set when the server runs a replica of the service. Until
+	// servers route to each other's replicas, only these answer.
+	Serves bool `json:"serves"`
 }
 
 // DNSRecord is one DNS record a domain needs and the state it was found in.
@@ -337,7 +388,7 @@ type DNSRecord struct {
 	Type  string `json:"type"`
 	Name  string `json:"name"`
 	Value string `json:"value"`
-	// Purpose is "routing" or "ownership".
+	// Purpose is "routing", "ownership" or, for a wildcard, "acme_delegation".
 	Purpose string `json:"purpose"`
 	// State is "unknown", "ok", "missing" or "wrong".
 	State string  `json:"state"`
