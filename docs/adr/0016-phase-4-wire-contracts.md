@@ -105,6 +105,12 @@ These depart from, or settle, what 0011, 0012 and 0014 left open.
   newer than every header claimed for the generation, and none after the
   generation answered healthy (0011's "once per generation"). The deploy
   workflow can still retry an unhealthy warm-up with a fresh header.
+- **Recordings** follow 0012 (default `full`, 30-day retention, playback
+  with `audit:read` and `shell:open`) with three differences: parts are
+  gzipped, since Workers have no zstd; every part is numbered
+  (`<session>.<part>.cast.gz.age`); and they are encrypted to the
+  project's backup recipient (0004) rather than a separate recording key
+  in the keyring (0014 §15.3). Playback also needs a fresh session.
 - **Push progress** arrives as `task` log lines whose `task_id` is the
   `psh_` ID; the control plane files them under the deployment's build
   log, only from the node the push was sent to.
