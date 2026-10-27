@@ -556,28 +556,25 @@ func TestReattachKeepsTheOriginalDeadline(t *testing.T) {
 	d := newFakeDocker()
 	dir := t.TempDir()
 	a := newHarness(t, d, dir, nil)
-	a.r.Start(jobRun("crn_1", 25, 1))
+	a.r.Start(jobRun("crn_1", 600, 1))
 	waitFor(t, "running", func() bool { return slices.Contains(a.states("crn_1"), protocol.JobRunning) })
-	a.r.mu.Lock()
-	deadline := time.UnixMilli(a.r.runs["crn_1"].deadline)
-	a.r.mu.Unlock()
 	a.stop()
 	c, _ := d.container(ContainerPrefix + "crn_1")
 	if !c.state.Running {
 		t.Fatal("stopping the runner stopped the job")
 	}
-	time.Sleep(20 * unit)
+	// The deadline passed while the agent was down. Rather than sleep through
+	// a short timeout and race the clock, record that outright: a deadline
+	// restarted from now, or from the container's start, is 600 units out,
+	// far past waitFinal's patience, while the original one is due at once.
+	a.r.mu.Lock()
+	a.r.runs["crn_1"].deadline = time.Now().Add(-unit).UnixMilli()
+	a.r.mu.Unlock()
+	a.r.persist()
 
 	b := newHarness(t, d, dir, nil)
-	st := b.waitFinal("crn_1")
-	killed := time.Now()
-	if st.State != protocol.JobTimedOut {
+	if st := b.waitFinal("crn_1"); st.State != protocol.JobTimedOut {
 		t.Fatalf("status %+v", st)
-	}
-	// Under a fresh deadline the kill would come at least 20 units later; the
-	// margin absorbs the grace period and a loaded machine.
-	if late := killed.Sub(deadline); late > 15*unit {
-		t.Fatalf("killed %v after the original deadline", late)
 	}
 	if sys := b.lines("crn_1", protocol.StreamSystem); !slices.Contains(sys, "agent restarted: re-attached to the running job") {
 		t.Fatalf("system lines %v", sys)
