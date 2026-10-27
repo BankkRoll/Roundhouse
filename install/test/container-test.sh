@@ -169,6 +169,8 @@ grep -qx 'Environment=CADDY_ADMIN=localhost:2019' "$dropin" || fail "Caddy admin
 grep -qx 'ExecReload=' "$dropin" || fail "Caddy reload not disabled"
 grep -q 'enable caddy.service' /tmp/systemctl.log || fail "caddy not enabled"
 [ "$(grep -c 'restart caddy.service' /tmp/systemctl.log)" -eq 1 ] || fail "caddy not restarted exactly once"
+certs_dir="$(stat -c '%U:%G %a' /var/lib/roundhouse-certs 2>/dev/null)"
+[ "$certs_dir" = "root:caddy 2750" ] || fail "certificates directory is ${certs_dir:-missing}, want root:caddy 2750"
 
 # Run Caddy as its unit would, and check it comes up with an empty config on
 # the admin API rather than the packaged Caddyfile.
@@ -198,9 +200,13 @@ done
 
 log "re-run without a token is idempotent"
 railpack_mtime="$(stat -c %Y /usr/local/bin/railpack)"
+chown root:root /var/lib/roundhouse-certs
+chmod 0700 /var/lib/roundhouse-certs
 sleep 1
 bash /tmp/install.sh
 [ "$(wc -l </tmp/joins.jsonl)" -eq 1 ] || fail "re-run joined again"
+[ "$(stat -c '%U:%G %a' /var/lib/roundhouse-certs)" = "root:caddy 2750" ] ||
+	fail "re-run did not restore the certificates directory's owner and mode"
 [ "$(stat -c %Y /usr/local/bin/railpack)" = "$railpack_mtime" ] || fail "re-run reinstalled railpack"
 [ "$(grep -c '^pull ' /tmp/docker.log)" -eq 2 ] || fail "re-run pulled images again"
 [ "$(grep -c 'restart caddy.service' /tmp/systemctl.log)" -eq 1 ] || fail "re-run restarted caddy"

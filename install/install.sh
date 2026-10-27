@@ -98,6 +98,8 @@ CADDY_REPO="https://dl.cloudsmith.io/public/caddy/stable/deb/debian"
 CADDY_KEYRING=/etc/apt/keyrings/caddy-stable.asc
 CADDY_LIST=/etc/apt/sources.list.d/caddy-stable.list
 CADDY_DROPIN=/etc/systemd/system/caddy.service.d/roundhouse.conf
+# Must match certs.DefaultDir in agent/internal/certs.
+CERTS_DIR=/var/lib/roundhouse-certs
 
 # IMPORTANT: builder pins. The Railpack CLI version must match the frontend
 # image the agent builds with, and the image references must match the
@@ -567,6 +569,18 @@ install_caddy() {
 		apt_install caddy
 	fi
 
+	# NOTE: the agent writes the control plane's certificates (managed TLS
+	# mode) here as 0640 files. The setgid bit makes them group caddy without
+	# the agent needing CAP_CHOWN, and its unit's RestrictSUIDSGID forbids it
+	# from setting that bit itself, so the installer does. Re-running fixes
+	# the owner and mode.
+	if getent group caddy >/dev/null; then
+		install -d -m 2750 -o root -g caddy "$CERTS_DIR"
+	else
+		warn "no caddy group; ${CERTS_DIR} is root-only, so Caddy must run as root to load managed certificates"
+		install -d -m 0700 -o root -g root "$CERTS_DIR"
+	fi
+
 	# NOTE: --resume starts from the config the agent last pushed (Caddy
 	# autosaves it), or from an empty config on first start, instead of the
 	# packaged Caddyfile. Reload is disabled because it would replace the
@@ -776,6 +790,9 @@ RuntimeDirectoryPreserve=yes
 ReadWritePaths=-/etc/roundhouse
 # iptables-legacy serialises on this lock; iptables-nft does not use it.
 ReadWritePaths=-/run/xtables.lock
+# Managed-mode TLS certificates live outside the 0700 state directory so
+# Caddy (group caddy) can read them; install.sh creates it root:caddy 2750.
+ReadWritePaths=-/var/lib/roundhouse-certs
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

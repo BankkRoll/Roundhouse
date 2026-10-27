@@ -33,6 +33,9 @@ RuntimeDirectoryPreserve=yes
 ReadWritePaths=-/etc/roundhouse
 # iptables-legacy serialises on this lock; iptables-nft does not use it.
 ReadWritePaths=-/run/xtables.lock
+# Managed-mode TLS certificates live outside the 0700 state directory so
+# Caddy (group caddy) can read them; install.sh creates it root:caddy 2750.
+ReadWritePaths=-/var/lib/roundhouse-certs
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

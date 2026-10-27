@@ -5,7 +5,8 @@
 #   sudo bash uninstall.sh
 #
 # Stops and removes the systemd unit, the agent binary, its config and its
-# state (including the node credential and identity key).
+# state (including the node credential and identity key), and the managed TLS
+# certificates and private keys in /var/lib/roundhouse-certs.
 #
 # Docker, Caddy, git, wireguard-tools and any containers (including a
 # builder's sys_buildkitd and registry, and their volumes) are left untouched:
@@ -51,7 +52,7 @@ fi
 
 log "removing binary, config and state"
 rm -f /usr/local/bin/roundhouse-agent /usr/local/bin/railpack
-rm -rf /etc/roundhouse /var/lib/roundhouse
+rm -rf /etc/roundhouse /var/lib/roundhouse /var/lib/roundhouse-certs
 
 log "Roundhouse agent removed."
 log "Docker, Caddy, wireguard-tools and existing containers were left in place."
