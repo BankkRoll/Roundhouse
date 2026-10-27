@@ -231,8 +231,9 @@ export function previewWithholdsSecrets(
 
 /**
  * A base environment's config as a preview runs it: replicas, CPU and
- * memory clamped to the caps, and the preview node selector merged over the
- * service's own (preview keys win). Never raises a value.
+ * memory clamped to the caps, the preview node selector merged over the
+ * service's own (preview keys win), and on the project's nodes even when
+ * the base runs on Cloudflare Containers. Never raises a value.
  *
  * @param spec - The base environment's latest config.
  * @param caps - The project's caps.
@@ -259,6 +260,9 @@ export function clampPreviewConfig(
     },
     placement: {
       ...spec.placement,
+      // A preview runs on the project's own nodes, in the preview build
+      // isolation and under the caps, never on Cloudflare Containers (ADR 0011).
+      ...(spec.placement.provider ? { provider: "nodes" as const } : {}),
       node_selector: { ...spec.placement.node_selector, ...nodeSelector },
     },
   };

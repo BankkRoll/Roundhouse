@@ -65,6 +65,17 @@ describe("clampPreviewConfig", () => {
     expect(out.deploy.replicas).toBe(0);
     expect(out.resources).toEqual({ cpu_millis: 250, memory_mb: 512 });
   });
+
+  it("runs a preview on nodes even when the base runs on Cloudflare", () => {
+    const spec = defaultServiceConfig({ type: "image", image: "nginx:1.27" });
+    spec.placement = { ...spec.placement, provider: "cloudflare" };
+    const out = clampPreviewConfig(
+      spec,
+      { replicas: 1, cpu_millis: 1000, memory_mb: 512, volume_mb: 1024 },
+      {},
+    );
+    expect(out.placement.provider).toBe("nodes");
+  });
 });
 
 describe("names", () => {
