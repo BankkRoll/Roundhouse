@@ -15,6 +15,7 @@ import {
   EnvironmentProtectionSchema,
   ProjectAccessGrantSchema,
   ProjectAccessSchema,
+  ProjectDirectorySchema,
   PutEnvironmentProtectionBody,
   PutProjectGrantBody,
   PutTeamMembersBody,
@@ -188,6 +189,21 @@ export const deleteProjectGrant = defineRoute(session("access:manage", ["access.
   responses: { 204: { description: "Revoked" }, ...errors(401, 403, 404) },
 });
 
+/**
+ * Names and avatars of the project's members and of whoever its grants and
+ * protection rules name, for readers who can't list workspace members.
+ * Emails only for callers with `members:read`.
+ */
+export const getProjectDirectory = defineRoute(session("projects:read"), {
+  method: "get",
+  path: "/v1/projects/{projectId}/directory",
+  tags: ["access"],
+  summary: "Get the names behind a project's access settings",
+  security: sessionAuth,
+  request: { params: ProjectParams },
+  responses: { 200: json(ProjectDirectorySchema), ...errors(401, 403, 404) },
+});
+
 // -----------------------------------------------------------------------------
 // Environment protection
 // -----------------------------------------------------------------------------
@@ -231,6 +247,7 @@ export const ACCESS_ROUTES = {
   getProjectAccess,
   putProjectGrant,
   deleteProjectGrant,
+  getProjectDirectory,
   getEnvironmentProtection,
   putEnvironmentProtection,
 } as const;

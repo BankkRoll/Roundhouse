@@ -4,6 +4,7 @@ import {
   type ProtectionRuleRole,
 } from "@roundhouse/shared";
 import {
+  Avatar,
   Badge,
   Button,
   Checkbox,
@@ -24,8 +25,12 @@ import type { EnvironmentProtection, ProtectionRuleWire } from "../../lib/api/ac
 import { errorMessage } from "../../lib/api/client";
 import type { Environment } from "../../lib/api/deploy-types";
 import { usePermissions, useProjectPermissions } from "../../lib/permissions";
-import { useProtection, usePutProtection, useTeams } from "../../queries/access";
-import { useMembers } from "../../queries/members";
+import {
+  useProjectDirectory,
+  useProtection,
+  usePutProtection,
+  useTeams,
+} from "../../queries/access";
 import { ProjectSettingsFrame } from "../projects/project-settings-frame";
 import { useProjectEnvironment } from "../projects/use-project-environment";
 import { OPERATION_COPY, RULE_ROLES_FOR } from "./roles";
@@ -43,14 +48,23 @@ const RULE_VERB: Record<ProtectedOperation, string> = {
   variables: "change variables in",
 };
 
-/** Names to show for user and team ids; falls back to the id when unknown. */
+/**
+ * Names for the user and team ids in the rules, from the project directory. `options`
+ * are what the pickers offer: people with a role on the project, and teams.
+ */
 interface Directory {
   users: { id: string; name: string }[];
   teams: { id: string; name: string }[];
+  options: { users: { id: string; name: string }[]; teams: { id: string; name: string }[] };
 }
 
-const nameOf = (list: Directory["users"], id: string) =>
-  list.find((entry) => entry.id === id)?.name ?? id;
+/**
+ * The name behind an id. The directory names every current member a rule mentions, so a
+ * miss is someone who left the workspace or a deleted team; never show the raw id.
+ */
+const nameOf = (list: Directory["users"], id: string, kind: "People" | "Teams") =>
+  list.find((entry) => entry.id === id)?.name ??
+  (kind === "People" ? "Former member" : "Deleted team");
 
 /**
  * "Project admins, developers, Ada and team Platform": who passes a rule, in words.
@@ -59,8 +73,8 @@ function describeRule(rule: ProtectionRuleWire, directory: Directory): string {
   const parts = [
     "project admins",
     ...rule.roles.map((role) => ROLE_PLURAL[role]),
-    ...rule.user_ids.map((id) => nameOf(directory.users, id)),
-    ...rule.team_ids.map((id) => `team ${nameOf(directory.teams, id)}`),
+    ...rule.user_ids.map((id) => nameOf(directory.users, id, "People")),
+    ...rule.team_ids.map((id) => `team ${nameOf(directory.teams, id, "Teams")}`),
   ];
   if (parts.length === 1) return "Only project admins";
   const last = parts.pop();
@@ -72,6 +86,7 @@ function PrincipalPicker({
   label,
   operation,
   ids,
+  names,
   options,
   disabled,
   onChange,
@@ -79,6 +94,9 @@ function PrincipalPicker({
   label: "People" | "Teams";
   operation: ProtectedOperation;
   ids: string[];
+  /** Everyone the chips may name. */
+  names: Directory["users"];
+  /** What the picker offers. */
   options: Directory["users"];
   disabled: boolean;
   onChange: (ids: string[]) => void;
@@ -99,12 +117,16 @@ function PrincipalPicker({
               key={id}
               className="inline-flex h-6 items-center gap-1 rounded-sm border border-border-strong bg-muted pr-0.5 pl-2 text-xs text-foreground"
             >
-              {label === "Teams" ? "team " : null}
-              {nameOf(options, id)}
+              {label === "People" ? (
+                <Avatar name={nameOf(names, id, label)} seed={id} size={16} className="-ml-1" />
+              ) : (
+                "team "
+              )}
+              {nameOf(names, id, label)}
               {disabled ? null : (
                 <button
                   type="button"
-                  aria-label={`Remove ${nameOf(options, id)} from the ${ruleName} rule`}
+                  aria-label={`Remove ${nameOf(names, id, label)} from the ${ruleName} rule`}
                   onClick={() => onChange(ids.filter((entry) => entry !== id))}
                   className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                 >
@@ -225,7 +247,8 @@ function RuleRow({
           label="People"
           operation={operation}
           ids={rule.user_ids}
-          options={directory.users}
+          names={directory.users}
+          options={directory.options.users}
           disabled={!editable}
           onChange={(user_ids) => onChange({ ...rule, user_ids })}
         />
@@ -233,7 +256,8 @@ function RuleRow({
           label="Teams"
           operation={operation}
           ids={rule.team_ids}
-          options={directory.teams}
+          names={directory.teams}
+          options={directory.options.teams}
           disabled={!editable}
           onChange={(team_ids) => onChange({ ...rule, team_ids })}
         />
@@ -459,18 +483,23 @@ export function EnvironmentProtectionPage({
   const permissions = useProjectPermissions(workspaceId, projectId);
   const workspace = usePermissions(workspaceId);
   const canManage = permissions.loaded && permissions.can("access:manage");
-  const canReadMembers = workspace.can("members:read");
   const protection = useProtection(environment?.id);
-  const members = useMembers(workspaceId, canReadMembers);
-  const teams = useTeams(workspaceId, canReadMembers);
+  // NOTE: Project admins need not be able to list the workspace's members (a workspace
+  // viewer granted project admin can't), so names come from the project directory.
+  // Teams without a grant or rule on the project are only offered to those who can.
+  const projectDirectory = useProjectDirectory(projectId);
+  const allTeams = useTeams(workspaceId, canManage && workspace.can("members:read"));
   const pickerId = useId();
   const environments = project.data?.environments ?? [];
+  const known = projectDirectory.data ?? { users: [], teams: [] };
+  const teams = [...known.teams];
+  for (const team of allTeams.data ?? []) {
+    if (!teams.some((entry) => entry.id === team.id)) teams.push({ id: team.id, name: team.name });
+  }
   const directory: Directory = {
-    users: (members.data ?? []).map((member) => ({
-      id: member.user_id,
-      name: member.name || member.email,
-    })),
-    teams: (teams.data ?? []).map((team) => ({ id: team.id, name: team.name })),
+    users: known.users,
+    teams,
+    options: { users: known.users.filter((user) => user.project_member), teams },
   };
 
   return (
@@ -508,12 +537,15 @@ export function EnvironmentProtectionPage({
         ) : null
       }
     >
-      {!environment || protection.isPending ? (
+      {!environment || protection.isPending || projectDirectory.isPending ? (
         <Skeleton className="h-64" />
-      ) : protection.isError ? (
+      ) : protection.isError || projectDirectory.isError ? (
         <ErrorState
-          message={errorMessage(protection.error)}
-          onRetry={() => void protection.refetch()}
+          message={errorMessage(protection.error ?? projectDirectory.error)}
+          onRetry={() => {
+            if (protection.isError) void protection.refetch();
+            if (projectDirectory.isError) void projectDirectory.refetch();
+          }}
         />
       ) : (
         <>

@@ -200,6 +200,44 @@ export const PutEnvironmentProtectionBody = z
   .openapi("PutEnvironmentProtection");
 
 // -----------------------------------------------------------------------------
+// Project directory
+// -----------------------------------------------------------------------------
+
+/** A person the project directory names. */
+export const DirectoryUserSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    image: z.string().nullable(),
+    /**
+     * Only for callers who may list the workspace's members (`members:read`);
+     * `null` for everyone else, who would not see it on the members page either.
+     */
+    email: z.string().nullable(),
+    /**
+     * Whether they have a role on the project now. People named only by a
+     * protection rule may have lost it since.
+     */
+    project_member: z.boolean(),
+  })
+  .openapi("DirectoryUser");
+
+/** A team the project directory names. */
+export const DirectoryTeamSchema = z
+  .object({ id: z.string(), name: z.string() })
+  .openapi("DirectoryTeam");
+
+/**
+ * Names behind the IDs a project's access settings use, for callers who
+ * can read the project but not the workspace's members or teams: everyone
+ * with a role on the project, plus the people and teams its grants and
+ * protection rules name, while they still belong to the workspace.
+ */
+export const ProjectDirectorySchema = z
+  .object({ users: z.array(DirectoryUserSchema), teams: z.array(DirectoryTeamSchema) })
+  .openapi("ProjectDirectory");
+
+// -----------------------------------------------------------------------------
 // Effective access
 // -----------------------------------------------------------------------------
 

@@ -3560,6 +3560,32 @@ describe("MSW mocks match the API contract", () => {
         (await call("PUT", protection, { protected: true, require_approval: "yes" })).status,
       ).toBe(400);
 
+      const directory = `/v1/projects/${SEED.project}/directory`;
+      const named = await call("GET", directory);
+      expect(named.status).toBe(200);
+      const listed = named.body as {
+        users: { id: string; email: string | null; project_member: boolean }[];
+        teams: { id: string; name: string }[];
+      };
+      expect(listed.teams).toEqual([{ id: teamId, name: "Operations" }]);
+      expect(listed.users.find((u) => u.id === USERS.member.id)).toMatchObject({
+        email: USERS.member.email,
+        project_member: true,
+      });
+      expect((await call("GET", "/v1/projects/prj_nope/directory")).status).toBe(404);
+
+      as("member");
+      expect(
+        ((await call("GET", directory)).body as { users: { email: string | null }[] }).users.every(
+          (u) => u.email !== null,
+        ),
+      ).toBe(true);
+      as("viewer");
+      expect(
+        ((await call("GET", directory)).body as { users: { email: string | null }[] }).users.every(
+          (u) => u.email === null,
+        ),
+      ).toBe(true);
       as("member");
       expect((await call("GET", access)).status).toBe(403);
       const selfGrant = { principal: { type: "user", id: USERS.member.id }, role: "developer" };
@@ -3576,6 +3602,10 @@ describe("MSW mocks match the API contract", () => {
       db.access.grants = [];
       expect((await call("GET", protection)).status).toBe(404);
       expect((await call("GET", access)).status).toBe(404);
+      expect((await call("GET", directory)).status).toBe(404);
+      as(null);
+      expect((await call("GET", directory)).status).toBe(401);
+      as("viewer");
 
       as("owner");
       const regrant = await call("PUT", access, selfGrant);

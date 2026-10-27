@@ -29,8 +29,10 @@ import {
   ACTIONS,
   type Action,
   DEFAULT_PROTECTION_RULES,
+  DEFAULT_WORKSPACE_ACCESS_SETTINGS,
   ENVIRONMENT_ACTIONS,
   INSTANCE_ACTIONS,
+  impliedProjectRole,
   newId,
   PROJECT_ACTIONS,
   PROTECTED_OPERATIONS,
@@ -49,6 +51,7 @@ import {
   getEffectiveAccess,
   getEnvironmentProtection,
   getProjectAccess,
+  getProjectDirectory,
   getTeam,
   getWorkspaceAccessSettings,
   listTeams,
@@ -295,6 +298,107 @@ function toApiGrant(g: GrantRow, principalName: string) {
 /** Users whose project access a grant decides: its user, or its team's members. */
 async function grantSubjects(db: Db, g: Pick<GrantRow, "principalType" | "userId" | "teamId">) {
   return g.principalType === "user" ? [g.userId!] : teamMemberIds(db, g.teamId!);
+}
+
+/**
+ * Builds `GET /v1/projects/{projectId}/directory`.
+ *
+ * Lists the workspace members with a role on the project (implied by their
+ * workspace role, granted directly or through a team) and the members and
+ * teams that the project's grants or any of its environments' protection
+ * rules name. Nobody outside the workspace is listed, even if a stale rule
+ * still names them.
+ *
+ * SECURITY: Callers reach this with `projects:read` alone, so it carries
+ * only what the access screens need: names and avatars, and emails only
+ * when the caller could list the workspace's members anyway.
+ */
+async function projectDirectory(
+  db: Db,
+  project: { id: string; workspaceId: string },
+  withEmails: boolean,
+) {
+  const [settings, memberRows, grantRows, envRows] = await Promise.all([
+    db
+      .select({
+        memberDefaultProjectRole: workspaces.memberDefaultProjectRole,
+        viewerDefaultProjectRole: workspaces.viewerDefaultProjectRole,
+      })
+      .from(workspaces)
+      .where(eq(workspaces.id, project.workspaceId))
+      .limit(1),
+    db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        image: users.image,
+        role: workspaceMembers.role,
+      })
+      .from(workspaceMembers)
+      .innerJoin(users, eq(users.id, workspaceMembers.userId))
+      .where(eq(workspaceMembers.workspaceId, project.workspaceId)),
+    db
+      .select({
+        principalType: projectAccessGrants.principalType,
+        userId: projectAccessGrants.userId,
+        teamId: projectAccessGrants.teamId,
+      })
+      .from(projectAccessGrants)
+      .where(eq(projectAccessGrants.projectId, project.id)),
+    db
+      .select({ rules: environments.protectionRules })
+      .from(environments)
+      .where(eq(environments.projectId, project.id)),
+  ]);
+  const grantedUsers = new Set(grantRows.flatMap((g) => (g.userId ? [g.userId] : [])));
+  const grantedTeams = [...new Set(grantRows.flatMap((g) => (g.teamId ? [g.teamId] : [])))];
+  const ruleUsers = new Set<string>();
+  const ruleTeams = new Set<string>();
+  for (const { rules } of envRows) {
+    for (const op of PROTECTED_OPERATIONS) {
+      for (const id of rules?.[op].userIds ?? []) ruleUsers.add(id);
+      for (const id of rules?.[op].teamIds ?? []) ruleTeams.add(id);
+    }
+  }
+  const teamIds = [...new Set([...grantedTeams, ...ruleTeams])];
+  const [teamRows, viaTeams] = await Promise.all([
+    teamIds.length
+      ? db
+          .select({ id: teams.id, name: teams.name })
+          .from(teams)
+          .where(and(eq(teams.workspaceId, project.workspaceId), inArray(teams.id, teamIds)))
+      : [],
+    grantedTeams.length
+      ? db
+          .select({ userId: teamMembers.userId })
+          .from(teamMembers)
+          .innerJoin(teams, eq(teams.id, teamMembers.teamId))
+          .where(
+            and(
+              eq(teams.workspaceId, project.workspaceId),
+              inArray(teamMembers.teamId, grantedTeams),
+            ),
+          )
+      : [],
+  ]);
+  const viaTeam = new Set(viaTeams.map((r) => r.userId));
+  const ws = settings[0] ?? DEFAULT_WORKSPACE_ACCESS_SETTINGS;
+  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
+  return {
+    users: memberRows
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        image: m.image,
+        email: withEmails ? m.email : null,
+        project_member:
+          impliedProjectRole(m.role, ws) !== null || grantedUsers.has(m.id) || viaTeam.has(m.id),
+      }))
+      .filter((u) => u.project_member || ruleUsers.has(u.id))
+      .sort(byName),
+    teams: teamRows.map((t) => ({ id: t.id, name: t.name })).sort(byName),
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -615,6 +719,11 @@ export const accessRoutes = createRouter()
       await revalidateWorkspace(db, c.env, team.workspaceId, { userIds: removed });
     }
     return c.json(await teamDetail(db, team), 200);
+  })
+  .openapi(getProjectDirectory, async (c) => {
+    const { projectId } = c.req.valid("param");
+    const { project, caller } = await projectScope(c, projectId, actionOf(getProjectDirectory));
+    return c.json(await projectDirectory(c.get("db"), project, caller.allows("members:read")), 200);
   })
   .openapi(getProjectAccess, async (c) => {
     const { projectId } = c.req.valid("param");
