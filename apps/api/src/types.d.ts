@@ -3,3 +3,9 @@ declare module "*.sh" {
   const content: string;
   export default content;
 }
+
+// The Cloudflare runtime Worker is bundled as text for upload (ADR 0011).
+declare module "*.worker.js" {
+  const content: string;
+  export default content;
+}

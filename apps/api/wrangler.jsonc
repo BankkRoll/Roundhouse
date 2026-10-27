@@ -119,6 +119,10 @@
   // certificate orders and renewals in the managed TLS mode (src/lib/certificates),
   // cron service runs (src/lib/cron/schedule.ts) and the other claimers in src/lib/dispatch.ts.
   "triggers": { "crons": ["17 * * * *", "* * * * *"] },
-  "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": true }],
+  "rules": [
+    { "type": "Text", "globs": ["**/*.sh"], "fallthrough": true },
+    // The runtime Worker (src/cf-runtime) is uploaded to Cloudflare, not run here.
+    { "type": "Text", "globs": ["**/*.worker.js"], "fallthrough": true }
+  ],
   "observability": { "enabled": true }
 }
