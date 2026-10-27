@@ -171,3 +171,20 @@ export function useStartGithubClaim() {
     mutationFn: (workspaceId: string) => securityApi.startGithubClaim(workspaceId),
   });
 }
+
+/**
+ * Releases a GitHub installation from a workspace (ADR 0014). Needs a fresh session,
+ * which the API client asks for.
+ *
+ * @param workspaceId - Workspace that holds the claim.
+ * @returns A mutation taking the installation's `ghi_…` id.
+ */
+export function useReleaseGithubInstallation(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (installationId: string) =>
+      securityApi.releaseGithubInstallation(workspaceId, installationId),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.githubStatus(workspaceId) }),
+  });
+}
