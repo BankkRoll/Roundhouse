@@ -48,15 +48,15 @@ they are sent; the control plane sends nothing above an agent's version.
 New box purposes, each with an AAD helper in `box.ts` and an `Open*` helper
 in `go/boxes.go`:
 
-| Purpose             | Carried in                                                        | AAD binds                        | Plaintext                       |
-| ------------------- | ----------------------------------------------------------------- | -------------------------------- | ------------------------------- |
-| `job-env`           | `job_run.workload.env_sealed`                                     | node, run, workload              | `{env, files}`                  |
-| `mesh-psks`         | `desired_state.mesh.psks_sealed`                                  | node, generation                 | `{psks: {node_id: key}}`        |
-| `registry-upstream` | `desired_state.registry.upstream.password_sealed`                 | node, generation                 | `{password}`                    |
-| `backup-parts`      | `parts_sealed` of `backup_job`, `backup_parts`, `volume_copy_out` | node, backup                     | `{parts: [{part_number, url}]}` |
-| `restore`           | `secrets_sealed` of `restore_job`, `volume_copy_in`               | node, restore or migration       | `{download_url, age_identity}`  |
-| `db-credential`     | `db_query.credential_sealed`                                      | node, request                    | `{username, password}`          |
-| `cert-key`          | `cert_sync.upserts[].key_sealed`                                  | node, certificate, chain SHA-256 | `{key_pem}`                     |
+| Purpose             | Carried in                                                        | AAD binds                        | Plaintext                             |
+| ------------------- | ----------------------------------------------------------------- | -------------------------------- | ------------------------------------- |
+| `job-env`           | `job_run.workload.env_sealed`                                     | node, run, workload              | `{env, files}`                        |
+| `mesh-psks`         | `desired_state.mesh.psks_sealed`                                  | node, generation                 | `{psks: {node_id: key}}`              |
+| `registry-upstream` | `desired_state.registry.upstream.password_sealed`                 | node, generation                 | `{password}`                          |
+| `backup-parts`      | `parts_sealed` of `backup_job`, `backup_parts`, `volume_copy_out` | node, backup                     | `{parts: [{part_number, url}]}`       |
+| `restore`           | `secrets_sealed` of `restore_job`, `volume_copy_in`               | node, restore or migration       | `{download_url, age_identity}`        |
+| `db-credential`     | `db_query.credential_sealed`                                      | node, request                    | `{username, password, new_password?}` |
+| `cert-key`          | `cert_sync.upserts[].key_sealed`                                  | node, certificate, chain SHA-256 | `{key_pem}`                           |
 
 Always credential-bearing (`CREDENTIAL_FRAME_TYPES`): `backup_job`,
 `backup_parts`, `restore_job`, `volume_copy_out`, `volume_copy_in`,
@@ -125,6 +125,18 @@ TypeScript and Go never disagree over `[]` versus absent.
   SQL parameters are text or `null`.
 - **Hello** gains `volume_quota` (the migration check needs it) and
   `pinned_kids` (0014 §13 reports which kids each node pins).
+- **Credential rotation** (amendment, 2026-10-23): `DbOp` gains
+  `set_password { user }`, admin mode only. The new password travels only
+  in the `db-credential` box as `new_password` (charset `[A-Za-z0-9._~-]`,
+  16–256), never in the op, so neither the frame nor the query audit
+  carries it. Agents advertise support as `capabilities.db_set_password`.
+- **Published ports** (amendment, 2026-10-23): agents that enforce
+  `publish_allowed_cidrs` advertise `capabilities.tcp_proxy`; the control
+  plane must send `ports[].publish` only to them. The allowlist is an iptables
+  chain jumped from `DOCKER-USER` and `INPUT` (ADR 0004, "TCP proxy"),
+  not the nftables table 0004 first described. `host_ip: "::"` means dual
+  stack (bound on `0.0.0.0` and `::`, rules in both families); the
+  control plane sends it only for an allowlist with an IPv6 block.
 
 ## Consequences
 
