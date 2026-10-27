@@ -4,8 +4,8 @@ import type { SetupRequest } from "../lib/api/types";
 import { queryKeys } from "./keys";
 
 /**
- * Query options for first-run setup status. Always refetched on mount because it flips
- * once, from the setup wizard.
+ * Query options for first-run setup status. Always stale, so route guards fetch it fresh,
+ * because it flips once, from the setup wizard.
  *
  * @returns Options for `useQuery` / `ensureQueryData`.
  */
@@ -18,12 +18,16 @@ export function setupQueryOptions() {
 }
 
 /**
- * Reads `GET /v1/setup`.
+ * Reads `GET /v1/setup` for the setup wizard.
+ *
+ * The `/setup` route fetches a fresh copy in `beforeLoad`, so the wizard does not refetch
+ * on mount. That refetch would only repeat the request, landing after the first step had
+ * rendered, where a changed answer could switch steps under the operator's form.
  *
  * @returns The setup status query.
  */
 export function useSetupStatus() {
-  return useQuery(setupQueryOptions());
+  return useQuery({ ...setupQueryOptions(), refetchOnMount: false });
 }
 
 /**
