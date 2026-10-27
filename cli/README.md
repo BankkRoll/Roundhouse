@@ -418,8 +418,8 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `cron pause\|resume`, `cron preview <schedule>`          | Pause or resume scheduling; a schedule's next slots       |
 | `previews list [--all]`                                  | The project's pull request previews                       |
 | `previews approve\|redeploy\|destroy <preview>`          | Approve a fork's commit, redeploy, or tear down           |
-| `environments list|create|diff`                          | Environments: clone one, compare two (no values shown)    |
-| `environments promote|delete`                            | Propose a promotion as a change set; delete (typed slug)  |
+| `environments list\|create\|diff`                        | Environments: clone one, compare two (no values shown)    |
+| `environments promote\|delete`                           | Propose a promotion as a change set; delete (typed slug)  |
 | `tokens list\|create\|revoke`                            | Workspace API tokens for CI and scripts                   |
 | `version`, `completion`                                  | Build info, shell completion                              |
 | `up`, `shell`, `db connect`                              | Not available on the control plane yet (exit 10)          |
