@@ -463,6 +463,49 @@ New RBAC action: `domains:manage` (owner, admin, member). New ID prefix:
   the wildcard. Other DNS providers get per-name certificates, under the
   50-per-week limit.
 
+## Implementation notes
+
+Built (2026-10-27): direct mode, `managed` TLS with the control-plane ACME
+client, HSTS, wildcards through DNS-01, `cert_status` reporting, and the
+agent's certificate store. Where the build differs from the decision above:
+- **Routing before the mesh.** Every ingress server runs Caddy, but a server
+  routes a hostname only to replicas running on it until the WireGuard mesh
+  (0005) exists. DNS guidance therefore names the servers that run the
+  service (A/AAAA records of exactly those when others don't), and
+  `tls.nodes` counts only those servers.
+- **Certificate files.** Caddy runs as its own user, so certificates are
+  written to `/var/lib/roundhouse-certs/<id>.pem` (`ingress.certs_dir`),
+  mode 0640 in a `root:caddy` setgid directory that `install.sh` creates,
+  not 0600 root in the data directory.
+- **Challenge proxy scope.** Caddy proxies HTTP-01 challenges for every
+  exact hostname a server routes, not only `managed_hosts`: a host becomes
+  managed only once its certificate can be served, so its first order needs
+  the proxy already. Caddy still answers its own on-demand challenges first.
+- **Data model.** Migration 0017 adds `domains.hsts` and `tls_issuer`,
+  `tls_not_before`, `tls_not_after`, `tls_error`, `tls_updated_at`
+  instead of `certificate_id`/`cert_not_after` (a domain's certificate
+  is found through `certificates.domain_id`, or the apps wildcard).
+  `certificates` gains `kind = 'generated'` (one generated hostname when
+  there is no wildcard), `challenge`, `pending_key_sealed`, `sha256`,
+  `issuer`, `failures` and `next_attempt_at`; `acme_challenges` records
+  DNS-01 records to delete; `domain_tls_reports` keeps each server's
+  `cert_status` in `acme` mode.
+- **Settings.** `GET`/`PUT /v1/instance/domains` hold the ingress
+  hostname, the CA directory and contact, and `cloudflare_dns`;
+  `GET /v1/instance/certificates` lists certificates. The TLS mode stays on
+  `PATCH /v1/instance/settings`. `managed` needs an `https`
+  `PUBLIC_ORIGIN` (422 `managed_tls_unavailable` otherwise).
+- **HTTPS probe.** Kept only as the fallback for servers older than
+  `CERTS_PROTOCOL_VERSION`, which send no `cert_status`.
+- **Cloudflare for SaaS** is not built; see
+  [the implementation spec](../cloudflare-for-saas.md) for why (shared
+  fallback origin versus local-replica routing, the origin firewall, test
+  doubles) and the plan.
+- **Tests.** The order pipeline runs against Pebble
+  (`apps/api/test-node`) and against an in-process CA in the Workers
+  suite; the multi-node e2e run (`e2e/phase3/domains.test.mjs`) waits for
+  the mesh.
+
 ## Open questions
 
 - Should SaaS-mode origins use Authenticated Origin Pulls in addition to
