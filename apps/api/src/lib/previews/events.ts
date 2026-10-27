@@ -74,8 +74,17 @@ type Json = Record<string, unknown>;
 
 const obj = (v: unknown): Json | null =>
   v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Json) : null;
+/**
+ * A non-empty string cut to `max`, for fields only shown. Fields compared
+ * with settings use {@link exact}: a cut value could match what the full
+ * one doesn't.
+ */
 const str = (v: unknown, max: number): string | null =>
   typeof v === "string" && v.length > 0 ? v.slice(0, max) : null;
+
+/** A non-empty string of at most `max` characters, else `null`. */
+const exact = (v: unknown, max: number): string | null =>
+  typeof v === "string" && v.length > 0 && v.length <= max ? v : null;
 
 /**
  * Validates a `pull_request` delivery and copies what previews need.
@@ -101,15 +110,15 @@ export function parsePullRequestEvent(payload: unknown): PreviewEvent | null {
   const sha = head.sha;
   const updatedAt = typeof pr.updated_at === "string" ? Date.parse(pr.updated_at) : Number.NaN;
   const installationId = installation.id;
-  const baseFullName = str(baseRepo.full_name, 201);
-  const cloneUrl = str(baseRepo.clone_url, 300);
-  const baseRef = str(base.ref, 255);
+  const baseFullName = exact(baseRepo.full_name, 201);
+  const cloneUrl = exact(baseRepo.clone_url, 300);
+  const baseRef = exact(base.ref, 255);
   const headRef = str(head.ref, 255);
-  const headFullName = headRepo ? str(headRepo.full_name, 201) : null;
+  const headFullName = headRepo ? exact(headRepo.full_name, 201) : null;
   const user = obj(pr.user);
   const sender = obj(p.sender);
-  const authorLogin = str(user?.login, 60);
-  const senderLogin = str(sender?.login, 60);
+  const authorLogin = exact(user?.login, 60);
+  const senderLogin = exact(sender?.login, 60);
   if (
     typeof number !== "number" ||
     !Number.isSafeInteger(number) ||
@@ -133,7 +142,7 @@ export function parsePullRequestEvent(payload: unknown): PreviewEvent | null {
     return null;
   }
   const changes = obj(p.changes);
-  const previousRef = str(obj(obj(changes?.base)?.ref)?.from, 255);
+  const previousRef = exact(obj(obj(changes?.base)?.ref)?.from, 255);
   return {
     action: action as PreviewAction,
     number,
@@ -154,7 +163,7 @@ export function parsePullRequestEvent(payload: unknown): PreviewEvent | null {
       association: str(pr.author_association, 40) ?? "NONE",
     },
     sender: { login: senderLogin, bot: sender?.type === "Bot" },
-    label: action === "labeled" ? str(obj(p.label)?.name, 50) : null,
+    label: action === "labeled" ? exact(obj(p.label)?.name, 50) : null,
     installation_id: installationId,
   };
 }

@@ -456,6 +456,12 @@ describe("preview rules", () => {
     expect(JSON.stringify(event).length).toBeLessThan(4096);
     expect(parsePullRequestEvent(pr({ fork: "deleted" }))!.head.repo_full_name).toBeNull();
     expect(parsePullRequestEvent({ ...pr(), action: "assigned" })).toBeNull();
+    // A label is compared with the approval label whole, never cut to fit.
+    const long = pr({ action: "labeled", label: `${"x".repeat(50)}y` });
+    expect(parsePullRequestEvent(long)!.label).toBeNull();
+    expect(
+      parsePullRequestEvent(pr({ action: "labeled", label: "roundhouse:preview" }))!.label,
+    ).toBe("roundhouse:preview");
     const badSha = pr();
     badSha.pull_request.head.sha = "main";
     expect(parsePullRequestEvent(badSha)).toBeNull();
