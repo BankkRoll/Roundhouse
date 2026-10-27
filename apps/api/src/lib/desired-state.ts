@@ -17,8 +17,8 @@
  *   mesh IP and uses the private DNS, the frame lists peers, sealed
  *   preshared keys and the mesh IPs of every environment the node runs, and
  *   an ingress node gets a route-only workload for every routed service
- *   that has replicas only on other nodes, so any ingress node serves any
- *   hostname. Without the mesh a node routes a hostname only while it runs
+ *   with replicas on other nodes, so any ingress node serves any hostname
+ *   and falls back to remote replicas when its local ones are unhealthy. Without the mesh a node routes a hostname only while it runs
  *   a replica of its service, and DNS guidance says so (`lib/domains`).
  * - {@link refreshNodes}: bumps nodes' `desired_generation` and asks their
  *   Durable Objects to push the new state.
@@ -585,8 +585,8 @@ export async function buildDesiredState(
       ]),
     ).values(),
   ];
-  // A meshed ingress node also routes services whose replicas all run on
-  // other nodes, through route-only workloads.
+  // A meshed ingress node also routes services with replicas on other
+  // nodes, through route-only workloads.
   const routePairs =
     meshed && isIngressNode(node.capabilities)
       ? [
@@ -715,7 +715,6 @@ export async function buildDesiredState(
     body.workloads.push(
       ...(await routeWorkloads({
         nodeId,
-        localPairs: new Set(pairs.map((p) => `${p.serviceId}:${p.environmentId}`)),
         cluster,
         hostnames,
         hsts: certsCapable ? hsts : undefined,
@@ -891,8 +890,6 @@ async function routedServicePairs(
 /** What {@link routeWorkloads} needs. */
 interface RouteWorkloadsInput {
   nodeId: string;
-  /** `<serviceId>:<environmentId>` pairs with a replica on the node, which route locally. */
-  localPairs: ReadonlySet<string>;
   /** Every replica with a mesh IP in the workspace. */
   cluster: readonly ClusterReplica[];
   /** Verified hostnames per pair. */
@@ -904,11 +901,13 @@ interface RouteWorkloadsInput {
 
 /**
  * Route-only workloads (ADR 0005, "Cross-node ingress"): for each routed
- * service with no replica on this node, its hostnames proxied to the mesh
- * IPs of its replicas elsewhere, healthy ones only unless none is, so
- * Caddy reports connection refused rather than a missing route.
+ * service with replicas on other nodes, its hostnames proxied to their mesh
+ * IPs, healthy ones only unless none is, so Caddy reports connection
+ * refused rather than a missing route. A service that also runs on this
+ * node gets one too: the agent serves the remote replicas only while no
+ * local one is healthy.
  *
- * @param input - The node, its local pairs and the cluster.
+ * @param input - The node and the cluster.
  * @returns The workloads, sorted by ID.
  */
 async function routeWorkloads(input: RouteWorkloadsInput): Promise<WorkloadSpec[]> {
@@ -916,7 +915,6 @@ async function routeWorkloads(input: RouteWorkloadsInput): Promise<WorkloadSpec[
   for (const c of input.cluster) {
     if (c.nodeId === input.nodeId) continue;
     const key = `${c.serviceId}:${c.environmentId}`;
-    if (input.localPairs.has(key)) continue;
     byPair.set(key, [...(byPair.get(key) ?? []), c]);
   }
   const out: WorkloadSpec[] = [];

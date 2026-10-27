@@ -492,6 +492,24 @@ describe("workloads on a meshed cluster", () => {
     ]);
   });
 
+  it("gives a node with a local replica its remote replicas as failover upstreams", async () => {
+    const c = await clusterStage();
+    const db = createDb(env.DB);
+    // A second production web replica on b.
+    const both = await liveDeployment(c.project.id, c.workspaceId, c.web.service.id, c.prod, [
+      c.a.joined.node_id,
+      c.b.joined.node_id,
+    ]);
+    await db.update(deployments).set({ status: "removed" }).where(eq(deployments.id, c.prodWeb.id));
+    const forA = (await buildDesiredState(db, env, c.a.joined.node_id))!;
+    const local = forA.workloads.find((w) => w.id === both.workloadIds[0])!;
+    const route = forA.workloads.find((w) => w.kind === "route")!;
+    expect(local.routes.map((r) => r.hostname)).toEqual(["shop.example.com"]);
+    // Only the other node's replica: the agent prefers the local one.
+    expect(route.upstreams).toEqual([{ ip: "10.200.2.12", port: 8080 }]);
+    expect(route.upstreams!.some((u) => u.ip === local.mesh_ip)).toBe(false);
+  });
+
   it("frees a mesh IP when its deployment stops being live", async () => {
     const c = await clusterStage();
     const db = createDb(env.DB);
