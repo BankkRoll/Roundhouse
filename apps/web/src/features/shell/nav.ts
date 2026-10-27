@@ -108,6 +108,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
       "tokens",
       "platform",
       "domains-tls",
+      "cloudflare",
       "preferences",
     ],
   },

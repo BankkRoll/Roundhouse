@@ -122,6 +122,18 @@ async function promptReauth(): Promise<boolean> {
   return reauthInFlight;
 }
 
+/**
+ * Asks the user to confirm their password outside a request, for refusals that don't
+ * come back as HTTP responses (a shell socket closing with 4428). Shares the prompt with
+ * any refused request in flight.
+ *
+ * @returns `true` once the session is fresh again; `false` when cancelled or no prompt
+ *   is mounted.
+ */
+export function requestReauth(): Promise<boolean> {
+  return promptReauth();
+}
+
 /** Options for {@link request}. */
 export interface RequestOptions {
   /** JSON-serialisable body. */

@@ -65,7 +65,16 @@ describe("database service pages", () => {
       within(tabs)
         .getAllByRole("link")
         .map((link) => link.textContent),
-    ).toEqual(["Deployments", "Logs", "Metrics", "Data", "Backups", "Variables", "Settings"]);
+    ).toEqual([
+      "Deployments",
+      "Logs",
+      "Metrics",
+      "Data",
+      "Backups",
+      "Variables",
+      "Settings",
+      "Shell",
+    ]);
   });
 
   it("hides the Data tab from viewers", async () => {

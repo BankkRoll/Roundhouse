@@ -31,6 +31,7 @@ import { CREDENTIAL_ROUTES, PHASE1_ROUTES } from "../../../api/src/contracts";
 import { RealtimeServerMessageSchema } from "../../../api/src/schemas";
 import { ACCESS_SEED } from "./access-db";
 import { requireApprovalIn } from "./changes-handlers";
+import { REFUSED_CLOUDFLARE_TOKEN, resetCloudflareMock } from "./cloudflare-handlers";
 import { CRON_SEED } from "./cron-db";
 import { DATA_SEED } from "./data-db";
 import {
@@ -49,6 +50,7 @@ import { SEED } from "./deploy-db";
 import { realtimeSubscriptions, sentRealtimeMessages } from "./deploy-handlers";
 import { handlers } from "./handlers";
 import { MOCK_BACKUP_CODES, MOCK_TOTP_CODE } from "./security-db";
+import { resetShellMock, shellMock } from "./shell-handlers";
 
 // -----------------------------------------------------------------------------
 // API route definitions, read from the API source
@@ -98,6 +100,8 @@ const ROUTE_MODULES = [
   "auth-security",
   "cron",
   "access",
+  "shell",
+  "cloudflare",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -4048,6 +4052,114 @@ describe("MSW mocks match the API contract", () => {
       as("viewer");
       expect((await call("DELETE", `${WS}/members/mem_viewer`)).status).toBe(204);
       db.sessionStale = false;
+    });
+  });
+
+  it("shell: targets with their gate, plain HTTP on the socket, sessions and terminate", async () => {
+    await fresh(async () => {
+      resetShellMock();
+      const targets = `/v1/services/${SEED.web}/shell-targets?environment_id=${SEED.production}`;
+      expect(await call("GET", targets)).toMatchObject({
+        status: 200,
+        body: { gate: { allowed: false, reason: "two_factor_required" } },
+      });
+      db.security.twoFactor[USERS.owner.id] = { backupCodes: [] };
+      expect(await call("GET", targets)).toMatchObject({
+        status: 200,
+        body: { gate: { allowed: true, reason: null }, targets: [{ replica: 0 }, { replica: 1 }] },
+      });
+      expect((await call("GET", `/v1/services/${SEED.web}/shell-targets`)).status).toBe(400);
+      expect((await call("GET", `/v1/workloads/wl_${SEED.webActive}_0/shell`)).status).toBe(426);
+
+      const now = Date.now();
+      shellMock.rows.push({
+        id: "shl_1",
+        project_id: SEED.project,
+        environment_id: SEED.production,
+        service_id: SEED.web,
+        workload_id: `wl_${SEED.webActive}_0`,
+        deployment_id: SEED.webActive,
+        replica: 0,
+        node_id: "node_hel1",
+        user_id: USERS.owner.id,
+        token_id: null,
+        command: "/bin/sh",
+        container_user: "node",
+        started_at: now,
+        opened_at: now,
+        ended_at: null,
+        end_reason: null,
+        exit_code: null,
+        bytes_in: 0,
+        bytes_out: 0,
+      });
+      expect(await call("GET", `${WS}/shell-sessions?project_id=${SEED.project}`)).toMatchObject({
+        status: 200,
+        body: { sessions: [{ id: "shl_1" }], next_cursor: null },
+      });
+      expect(await call("POST", "/v1/shell-sessions/shl_1/terminate")).toMatchObject({
+        status: 200,
+        body: { id: "shl_1", end_reason: "terminated" },
+      });
+      expect((await call("POST", "/v1/shell-sessions/shl_1/terminate")).status).toBe(409);
+      expect((await call("POST", "/v1/shell-sessions/shl_nope/terminate")).status).toBe(404);
+      as("viewer");
+      expect((await call("GET", `${WS}/shell-sessions`)).status).toBe(403);
+    });
+  });
+
+  it("cloudflare: a write-only token, verification, and a service's provider status", async () => {
+    await fresh(async () => {
+      resetCloudflareMock();
+      const I = "/v1/instance/cloudflare";
+      const account = {
+        account_id: "0123456789abcdef0123456789abcdef",
+        api_token: "cf-token-0123456789abcdef",
+      };
+      expect(await call("GET", I)).toMatchObject({ status: 200, body: { configured: false } });
+      expect((await call("POST", `${I}/verify`)).status).toBe(409);
+      expect((await call("PUT", I, { account_id: "nope", api_token: "x" })).status).toBe(400);
+      db.sessionStale = true;
+      expect(await call("PUT", I, account)).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.sessionStale = false;
+      expect(
+        (await call("PUT", I, { ...account, api_token: REFUSED_CLOUDFLARE_TOKEN })).status,
+      ).toBe(422);
+      const saved = await call("PUT", I, { ...account, apps_domain_proxied: true });
+      expect(saved).toMatchObject({
+        status: 200,
+        body: { configured: true, token_hint: "cdef", apps_domain_proxied: true },
+      });
+      expect(JSON.stringify(saved.body)).not.toContain(account.api_token);
+      expect(await call("POST", `${I}/verify`)).toMatchObject({ status: 200, body: { ok: true } });
+
+      const S = `/v1/services/${SEED.web}/cloudflare`;
+      expect(await call("GET", `${S}?environment_id=${SEED.production}`)).toMatchObject({
+        status: 200,
+        body: { provider: "nodes", configured: true, eligibility: [], warnings: [], runtime: null },
+      });
+      expect((await call("GET", S)).status).toBe(400);
+      expect((await call("GET", `/v1/services/svc_nope/cloudflare?environment_id=x`)).status).toBe(
+        404,
+      );
+
+      const latest = db.deploy.configs
+        .filter((c) => c.service_id === SEED.web && c.environment_id === SEED.production)
+        .sort((a, b) => b.version - a.version)[0]!;
+      const nodes = latest.placement;
+      latest.placement = {
+        ...nodes,
+        provider: "cloudflare",
+        cloudflare: { max_instances: 2, sleep_after: "10m" },
+      } as typeof nodes;
+      expect((await call("DELETE", I)).status).toBe(409);
+      latest.placement = nodes;
+      expect(await call("DELETE", I)).toMatchObject({ status: 200, body: { configured: false } });
+      as("admin");
+      expect((await call("GET", I)).status).toBe(403);
     });
   });
 

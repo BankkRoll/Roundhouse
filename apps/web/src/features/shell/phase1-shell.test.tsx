@@ -114,6 +114,7 @@ describe("palette and shortcuts in a project", () => {
       "Variables",
       "Settings",
       "Domains",
+      "Shell",
     ]);
     expect(links[0]).toHaveAttribute("aria-current", "page");
     links[3]?.focus();
