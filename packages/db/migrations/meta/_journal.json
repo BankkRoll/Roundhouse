@@ -106,6 +106,13 @@
       "when": 1792820000000,
       "tag": "0015_signing_key_rollover",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1792850000000,
+      "tag": "0018_canvas_review_and_edges",
+      "breakpoints": true
     }
   ]
 }
