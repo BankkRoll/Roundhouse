@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { CRON_SEED } from "../../../mocks/cron-db";
 import { db, signInAs, USERS } from "../../../mocks/db";
-import { pushRealtime, servicePath } from "../../../test/phase1";
+import { pushRealtime, SEED, servicePath } from "../../../test/phase1";
 import { renderApp } from "../../../test/render";
 
 const RUNS = servicePath(CRON_SEED.service, "runs");
@@ -96,6 +96,23 @@ describe("cron runs tab", () => {
     await waitFor(() =>
       expect(within(table).getAllByRole("row")[1]).toHaveAttribute("data-status", "starting"),
     );
+  });
+
+  it("locks Run now and Pause, with the reason, in a protected environment", async () => {
+    const production = db.deploy.environments.find((row) => row.id === SEED.production)!;
+    production.protected = true;
+    db.access.rules[SEED.production] = {
+      deploy: { roles: [], userIds: [], teamIds: [] },
+      config: { roles: [], userIds: [], teamIds: [] },
+      variables: { roles: [], userIds: [], teamIds: [] },
+    };
+    signInAs(USERS.member.id);
+    await openRuns();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled());
+    const runNow = screen.getByRole("button", { name: "Run now" });
+    expect(runNow.parentElement).toHaveAccessibleDescription(/^production is protected/);
+    expect(screen.getByRole("button", { name: "Pause" })).toBeDisabled();
+    expect(db.cron.runs.filter((row) => row.trigger === "manual")).toHaveLength(1);
   });
 
   it("shows viewers the history without actions", async () => {

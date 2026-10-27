@@ -103,6 +103,8 @@ describe("variables editor", () => {
     expect(rowOf("CACHE_TTL")).toHaveTextContent("new");
     expect(rowOf("CACHE_TTL")).toHaveTextContent("secret");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
+    const confirm = await screen.findByRole("dialog", { name: "Store these values write-only?" });
+    await user.click(within(confirm).getByRole("button", { name: "Store write-only" }));
     await waitFor(() =>
       expect(serviceVariable("CACHE_TTL")).toMatchObject({ value: "60", tier: "secret" }),
     );
@@ -202,6 +204,89 @@ describe("variables editor", () => {
     expect(alert).toHaveTextContent("Reference is missing its closing }} (characters 3–5)");
     expect(alert.querySelector("mark")).toHaveTextContent("cde");
     expect(screen.getByText("1 staged change")).toBeInTheDocument();
+  });
+
+  it("asks before storing a value write-only, listing the keys, and saves once confirmed", async () => {
+    const { user, rowOf } = await openVariables();
+    await user.click(screen.getByRole("button", { name: "Add variable" }));
+    const form = screen.getByRole("form", { name: "New variable" });
+    await user.type(within(form).getByLabelText("Key"), "WEBHOOK_TOKEN");
+    await user.type(within(form).getByRole("combobox", { name: "Value" }), "not-a-real-token");
+    await user.click(within(form).getByRole("switch", { name: "Secret" }));
+    await user.click(within(form).getByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Store this value write-only?" });
+    expect(dialog).toHaveTextContent("can never be shown again");
+    expect(within(dialog).getByText("WEBHOOK_TOKEN")).toBeInTheDocument();
+    expect(serviceVariable("WEBHOOK_TOKEN")).toBeUndefined();
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("1 staged change")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(
+      within(await screen.findByRole("dialog", { name: "Store this value write-only?" })).getByRole(
+        "button",
+        { name: "Store write-only" },
+      ),
+    );
+    await waitFor(() =>
+      expect(serviceVariable("WEBHOOK_TOKEN")).toMatchObject({ tier: "secret", version: 1 }),
+    );
+    const row = rowOf("WEBHOOK_TOKEN");
+    expect(row).not.toHaveTextContent("not-a-real-token");
+    expect(within(row).getByText("value hidden")).toBeInTheDocument();
+    expect(row).toHaveTextContent(/fp [a-f0-9]{8}/);
+  });
+
+  it("locks the secret switch for a recognised credential and explains why", async () => {
+    const { user } = await openVariables();
+    await user.click(screen.getByRole("button", { name: "Add variable" }));
+    const form = screen.getByRole("form", { name: "New variable" });
+    await user.type(within(form).getByLabelText("Key"), "REPLICA_URL");
+    await user.type(
+      within(form).getByRole("combobox", { name: "Value" }),
+      "postgres://app:not-a-real-password@db.example.test/app",
+    );
+    const toggle = within(form).getByRole("switch", { name: "Secret" });
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAccessibleDescription(/always stored as a write-only secret/);
+  });
+
+  it("asks before shipping a credential-looking public variable to browsers", async () => {
+    const { user } = await openVariables();
+    await user.click(screen.getByRole("button", { name: "Add variable" }));
+    const form = screen.getByRole("form", { name: "New variable" });
+    await user.type(within(form).getByLabelText("Key"), "VITE_DB");
+    await user.type(
+      within(form).getByRole("combobox", { name: "Value" }),
+      "postgres://app:not-a-real-password@db.example.test/app",
+    );
+    const toggle = within(form).getByRole("switch", { name: "Secret" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAccessibleDescription(/VITE_ variables ship to the browser/);
+    await user.click(within(form).getByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    const dialog = await screen.findByRole("dialog", { name: "Ship VITE_DB to every browser?" });
+    await user.click(within(dialog).getByRole("button", { name: "Store as public" }));
+    await waitFor(() => expect(serviceVariable("VITE_DB")).toMatchObject({ tier: "plain" }));
+  });
+
+  it("explains a protected environment to developers and offers no edits", async () => {
+    const production = db.deploy.environments.find((row) => row.id === SEED.production)!;
+    production.protected = true;
+    signInAs(USERS.member.id);
+    const { rowOf } = await openVariables();
+    expect(await screen.findByRole("note")).toHaveTextContent(
+      "production is protected: only project admins and people its rules list can change variables here.",
+    );
+    expect(screen.queryByRole("button", { name: "Add variable" })).not.toBeInTheDocument();
+    expect(
+      within(rowOf("NODE_ENV")).queryByRole("button", { name: "Edit NODE_ENV" }),
+    ).not.toBeInTheDocument();
   });
 
   it("lets members edit but not reveal", async () => {

@@ -37,11 +37,15 @@ import { Route as AppWWorkspaceIdPreferencesAccessibilityRouteImport } from './r
 import { Route as AppWWorkspaceIdPreferencesShortcutsRouteImport } from './routes/_app/w/$workspaceId/preferences/shortcuts'
 import { Route as AppWWorkspaceIdServersIndexRouteImport } from './routes/_app/w/$workspaceId/servers/index'
 import { Route as AppWWorkspaceIdServersNodeIdRouteImport } from './routes/_app/w/$workspaceId/servers/$nodeId'
+import { Route as AppWWorkspaceIdTeamsIndexRouteImport } from './routes/_app/w/$workspaceId/teams/index'
+import { Route as AppWWorkspaceIdTeamsTeamIdRouteImport } from './routes/_app/w/$workspaceId/teams/$teamId'
 import { Route as AppWWorkspaceIdTemplatesIndexRouteImport } from './routes/_app/w/$workspaceId/templates/index'
 import { Route as AppWWorkspaceIdTemplatesTemplateIdRouteImport } from './routes/_app/w/$workspaceId/templates/$templateId'
 import { Route as AppWWorkspaceIdPProjectIdIndexRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/index'
-import { Route as AppWWorkspaceIdPProjectIdSettingsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/settings'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdRouteRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/route'
+import { Route as AppWWorkspaceIdPProjectIdSettingsIndexRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/settings/index'
+import { Route as AppWWorkspaceIdPProjectIdSettingsAccessRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/settings/access'
+import { Route as AppWWorkspaceIdPProjectIdSettingsEnvironmentsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/settings/environments'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdIndexRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/index'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdBackupsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/backups'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdDataRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/data'
@@ -202,6 +206,18 @@ const AppWWorkspaceIdServersNodeIdRoute =
     path: '/servers/$nodeId',
     getParentRoute: () => AppWWorkspaceIdRouteRoute,
   } as any)
+const AppWWorkspaceIdTeamsIndexRoute =
+  AppWWorkspaceIdTeamsIndexRouteImport.update({
+    id: '/teams/',
+    path: '/teams/',
+    getParentRoute: () => AppWWorkspaceIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdTeamsTeamIdRoute =
+  AppWWorkspaceIdTeamsTeamIdRouteImport.update({
+    id: '/teams/$teamId',
+    path: '/teams/$teamId',
+    getParentRoute: () => AppWWorkspaceIdRouteRoute,
+  } as any)
 const AppWWorkspaceIdTemplatesIndexRoute =
   AppWWorkspaceIdTemplatesIndexRouteImport.update({
     id: '/templates/',
@@ -220,16 +236,28 @@ const AppWWorkspaceIdPProjectIdIndexRoute =
     path: '/',
     getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
   } as any)
-const AppWWorkspaceIdPProjectIdSettingsRoute =
-  AppWWorkspaceIdPProjectIdSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
-  } as any)
 const AppWWorkspaceIdPProjectIdSServiceIdRouteRoute =
   AppWWorkspaceIdPProjectIdSServiceIdRouteRouteImport.update({
     id: '/s/$serviceId',
     path: '/s/$serviceId',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSettingsIndexRoute =
+  AppWWorkspaceIdPProjectIdSettingsIndexRouteImport.update({
+    id: '/settings/',
+    path: '/settings/',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSettingsAccessRoute =
+  AppWWorkspaceIdPProjectIdSettingsAccessRouteImport.update({
+    id: '/settings/access',
+    path: '/settings/access',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
+  } as any)
+const AppWWorkspaceIdPProjectIdSettingsEnvironmentsRoute =
+  AppWWorkspaceIdPProjectIdSettingsEnvironmentsRouteImport.update({
+    id: '/settings/environments',
+    path: '/settings/environments',
     getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
   } as any)
 const AppWWorkspaceIdPProjectIdSServiceIdIndexRoute =
@@ -325,13 +353,17 @@ export interface FileRoutesByFullPath {
   '/w/$workspaceId/preferences/accessibility': typeof AppWWorkspaceIdPreferencesAccessibilityRoute
   '/w/$workspaceId/preferences/shortcuts': typeof AppWWorkspaceIdPreferencesShortcutsRoute
   '/w/$workspaceId/servers/$nodeId': typeof AppWWorkspaceIdServersNodeIdRoute
+  '/w/$workspaceId/teams/$teamId': typeof AppWWorkspaceIdTeamsTeamIdRoute
   '/w/$workspaceId/templates/$templateId': typeof AppWWorkspaceIdTemplatesTemplateIdRoute
   '/w/$workspaceId/preferences/': typeof AppWWorkspaceIdPreferencesIndexRoute
   '/w/$workspaceId/servers/': typeof AppWWorkspaceIdServersIndexRoute
+  '/w/$workspaceId/teams/': typeof AppWWorkspaceIdTeamsIndexRoute
   '/w/$workspaceId/templates/': typeof AppWWorkspaceIdTemplatesIndexRoute
-  '/w/$workspaceId/p/$projectId/settings': typeof AppWWorkspaceIdPProjectIdSettingsRoute
   '/w/$workspaceId/p/$projectId/': typeof AppWWorkspaceIdPProjectIdIndexRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId': typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren
+  '/w/$workspaceId/p/$projectId/settings/access': typeof AppWWorkspaceIdPProjectIdSettingsAccessRoute
+  '/w/$workspaceId/p/$projectId/settings/environments': typeof AppWWorkspaceIdPProjectIdSettingsEnvironmentsRoute
+  '/w/$workspaceId/p/$projectId/settings/': typeof AppWWorkspaceIdPProjectIdSettingsIndexRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/backups': typeof AppWWorkspaceIdPProjectIdSServiceIdBackupsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/data': typeof AppWWorkspaceIdPProjectIdSServiceIdDataRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/domains': typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
@@ -368,12 +400,16 @@ export interface FileRoutesByTo {
   '/w/$workspaceId/preferences/accessibility': typeof AppWWorkspaceIdPreferencesAccessibilityRoute
   '/w/$workspaceId/preferences/shortcuts': typeof AppWWorkspaceIdPreferencesShortcutsRoute
   '/w/$workspaceId/servers/$nodeId': typeof AppWWorkspaceIdServersNodeIdRoute
+  '/w/$workspaceId/teams/$teamId': typeof AppWWorkspaceIdTeamsTeamIdRoute
   '/w/$workspaceId/templates/$templateId': typeof AppWWorkspaceIdTemplatesTemplateIdRoute
   '/w/$workspaceId/preferences': typeof AppWWorkspaceIdPreferencesIndexRoute
   '/w/$workspaceId/servers': typeof AppWWorkspaceIdServersIndexRoute
+  '/w/$workspaceId/teams': typeof AppWWorkspaceIdTeamsIndexRoute
   '/w/$workspaceId/templates': typeof AppWWorkspaceIdTemplatesIndexRoute
-  '/w/$workspaceId/p/$projectId/settings': typeof AppWWorkspaceIdPProjectIdSettingsRoute
   '/w/$workspaceId/p/$projectId': typeof AppWWorkspaceIdPProjectIdIndexRoute
+  '/w/$workspaceId/p/$projectId/settings/access': typeof AppWWorkspaceIdPProjectIdSettingsAccessRoute
+  '/w/$workspaceId/p/$projectId/settings/environments': typeof AppWWorkspaceIdPProjectIdSettingsEnvironmentsRoute
+  '/w/$workspaceId/p/$projectId/settings': typeof AppWWorkspaceIdPProjectIdSettingsIndexRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/backups': typeof AppWWorkspaceIdPProjectIdSServiceIdBackupsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/data': typeof AppWWorkspaceIdPProjectIdSServiceIdDataRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/domains': typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
@@ -414,13 +450,17 @@ export interface FileRoutesById {
   '/_app/w/$workspaceId/preferences/accessibility': typeof AppWWorkspaceIdPreferencesAccessibilityRoute
   '/_app/w/$workspaceId/preferences/shortcuts': typeof AppWWorkspaceIdPreferencesShortcutsRoute
   '/_app/w/$workspaceId/servers/$nodeId': typeof AppWWorkspaceIdServersNodeIdRoute
+  '/_app/w/$workspaceId/teams/$teamId': typeof AppWWorkspaceIdTeamsTeamIdRoute
   '/_app/w/$workspaceId/templates/$templateId': typeof AppWWorkspaceIdTemplatesTemplateIdRoute
   '/_app/w/$workspaceId/preferences/': typeof AppWWorkspaceIdPreferencesIndexRoute
   '/_app/w/$workspaceId/servers/': typeof AppWWorkspaceIdServersIndexRoute
+  '/_app/w/$workspaceId/teams/': typeof AppWWorkspaceIdTeamsIndexRoute
   '/_app/w/$workspaceId/templates/': typeof AppWWorkspaceIdTemplatesIndexRoute
-  '/_app/w/$workspaceId/p/$projectId/settings': typeof AppWWorkspaceIdPProjectIdSettingsRoute
   '/_app/w/$workspaceId/p/$projectId/': typeof AppWWorkspaceIdPProjectIdIndexRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId': typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren
+  '/_app/w/$workspaceId/p/$projectId/settings/access': typeof AppWWorkspaceIdPProjectIdSettingsAccessRoute
+  '/_app/w/$workspaceId/p/$projectId/settings/environments': typeof AppWWorkspaceIdPProjectIdSettingsEnvironmentsRoute
+  '/_app/w/$workspaceId/p/$projectId/settings/': typeof AppWWorkspaceIdPProjectIdSettingsIndexRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/backups': typeof AppWWorkspaceIdPProjectIdSServiceIdBackupsRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/data': typeof AppWWorkspaceIdPProjectIdSServiceIdDataRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/domains': typeof AppWWorkspaceIdPProjectIdSServiceIdDomainsRoute
@@ -461,13 +501,17 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/preferences/accessibility'
     | '/w/$workspaceId/preferences/shortcuts'
     | '/w/$workspaceId/servers/$nodeId'
+    | '/w/$workspaceId/teams/$teamId'
     | '/w/$workspaceId/templates/$templateId'
     | '/w/$workspaceId/preferences/'
     | '/w/$workspaceId/servers/'
+    | '/w/$workspaceId/teams/'
     | '/w/$workspaceId/templates/'
-    | '/w/$workspaceId/p/$projectId/settings'
     | '/w/$workspaceId/p/$projectId/'
     | '/w/$workspaceId/p/$projectId/s/$serviceId'
+    | '/w/$workspaceId/p/$projectId/settings/access'
+    | '/w/$workspaceId/p/$projectId/settings/environments'
+    | '/w/$workspaceId/p/$projectId/settings/'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/backups'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/data'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/domains'
@@ -504,12 +548,16 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/preferences/accessibility'
     | '/w/$workspaceId/preferences/shortcuts'
     | '/w/$workspaceId/servers/$nodeId'
+    | '/w/$workspaceId/teams/$teamId'
     | '/w/$workspaceId/templates/$templateId'
     | '/w/$workspaceId/preferences'
     | '/w/$workspaceId/servers'
+    | '/w/$workspaceId/teams'
     | '/w/$workspaceId/templates'
-    | '/w/$workspaceId/p/$projectId/settings'
     | '/w/$workspaceId/p/$projectId'
+    | '/w/$workspaceId/p/$projectId/settings/access'
+    | '/w/$workspaceId/p/$projectId/settings/environments'
+    | '/w/$workspaceId/p/$projectId/settings'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/backups'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/data'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/domains'
@@ -549,13 +597,17 @@ export interface FileRouteTypes {
     | '/_app/w/$workspaceId/preferences/accessibility'
     | '/_app/w/$workspaceId/preferences/shortcuts'
     | '/_app/w/$workspaceId/servers/$nodeId'
+    | '/_app/w/$workspaceId/teams/$teamId'
     | '/_app/w/$workspaceId/templates/$templateId'
     | '/_app/w/$workspaceId/preferences/'
     | '/_app/w/$workspaceId/servers/'
+    | '/_app/w/$workspaceId/teams/'
     | '/_app/w/$workspaceId/templates/'
-    | '/_app/w/$workspaceId/p/$projectId/settings'
     | '/_app/w/$workspaceId/p/$projectId/'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId'
+    | '/_app/w/$workspaceId/p/$projectId/settings/access'
+    | '/_app/w/$workspaceId/p/$projectId/settings/environments'
+    | '/_app/w/$workspaceId/p/$projectId/settings/'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/backups'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/data'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/domains'
@@ -775,6 +827,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWWorkspaceIdServersNodeIdRouteImport
       parentRoute: typeof AppWWorkspaceIdRouteRoute
     }
+    '/_app/w/$workspaceId/teams/': {
+      id: '/_app/w/$workspaceId/teams/'
+      path: '/teams'
+      fullPath: '/w/$workspaceId/teams/'
+      preLoaderRoute: typeof AppWWorkspaceIdTeamsIndexRouteImport
+      parentRoute: typeof AppWWorkspaceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/teams/$teamId': {
+      id: '/_app/w/$workspaceId/teams/$teamId'
+      path: '/teams/$teamId'
+      fullPath: '/w/$workspaceId/teams/$teamId'
+      preLoaderRoute: typeof AppWWorkspaceIdTeamsTeamIdRouteImport
+      parentRoute: typeof AppWWorkspaceIdRouteRoute
+    }
     '/_app/w/$workspaceId/templates/': {
       id: '/_app/w/$workspaceId/templates/'
       path: '/templates'
@@ -796,18 +862,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWWorkspaceIdPProjectIdIndexRouteImport
       parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
     }
-    '/_app/w/$workspaceId/p/$projectId/settings': {
-      id: '/_app/w/$workspaceId/p/$projectId/settings'
-      path: '/settings'
-      fullPath: '/w/$workspaceId/p/$projectId/settings'
-      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSettingsRouteImport
-      parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
-    }
     '/_app/w/$workspaceId/p/$projectId/s/$serviceId': {
       id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId'
       path: '/s/$serviceId'
       fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId'
       preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/settings/': {
+      id: '/_app/w/$workspaceId/p/$projectId/settings/'
+      path: '/settings'
+      fullPath: '/w/$workspaceId/p/$projectId/settings/'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSettingsIndexRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/settings/access': {
+      id: '/_app/w/$workspaceId/p/$projectId/settings/access'
+      path: '/settings/access'
+      fullPath: '/w/$workspaceId/p/$projectId/settings/access'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSettingsAccessRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
+    }
+    '/_app/w/$workspaceId/p/$projectId/settings/environments': {
+      id: '/_app/w/$workspaceId/p/$projectId/settings/environments'
+      path: '/settings/environments'
+      fullPath: '/w/$workspaceId/p/$projectId/settings/environments'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSettingsEnvironmentsRouteImport
       parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
     }
     '/_app/w/$workspaceId/p/$projectId/s/$serviceId/': {
@@ -936,18 +1016,24 @@ const AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren =
   )
 
 interface AppWWorkspaceIdPProjectIdRouteRouteChildren {
-  AppWWorkspaceIdPProjectIdSettingsRoute: typeof AppWWorkspaceIdPProjectIdSettingsRoute
   AppWWorkspaceIdPProjectIdIndexRoute: typeof AppWWorkspaceIdPProjectIdIndexRoute
   AppWWorkspaceIdPProjectIdSServiceIdRouteRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren
+  AppWWorkspaceIdPProjectIdSettingsAccessRoute: typeof AppWWorkspaceIdPProjectIdSettingsAccessRoute
+  AppWWorkspaceIdPProjectIdSettingsEnvironmentsRoute: typeof AppWWorkspaceIdPProjectIdSettingsEnvironmentsRoute
+  AppWWorkspaceIdPProjectIdSettingsIndexRoute: typeof AppWWorkspaceIdPProjectIdSettingsIndexRoute
 }
 
 const AppWWorkspaceIdPProjectIdRouteRouteChildren: AppWWorkspaceIdPProjectIdRouteRouteChildren =
   {
-    AppWWorkspaceIdPProjectIdSettingsRoute:
-      AppWWorkspaceIdPProjectIdSettingsRoute,
     AppWWorkspaceIdPProjectIdIndexRoute: AppWWorkspaceIdPProjectIdIndexRoute,
     AppWWorkspaceIdPProjectIdSServiceIdRouteRoute:
       AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren,
+    AppWWorkspaceIdPProjectIdSettingsAccessRoute:
+      AppWWorkspaceIdPProjectIdSettingsAccessRoute,
+    AppWWorkspaceIdPProjectIdSettingsEnvironmentsRoute:
+      AppWWorkspaceIdPProjectIdSettingsEnvironmentsRoute,
+    AppWWorkspaceIdPProjectIdSettingsIndexRoute:
+      AppWWorkspaceIdPProjectIdSettingsIndexRoute,
   }
 
 const AppWWorkspaceIdPProjectIdRouteRouteWithChildren =
@@ -972,9 +1058,11 @@ interface AppWWorkspaceIdRouteRouteChildren {
   AppWWorkspaceIdPreferencesAccessibilityRoute: typeof AppWWorkspaceIdPreferencesAccessibilityRoute
   AppWWorkspaceIdPreferencesShortcutsRoute: typeof AppWWorkspaceIdPreferencesShortcutsRoute
   AppWWorkspaceIdServersNodeIdRoute: typeof AppWWorkspaceIdServersNodeIdRoute
+  AppWWorkspaceIdTeamsTeamIdRoute: typeof AppWWorkspaceIdTeamsTeamIdRoute
   AppWWorkspaceIdTemplatesTemplateIdRoute: typeof AppWWorkspaceIdTemplatesTemplateIdRoute
   AppWWorkspaceIdPreferencesIndexRoute: typeof AppWWorkspaceIdPreferencesIndexRoute
   AppWWorkspaceIdServersIndexRoute: typeof AppWWorkspaceIdServersIndexRoute
+  AppWWorkspaceIdTeamsIndexRoute: typeof AppWWorkspaceIdTeamsIndexRoute
   AppWWorkspaceIdTemplatesIndexRoute: typeof AppWWorkspaceIdTemplatesIndexRoute
 }
 
@@ -998,10 +1086,12 @@ const AppWWorkspaceIdRouteRouteChildren: AppWWorkspaceIdRouteRouteChildren = {
   AppWWorkspaceIdPreferencesShortcutsRoute:
     AppWWorkspaceIdPreferencesShortcutsRoute,
   AppWWorkspaceIdServersNodeIdRoute: AppWWorkspaceIdServersNodeIdRoute,
+  AppWWorkspaceIdTeamsTeamIdRoute: AppWWorkspaceIdTeamsTeamIdRoute,
   AppWWorkspaceIdTemplatesTemplateIdRoute:
     AppWWorkspaceIdTemplatesTemplateIdRoute,
   AppWWorkspaceIdPreferencesIndexRoute: AppWWorkspaceIdPreferencesIndexRoute,
   AppWWorkspaceIdServersIndexRoute: AppWWorkspaceIdServersIndexRoute,
+  AppWWorkspaceIdTeamsIndexRoute: AppWWorkspaceIdTeamsIndexRoute,
   AppWWorkspaceIdTemplatesIndexRoute: AppWWorkspaceIdTemplatesIndexRoute,
 }
 

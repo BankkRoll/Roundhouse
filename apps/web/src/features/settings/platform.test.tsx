@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { http } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { external } from "../../lib/external";
-import { db, SIGNING_KID, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
+import { db, PASSWORD, SIGNING_KID, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
 import { apiError } from "../../mocks/handlers";
 import { server } from "../../mocks/server";
 import { findPageHeading, renderApp } from "../../test/render";
@@ -288,5 +288,30 @@ describe("GitHub setup landing page", () => {
       "href",
       PLATFORM,
     );
+  });
+});
+
+describe("releasing a GitHub installation", () => {
+  it("confirms, asks for the password, then releases the claim", async () => {
+    db.sessionStale = true;
+    const { user } = renderApp(PLATFORM);
+    const installations = await screen.findByRole("list", { name: "Installations" });
+    await user.click(within(installations).getByRole("button", { name: "Release acme" }));
+    const dialog = await screen.findByRole("dialog", { name: "Release acme?" });
+    await user.click(within(dialog).getByRole("button", { name: "Release installation" }));
+    const reauth = await screen.findByRole("dialog", { name: "Confirm it's you" });
+    await user.type(within(reauth).getByLabelText("Password"), PASSWORD);
+    await user.click(within(reauth).getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(db.deploy.github.installations[0]?.workspace_id).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("list", { name: "Installations" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("doesn't offer members a release", async () => {
+    signInAs(USERS.member.id);
+    renderApp(PLATFORM);
+    await screen.findByRole("list", { name: "Installations" });
+    expect(screen.queryByRole("button", { name: /^Release / })).not.toBeInTheDocument();
   });
 });

@@ -4,6 +4,7 @@ import {
   applySuggestion,
   EMPTY_DRAFT,
   errorsFromDetails,
+  lockedTier,
   mapApiError,
   mergeRows,
   type ReferenceCatalog,
@@ -108,10 +109,30 @@ describe("staging", () => {
           { key: "NEW", value: "x", tier: "secret" },
         ],
         delete: ["S"],
-        confirm_write_only: true,
+        confirm_write_only: false,
       },
       setKeys: ["A", "NEW"],
     });
+    expect(
+      toPutBody(draft, { confirmWriteOnly: true, acknowledgePublic: ["VITE_X"] }).body,
+    ).toMatchObject({ confirm_write_only: true, acknowledge_public: ["VITE_X"] });
+  });
+
+  it("sends the tier the classifier locks, whatever the switch says", () => {
+    const draft = stageSet(
+      stageSet(EMPTY_DRAFT, "VITE_API_URL", { value: "https://api.example.test", isSecret: true }),
+      "DATABASE_URL",
+      { value: "postgres://app:not-a-real-password@db.example.test/app", isSecret: false },
+    );
+    expect(toPutBody(draft).body.set).toEqual([
+      {
+        key: "DATABASE_URL",
+        value: "postgres://app:not-a-real-password@db.example.test/app",
+        tier: "secret",
+      },
+      { key: "VITE_API_URL", value: "https://api.example.test", tier: "plain" },
+    ]);
+    expect(lockedTier("API_URL", "https://api.example.test")).toBeNull();
   });
 
   it("drops unsaved additions instead of deleting them, and can undo", () => {

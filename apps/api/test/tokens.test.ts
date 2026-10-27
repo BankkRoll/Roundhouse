@@ -308,7 +308,7 @@ describe("token and member management by tokens", () => {
     expect(audit).toEqual({ actor_type: "token", actor_id: manager.token.id });
   });
 
-  it("can't manage members without members:manage", async () => {
+  it("can't manage members without members:manage, nor change roles at all", async () => {
     const { owner, workspaceId } = await install();
     await addMember(owner, workspaceId, "v@example.com", "viewer");
     const id = await memberId(owner, workspaceId, "v@example.com");
@@ -323,8 +323,11 @@ describe("token and member management by tokens", () => {
       (await as(reader.secret, `/v1/workspaces/${workspaceId}/members/${id}`, { method: "DELETE" }))
         .status,
     ).toBe(403);
+    // NOTE: Role changes need a fresh session, which a token never is (ADR 0014).
     const manager = await mint(owner, workspaceId, ["members:manage"]);
-    expect((await change(manager.secret)).status).toBe(200);
+    const refused = await change(manager.secret);
+    expect(refused.status).toBe(403);
+    expect((refused.body as { error: { code: string } }).error.code).toBe("reauth_required");
   });
 });
 

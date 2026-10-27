@@ -20,12 +20,17 @@ import {
 import { Switch } from "@roundhouse/ui/controls";
 import { ExternalLinkIcon, ShieldIcon } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
+import { ConfirmDialog } from "../../components/confirm-dialog";
 import { ErrorState } from "../../components/error-state";
 import { FormField } from "../../components/form-field";
 import { GithubIcon } from "../../components/github-mark";
 import { SettingsField } from "../../components/settings-field";
 import { errorMessage, isApiError } from "../../lib/api/client";
-import type { GithubStatus, InstanceSettings } from "../../lib/api/deploy-types";
+import type {
+  GithubInstallation,
+  GithubStatus,
+  InstanceSettings,
+} from "../../lib/api/deploy-types";
 import { external } from "../../lib/external";
 import { formatRelativeTime } from "../../lib/format";
 import { canManageInstance, usePermissions } from "../../lib/permissions";
@@ -33,6 +38,7 @@ import {
   useCreateGithubManifest,
   useGithubStatus,
   useInstanceSettings,
+  useReleaseGithubInstallation,
   useStartGithubClaim,
   useUpdateInstanceSettings,
 } from "../../queries/instance";
@@ -374,11 +380,16 @@ function GithubSection({
   workspaceId,
   status,
   canCreate,
+  canRelease,
 }: {
   workspaceId: string;
   status: GithubStatus;
   canCreate: boolean;
+  /** `github:manage`: may release claimed installations. */
+  canRelease: boolean;
 }) {
+  const release = useReleaseGithubInstallation(workspaceId);
+  const [releasing, setReleasing] = useState<GithubInstallation | null>(null);
   return (
     <SettingsSection
       title="GitHub App"
@@ -451,9 +462,21 @@ function GithubSection({
                         </Badge>
                       )}
                     </span>
-                    <span className="text-xs text-muted-foreground">
-                      {installation.account_type.toLowerCase()} · added{" "}
-                      {formatRelativeTime(installation.created_at)}
+                    <span className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground">
+                        {installation.account_type.toLowerCase()} · added{" "}
+                        {formatRelativeTime(installation.created_at)}
+                      </span>
+                      {canRelease && installation.workspace_id === workspaceId ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Release ${installation.account_login}`}
+                          onClick={() => setReleasing(installation)}
+                        >
+                          Release
+                        </Button>
+                      ) : null}
                     </span>
                   </li>
                 ))}
@@ -462,6 +485,29 @@ function GithubSection({
           </SettingsRow>
         </>
       )}
+      <ConfirmDialog
+        open={releasing !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setReleasing(null);
+            release.reset();
+          }
+        }}
+        title={`Release ${releasing?.account_login ?? "installation"}?`}
+        description="This workspace stops deploying its repositories: new builds of services that use them fail until it is installed and claimed again. The App stays installed on GitHub."
+        confirmLabel="Release installation"
+        pending={release.isPending}
+        error={release.isError ? errorMessage(release.error) : null}
+        onConfirm={() => {
+          if (!releasing) return;
+          release.mutate(releasing.id, {
+            onSuccess: () => {
+              toast({ title: `${releasing.account_login} released`, tone: "success" });
+              setReleasing(null);
+            },
+          });
+        }}
+      />
     </SettingsSection>
   );
 }
@@ -523,7 +569,12 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
         ) : github.isError ? (
           <ErrorState message={errorMessage(github.error)} onRetry={() => void github.refetch()} />
         ) : (
-          <GithubSection workspaceId={workspaceId} status={github.data} canCreate={owner} />
+          <GithubSection
+            workspaceId={workspaceId}
+            status={github.data}
+            canCreate={owner}
+            canRelease={can("github:manage")}
+          />
         )}
       </SettingsStack>
     </SettingsFrame>

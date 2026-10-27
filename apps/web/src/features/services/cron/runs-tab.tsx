@@ -31,7 +31,6 @@ import { ErrorState } from "../../../components/error-state";
 import { errorMessage, isApiError } from "../../../lib/api/client";
 import type { CronRun, CronState } from "../../../lib/api/cron-client";
 import { formatDuration, formatRelativeTime, formatTimestamp } from "../../../lib/format";
-import { usePermissions } from "../../../lib/permissions";
 import { useNow } from "../../../lib/use-now";
 import {
   useCancelCronRun,
@@ -42,6 +41,7 @@ import {
   useTriggerCronRun,
 } from "../../../queries/cron";
 import { useServiceConfig } from "../../../queries/services";
+import { LockedButton, useEnvironmentGate } from "../../access/environment-gate";
 import { findService, useProjectEnvironment } from "../../projects/use-project-environment";
 import { LogViewer } from "../logs/log-viewer";
 import { useLogStream } from "../logs/use-log-stream";
@@ -95,6 +95,8 @@ function StateHeader({
   state,
   canRun,
   canManage,
+  runLocked,
+  manageLocked,
   onRun,
   running,
   onTogglePause,
@@ -103,6 +105,10 @@ function StateHeader({
   state: CronState;
   canRun: boolean;
   canManage: boolean;
+  /** Why a protected environment keeps the caller from running it, if one does. */
+  runLocked: string | null;
+  /** Why a protected environment keeps the caller from pausing it, if one does. */
+  manageLocked: string | null;
   onRun: () => void;
   running: boolean;
   onTogglePause: () => void;
@@ -142,13 +148,21 @@ function StateHeader({
         </dd>
       </dl>
       <div className="flex items-center gap-2">
-        {canManage && armed ? (
+        {manageLocked && armed ? (
+          <LockedButton variant="secondary" reason={manageLocked}>
+            {state.paused ? "Resume" : "Pause"}
+          </LockedButton>
+        ) : canManage && armed ? (
           <Button variant="secondary" onClick={onTogglePause} loading={toggling}>
             {toggling ? null : state.paused ? <PlayIcon /> : <PauseIcon />}
             {state.paused ? "Resume" : "Pause"}
           </Button>
         ) : null}
-        {canRun ? (
+        {runLocked ? (
+          <LockedButton variant="primary" reason={runLocked}>
+            Run now
+          </LockedButton>
+        ) : canRun ? (
           <Button variant="primary" onClick={onRun} loading={running} disabled={!armed}>
             {running ? null : <PlayIcon />}
             Run now
@@ -266,7 +280,8 @@ export function RunsTab({ workspaceId, projectId, serviceId }: ServicePageProps)
   const { project, environment } = useProjectEnvironment(projectId);
   const service = findService(project.data, serviceId);
   const isCron = service?.kind === "cron";
-  const { can } = usePermissions(workspaceId);
+  const gate = useEnvironmentGate(workspaceId, projectId, environment);
+  const { can } = gate;
   const [status, setStatus] = useState<CronRunStatus | null>(null);
   const state = useCronState(serviceId, environment?.id, isCron);
   const runs = useCronRuns(serviceId, isCron ? environment?.id : undefined, status);
@@ -341,6 +356,8 @@ export function RunsTab({ workspaceId, projectId, serviceId }: ServicePageProps)
         state={cron}
         canRun={canRun}
         canManage={can("services:manage")}
+        runLocked={gate.locked("deployments:create")}
+        manageLocked={gate.locked("services:manage")}
         onRun={() => run()}
         running={trigger.isPending}
         toggling={setPaused.isPending}

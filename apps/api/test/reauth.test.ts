@@ -9,7 +9,7 @@ import { REAUTH_WINDOW_MS } from "@roundhouse/shared";
 import { describe, expect, it } from "vitest";
 import { POLICY_KEY, type RoutePolicy } from "../src/contracts";
 import { app } from "../src/index";
-import { type Client, call, install, nextTotpCode, signInAs } from "./helpers";
+import { addMember, type Client, call, install, nextTotpCode, signInAs } from "./helpers";
 
 const PASSWORD = "correct horse battery";
 const EMAIL = "mara@example.com";
@@ -147,6 +147,46 @@ describe("routes that need a fresh session", () => {
       "SELECT value FROM instance_settings WHERE key = 'mcp_enabled'",
     ).first<{ value: string }>();
     expect(JSON.parse(row!.value)).toBe(false);
+  });
+});
+
+describe("member role changes and removals", () => {
+  it("need a fresh session to change or remove someone else, but not to leave", async () => {
+    const { owner, userId, workspaceId } = await install();
+    const jonas = await addMember(owner, workspaceId, "jonas@example.com", "member");
+    const { body } = await owner.json<{ members: { id: string; email: string }[] }>(
+      `/v1/workspaces/${workspaceId}/members`,
+    );
+    const row = body.members.find((m) => m.email === "jonas@example.com")!;
+    await makeStale(userId);
+
+    const demote = await owner.json<ErrorResponse>(
+      `/v1/workspaces/${workspaceId}/members/${row.id}`,
+      { method: "PATCH", json: { role: "viewer" } },
+    );
+    expect(demote.status).toBe(403);
+    expect(demote.body.error.code).toBe("reauth_required");
+    const remove = await owner.json<ErrorResponse>(
+      `/v1/workspaces/${workspaceId}/members/${row.id}`,
+      { method: "DELETE" },
+    );
+    expect(remove.body.error.code).toBe("reauth_required");
+
+    await owner.request("/v1/auth/reauth", { method: "POST", json: await credentials() });
+    const changed = await owner.request(`/v1/workspaces/${workspaceId}/members/${row.id}`, {
+      method: "PATCH",
+      json: { role: "viewer" },
+    });
+    expect(changed.status).toBe(200);
+
+    const jonasId = await env.DB.prepare("SELECT id FROM users WHERE email = ?")
+      .bind("jonas@example.com")
+      .first<{ id: string }>();
+    await makeStale(jonasId!.id);
+    const leave = await jonas.request(`/v1/workspaces/${workspaceId}/members/${row.id}`, {
+      method: "DELETE",
+    });
+    expect(leave.status).toBe(204);
   });
 });
 

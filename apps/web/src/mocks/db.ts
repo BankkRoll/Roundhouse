@@ -16,6 +16,7 @@ import type {
   User,
   Workspace,
 } from "../lib/api/types";
+import { type AccessDb, emptyAccess, seedAccess } from "./access-db";
 import { type ChangesDb, emptyChanges } from "./changes-db";
 import { type CronDb, emptyCron, seedCron } from "./cron-db";
 import { type DataDb, emptyData, seedData } from "./data-db";
@@ -93,6 +94,8 @@ export interface MockDb {
   cron: CronDb;
   /** Two-factor, sessions and lockouts. */
   security: SecurityDb;
+  /** Teams, project grants, protection rules and default project roles. */
+  access: AccessDb;
   signingKeys: DbSigningKeys;
   counter: number;
 }
@@ -290,6 +293,7 @@ function seed(): MockDb {
     providers: emptyProviders(),
     changes: emptyChanges(),
     security: seedSecurity(USERS.owner.id, now),
+    access: seedAccess(WORKSPACE_ID, [USERS.admin.id, USERS.member.id], now),
     signingKeys: {
       current: { kid: SIGNING_KID, public_key: "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=" },
       next: null,
@@ -331,6 +335,7 @@ export function seedFreshInstall(masterKeyConfigured = true): void {
     deploy: emptyDeploy(),
     data: emptyData(),
     cron: emptyCron(),
+    access: emptyAccess(),
   };
 }
 

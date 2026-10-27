@@ -43,6 +43,12 @@ import {
   waitForStatus,
 } from "./pipeline-helpers";
 
+/**
+ * Each test deploys, runs jobs through real workflows and waits out the 2 s log flush,
+ * which can pass the 5 s default on a loaded machine.
+ */
+const RUN_TEST_TIMEOUT_MS = 30_000;
+
 const SECRET = "sk-live-cron-0123456789";
 
 let introspectors: { dispose(): Promise<void> }[] = [];
@@ -306,7 +312,7 @@ async function settleRuns(): Promise<void> {
   );
 }
 
-describe("cron deploy", () => {
+describe("cron deploy", { timeout: RUN_TEST_TIMEOUT_MS }, () => {
   it("arms the schedule without placing replicas or running anything", async () => {
     const s = await armedCronStage(() => ({ kind: "exit", code: 0 }));
     const state = await s.owner.json<{
@@ -326,7 +332,7 @@ describe("cron deploy", () => {
   });
 });
 
-describe("cron runner", () => {
+describe("cron runner", { timeout: RUN_TEST_TIMEOUT_MS }, () => {
   it("runs a job with its sealed environment, files its redacted logs, and leaks no secret", async () => {
     const s = await armedCronStage(() => ({
       kind: "exit",
@@ -543,7 +549,7 @@ describe("cron runner", () => {
   });
 });
 
-describe("pre-deploy command", () => {
+describe("pre-deploy command", { timeout: RUN_TEST_TIMEOUT_MS }, () => {
   async function appStage(script: JobAgent["script"]) {
     const { owner, workspaceId } = await install();
     const job = await connectJobAgent(owner, workspaceId, script);
@@ -610,7 +616,7 @@ describe("pre-deploy command", () => {
   });
 });
 
-describe("protected environments", () => {
+describe("protected environments", { timeout: RUN_TEST_TIMEOUT_MS }, () => {
   it("applies the deploy rule to run now and the config rule to pause", async () => {
     const s = await armedCronStage(() => ({ kind: "exit", code: 0 }));
     const member = await addMember(s.owner, s.workspaceId, "dev@example.com", "member");

@@ -494,7 +494,9 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         kind: "production",
         pr_number: null,
         source_branch: null,
-        protected: true,
+        // NOTE: Created before ADR 0014, so the migration left it unprotected; the tools
+        // project's production shows the protected case.
+        protected: false,
         created_at: now - 7 * DAY,
       },
       {

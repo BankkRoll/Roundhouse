@@ -33,7 +33,6 @@ import { errorMessage } from "../../../lib/api/client";
 import type { Domain } from "../../../lib/api/deploy-types";
 import type { DnsRecord } from "../../../lib/api/domains-client";
 import { formatRelativeTime } from "../../../lib/format";
-import { usePermissions } from "../../../lib/permissions";
 import {
   isInProgress,
   useAddDomain,
@@ -42,6 +41,7 @@ import {
   useServiceDomains,
 } from "../../../queries/domains";
 import { useServiceConfig } from "../../../queries/services";
+import { useEnvironmentGate } from "../../access/environment-gate";
 import { useProjectEnvironment } from "../../projects/use-project-environment";
 import type { ServicePageProps } from "../service-layout";
 
@@ -396,8 +396,7 @@ export function DomainsSection({ workspaceId, projectId, serviceId }: ServicePag
   const { environment } = useProjectEnvironment(projectId);
   const domains = useServiceDomains(serviceId, environment?.id);
   const config = useServiceConfig(serviceId, environment?.id);
-  const { can } = usePermissions(workspaceId);
-  const canManage = can("services:manage");
+  const canManage = useEnvironmentGate(workspaceId, projectId, environment).can("services:manage");
   const remove = useRemoveDomain();
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<Domain | null>(null);

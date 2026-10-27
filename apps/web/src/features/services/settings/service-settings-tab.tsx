@@ -38,7 +38,7 @@ import type {
   UpdateServiceBody,
 } from "../../../lib/api/deploy-types";
 import { formatCpu, formatDuration, formatMemoryMb, formatRelativeTime } from "../../../lib/format";
-import { usePermissions } from "../../../lib/permissions";
+import { describeDenial, useProjectPermissions } from "../../../lib/permissions";
 import { useDeploy } from "../../../queries/deployments";
 import { latestDeploymentQueryOptions } from "../../../queries/projects";
 import {
@@ -47,6 +47,7 @@ import {
   useServiceConfig,
   useUpdateService,
 } from "../../../queries/services";
+import { LockedButton, LockedNote, useEnvironmentGate } from "../../access/environment-gate";
 import { DatabaseSection } from "../../databases/database-section";
 import { VolumeSection } from "../../databases/volume-section";
 import {
@@ -1176,10 +1177,13 @@ function DeleteServiceSection({
   workspaceId,
   projectId,
   service,
+  lockedReason,
 }: {
   workspaceId: string;
   projectId: string;
   service: Service;
+  /** Why a protected environment keeps the caller from deleting, if one does. */
+  lockedReason: string | null;
 }) {
   const remove = useDeleteService(projectId);
   const navigate = useNavigate();
@@ -1192,9 +1196,15 @@ function DeleteServiceSection({
         description="Stops every replica, removes its domains, and deletes its deployments and variables."
       >
         <div className="md:flex md:justify-end">
-          <Button variant="danger-outline" onClick={() => setConfirming(true)}>
-            Delete service
-          </Button>
+          {lockedReason ? (
+            <LockedButton variant="danger-outline" reason={lockedReason}>
+              Delete service
+            </LockedButton>
+          ) : (
+            <Button variant="danger-outline" onClick={() => setConfirming(true)}>
+              Delete service
+            </Button>
+          )}
         </div>
       </SettingsRow>
       <ConfirmDialog
@@ -1285,7 +1295,9 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
   });
   const update = useUpdateService(serviceId);
   const deploy = useDeploy();
-  const { can } = usePermissions(workspaceId);
+  const access = useProjectPermissions(workspaceId, projectId);
+  const gate = useEnvironmentGate(workspaceId, projectId, environment);
+  const configLocked = gate.locked("services:manage");
   const [saving, setSaving] = useState<Part | null>(null);
   const [errors, setErrors] = useState<Partial<Record<Part, string>>>({});
 
@@ -1305,7 +1317,7 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
   const current = config.data;
 
   const context: SaveContext = {
-    canEdit: can("services:manage"),
+    canEdit: gate.can("services:manage"),
     saving,
     errors,
     save: (part, value) => {
@@ -1338,7 +1350,15 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
   const undeployed =
     latest.data !== undefined &&
     (latest.data === null || latest.data.config_version < current.version);
-  const canDelete = can("services:manage");
+  const canDelete = access.can("services:manage");
+  // NOTE: Deleting a service removes it from every environment, so any protected one
+  // that refuses the caller blocks it, like the API checks each environment.
+  const deleteBlockedIn = (project.data?.environments ?? []).find(
+    (entry) => access.denial("services:manage", entry.id) === "environment_protected",
+  );
+  const deleteLocked = deleteBlockedIn
+    ? `Deleting removes the service from every environment. ${describeDenial("environment_protected", "services:manage", deleteBlockedIn.name)}`
+    : null;
   const isCron = service.kind === "cron";
 
   return (
@@ -1346,6 +1366,7 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
       nav={<SectionNav canDelete={canDelete} database={Boolean(service.database)} cron={isCron} />}
     >
       <div className="mb-8 grid gap-3">
+        {configLocked ? <LockedNote reason={configLocked} /> : null}
         <p className="text-sm text-muted-foreground">
           Each save is a new config version and applies on the next deploy.{" "}
           <span className="text-foreground tabular-nums">
@@ -1366,7 +1387,7 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
             <span>
               v{current.version} isn't deployed yet (running v{latest.data.config_version})
             </span>
-            {can("deployments:create") && environment ? (
+            {gate.can("deployments:create") && environment ? (
               <Button
                 size="sm"
                 variant="primary"
@@ -1395,7 +1416,11 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
         ) : null}
       </div>
       <SettingsStack>
-        <GeneralSection service={service} serviceId={serviceId} canEdit={context.canEdit} />
+        <GeneralSection
+          service={service}
+          serviceId={serviceId}
+          canEdit={access.can("services:manage")}
+        />
         {service.database ? (
           <>
             <DatabaseSection
@@ -1425,6 +1450,7 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
               workspaceId={workspaceId}
               projectId={projectId}
               service={service}
+              lockedReason={deleteLocked}
             />
           </div>
         ) : null}

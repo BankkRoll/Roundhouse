@@ -25,6 +25,7 @@ import { HttpResponse, http } from "msw";
 import { CRON_ROUTES, type CronState, policyOf } from "../../../api/src/contracts";
 import type { CronRun } from "../lib/api/cron-client";
 import type { Environment, Project, Service } from "../lib/api/deploy-types";
+import { protectionRefusal } from "./access-resolve";
 import {
   apiError,
   currentUser,
@@ -159,6 +160,14 @@ function serviceAccess(
     (row) => row.id === environmentId && row.project_id === project!.id,
   );
   if (!environment) return { ok: false, response: notFound("Environment") };
+  // Run now and cancel follow the environment's deploy rule, pause and resume its config rule.
+  const refused = protectionRefusal(
+    project!.workspace_id,
+    granted.guard.user.id,
+    environment.id,
+    action,
+  );
+  if (refused) return { ok: false, response: refused };
   return { ...granted, service: service!, project: project!, environment };
 }
 
