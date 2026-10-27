@@ -79,6 +79,7 @@ import {
   PresenceEditingSchema,
   PresenceUpdateMessageSchema,
 } from "./schemas/changes";
+import { CloudflarePlacementSchema, ServiceProviderSchema } from "./schemas/cloudflare";
 import { CronConfigFields, CronConfigSchema, CronRunUpdatedMessageSchema } from "./schemas/cron";
 import { CostEstimateSchema } from "./schemas/providers";
 import { VariableKeyField } from "./schemas/variables";
@@ -513,12 +514,17 @@ const PlacementConfigFields = z.object({
   node_selector: z
     .record(z.string().max(128).regex(LABEL_KEY_RE, "expected a label key"), z.string().max(256))
     .refine((s) => Object.keys(s).length <= 16, { message: "at most 16 selector labels" }),
+  /** `nodes` when absent (ADR 0011). */
+  provider: ServiceProviderSchema.optional(),
+  /** Required with `provider: "cloudflare"`; kept when switching back. */
+  cloudflare: CloudflarePlacementSchema.optional(),
 });
 
-/** Which nodes may run a service. */
-export const PlacementConfigSchema = PlacementConfigFields.openapi(
-  "PlacementConfig",
-) satisfies z.ZodType<PlacementConfig>;
+/** Where a service runs: which nodes, or Cloudflare Containers (ADR 0011). */
+export const PlacementConfigSchema = PlacementConfigFields.refine(
+  (p) => p.provider !== "cloudflare" || p.cloudflare !== undefined,
+  { message: "placement.cloudflare is required with provider cloudflare", path: ["cloudflare"] },
+).openapi("PlacementConfig") satisfies z.ZodType<PlacementConfig>;
 
 /** One immutable config version of a service in an environment. */
 export const ServiceConfigSchema = z

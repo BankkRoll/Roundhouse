@@ -16,6 +16,7 @@ import { createDb } from "@roundhouse/db";
 import type { Env } from "../env";
 import { claimDueBackups } from "./backups/schedule";
 import { claimDueCertificates, syncCertificates } from "./certificates/schedule";
+import { claimCloudflareDeletions } from "./cloudflare/runtime";
 import { claimDueCronRuns } from "./cron/schedule";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
 import { expireLostShellSessions } from "./shell";
@@ -65,6 +66,7 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
   { name: "migration_cleanups", run: claimMigrationCleanups },
   { name: "cron", run: claimDueCronRuns },
   { name: "lost_shell_sessions", run: expireLostShellSessions },
+  { name: "cloudflare_deletions", run: claimCloudflareDeletions },
 ];
 
 /**

@@ -12,6 +12,7 @@ CREATE TABLE `cf_deployments` (
 	`image_ref` text NOT NULL,
 	`image_digest` text,
 	`push_id` text,
+	`push_node_id` text,
 	`runtime_generation` integer NOT NULL,
 	`instance_type` text NOT NULL,
 	`max_instances` integer NOT NULL,

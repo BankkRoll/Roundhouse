@@ -82,6 +82,7 @@ export * from "./contracts/access";
 export * from "./contracts/auth";
 export * from "./contracts/backups";
 export * from "./contracts/changes";
+export * from "./contracts/cloudflare";
 export * from "./contracts/cron";
 export * from "./contracts/data-browser";
 export * from "./contracts/databases";
@@ -390,15 +391,18 @@ export const getService = defineRoute(session("services:read"), {
  * checked like on {@link createService} (400 `installation_not_in_workspace`,
  * 400 `repository_not_in_installation`, 502 `upstream_error`).
  */
-export const updateService = defineRoute(session("services:manage", ["service.updated"]), {
-  method: "patch",
-  path: "/v1/services/{serviceId}",
-  tags: ["services"],
-  summary: "Update a service or its config",
-  security: sessionAuth,
-  request: { params: ServiceParams, ...body(UpdateServiceBody) },
-  responses: { 200: json(UpdatedServiceSchema), ...errors(400, 401, 403, 404, 409, 502) },
-});
+export const updateService = defineRoute(
+  session("services:manage", ["service.updated", "service.provider_changed"]),
+  {
+    method: "patch",
+    path: "/v1/services/{serviceId}",
+    tags: ["services"],
+    summary: "Update a service or its config",
+    security: sessionAuth,
+    request: { params: ServiceParams, ...body(UpdateServiceBody) },
+    responses: { 200: json(UpdatedServiceSchema), ...errors(400, 401, 403, 404, 409, 422, 502) },
+  },
+);
 
 /** Soft-deletes a service and removes its workloads from every node. */
 export const deleteService = defineRoute(session("services:manage", ["service.deleted"]), {

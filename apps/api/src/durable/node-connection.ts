@@ -12,6 +12,8 @@
  * - apply `workload_status` (and `hello.statuses`) to placements, move
  *   deployments between `active` and `crashed`, and wake deploy workflows;
  * - record `build_result`s and wake the waiting workflow;
+ * - send `image_push` (ADR 0011) to builders at `IMAGE_PUSH_PROTOCOL_VERSION`
+ *   and record `image_push_result` (`./node/handlers/image-push.ts`);
  * - send `job_run` and `job_cancel` (ADR 0010) to agents at
  *   `JOBS_PROTOCOL_VERSION`, apply `job_status` to cron runs and file `job`
  *   log sources under their run (`./node/handlers/jobs.ts`);
@@ -79,6 +81,8 @@ import {
   EXEC_PROTOCOL_VERSION,
   type Heartbeat,
   type Hello,
+  IMAGE_PUSH_PROTOCOL_VERSION,
+  type ImagePush,
   JOBS_PROTOCOL_VERSION,
   type JobRun,
   KEY_ROLLOVER_PROTOCOL_VERSION,
@@ -136,6 +140,7 @@ import { onMigrationVolumeReports } from "../lib/volume-migrations";
 import { type BackupJobFrameBody, onBackupFrame } from "./node/handlers/backups";
 import { onCertFrame } from "./node/handlers/certs";
 import { MAX_QUERIES_PER_NODE, PendingQueries, UserQueryLimiter } from "./node/handlers/data";
+import { onImagePushResult } from "./node/handlers/image-push";
 import { jobLogOwner, onJobStatus } from "./node/handlers/jobs";
 import { MetricOwners, onMetrics } from "./node/handlers/metrics";
 import { onVolumeStatus } from "./node/handlers/volumes";
@@ -307,6 +312,9 @@ export type BuildCancelRejection = "not_connected" | "protocol_too_old";
 
 /** Fields a caller supplies for a `job_run`; the signed header is added when sent. */
 export type JobRunBody = Omit<JobRun, "id" | "node_id" | "iat" | "exp" | "type">;
+
+/** Fields a caller supplies for an `image_push`; the signed header is added when sent. */
+export type ImagePushBody = Omit<ImagePush, "id" | "node_id" | "iat" | "exp" | "type">;
 
 /** Why {@link NodeConnection.sendJobRun} or {@link NodeConnection.sendJobCancel} could not deliver. */
 export type JobRejection = "not_connected" | "protocol_too_old";
@@ -543,6 +551,11 @@ export class NodeConnection extends DurableObject<Env> {
       case "exec_exit":
         if (attachment.protocolVersion < EXEC_PROTOCOL_VERSION) return;
         await this.shell.onAgentFrame(message);
+        return;
+      // Cloudflare image pushes (ADR 0011): `./node/handlers/image-push.ts`.
+      case "image_push_result":
+        if (attachment.protocolVersion < IMAGE_PUSH_PROTOCOL_VERSION) return;
+        await onImagePushResult(this.db, this.env, attachment.nodeId, message);
         return;
       default:
         // Validated Phase 2–3 frames whose handlers land with their streams.
@@ -784,6 +797,32 @@ export class NodeConnection extends DurableObject<Env> {
       ...this.header(attachment.nodeId, Date.now()),
       run_id: runId,
       reason: reason.slice(0, 256),
+    });
+    return { sent: true };
+  }
+
+  /**
+   * Signs and sends an `image_push` (ADR 0011) with the credential TTL. The
+   * caller has sealed the registry login to this node, bound to `push_id`,
+   * so no plaintext credential reaches this object. Agents below
+   * `IMAGE_PUSH_PROTOCOL_VERSION` can't push, so it is not sent to them.
+   *
+   * @param push - Frame fields.
+   * @returns `{ sent: true }`, or why it could not be delivered.
+   */
+  async sendImagePush(
+    push: ImagePushBody,
+  ): Promise<{ sent: true } | { sent: false; reason: JobRejection }> {
+    const ws = this.greetedSocket();
+    if (!ws) return { sent: false, reason: "not_connected" };
+    const attachment = ws.deserializeAttachment() as Attachment;
+    if (attachment.protocolVersion < IMAGE_PUSH_PROTOCOL_VERSION) {
+      return { sent: false, reason: "protocol_too_old" };
+    }
+    await this.send(ws, {
+      type: "image_push",
+      ...this.header(attachment.nodeId, Date.now(), CREDENTIAL_FRAME_TTL_MS),
+      ...push,
     });
     return { sent: true };
   }

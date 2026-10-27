@@ -69,6 +69,12 @@ export const SettingKey = {
    * apps wildcard and delegated custom wildcards can be issued.
    */
   cloudflareDns: "cloudflare_dns",
+  /**
+   * The Cloudflare Containers provider account (ADR 0011): account ID, API
+   * token (sealed), `workers.dev` subdomain, the apps zone and
+   * `apps_domain_proxied`. See `lib/cloudflare/settings.ts`.
+   */
+  cloudflareAccount: "cloudflare_account",
 } as const;
 
 /**

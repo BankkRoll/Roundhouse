@@ -143,6 +143,33 @@ server routes a hostname only to replicas running on it. DNS for a custom
 domain must point at servers that run the service; the dashboard and
 `roundhouse domain` list exactly those when some servers don't.
 
+### Cloudflare Containers provider
+
+Settings → Cloudflare holds the `cloudflare_account` instance setting (ADR
+0011), set by an instance admin from a fresh browser session with
+`PUT /v1/instance/cloudflare`:
+- **Account ID and API token.** The token is checked first (it must list
+  Workers scripts and container applications and read the account's
+  `workers.dev` subdomain), then sealed and write-only; only its last 4
+  characters are shown. It needs Workers Scripts Edit, Workers Routes Edit
+  on the apps domain's zone, Containers Edit and Account Analytics Read.
+  Key rotation re-wraps it like the other instance secrets.
+- **`apps_domain_proxied`.** You confirm that `*.<apps_domain>` is proxied
+  (orange cloud) in Cloudflare: Worker routes only run on proxied hostnames.
+  The control plane doesn't create that record; services can't switch to
+  Cloudflare until this is on.
+- **Apps zone.** Found when the token is saved: the apps domain or its
+  nearest parent that is a zone of the account. Save the settings again
+  after changing the apps domain.
+
+`POST /v1/instance/cloudflare/verify` re-runs every check;
+`DELETE /v1/instance/cloudflare` disconnects (409 while any service still
+runs on Cloudflare). There are no environment variables or bindings for
+the provider: the runtime scripts reach the control plane through a service
+binding to its `RuntimeEnv` entrypoint and send their logs to its `tail()`
+handler, both by the Worker name `roundhouse` from `wrangler.jsonc`. See
+[cloudflare-containers.md](cloudflare-containers.md).
+
 ### Web shell
 
 The web shell (ADR 0012) has no setting. Its limits are fixed:

@@ -90,6 +90,11 @@ export const cfDeployments = sqliteTable(
     imageDigest: text("image_digest"),
     /** `psh_…` of the builder's `image_push`, for git builds. */
     pushId: text("push_id"),
+    /**
+     * The builder node `image_push` was sent to; only its
+     * `image_push_result` is accepted for this push.
+     */
+    pushNodeId: text("push_node_id"),
     runtimeGeneration: integer("runtime_generation").notNull(),
     instanceType: text("instance_type").notNull(),
     maxInstances: integer("max_instances").notNull(),

@@ -68,6 +68,8 @@ export type ErrorCode =
   | "cron_schedule_required"
   | "cron_has_no_endpoint"
   | "run_in_progress"
+  | "provider_ineligible"
+  | "cloudflare_account_invalid"
   | "internal";
 
 /**

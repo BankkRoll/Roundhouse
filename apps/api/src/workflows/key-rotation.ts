@@ -48,6 +48,7 @@ import { auditInsert } from "../lib/audit";
 import { authSecretVersion } from "../lib/auth-secrets";
 import { CERTIFICATE_KEY_SETTING } from "../lib/certificates/config";
 import { ACME_ACCOUNT_KEY_FIELD, CLOUDFLARE_TOKEN_FIELD } from "../lib/certificates/settings";
+import { CLOUDFLARE_ACCOUNT_TOKEN_FIELD } from "../lib/cloudflare/settings";
 import { type Sealed, sealDataKey, unsealDataKey } from "../lib/crypto";
 import {
   openDeploymentBuild,
@@ -112,6 +113,11 @@ export const INSTANCE_SECRET_FIELDS: readonly InstanceSecretField[] = [
     field: "secret_access_key",
   },
   { setting: SettingKey.cloudflareDns, property: "api_token", field: CLOUDFLARE_TOKEN_FIELD },
+  {
+    setting: SettingKey.cloudflareAccount,
+    property: "api_token",
+    field: CLOUDFLARE_ACCOUNT_TOKEN_FIELD,
+  },
   { setting: SettingKey.acmeAccount, property: "key", field: ACME_ACCOUNT_KEY_FIELD },
 ];
 

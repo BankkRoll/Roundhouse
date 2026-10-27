@@ -28,6 +28,10 @@
  *   see `lib/dispatch.ts`
  * - The hourly retention job (Cron Trigger), see `lib/retention.ts`, and the
  *   cloud provider reconcile, see `lib/provisioning.ts`
+ * - The Cloudflare Containers provider (ADR 0011): its routes
+ *   (`routes/cloudflare.ts`), the `RuntimeEnv` entrypoint runtime scripts
+ *   bind as `CONTROL` (`runtime-env.ts`), and `tail()`, which stores their
+ *   console output as `system` log lines
  * - Static SPA assets (served by the platform for everything else)
  *
  * @module
@@ -56,6 +60,7 @@ import { auditRoutes } from "./routes/audit";
 import { authSecurityRoutes } from "./routes/auth-security";
 import { backupRoutes } from "./routes/backups";
 import { changeRoutes } from "./routes/changes";
+import { cloudflareRoutes } from "./routes/cloudflare";
 import { cronRoutes } from "./routes/cron";
 import { dataBrowserRoutes } from "./routes/data-browser";
 import { databaseRoutes } from "./routes/databases";
@@ -80,11 +85,13 @@ import { tlsRoutes } from "./routes/tls";
 import { tokenRoutes } from "./routes/tokens";
 import { variableRoutes } from "./routes/variables";
 import { workspaceRoutes } from "./routes/workspaces";
+import { type RuntimeTraceItem, storeRuntimeTail } from "./runtime-env";
 import { SESSION_SCHEME, TOKEN_SCHEME } from "./schemas";
 
 export { AuditChain } from "./durable/audit-chain";
 export { NodeConnection } from "./durable/node-connection";
 export { ProjectRoom } from "./durable/project-room";
+export { RuntimeEnv } from "./runtime-env";
 export { BackupWorkflow } from "./workflows/backup";
 export { CertificateWorkflow } from "./workflows/certificate";
 export { CronRunWorkflow } from "./workflows/cron-run";
@@ -145,6 +152,7 @@ app
   .route("/", deploymentRoutes)
   .route("/", instanceRoutes)
   .route("/", tlsRoutes)
+  .route("/", cloudflareRoutes)
   .route("/", githubRoutes)
   .route("/", tokenRoutes)
   .route("/", realtimeRoutes)
@@ -203,6 +211,13 @@ export { app };
 
 export default {
   fetch: app.fetch,
+  async tail(events, env) {
+    try {
+      await storeRuntimeTail(env, events as unknown as RuntimeTraceItem[]);
+    } catch (err) {
+      console.error("runtime tail failed", err instanceof Error ? err.name : "error");
+    }
+  },
   async scheduled(controller, env) {
     if (controller.cron === MINUTE_CRON) {
       try {
