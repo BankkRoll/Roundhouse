@@ -1,7 +1,13 @@
 import { Button, cn } from "@roundhouse/ui";
-import { AlertTriangleIcon, GitPullRequestDraftIcon, RocketIcon } from "lucide-react";
+import {
+  AlertTriangleIcon,
+  GitPullRequestDraftIcon,
+  RocketIcon,
+  ShieldCheckIcon,
+} from "lucide-react";
 import type { ChangeSet } from "../../lib/api/changes-types";
 import { changeCount } from "./diff-format";
+import { ReviewBadge } from "./review-status";
 
 /** Props for {@link StagedBar}. */
 export interface StagedBarProps {
@@ -11,6 +17,8 @@ export interface StagedBarProps {
   /** Present when the caller may apply; applies with `deploy: "affected"`. */
   onDeploy?: () => void;
   deploying?: boolean;
+  /** The environment needs an approval the draft doesn't have yet; Review leads instead. */
+  needsApproval?: boolean;
   className?: string;
 }
 
@@ -28,6 +36,7 @@ export function StagedBar({
   onDiscard,
   onDeploy,
   deploying = false,
+  needsApproval = false,
   className,
 }: StagedBarProps) {
   const conflicts = draft.conflicted_count;
@@ -49,12 +58,19 @@ export function StagedBar({
             {conflicts} conflict{conflicts === 1 ? "" : "s"}
           </span>
         ) : null}
+        <ReviewBadge status={draft.review_status} />
+        {needsApproval ? (
+          <span className="inline-flex items-center gap-1 text-muted-foreground">
+            <ShieldCheckIcon className="size-3.5" aria-hidden="true" />
+            needs approval
+          </span>
+        ) : null}
       </p>
       <div className="ml-auto flex items-center gap-1.5">
         <Button variant="ghost" size="sm" onClick={onDiscard}>
           Discard
         </Button>
-        <Button variant="secondary" size="sm" onClick={onReview}>
+        <Button variant={onDeploy ? "secondary" : "primary"} size="sm" onClick={onReview}>
           Review
         </Button>
         {onDeploy ? (

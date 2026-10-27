@@ -255,6 +255,46 @@ describe("RealtimeClient", () => {
     expect(timers).toHaveLength(0);
     expect(client.state).toBe("closed");
   });
+
+  it("coalesces presence updates, keeps the latest, and sends it again after a reconnect", () => {
+    const { client, socket, timers, fire } = setup();
+    client.connect();
+    socket().open();
+    const first = { environment_id: "env_1", selection: ["svc_1"], editing: null };
+    const latest = {
+      environment_id: "env_1",
+      selection: ["svc_2"],
+      editing: { service_id: "svc_2", part: "variables" as const },
+    };
+    client.updatePresence(first);
+    client.updatePresence(latest);
+    expect(timers).toHaveLength(1);
+    fire();
+    expect(socket().sent).toEqual([{ type: "presence.update", ...latest }]);
+
+    socket().drop();
+    fire();
+    socket().open();
+    expect(socket().sent).toEqual([{ type: "presence.update", ...latest }]);
+  });
+
+  it("passes change set and canvas frames on", () => {
+    const { client, socket, onMessage } = setup();
+    client.connect();
+    socket().open();
+    socket().receive({ type: "canvas.edges_updated", by_user_id: "usr_1" });
+    socket().receive({
+      type: "change_set.applied",
+      change_set_id: "chs_1",
+      environment_id: "env_1",
+      deployment_ids: [],
+    });
+    socket().receive({ type: "change_set.updated", change_set: "nope" });
+    expect(onMessage.mock.calls.map(([m]) => m.type)).toEqual([
+      "canvas.edges_updated",
+      "change_set.applied",
+    ]);
+  });
 });
 
 describe("helpers", () => {

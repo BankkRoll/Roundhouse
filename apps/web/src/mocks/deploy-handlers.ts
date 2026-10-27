@@ -28,6 +28,7 @@ import {
   freeSlug,
   generatedHostname,
   parseReferences,
+  presenceColor,
   REALTIME_CLOSE_CODES,
   RESERVED_SERVICE_SLUGS,
   ROLLBACK_SOURCE_STATUSES,
@@ -39,11 +40,13 @@ import {
 } from "@roundhouse/shared";
 import { HttpResponse, http, ws } from "msw";
 import { PHASE1_ROUTES, policyOf } from "../../../api/src/contracts";
+import { PresenceUpdateMessageSchema } from "../../../api/src/schemas";
 import type {
   ApiToken,
   Deployment,
   DeploymentDetail,
   Environment,
+  PresenceUser,
   Project,
   ProjectDetail,
   ProjectSummary,
@@ -566,6 +569,35 @@ export function announceDeployment(row: DbDeployment) {
     broadcastRealtime(projectId, { type: "deployment.updated", deployment: toDeployment(row) });
 }
 
+/**
+ * Records what a viewer's canvas shows and fans the presence list out, like the API's
+ * `ProjectRoom` (which also rate-limits and batches; the mock answers each update).
+ */
+function updatePresence(
+  projectId: string,
+  user: { id: string; name: string; image: string | null },
+  update: {
+    environment_id: string | null;
+    selection: string[];
+    editing: PresenceUser["editing"];
+  },
+) {
+  const entry: PresenceUser = {
+    user_id: user.id,
+    name: user.name,
+    image: user.image,
+    color: presenceColor(user.id),
+    environment_id: update.environment_id,
+    selection: update.selection,
+    editing: update.editing,
+  };
+  const known = db.deploy.presence.some((p) => p.user_id === user.id);
+  db.deploy.presence = known
+    ? db.deploy.presence.map((p) => (p.user_id === user.id ? entry : p))
+    : [...db.deploy.presence, entry];
+  broadcastRealtime(projectId, { type: "presence", users: db.deploy.presence });
+}
+
 const realtimeHandler = realtimeLink.addEventListener("connection", ({ client }) => {
   const projectId = /\/v1\/projects\/([^/]+)\/realtime/.exec(client.url.pathname)?.[1] ?? "";
   const project = liveProject(decodeURIComponent(projectId));
@@ -594,11 +626,17 @@ const realtimeHandler = realtimeLink.addEventListener("connection", ({ client })
   };
   sockets.set(client, state);
   send(state, { type: "presence", users: db.deploy.presence });
+  const viewer = guard.user;
   client.addEventListener("message", (event) => {
     let message: unknown;
     try {
       message = JSON.parse(String(event.data));
     } catch {
+      return;
+    }
+    if ((message as { type?: unknown }).type === "presence.update") {
+      const update = PresenceUpdateMessageSchema.safeParse(message);
+      if (update.success) updatePresence(state.projectId, viewer, update.data);
       return;
     }
     const parsed = message as {

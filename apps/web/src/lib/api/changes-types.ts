@@ -15,12 +15,23 @@ import type {
   ChangeSetSummary,
   getCanvas,
   ResponseOf,
+  rebaseChangeSet,
+  ServiceEdge,
   StagedChange,
   StagedOpInput,
   updateCanvasLayout,
+  WorkspaceChangeSet,
 } from "../../../../api/src/contracts";
 
-export type { ChangeSet, ChangeSetReview, ChangeSetSummary, StagedChange, StagedOpInput };
+export type {
+  ChangeSet,
+  ChangeSetReview,
+  ChangeSetSummary,
+  ServiceEdge,
+  StagedChange,
+  StagedOpInput,
+  WorkspaceChangeSet,
+};
 
 /** What the canvas draws for one environment. */
 export type Canvas = ResponseOf<typeof getCanvas, 200>;
@@ -40,3 +51,11 @@ export type ApplyChangeSetBody = BodyOf<typeof applyChangeSet>;
 export type AppliedChangeSet = ResponseOf<typeof applyChangeSet, 200>;
 /** One changed value of a staged change. */
 export type DiffEntry = StagedChange["diff"][number];
+/** A service's volume on the canvas, with what the draft does to it. */
+export type CanvasVolume = NonNullable<CanvasNode["volume"]>;
+/** A custom domain on the canvas. */
+export type CanvasDomain = CanvasNode["domains"][number];
+/** Where a change set is in review. */
+export type ReviewStatus = ChangeSetSummary["review_status"];
+/** What `POST /v1/change-sets/{changeSetId}/rebase` answers. */
+export type RebasedChangeSet = ResponseOf<typeof rebaseChangeSet, 200>;

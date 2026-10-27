@@ -85,7 +85,9 @@ export function pickEnvironment(
   slug?: string,
 ): Environment | undefined {
   return (
-    (slug ? environments.find((environment) => environment.slug === slug) : undefined) ??
+    (slug
+      ? environments.find((environment) => environment.slug === slug || environment.id === slug)
+      : undefined) ??
     environments.find((environment) => environment.kind === "production") ??
     environments[0]
   );

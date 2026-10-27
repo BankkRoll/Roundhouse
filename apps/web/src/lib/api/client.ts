@@ -325,13 +325,13 @@ export const api = {
   getWorkspace: (workspaceId: string, signal?: AbortSignal) =>
     request<Workspace>("GET", `/v1/workspaces/${seg(workspaceId)}`, { signal }),
   /**
-   * Renames a workspace. The slug does not change.
+   * Renames a workspace or changes its settings. The slug does not change.
    *
    * @param workspaceId - Workspace id.
-   * @param body - New name.
+   * @param body - New name, and whether canvas edits stage for review.
    * @returns The updated workspace.
    */
-  updateWorkspace: (workspaceId: string, body: { name: string }) =>
+  updateWorkspace: (workspaceId: string, body: { name?: string; staged_changes?: boolean }) =>
     request<Workspace>("PATCH", `/v1/workspaces/${seg(workspaceId)}`, { body }),
 
   /**

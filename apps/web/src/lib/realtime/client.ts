@@ -96,7 +96,23 @@ const MESSAGE_TYPES = new Set([
   "log.lines",
   "service.updated",
   "presence",
+  "change_set.updated",
+  "change_set.applied",
+  "canvas.layout_updated",
+  "canvas.edges_updated",
 ]);
+
+/** What this tab tells the room it is looking at (ADR 0006); IDs only. */
+export type PresenceState = Omit<
+  Extract<RealtimeClientMessage, { type: "presence.update" }>,
+  "type"
+>;
+
+/**
+ * Shortest gap between two `presence.update` frames. The room accepts ten a second per
+ * socket and drops the rest, so updates are coalesced below that.
+ */
+export const PRESENCE_SEND_INTERVAL_MS = 150;
 
 /**
  * Stable key of a log topic, also used to route `log.lines` to subscribers.
@@ -159,6 +175,20 @@ export function parseServerMessage(data: unknown): RealtimeServerMessage | null 
         : null;
     case "presence":
       return Array.isArray(value.users) ? (value as RealtimeServerMessage) : null;
+    case "change_set.updated":
+      return isObject(value.change_set) && typeof value.change_set.id === "string"
+        ? (value as RealtimeServerMessage)
+        : null;
+    case "change_set.applied":
+      return typeof value.change_set_id === "string" && typeof value.environment_id === "string"
+        ? (value as RealtimeServerMessage)
+        : null;
+    case "canvas.layout_updated":
+      return isObject(value.positions) && typeof value.version === "number"
+        ? (value as RealtimeServerMessage)
+        : null;
+    case "canvas.edges_updated":
+      return value as RealtimeServerMessage;
     default:
       return isObject(value.source) && Array.isArray(value.lines)
         ? (value as RealtimeServerMessage)
@@ -194,6 +224,9 @@ export class RealtimeClient {
   private attempt = 0;
   private retryHandle: unknown = null;
   private status: RealtimeStatus = "closed";
+  private presence: PresenceState | null = null;
+  private presenceHandle: unknown = null;
+  private presenceSentAt = 0;
   private readonly topics = new Map<
     string,
     { topic: RealtimeTopic; listeners: Set<LogListener> }
@@ -239,6 +272,9 @@ export class RealtimeClient {
   close(): void {
     this.stopped = true;
     this.cancelRetry();
+    if (this.presenceHandle !== null) this.options.timers.clearTimeout(this.presenceHandle);
+    this.presenceHandle = null;
+    this.presence = null;
     const socket = this.socket;
     this.socket = null;
     if (socket) {
@@ -286,6 +322,30 @@ export class RealtimeClient {
     };
   }
 
+  /**
+   * Tells the room what this tab shows: the environment, the selected services and what
+   * is being edited. Only the latest state matters, so frames are coalesced to one per
+   * {@link PRESENCE_SEND_INTERVAL_MS}, and the state is sent again after a reconnect.
+   *
+   * @param state - Environment, selection and editing, by ID.
+   */
+  updatePresence(state: PresenceState): void {
+    this.presence = state;
+    if (this.presenceHandle !== null) return;
+    const now = Date.now();
+    const wait = Math.max(0, this.presenceSentAt + PRESENCE_SEND_INTERVAL_MS - now);
+    this.presenceHandle = this.options.timers.setTimeout(() => {
+      this.presenceHandle = null;
+      this.flushPresence();
+    }, wait);
+  }
+
+  private flushPresence() {
+    if (!this.presence) return;
+    this.presenceSentAt = Date.now();
+    this.send({ type: "presence.update", ...this.presence });
+  }
+
   private setStatus(status: RealtimeStatus) {
     if (this.status === status) return;
     this.status = status;
@@ -318,6 +378,7 @@ export class RealtimeClient {
       this.attempt = 0;
       this.setStatus("open");
       for (const { topic } of this.topics.values()) this.send({ type: "subscribe", topic });
+      this.flushPresence();
     };
     socket.onmessage = (event) => {
       if (this.socket !== socket) return;

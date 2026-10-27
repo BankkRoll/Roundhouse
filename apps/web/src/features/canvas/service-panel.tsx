@@ -1,13 +1,15 @@
+import type { PresenceEditPart } from "@roundhouse/shared";
 import { Badge, Button, Checkbox, Label, StatusBadge } from "@roundhouse/ui";
 import { Link } from "@tanstack/react-router";
 import { ExternalLinkIcon, Trash2Icon, XIcon } from "lucide-react";
 import { type FormEvent, useEffect, useId, useState } from "react";
 import { FormField } from "../../components/form-field";
-import type { CanvasNode, StagedOpInput } from "../../lib/api/changes-types";
+import type { CanvasEdge, CanvasNode, StagedOpInput } from "../../lib/api/changes-types";
 import { errorMessage } from "../../lib/api/client";
 import { useServiceConfig } from "../../queries/services";
 import { useServiceVariables } from "../../queries/variables";
 import type { ServiceView } from "../projects/service-list";
+import { ConnectionsSection, DomainsSection, VolumeSection } from "./service-resources";
 
 /** Props for {@link ServicePanel}. */
 export interface ServicePanelProps {
@@ -28,6 +30,19 @@ export interface ServicePanelProps {
   onClose: () => void;
   /** Draft size, so "Apply now" can say it applies everything staged. */
   stagedCount: number;
+  /**
+   * The workspace stages canvas edits (`staged_changes`). Off, every edit here is
+   * applied as it is saved, like the service's own pages.
+   */
+  staging?: boolean;
+  /** Every node and edge of the canvas, for the connections section. */
+  nodes?: readonly CanvasNode[];
+  edges?: readonly CanvasEdge[];
+  /** Draws a "connects to" edge from this service. */
+  onAddEdge?: (to: string) => Promise<unknown>;
+  onRemoveEdge?: (edgeId: string) => Promise<unknown>;
+  /** The part of the service being edited changed (for presence). */
+  onEditing?: (part: PresenceEditPart | null) => void;
 }
 
 interface ConfigForm {
@@ -61,6 +76,12 @@ export function ServicePanel({
   onUnstageCreate,
   onClose,
   stagedCount,
+  staging = true,
+  nodes = [],
+  edges = [],
+  onAddEdge,
+  onRemoveEdge,
+  onEditing,
 }: ServicePanelProps) {
   const live = node.staged !== "create";
   const config = useServiceConfig(node.id, live ? environmentId : undefined);
@@ -151,8 +172,11 @@ export function ServicePanel({
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
-    void submit(false);
+    void submit(!staging);
   }
+
+  const commit = (ops: StagedOpInput[]) => onStage(ops, { apply: !staging });
+  const editing = (part: PresenceEditPart) => () => onEditing?.(part);
 
   const set = (key: keyof ConfigForm) => (event: { target: { value: string } }) =>
     setForm((f) => (f ? { ...f, [key]: event.target.value } : f));
@@ -172,7 +196,9 @@ export function ServicePanel({
           </h2>
           <p className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span className="font-mono">{node.slug}</span>
-            <span>{node.kind}</span>
+            <span>
+              {node.database ? `${node.database.engine} ${node.database.version}` : node.kind}
+            </span>
             {node.staged === "create" ? <Badge tone="accent">staged for creation</Badge> : null}
             {node.staged === "delete" ? <Badge tone="danger">staged for deletion</Badge> : null}
             {view?.latest ? <StatusBadge status={view.latest.status} kind="deployment" /> : null}
@@ -198,7 +224,11 @@ export function ServicePanel({
       {live ? (
         <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
           <div className="grid flex-1 gap-5 overflow-y-auto px-4 py-4">
-            <fieldset className="grid gap-3" disabled={!canManageServices || !form}>
+            <fieldset
+              className="grid gap-3"
+              disabled={!canManageServices || !form}
+              onFocus={editing("config")}
+            >
               <legend className="mb-2 font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
                 Deploy
               </legend>
@@ -231,7 +261,11 @@ export function ServicePanel({
               />
             </fieldset>
 
-            <fieldset className="grid gap-3" disabled={!canManageVariables}>
+            <fieldset
+              className="grid gap-3"
+              disabled={!canManageVariables}
+              onFocus={editing("variables")}
+            >
               <legend className="mb-2 font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
                 Add a variable
               </legend>
@@ -282,12 +316,42 @@ export function ServicePanel({
               </div>
             </fieldset>
 
+            {node.staged !== "delete" ? (
+              <>
+                <VolumeSection
+                  node={node}
+                  canManage={canManageServices}
+                  commit={commit}
+                  onFocus={editing("volume")}
+                />
+                <DomainsSection
+                  node={node}
+                  canManage={canManageServices}
+                  commit={commit}
+                  onFocus={editing("domains")}
+                />
+              </>
+            ) : null}
+            {onAddEdge && onRemoveEdge ? (
+              <ConnectionsSection
+                node={node}
+                nodes={nodes}
+                edges={edges}
+                canManage={canManageServices}
+                onAdd={onAddEdge}
+                onRemove={onRemoveEdge}
+                onFocus={editing("connections")}
+              />
+            ) : null}
+
             {canManageServices && node.staged !== "delete" ? (
               <div>
                 <Button
                   variant="danger-outline"
                   size="sm"
                   onClick={() =>
+                    // NOTE: Always staged, even with staging off: a deletion goes through
+                    // the review panel rather than happening on one click.
                     void onStage([{ type: "service.delete", service_id: node.id }], {
                       apply: false,
                     }).catch((err) => setError(errorMessage(err)))
@@ -306,30 +370,44 @@ export function ServicePanel({
                 {error}
               </p>
             ) : null}
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <Button
-                variant="secondary"
-                loading={busy === "apply"}
-                disabled={busy !== null || (!canManageServices && !canManageVariables)}
-                onClick={() => void submit(true)}
-                title={
-                  stagedCount
-                    ? `Also applies the ${stagedCount} change(s) already staged`
-                    : undefined
-                }
-              >
-                Apply now
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                loading={busy === "stage"}
-                disabled={busy !== null || (!canManageServices && !canManageVariables)}
-              >
-                Stage
-              </Button>
-            </div>
-            {stagedCount ? (
+            {staging ? null : (
+              <div className="flex justify-end">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  loading={busy === "apply"}
+                  disabled={busy !== null || (!canManageServices && !canManageVariables)}
+                >
+                  Save
+                </Button>
+              </div>
+            )}
+            {staging ? (
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Button
+                  variant="secondary"
+                  loading={busy === "apply"}
+                  disabled={busy !== null || (!canManageServices && !canManageVariables)}
+                  onClick={() => void submit(true)}
+                  title={
+                    stagedCount
+                      ? `Also applies the ${stagedCount} change(s) already staged`
+                      : undefined
+                  }
+                >
+                  Apply now
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  loading={busy === "stage"}
+                  disabled={busy !== null || (!canManageServices && !canManageVariables)}
+                >
+                  Stage
+                </Button>
+              </div>
+            ) : null}
+            {staging && stagedCount ? (
               <p className="text-right text-xs text-subtle-foreground">
                 Apply now also applies the {stagedCount} change{stagedCount === 1 ? "" : "s"}{" "}
                 already staged.

@@ -1,8 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ComingSoon } from "../../../../features/shell/coming-soon";
+import { WorkspaceCanvasPage } from "../../../../features/canvas/workspace-canvas-page";
 
-/** Canvas placeholder until projects ship. */
+/** Staged changes across the workspace's projects, and the projects' canvases. */
 export const Route = createFileRoute("/_app/w/$workspaceId/canvas")({
   staticData: { title: "Canvas" },
-  component: () => <ComingSoon feature="canvas" />,
+  component: CanvasRoute,
 });
+
+function CanvasRoute() {
+  const { workspaceId } = Route.useParams();
+  return <WorkspaceCanvasPage workspaceId={workspaceId} />;
+}

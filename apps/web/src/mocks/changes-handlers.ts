@@ -8,8 +8,16 @@
  * then 409 for a stale revision or a closed set. Staging coalesces with the shared
  * `stageOp`, diffs configs with `configDiff` and shows variables by fingerprint only;
  * applying checks drift (rebasing disjoint config edits, refusing overlapping ones),
- * writes configs, services and variables, deploys the affected services and records the
- * API's audit entries.
+ * writes configs, services, variables, volumes and custom domains, deploys the affected
+ * services and records the API's audit entries.
+ *
+ * Review mirrors `apps/api/src/lib/changes/review.ts`: submitting asks for a review,
+ * approving or rejecting binds the set's revision and is refused to its authors
+ * (`self_review`), and any later edit (stage, unstage, resolve, rebase) moves an approved
+ * or rejected set back to `submitted`. Applying refuses a rejected set (409
+ * `change_set_rejected`) and, where the environment requires approval (see
+ * {@link requireApprovalIn}), a set not approved at its revision (403
+ * `approval_required`) or one the applier approved (403 `forbidden`).
  *
  * @module
  */
@@ -24,6 +32,7 @@ import {
   describeOp,
   freeSlug,
   isNewServiceRef,
+  MAX_SERVICE_EDGES,
   mergeConfigPatches,
   opAction,
   patchPointers,
@@ -35,15 +44,18 @@ import {
   slugify,
   stageOp,
   targetKeyOf,
+  VOLUME_DELETE_GRACE_MS,
   variableDependencies,
 } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
-import { CHANGE_ROUTES, policyOf } from "../../../api/src/contracts";
-import type { StagedOpInput } from "../lib/api/changes-types";
+import { CHANGE_ROUTES, policyOf, type ServiceEdge } from "../../../api/src/contracts";
+import type { CanvasNode, StagedOpInput } from "../lib/api/changes-types";
+import type { Volume } from "../lib/api/data-client";
 import type { Environment, Service, ServiceConfig } from "../lib/api/deploy-types";
 import {
   type DbChangeSet,
   type DbStagedChange,
+  hasValidApproval,
   mockFingerprint,
   toChangeSet,
   toSummary,
@@ -57,6 +69,7 @@ import {
   requireWorkspace,
   unauthorized,
 } from "./common";
+import { makeVolume } from "./data-db";
 import { db, nextId } from "./db";
 import type { DbVariable } from "./deploy-db";
 import {
@@ -65,6 +78,33 @@ import {
   createConfigs,
   startDeployment,
 } from "./deploy-handlers";
+import { checkCustomHostname, hostnameTaken, newCustomDomain } from "./domains-mock";
+
+// -----------------------------------------------------------------------------
+// Approval knob
+// -----------------------------------------------------------------------------
+
+/**
+ * Makes applying change sets in an environment need an approval, as `PUT
+ * /v1/environments/{id}/protection` with `require_approval: true` would. The
+ * environment is marked protected too, since the setting only counts on protected
+ * environments. Call it after `resetDb()`; the next reset turns it off.
+ *
+ * @param environmentId - Environment id, e.g. `SEED.production`.
+ * @param required - `false` turns it off again.
+ * @example
+ * resetDb();
+ * requireApprovalIn(SEED.production);
+ */
+export function requireApprovalIn(environmentId: string, required = true): void {
+  db.changes.requireApproval[environmentId] = required;
+  const environment = db.deploy.environments.find((e) => e.id === environmentId);
+  if (environment && required) environment.protected = true;
+}
+
+function requiresApproval(environment: Environment): boolean {
+  return environment.protected && db.changes.requireApproval[environment.id] === true;
+}
 
 // -----------------------------------------------------------------------------
 // Validation with the contract's schemas
@@ -198,6 +238,25 @@ function setScope(
   return { ...scope, set };
 }
 
+function projectScope(
+  projectId: string,
+  action: Action,
+):
+  | { ok: true; project: (typeof db.deploy.projects)[number]; userId: string }
+  | { ok: false; response: Response } {
+  if (!currentUser()) return { ok: false, response: unauthorized() };
+  const project = db.deploy.projects.find((p) => p.id === projectId && !p.deleted);
+  if (!project) return { ok: false, response: notFound("Project") };
+  const guard = requireWorkspace(project.workspace_id, action);
+  if (!guard.ok) {
+    return {
+      ok: false,
+      response: guard.response.status === 404 ? notFound("Project") : guard.response,
+    };
+  }
+  return { ok: true, project, userId: guard.user.id };
+}
+
 function allows(workspaceId: string, action: Action): boolean {
   return requireWorkspace(workspaceId, action).ok;
 }
@@ -270,12 +329,73 @@ function nameOf(set: DbChangeSet) {
   };
 }
 
+function publish(set: DbChangeSet) {
+  broadcastRealtime(set.project_id, { type: "change_set.updated", change_set: toSummary(set) });
+}
+
+/** Mirrors the API's `bumpRevision`: an edit voids any review decision. */
 function touch(set: DbChangeSet) {
   set.revision += 1;
   set.updated_at = Date.now();
   set.error = null;
-  broadcastRealtime(set.project_id, { type: "change_set.updated", change_set: toSummary(set) });
+  if (set.review_status && set.review_status !== "none") set.review_status = "submitted";
+  set.approved_by = null;
+  set.approved_at = null;
+  set.approved_revision = null;
+  set.rejected_by = null;
+  set.rejected_at = null;
+  publish(set);
 }
+
+/** Who opened the set or staged one of its pending ops: none of them may review it. */
+function authorsOf(set: DbChangeSet): string[] {
+  const ids = new Set<string>();
+  if (set.created_by) ids.add(set.created_by);
+  for (const c of set.changes) if (c.status !== "applied" && c.created_by) ids.add(c.created_by);
+  return [...ids].sort();
+}
+
+function canEdit(workspaceId: string): boolean {
+  return allows(workspaceId, "services:manage") || allows(workspaceId, "variables:manage");
+}
+
+const cannotEdit = () =>
+  apiError(403, "forbidden", "Editing staged changes needs services:manage or variables:manage");
+
+const nothingStaged = () => apiError(409, "conflict", "Nothing is staged in this change set");
+
+function volumeOf(serviceId: string, environmentId: string): Volume | undefined {
+  return db.data.volumes.find(
+    (v) =>
+      v.service_id === serviceId &&
+      v.environment_id === environmentId &&
+      v.status !== "deleted" &&
+      v.status !== "abandoned",
+  );
+}
+
+function volumeDiff(
+  current: Volume | undefined,
+  after: { mount_path: string; size_mb: number } | null,
+): DbStagedChange["diff"] {
+  if (current && after) {
+    return [{ path: "/volume/size_mb", before: current.size_mb, after: after.size_mb }];
+  }
+  return [
+    {
+      path: "/volume",
+      before: current ? { mount_path: current.mount_path, size_mb: current.size_mb } : null,
+      after,
+    },
+  ];
+}
+
+const volumeScheduledForDeletion = () =>
+  apiError(
+    409,
+    "conflict",
+    "The service's volume is scheduled for deletion; undelete it before changing it",
+  );
 
 // -----------------------------------------------------------------------------
 // Staging
@@ -285,7 +405,16 @@ function prepare(
   set: DbChangeSet,
   environment: Environment,
   input: StagedOpInput,
-): { op: StagedOp; diff: DbStagedChange["diff"]; base: number | null; value?: string } | Response {
+):
+  | {
+      op: StagedOp;
+      diff: DbStagedChange["diff"];
+      base: number | null;
+      value?: string;
+      /** Instead of staging, take out the staged op with this target key. */
+      unstage?: string;
+    }
+  | Response {
   const pending = set.changes.filter((c) => c.status !== "applied");
   const live = (id: string) => liveServices(environment.project_id).find((s) => s.id === id);
   switch (input.type) {
@@ -428,6 +557,108 @@ function prepare(
         ],
       };
     }
+    case "volume.set": {
+      const service = live(input.service);
+      if (!service) return notFound("Service");
+      const current = volumeOf(service.id, environment.id);
+      if (current?.status === "pending_deletion") return volumeScheduledForDeletion();
+      if (current) {
+        if (input.mount_path !== undefined && input.mount_path !== current.mount_path) {
+          return invalid(
+            `A volume's mount path can't change; it is mounted at ${current.mount_path}`,
+          );
+        }
+        if (input.size_mb < current.size_mb) {
+          return apiError(
+            422,
+            "volume_shrink_unsupported",
+            `Volumes only grow; it is ${current.size_mb} MiB`,
+          );
+        }
+        if (input.size_mb === current.size_mb) {
+          return invalid(`The volume already is ${current.size_mb} MiB`);
+        }
+      } else {
+        if (!input.mount_path) return invalid("mount_path: Required for a new volume");
+        if ((latestConfig(service.id, environment.id)?.deploy.replicas ?? 1) > 1) {
+          return apiError(
+            422,
+            "volume_requires_single_replica",
+            "A service with a volume runs at most one replica",
+          );
+        }
+      }
+      const mountPath = current?.mount_path ?? input.mount_path!;
+      return {
+        op: {
+          type: "volume.set",
+          service: service.id,
+          size_mb: input.size_mb,
+          ...(current ? {} : { mount_path: mountPath }),
+        },
+        base: null,
+        diff: volumeDiff(current, { mount_path: mountPath, size_mb: input.size_mb }),
+      };
+    }
+    case "volume.delete": {
+      const service = live(input.service);
+      if (!service) return notFound("Service");
+      const op: StagedOp = { type: "volume.delete", service: service.id };
+      const key = targetKeyOf(op);
+      const current = volumeOf(service.id, environment.id);
+      if (!current || current.status === "pending_deletion") {
+        // Deleting a volume that is only staged takes the staged one out.
+        if (pending.some((c) => c.target_key === key && c.op.type === "volume.set")) {
+          return { op, base: null, diff: [], unstage: key };
+        }
+        return current ? volumeScheduledForDeletion() : notFound("Volume");
+      }
+      return { op, base: null, diff: volumeDiff(current, null) };
+    }
+    case "domain.add": {
+      const service = live(input.service);
+      if (!service) return notFound("Service");
+      const checked = checkCustomHostname(input.hostname);
+      if (checked instanceof Response) return checked;
+      const { hostname } = checked;
+      const op: StagedOp = { type: "domain.add", service: service.id, hostname };
+      const prior = pending.find((c) => c.target_key === targetKeyOf(op));
+      if (prior?.op.type === "domain.remove" && prior.op.service === service.id) {
+        // Adding back a domain staged for removal just keeps it.
+        return { op, base: null, diff: [], unstage: prior.target_key };
+      }
+      const taken = hostnameTaken(hostname);
+      if (taken) return taken;
+      return {
+        op,
+        base: null,
+        diff: [{ path: `/domains/${hostname}`, before: null, after: { hostname } }],
+      };
+    }
+    case "domain.remove": {
+      const domain = db.deploy.domains.find((d) => d.id === input.domain_id);
+      if (!domain || domain.environment_id !== environment.id) return notFound("Domain");
+      if (!live(domain.service_id)) return notFound("Service");
+      if (domain.type !== "custom") {
+        return apiError(409, "conflict", "Turn off the generated domain under Networking instead");
+      }
+      return {
+        op: {
+          type: "domain.remove",
+          domain_id: domain.id,
+          hostname: domain.hostname,
+          service: domain.service_id,
+        },
+        base: null,
+        diff: [
+          {
+            path: `/domains/${domain.hostname}`,
+            before: { hostname: domain.hostname, status: domain.status },
+            after: null,
+          },
+        ],
+      };
+    }
   }
 }
 
@@ -444,6 +675,13 @@ function stageInto(
   if (!allows(scope.workspaceId, action)) return forbidden(scope.role, action);
   const prepared = prepare(set, scope.environment, input);
   if (prepared instanceof Response) return prepared;
+  if (prepared.unstage !== undefined) {
+    set.changes = set.changes.filter(
+      (c) => c.target_key !== prepared.unstage || c.status === "applied",
+    );
+    touch(set);
+    return null;
+  }
   const pending = set.changes.filter((c) => c.status !== "applied");
   const result = stageOp(
     pending.map((c) => ({ target_key: c.target_key, op: c.op as StagedOp })),
@@ -565,6 +803,23 @@ function drift(set: DbChangeSet, environment: Environment) {
   return { conflicts, rebases };
 }
 
+/** Moves an op onto the current state: new base, recomputed diff, no conflict. */
+function rebaseRow(row: DbStagedChange, environment: Environment) {
+  const op = row.op as StagedOp;
+  if (op.type === "config.patch") {
+    const latest = latestConfig(op.service, environment.id);
+    if (latest) {
+      row.base_version = latest.version;
+      row.diff = configDiff(specOf(latest), merge(specOf(latest), op.patch));
+    }
+  } else if (op.type === "variable.set" || op.type === "variable.delete") {
+    row.base_version = variableRow(environment, op)?.version ?? null;
+  }
+  row.status = "pending";
+  row.conflict = null;
+  row.updated_at = Date.now();
+}
+
 function plannedDeploys(set: DbChangeSet, environment: Environment) {
   const live = liveServices(environment.project_id);
   const slugOf = new Map(live.map((s) => [s.id, s.slug]));
@@ -580,7 +835,7 @@ function plannedDeploys(set: DbChangeSet, environment: Environment) {
   for (const s of live) services[s.slug] = vars(s.id, "service");
   const changedVariables: string[] = [];
   const changedServices: string[] = [];
-  const reasons = new Map<string, "config" | "variables" | "created">();
+  const reasons = new Map<string, "config" | "variables" | "created" | "volume">();
   for (const change of set.changes.filter((c) => c.status !== "applied")) {
     const op = change.op as StagedOp;
     if (op.type === "service.create") {
@@ -598,6 +853,14 @@ function plannedDeploys(set: DbChangeSet, environment: Environment) {
       if (slug) {
         changedServices.push(slug);
         if (!reasons.has(slug)) reasons.set(slug, "config");
+      }
+    }
+    // Only a new deployment mounts a new volume; growing one needs none.
+    if (op.type === "volume.set" && !volumeOf(op.service, environment.id)) {
+      const slug = slugOf.get(op.service);
+      if (slug) {
+        changedServices.push(slug);
+        if (!reasons.has(slug)) reasons.set(slug, "volume");
       }
     }
     if (op.type === "variable.set" || op.type === "variable.delete") {
@@ -624,6 +887,33 @@ function plannedDeploys(set: DbChangeSet, environment: Environment) {
   }));
 }
 
+/** Mirrors the API's `applyBlocker` for a signed-in person (the mock has no token callers). */
+function applyBlocker(set: DbChangeSet, environment: Environment, userId: string): Response | null {
+  if (set.review_status === "rejected") {
+    return apiError(
+      409,
+      "change_set_rejected",
+      "This change set was rejected; change it, or ask for another review, first",
+    );
+  }
+  if (!requiresApproval(environment)) return null;
+  if (!hasValidApproval(set)) {
+    return apiError(
+      403,
+      "approval_required",
+      `${environment.name} requires an approval before changes apply; submit the change set for review`,
+    );
+  }
+  if (set.approved_by === userId) {
+    return apiError(
+      403,
+      "forbidden",
+      "You approved this change set, so someone else must apply it",
+    );
+  }
+  return null;
+}
+
 function applySet(
   set: DbChangeSet,
   scope: Extract<Scope, { ok: true }>,
@@ -643,6 +933,8 @@ function applySet(
       );
     }
   }
+  const blocked = applyBlocker(set, environment, scope.userId);
+  if (blocked) return blocked;
   const { conflicts } = drift(set, environment);
   if (conflicts.length) {
     for (const c of conflicts) {
@@ -805,6 +1097,55 @@ function applySet(
           change_set_id: set.id,
         },
       });
+    } else if (op.type === "volume.set") {
+      const current = volumeOf(op.service, environment.id);
+      if (current) {
+        Object.assign(current, { size_mb: op.size_mb, updated_at: now });
+      } else {
+        db.data.volumes.push(
+          makeVolume({
+            id: nextId("vol"),
+            project_id: environment.project_id,
+            environment_id: environment.id,
+            service_id: op.service,
+            mount_path: op.mount_path ?? "/data",
+            size_mb: op.size_mb,
+          }),
+        );
+      }
+    } else if (op.type === "volume.delete") {
+      const current = volumeOf(op.service, environment.id);
+      if (current) {
+        Object.assign(current, {
+          status: "pending_deletion",
+          delete_after: now + VOLUME_DELETE_GRACE_MS,
+          updated_at: now,
+        });
+      }
+    } else if (op.type === "domain.add") {
+      const port = latestConfig(op.service, environment.id)?.networking.port ?? 8080;
+      const domain = newCustomDomain(op.service, environment.id, op.hostname, port);
+      db.deploy.domains.push(domain);
+      recordAudit({
+        workspaceId: scope.workspaceId,
+        actorType: "user",
+        actorId: scope.userId,
+        action: "domain.added",
+        targetType: "domain",
+        targetId: domain.id,
+        metadata: { hostname: domain.hostname, change_set_id: set.id },
+      });
+    } else if (op.type === "domain.remove") {
+      db.deploy.domains = db.deploy.domains.filter((d) => d.id !== op.domain_id);
+      recordAudit({
+        workspaceId: scope.workspaceId,
+        actorType: "user",
+        actorId: scope.userId,
+        action: "domain.removed",
+        targetType: "domain",
+        targetId: op.domain_id,
+        metadata: { hostname: op.hostname, change_set_id: set.id },
+      });
     }
     change.status = "applied";
     change.target_key = `applied:${change.id}`;
@@ -840,6 +1181,9 @@ function applySet(
   set.status = "applied";
   set.applied_by = scope.userId;
   set.applied_at = now;
+  // The API's apply lock bumps the revision without changing an op, so an approval of
+  // the reviewed revision follows it.
+  if (set.approved_revision === set.revision) set.approved_revision = set.revision + 1;
   set.revision += 1;
   set.updated_at = now;
   recordAudit({
@@ -870,18 +1214,41 @@ function canvasOf(environment: Environment) {
   const live = liveServices(projectId);
   const draft = draftOf(environment.id);
   const pending = draft?.changes.filter((c) => c.status !== "applied") ?? [];
-  const nodes = live.map((s) => ({
-    id: s.id,
-    name: s.name,
-    slug: s.slug,
-    kind: s.kind,
-    icon: s.icon,
-    staged: null as "create" | "update" | "delete" | null,
-    staged_ops: 0,
-  }));
+  const nodes: CanvasNode[] = live.map((s) => {
+    const volume = volumeOf(s.id, environment.id);
+    return {
+      id: s.id,
+      name: s.name,
+      slug: s.slug,
+      kind: s.kind,
+      icon: s.icon,
+      staged: null,
+      staged_ops: 0,
+      database: s.database ? { engine: s.database.engine, version: s.database.version } : null,
+      volume: volume
+        ? {
+            id: volume.id,
+            mount_path: volume.mount_path,
+            size_mb: volume.size_mb,
+            status: volume.status,
+            delete_after: volume.delete_after,
+            staged: null,
+            staged_size_mb: null,
+          }
+        : null,
+      domains: db.deploy.domains
+        .filter(
+          (d) =>
+            d.service_id === s.id && d.environment_id === environment.id && d.type === "custom",
+        )
+        .sort((a, b) => (a.hostname < b.hostname ? -1 : 1))
+        .map((d) => ({ id: d.id, hostname: d.hostname, status: d.status, staged: null })),
+    };
+  });
   for (const c of pending) {
     const op = c.op as StagedOp;
     if (op.type === "service.create") {
+      const database = op.database;
       nodes.push({
         id: op.ref,
         name: op.name,
@@ -890,16 +1257,50 @@ function canvasOf(environment: Environment) {
         icon: op.icon ?? null,
         staged: "create",
         staged_ops: 0,
+        database: database ? { engine: database.engine, version: database.version } : null,
+        volume: database
+          ? {
+              id: null,
+              mount_path: "",
+              size_mb: database.size_mb,
+              status: null,
+              delete_after: null,
+              staged: "create",
+              staged_size_mb: database.size_mb,
+            }
+          : null,
+        domains: [],
       });
     }
   }
   for (const c of pending) {
-    const id = serviceOfOp(c.op as StagedOp);
+    const op = c.op as StagedOp;
+    const id = serviceOfOp(op);
     const node = nodes.find((n) => n.id === id);
     if (!node) continue;
     node.staged_ops += 1;
-    if (c.op.type === "service.delete") node.staged = "delete";
+    if (op.type === "service.delete") node.staged = "delete";
     else if (node.staged === null) node.staged = "update";
+    if (op.type === "volume.set") {
+      node.volume = node.volume
+        ? { ...node.volume, staged: "resize", staged_size_mb: op.size_mb }
+        : {
+            id: null,
+            mount_path: op.mount_path ?? "",
+            size_mb: op.size_mb,
+            status: null,
+            delete_after: null,
+            staged: "create",
+            staged_size_mb: op.size_mb,
+          };
+    } else if (op.type === "volume.delete" && node.volume) {
+      node.volume = { ...node.volume, staged: "delete" };
+    } else if (op.type === "domain.add") {
+      node.domains.push({ id: null, hostname: op.hostname, status: null, staged: "add" });
+    } else if (op.type === "domain.remove") {
+      const domain = node.domains.find((d) => d.id === op.domain_id);
+      if (domain) domain.staged = "remove";
+    }
   }
   const values = (ownerId: string) =>
     Object.fromEntries(
@@ -957,35 +1358,67 @@ function canvasOf(environment: Environment) {
   add(before, "before");
   add(after, "after");
   const layout = db.changes.layouts[projectId] ?? { positions: {}, version: 0 };
+  const workspaceId = db.deploy.projects.find((p) => p.id === projectId)?.workspace_id;
+  const workspace = db.workspaces.find((w) => w.id === workspaceId);
+  const liveIds = new Set(live.map((s) => s.id));
   return {
     project_id: projectId,
     environment_id: environment.id,
-    environment_protected: false,
+    environment_protected: environment.protected,
+    environment_requires_approval: requiresApproval(environment),
+    // NOTE: Seeded workspaces leave the flag unset and stage, like `GET /v1/workspaces/{id}`.
+    staging: workspace?.staged_changes ?? true,
     nodes,
-    edges: [...edges].map(([id, e]) => {
-      const variables = [...e.variables].sort();
-      return {
-        id,
-        from: e.from,
-        to: e.to,
-        kind: variables.some((v) => v.endsWith(".ROUNDHOUSE_PRIVATE_DOMAIN"))
-          ? ("private_network" as const)
-          : ("reference" as const),
-        variables,
-        state:
-          e.before && e.after
-            ? ("current" as const)
-            : e.after
-              ? ("staged" as const)
-              : ("removed" as const),
-      };
-    }),
+    edges: [
+      ...edgesOf(edges),
+      ...db.changes.edges
+        .filter(
+          (e) =>
+            e.project_id === projectId &&
+            liveIds.has(e.from_service_id) &&
+            liveIds.has(e.to_service_id),
+        )
+        .map((e) => ({
+          id: e.id,
+          from: e.from_service_id,
+          to: e.to_service_id,
+          kind: "explicit" as const,
+          variables: [],
+          state: "current" as const,
+        })),
+    ],
     positions: Object.fromEntries(
       Object.entries(layout.positions).filter(([id]) => live.some((s) => s.id === id)),
     ),
     layout_version: layout.version,
     draft: draft ? toSummary(draft) : null,
   };
+}
+
+function edgesOf(
+  edges: Map<
+    string,
+    { from: string; to: string; variables: Set<string>; before: boolean; after: boolean }
+  >,
+) {
+  return [...edges].map(([id, e]) => {
+    const variables = [...e.variables].sort();
+    return {
+      id,
+      from: e.from,
+      to: e.to,
+      kind: variables.some((v) => v.endsWith(".ROUNDHOUSE_PRIVATE_DOMAIN"))
+        ? ("private_network" as const)
+        : ("reference" as const),
+      variables,
+      state:
+        e.before && e.after
+          ? ("current" as const)
+          : e.after
+            ? ("staged" as const)
+            : ("removed" as const),
+    };
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -1142,6 +1575,11 @@ export const changeHandlers = [
       rebases,
       conflicts,
       deploys: plannedDeploys(scope.set, scope.environment),
+      approval: {
+        required: requiresApproval(scope.environment),
+        approved: hasValidApproval(scope.set),
+        authors: authorsOf(scope.set),
+      },
     });
   }),
 
@@ -1208,18 +1646,7 @@ export const changeHandlers = [
     if (input.body.keep === "theirs") {
       set.changes = set.changes.filter((c) => c !== row);
     } else {
-      const op = row.op as StagedOp;
-      if (op.type === "config.patch") {
-        const latest = latestConfig(op.service, scope.environment.id);
-        if (latest) {
-          row.base_version = latest.version;
-          row.diff = configDiff(specOf(latest), merge(specOf(latest), op.patch));
-        }
-      } else if (op.type === "variable.set" || op.type === "variable.delete") {
-        row.base_version = variableRow(scope.environment, op)?.version ?? null;
-      }
-      row.status = "pending";
-      row.conflict = null;
+      rebaseRow(row, scope.environment);
     }
     touch(set);
     return HttpResponse.json(toChangeSet(set));
@@ -1280,4 +1707,259 @@ export const changeHandlers = [
     });
     return HttpResponse.json(toChangeSet(set));
   }),
+
+  http.post(mswPath("submitChangeSet"), async ({ request, params }) => {
+    const input = await validate<{ expected_revision?: number; note?: string }>(
+      "submitChangeSet",
+      request,
+      params,
+    );
+    if (!input.ok) return input.response;
+    const scope = setScope(input.params.changeSetId ?? "", actionOf("submitChangeSet"));
+    if (!scope.ok) return scope.response;
+    if (!canEdit(scope.workspaceId)) return cannotEdit();
+    const set = scope.set;
+    if (set.status !== "open") return closed(set);
+    if (
+      input.body.expected_revision !== undefined &&
+      input.body.expected_revision !== set.revision
+    ) {
+      return changed(set.revision);
+    }
+    const pending = set.changes.filter((c) => c.status !== "applied");
+    if (!pending.length) return nothingStaged();
+    // Submitting twice is harmless: a set waiting for (or holding) a decision stays as is.
+    if (set.review_status !== "submitted" && !hasValidApproval(set)) {
+      const now = Date.now();
+      Object.assign(set, {
+        review_status: "submitted",
+        submitted_by: scope.userId,
+        submitted_at: now,
+        rejected_by: null,
+        rejected_at: null,
+        review_note: input.body.note ?? null,
+        updated_at: now,
+      });
+      recordAudit({
+        workspaceId: scope.workspaceId,
+        actorType: "user",
+        actorId: scope.userId,
+        action: "change_set.submitted",
+        targetType: "change_set",
+        targetId: set.id,
+        metadata: {
+          project_id: set.project_id,
+          environment_id: set.environment_id,
+          revision: set.revision,
+          ops: pending.map((c) => c.summary),
+        },
+      });
+    }
+    publish(set);
+    return HttpResponse.json(toChangeSet(set));
+  }),
+
+  decide("approve"),
+  decide("reject"),
+
+  http.post(mswPath("rebaseChangeSet"), async ({ request, params }) => {
+    const input = await validate<{ expected_revision: number }>("rebaseChangeSet", request, params);
+    if (!input.ok) return input.response;
+    const scope = setScope(input.params.changeSetId ?? "", actionOf("rebaseChangeSet"));
+    if (!scope.ok) return scope.response;
+    if (!canEdit(scope.workspaceId)) return cannotEdit();
+    const set = scope.set;
+    if (set.status !== "open") return closed(set);
+    if (input.body.expected_revision !== set.revision) return changed(set.revision);
+    const { conflicts, rebases } = drift(set, scope.environment);
+    const settled = new Set([...conflicts.map((c) => c.id), ...rebases]);
+    const cleared = set.changes.filter((c) => c.status === "conflicted" && !settled.has(c.id));
+    const fresh = conflicts.filter((c) => {
+      const row = set.changes.find((x) => x.id === c.id);
+      return (
+        row?.status !== "conflicted" || JSON.stringify(row.conflict) !== JSON.stringify(c.conflict)
+      );
+    });
+    if (rebases.length || cleared.length || fresh.length) {
+      for (const id of rebases) {
+        const row = set.changes.find((c) => c.id === id);
+        if (row) rebaseRow(row, scope.environment);
+      }
+      for (const row of cleared) {
+        row.status = "pending";
+        row.conflict = null;
+      }
+      for (const c of fresh) {
+        const row = set.changes.find((x) => x.id === c.id)!;
+        row.status = "conflicted";
+        row.conflict = c.conflict;
+      }
+      touch(set);
+    } else {
+      publish(set);
+    }
+    return HttpResponse.json({ change_set: toChangeSet(set), rebased: rebases, conflicts });
+  }),
+
+  http.post(mswPath("addServiceEdge"), async ({ request, params }) => {
+    const input = await validate<{ from_service_id: string; to_service_id: string }>(
+      "addServiceEdge",
+      request,
+      params,
+    );
+    if (!input.ok) return input.response;
+    const scope = projectScope(input.params.projectId ?? "", actionOf("addServiceEdge"));
+    if (!scope.ok) return scope.response;
+    const { project, userId } = scope;
+    const { from_service_id: from, to_service_id: to } = input.body;
+    const live = new Set(liveServices(project.id).map((s) => s.id));
+    if (!live.has(from) || !live.has(to)) return notFound("Service");
+    const existing = db.changes.edges.filter((e) => e.project_id === project.id);
+    if (existing.length >= MAX_SERVICE_EDGES) {
+      return apiError(409, "conflict", `A project holds at most ${MAX_SERVICE_EDGES} connections`);
+    }
+    if (existing.some((e) => e.from_service_id === from && e.to_service_id === to)) {
+      return apiError(409, "conflict", "These services are already connected");
+    }
+    const edge: ServiceEdge = {
+      id: nextId("edg"),
+      project_id: project.id,
+      from_service_id: from,
+      to_service_id: to,
+      created_by: userId,
+      created_at: Date.now(),
+    };
+    db.changes.edges.push(edge);
+    recordAudit({
+      workspaceId: project.workspace_id,
+      actorType: "user",
+      actorId: userId,
+      action: "canvas.edge_added",
+      targetType: "project",
+      targetId: project.id,
+      metadata: { edge_id: edge.id, from, to },
+    });
+    broadcastRealtime(project.id, { type: "canvas.edges_updated", by_user_id: userId });
+    return HttpResponse.json(edge, { status: 201 });
+  }),
+
+  http.delete(mswPath("removeServiceEdge"), async ({ request, params }) => {
+    const input = await validate("removeServiceEdge", request, params);
+    if (!input.ok) return input.response;
+    const scope = projectScope(input.params.projectId ?? "", actionOf("removeServiceEdge"));
+    if (!scope.ok) return scope.response;
+    const { project, userId } = scope;
+    const edge = db.changes.edges.find(
+      (e) => e.id === input.params.edgeId && e.project_id === project.id,
+    );
+    if (!edge) return notFound("Connection");
+    db.changes.edges = db.changes.edges.filter((e) => e !== edge);
+    recordAudit({
+      workspaceId: project.workspace_id,
+      actorType: "user",
+      actorId: userId,
+      action: "canvas.edge_removed",
+      targetType: "project",
+      targetId: project.id,
+      metadata: { edge_id: edge.id, from: edge.from_service_id, to: edge.to_service_id },
+    });
+    broadcastRealtime(project.id, { type: "canvas.edges_updated", by_user_id: userId });
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.get(mswPath("listWorkspaceChangeSets"), async ({ request, params }) => {
+    const input = await validate<unknown, { review: "open" | "pending" }>(
+      "listWorkspaceChangeSets",
+      request,
+      params,
+    );
+    if (!input.ok) return input.response;
+    const workspaceId = input.params.workspaceId ?? "";
+    const guard = requireWorkspace(workspaceId, actionOf("listWorkspaceChangeSets"));
+    if (!guard.ok) return guard.response;
+    const projects = new Map(
+      db.deploy.projects
+        .filter((p) => p.workspace_id === workspaceId && !p.deleted)
+        .map((p) => [p.id, p]),
+    );
+    const change_sets = db.changes.sets
+      .filter((s) => projects.has(s.project_id) && (s.status === "open" || s.status === "applying"))
+      .map(toSummary)
+      .filter((s) => input.query.review !== "pending" || s.review_status === "submitted")
+      .sort((a, b) => b.updated_at - a.updated_at || (a.id < b.id ? 1 : -1))
+      .slice(0, 100)
+      .flatMap((s) => {
+        const environment = db.deploy.environments.find((e) => e.id === s.environment_id);
+        if (!environment) return [];
+        return [
+          {
+            ...s,
+            project_name: projects.get(s.project_id)!.name,
+            environment_name: environment.name,
+            environment_requires_approval: requiresApproval(environment),
+          },
+        ];
+      })
+      // A draft nothing is staged in yet is noise in a review queue.
+      .filter((s) => s.op_count > 0);
+    return HttpResponse.json({ change_sets });
+  }),
 ];
+
+/** The approve and reject handlers, which differ only in the decision they record. */
+function decide(decision: "approve" | "reject") {
+  const name = decision === "approve" ? "approveChangeSet" : "rejectChangeSet";
+  return http.post(mswPath(name), async ({ request, params }) => {
+    const input = await validate<{ expected_revision: number; note?: string }>(
+      name,
+      request,
+      params,
+    );
+    if (!input.ok) return input.response;
+    const scope = setScope(input.params.changeSetId ?? "", actionOf(name));
+    if (!scope.ok) return scope.response;
+    const set = scope.set;
+    if (set.status !== "open") return closed(set);
+    if (input.body.expected_revision !== set.revision) return changed(set.revision);
+    const pending = set.changes.filter((c) => c.status !== "applied");
+    if (!pending.length) return nothingStaged();
+    // SECURITY: Mirrors the API: whoever opened the set or staged an op can't review it.
+    if (authorsOf(set).includes(scope.userId)) {
+      return apiError(
+        403,
+        "self_review",
+        "You opened this change set or staged changes in it, so someone else must review it",
+      );
+    }
+    const now = Date.now();
+    const approve = decision === "approve";
+    Object.assign(set, {
+      review_status: approve ? "approved" : "rejected",
+      approved_by: approve ? scope.userId : null,
+      approved_at: approve ? now : null,
+      approved_revision: approve ? set.revision : null,
+      rejected_by: approve ? null : scope.userId,
+      rejected_at: approve ? null : now,
+      review_note: input.body.note ?? null,
+      submitted_at: set.submitted_at ?? now,
+      updated_at: now,
+    });
+    recordAudit({
+      workspaceId: scope.workspaceId,
+      actorType: "user",
+      actorId: scope.userId,
+      action: approve ? "change_set.approved" : "change_set.rejected",
+      targetType: "change_set",
+      targetId: set.id,
+      metadata: {
+        project_id: set.project_id,
+        environment_id: set.environment_id,
+        revision: set.revision,
+        ops: pending.map((c) => c.summary),
+        has_note: input.body.note !== undefined,
+      },
+    });
+    publish(set);
+    return HttpResponse.json(toChangeSet(set));
+  });
+}

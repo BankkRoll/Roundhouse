@@ -27,6 +27,24 @@ export function useWorkspace(workspaceId: string) {
 }
 
 /**
+ * Turns staged canvas edits (ADR 0006 "Rollout") on or off for a workspace.
+ *
+ * @param workspaceId - Workspace id.
+ * @returns A mutation taking the new setting.
+ */
+export function useStagedChangesSetting(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (on: boolean) => api.updateWorkspace(workspaceId, { staged_changes: on }),
+    onSuccess: (workspace) => {
+      queryClient.setQueryData(queryKeys.workspace(workspaceId), workspace);
+      // NOTE: Every canvas reports the flag; refetch them so the panels switch mode.
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+/**
  * Renames a workspace and patches the cached `/v1/me` so the sidebar updates instantly.
  *
  * @param workspaceId - Workspace id.
