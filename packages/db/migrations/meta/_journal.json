@@ -106,6 +106,13 @@
       "when": 1792820000000,
       "tag": "0015_signing_key_rollover",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1792840000000,
+      "tag": "0017_domains_tls",
+      "breakpoints": true
     }
   ]
 }

@@ -13,6 +13,7 @@ import type {
   DeploymentTrigger,
   DnsRecordState,
   DomainDnsObservation,
+  DomainHsts,
   DomainMode,
   DomainStatus,
   DomainTlsStatus,
@@ -216,6 +217,15 @@ export const domains = sqliteTable(
     /** When the cron checks it next; `null` stops scheduled checks (failed domains). */
     nextCheckAt: timestamp("next_check_at"),
     verifiedAt: timestamp("verified_at"),
+    /** HSTS policy of a custom domain; `null` takes `DEFAULT_HSTS` (ADR 0009). */
+    hsts: json<DomainHsts>("hsts"),
+    /** Issuer, validity and last error of the certificate serving the hostname. */
+    tlsIssuer: text("tls_issuer"),
+    tlsNotBefore: timestamp("tls_not_before"),
+    tlsNotAfter: timestamp("tls_not_after"),
+    tlsError: text("tls_error"),
+    /** When the `tls_*` columns last changed: a node's report or an issuance. */
+    tlsUpdatedAt: timestamp("tls_updated_at"),
     ...timestamps,
   },
   (t) => [
