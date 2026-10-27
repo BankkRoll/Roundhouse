@@ -76,10 +76,12 @@ export const PREVIEW_SAME_REPO_SECRETS = ["copy", "omit"] as const;
 export type PreviewSameRepoSecrets = (typeof PREVIEW_SAME_REPO_SECRETS)[number];
 
 /**
- * How a preview's databases start. Only `empty` exists: a preview never
- * receives a copy of another environment's data.
+ * How a preview's databases start: `empty`, or `latest_backup`, a restore of
+ * the base environment's latest database dump into the preview's fresh
+ * database (its own credentials kept). Never for a preview that withholds
+ * secrets: fork PRs always start empty.
  */
-export const PREVIEW_DATABASE_SEEDS = ["empty"] as const;
+export const PREVIEW_DATABASE_SEEDS = ["empty", "latest_backup"] as const;
 
 /** See {@link PREVIEW_DATABASE_SEEDS}. */
 export type PreviewDatabaseSeed = (typeof PREVIEW_DATABASE_SEEDS)[number];

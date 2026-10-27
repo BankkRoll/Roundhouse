@@ -1,5 +1,6 @@
 import {
   PREVIEW_LIMITS,
+  type PreviewDatabaseSeed,
   type PreviewForkPolicy,
   type PreviewSameRepoSecrets,
 } from "@roundhouse/shared";
@@ -43,6 +44,7 @@ interface Draft {
   volume_mb: string;
   skip_drafts: boolean;
   same_repo_secrets: PreviewSameRepoSecrets;
+  database_seed: PreviewDatabaseSeed;
   fork_policy: PreviewForkPolicy;
   approval_label: string;
   node_selector: KeyValuePair[];
@@ -60,6 +62,11 @@ const LABEL_KEY = /^[A-Za-z0-9]([A-Za-z0-9._/-]*[A-Za-z0-9])?$/;
 const SAME_REPO_SECRETS: Record<PreviewSameRepoSecrets, string> = {
   copy: "Copy from the base environment",
   omit: "Withhold, as for forks",
+};
+
+const DATABASE_SEEDS: Record<PreviewDatabaseSeed, string> = {
+  empty: "Start empty",
+  latest_backup: "Restore the base environment's latest dump",
 };
 
 const FORK_POLICIES: Record<PreviewForkPolicy, string> = {
@@ -80,6 +87,7 @@ function toDraft(settings: PreviewSettings, fallbackBase: string): Draft {
     volume_mb: String(settings.caps.volume_mb),
     skip_drafts: settings.skip_drafts,
     same_repo_secrets: settings.same_repo_secrets,
+    database_seed: settings.database_seed,
     fork_policy: settings.fork_policy,
     approval_label: settings.approval_label,
     node_selector: toPairs(settings.node_selector),
@@ -157,6 +165,7 @@ function toBody(draft: Draft): { body: PreviewSettingsBody } | { errors: DraftEr
       caps,
       skip_drafts: draft.skip_drafts,
       same_repo_secrets: draft.same_repo_secrets,
+      database_seed: draft.database_seed,
       fork_policy: draft.fork_policy,
       approval_label: label,
       node_selector: fromPairs(draft.node_selector),
@@ -245,6 +254,7 @@ export function PreviewSettingsForm({
     base: useId(),
     services: useId(),
     sameRepo: useId(),
+    seed: useId(),
     forkPolicy: useId(),
     build: useId(),
     field: useId(),
@@ -445,7 +455,7 @@ export function PreviewSettingsForm({
 
         <SettingsSection
           title="Secrets and forks"
-          description="A preview never receives another environment's database data."
+          description="Fork previews, and previews that withhold secrets, always start with empty databases."
         >
           <SettingsRow
             label="Same-repository secrets"
@@ -464,6 +474,25 @@ export function PreviewSettingsForm({
               {(Object.keys(SAME_REPO_SECRETS) as PreviewSameRepoSecrets[]).map((value) => (
                 <option key={value} value={value}>
                   {SAME_REPO_SECRETS[value]}
+                </option>
+              ))}
+            </Select>
+          </SettingsRow>
+          <SettingsRow
+            label="Preview databases"
+            description="A restore keeps the preview's own fresh credentials. Needs backup storage and a database dump."
+            htmlFor={ids.seed}
+          >
+            <Select
+              id={ids.seed}
+              aria-describedby={`${ids.seed}-description`}
+              value={draft.database_seed}
+              onChange={(event) => set("database_seed", event.target.value as PreviewDatabaseSeed)}
+              disabled={disabled}
+            >
+              {(Object.keys(DATABASE_SEEDS) as PreviewDatabaseSeed[]).map((value) => (
+                <option key={value} value={value}>
+                  {DATABASE_SEEDS[value]}
                 </option>
               ))}
             </Select>

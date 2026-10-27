@@ -34,7 +34,9 @@ import { renderPreviewComment } from "../src/lib/previews/github";
 import { loadPreviewSettings } from "../src/lib/previews/settings";
 import { planPreviewVariables } from "../src/lib/previews/variables";
 import { findPreview } from "../src/lib/previews/view";
+import { setS3Transport } from "../src/lib/s3";
 import { openVariable, projectKey } from "../src/lib/variables";
+import { STORAGE_BODY } from "./backups-helpers";
 import {
   deliver,
   FAKE_INSTALLATION_TOKEN,
@@ -42,6 +44,7 @@ import {
   fakeGithub,
   seedGithub,
 } from "./fake-github";
+import { FakeS3 } from "./fake-s3";
 import opened from "./fixtures/github/pull-request-opened.json";
 import { addMember, type Client, eventually, install, joinNode } from "./helpers";
 import {
@@ -83,6 +86,7 @@ afterEach(async () => {
   await settleDeployments(20_000);
   for (const i of introspectors) await i.dispose();
   gh.restore();
+  setS3Transport();
 });
 
 /** Waits for every preview workflow instance started so far to end. */
@@ -1146,6 +1150,78 @@ describe("teardown and limits", () => {
       ).first<{ actor_type: string }>();
       expect(audit?.actor_type).toBe("user");
       expect((await viewer.json(`/v1/previews/prv_nope`)).status).toBe(404);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "seeds a same-repository preview's database from the base's latest dump, never a fork's",
+    async () => {
+      const s3 = new FakeS3();
+      setS3Transport(s3.fetch);
+      const s = await stage(
+        {
+          database_seed: "latest_backup",
+          fork_policy: "approval",
+          build_node_selector: { pool: "untrusted" },
+        },
+        { pool: "untrusted" },
+      );
+      await ok(s.owner.json("/v1/instance/backup-storage", { method: "PUT", json: STORAGE_BODY }));
+      const insertBackup = (id: string, method: string, finishedAt: number) =>
+        env.DB.prepare(
+          `INSERT INTO backups (id, project_id, service_id, environment_id, trigger, method, engine, status,
+             object_key, sha256, bytes_stored, pinned, finished_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'manual', ?, 'postgres', 'succeeded', ?, ?, 10, 0, ?, 0, 0)`,
+        )
+          .bind(id, s.projectId, s.dbId, s.prodId, method, `k/${id}`, "a".repeat(64), finishedAt)
+          .run();
+      await insertBackup("bak_OLDDUMP", "dump", 1000);
+      await insertBackup("bak_NEWDUMP", "dump", 2000);
+      await insertBackup("bak_NEWERSNAP", "snapshot", 3000);
+
+      await deliver("pull_request", pr());
+      const p = await previewWhere(s, (x) => x.status === "active");
+      const restore = await eventually(
+        async () =>
+          (await env.DB.prepare("SELECT * FROM restores WHERE target_environment_id = ?")
+            .bind(p.environment_id)
+            .first<Record<string, unknown>>()) ?? undefined,
+      );
+      expect(restore).toMatchObject({
+        backup_id: "bak_NEWDUMP",
+        target_service_id: s.dbId,
+        mode: "new_service",
+        requested_by: null,
+      });
+      const audit = await env.DB.prepare(
+        "SELECT actor_type, metadata FROM audit_logs WHERE action = 'restore.started'",
+      ).first<{ actor_type: string; metadata: string }>();
+      expect(audit?.actor_type).toBe("system");
+      expect(JSON.parse(audit!.metadata)).toMatchObject({ mode: "preview_seed", preview_id: p.id });
+      // Stops the restore's wait for the database; seeding is all this test checks.
+      await env.DB.prepare("UPDATE restores SET status = 'failed'").run();
+
+      gh.permissions.set("wes", "write");
+      await deliver("pull_request", pr({ number: 8, fork: true }));
+      await deliver(
+        "pull_request",
+        pr({
+          number: 8,
+          fork: true,
+          action: "labeled",
+          label: "roundhouse:preview",
+          sender: "wes",
+        }),
+      );
+      const fork = await previewWhere(s, (x) => x.status === "active", 8);
+      await settlePreviews();
+      const forkRestores = await env.DB.prepare(
+        "SELECT count(*) AS n FROM restores WHERE target_environment_id = ?",
+      )
+        .bind(fork.environment_id)
+        .first<{ n: number }>();
+      expect(forkRestores?.n).toBe(0);
     },
     TEST_TIMEOUT_MS,
   );

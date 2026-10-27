@@ -169,6 +169,17 @@ describe("previews page", () => {
     expect(db.audit.at(-1)?.action).toBe("preview.settings_updated");
   });
 
+  it("seeds preview databases from the latest dump when asked", async () => {
+    const { user } = await openPreviews();
+    const form = await screen.findByRole("form", { name: "Preview settings" });
+    const seed = within(form).getByLabelText("Preview databases");
+    expect(seed).toHaveValue("empty");
+    await user.selectOptions(seed, "latest_backup");
+    await user.click(within(form).getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Preview settings saved")).toBeInTheDocument();
+    expect(settings().database_seed).toBe("latest_backup");
+  });
+
   it("checks numbers against the limits before saving", async () => {
     const { user } = await openPreviews();
     const form = await screen.findByRole("form", { name: "Preview settings" });

@@ -14,6 +14,7 @@
  * @module
  */
 import {
+  backups,
   cronStates,
   type Db,
   deployments,
@@ -21,6 +22,7 @@ import {
   environments,
   previewEnvironments,
   type projects,
+  restores,
   variables,
   volumes,
 } from "@roundhouse/db";
@@ -39,8 +41,11 @@ import {
   type ServiceConfigSpec,
   VOLUME_DELETE_GRACE_MS,
 } from "@roundhouse/shared";
-import { and, eq, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
 import type { Env } from "../../env";
+import { auditInsert } from "../audit";
+import { startRestoreWorkflow } from "../backups/restores";
+import { isBackupStorageConfigured } from "../backups/storage";
 import type { KeyEnv } from "../crypto";
 import { databaseVariables } from "../databases";
 import {
@@ -388,6 +393,103 @@ export async function deployPreview(
       if (err instanceof ApiError && (err.status === 409 || err.status === 422)) continue;
       throw err;
     }
+  }
+  return started;
+}
+
+// -----------------------------------------------------------------------------
+// Seed
+// -----------------------------------------------------------------------------
+
+/**
+ * Restores each database of a new preview from the base environment's latest
+ * successful dump, when the project asks for `database_seed: latest_backup`
+ * (ADR 0007). The restore waits for the preview's database to run healthy,
+ * and the agent keeps the preview's own fresh credentials over the dump's.
+ * Snapshots don't qualify: they carry the source's passwords.
+ *
+ * SECURITY: a preview that withholds secrets (every fork) gets no data
+ * either: a database can be as sensitive as the secrets withheld from it.
+ *
+ * @param ctx - Database and bindings.
+ * @param input - The preview, its project's workspace and settings, and its environment.
+ * @returns IDs of the restores started; idempotent per database.
+ */
+export async function seedPreviewDatabases(
+  ctx: LifecycleContext,
+  input: {
+    preview: PreviewRow;
+    workspaceId: string;
+    settings: PreviewSettingsRow;
+    environmentId: string;
+  },
+): Promise<string[]> {
+  const { db } = ctx;
+  const { preview, settings, environmentId } = input;
+  if (settings.databaseSeed !== "latest_backup") return [];
+  if (preview.withheld || previewWithholdsSecrets(preview.isFork, settings.sameRepoSecrets)) {
+    return [];
+  }
+  if (!(await isBackupStorageConfigured(db))) return [];
+  const started: string[] = [];
+  for (const s of await liveServices(db, preview.projectId)) {
+    if (!s.databaseEngine || !(await latestConfig(db, s.id, environmentId))) continue;
+    const [backup] = await db
+      .select()
+      .from(backups)
+      .where(
+        and(
+          eq(backups.serviceId, s.id),
+          eq(backups.environmentId, settings.baseEnvironmentId),
+          eq(backups.status, "succeeded"),
+          eq(backups.method, "dump"),
+        ),
+      )
+      .orderBy(desc(backups.finishedAt), desc(backups.id))
+      .limit(1);
+    if (!backup) continue;
+    const [already] = await db
+      .select({ id: restores.id })
+      .from(restores)
+      .where(
+        and(eq(restores.targetServiceId, s.id), eq(restores.targetEnvironmentId, environmentId)),
+      )
+      .limit(1);
+    if (already) continue;
+    const id = newId("restore");
+    const at = new Date();
+    await db.batch([
+      db.insert(restores).values({
+        id,
+        backupId: backup.id,
+        mode: "new_service",
+        targetServiceId: s.id,
+        targetEnvironmentId: environmentId,
+        safetyBackupId: null,
+        status: "queued",
+        requestedBy: null,
+        createdAt: at,
+        updatedAt: at,
+      }),
+      auditInsert(db, {
+        workspaceId: input.workspaceId,
+        actorType: "system",
+        actorId: null,
+        action: "restore.started",
+        targetType: "restore",
+        targetId: id,
+        metadata: {
+          project_id: preview.projectId,
+          backup_id: backup.id,
+          mode: "preview_seed",
+          preview_id: preview.id,
+          service_id: s.id,
+          environment_id: environmentId,
+        },
+      }),
+    ]);
+    await startRestoreWorkflow(ctx.env, id);
+    started.push(id);
   }
   return started;
 }

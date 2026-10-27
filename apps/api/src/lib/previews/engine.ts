@@ -32,6 +32,7 @@ import {
   ensurePreviewEnvironment,
   PreviewError,
   type PreviewRow,
+  seedPreviewDatabases,
   teardownPreviewEnvironment,
 } from "./environment";
 import { type PreviewEvent, previewGitServices, tracksBase } from "./events";
@@ -436,6 +437,12 @@ export async function runCreateStep(
       environmentId,
       scope: "all",
       origin,
+    });
+    await seedPreviewDatabases(ctx, {
+      preview,
+      workspaceId: project.workspaceId,
+      settings,
+      environmentId,
     });
     await ctx.db
       .update(previewEnvironments)
