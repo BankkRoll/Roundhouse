@@ -73,7 +73,9 @@ describe("preview build node selector", () => {
     renderApp(PREVIEWS);
     const form = await screen.findByRole("form", { name: "Preview settings" });
     expect(
-      await within(form).findByText(/No server carries these labels, so fork preview builds will fail/),
+      await within(form).findByText(
+        /No server carries these labels, so fork preview builds will fail/,
+      ),
     ).toBeInTheDocument();
     expect(within(form).getByRole("link", { name: "Servers" })).toHaveAttribute("href", SERVERS);
   });
