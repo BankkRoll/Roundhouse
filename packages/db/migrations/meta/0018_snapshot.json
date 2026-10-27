@@ -2306,6 +2306,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "mesh_ip": {
+          "name": "mesh_ip",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "exit_code": {
           "name": "exit_code",
           "type": "integer",
@@ -2397,6 +2404,15 @@
             "status"
           ],
           "isUnique": false
+        },
+        "cron_runs_node_mesh_ip_uq": {
+          "name": "cron_runs_node_mesh_ip_uq",
+          "columns": [
+            "node_id",
+            "mesh_ip"
+          ],
+          "isUnique": true,
+          "where": "mesh_ip IS NOT NULL AND status IN ('starting', 'running')"
         }
       },
       "foreignKeys": {
@@ -4924,6 +4940,41 @@
           "notNull": false,
           "autoincrement": false
         },
+        "cf_custom_hostname_id": {
+          "name": "cf_custom_hostname_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cf_status": {
+          "name": "cf_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cf_ssl_status": {
+          "name": "cf_ssl_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cf_errors": {
+          "name": "cf_errors",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cf_dcv": {
+          "name": "cf_dcv",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "integer",
@@ -5269,6 +5320,20 @@
           "notNull": false,
           "autoincrement": false
         },
+        "replaces_workload_id": {
+          "name": "replaces_workload_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_ip": {
+          "name": "mesh_ip",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "integer",
@@ -5292,13 +5357,13 @@
           ],
           "isUnique": true
         },
-        "placements_deployment_replica_uq": {
-          "name": "placements_deployment_replica_uq",
+        "placements_deployment_replica_idx": {
+          "name": "placements_deployment_replica_idx",
           "columns": [
             "deployment_id",
             "replica"
           ],
-          "isUnique": true
+          "isUnique": false
         },
         "placements_node_idx": {
           "name": "placements_node_idx",
@@ -5306,6 +5371,15 @@
             "node_id"
           ],
           "isUnique": false
+        },
+        "placements_node_mesh_ip_uq": {
+          "name": "placements_node_mesh_ip_uq",
+          "columns": [
+            "node_id",
+            "mesh_ip"
+          ],
+          "isUnique": true,
+          "where": "\"placements\".\"mesh_ip\" IS NOT NULL"
         }
       },
       "foreignKeys": {
@@ -5909,6 +5983,283 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "mesh_paths": {
+      "name": "mesh_paths",
+      "columns": {
+        "pair_key": {
+          "name": "pair_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "path": {
+          "name": "path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "relay_node_id": {
+          "name": "relay_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "configured_at": {
+          "name": "configured_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_handshake_at": {
+          "name": "last_handshake_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_direct_attempt_at": {
+          "name": "last_direct_attempt_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sides": {
+          "name": "sides",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "mesh_paths_relay_node_id_nodes_id_fk": {
+          "name": "mesh_paths_relay_node_id_nodes_id_fk",
+          "tableFrom": "mesh_paths",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "relay_node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "mesh_psks": {
+      "name": "mesh_psks",
+      "columns": {
+        "pair_key": {
+          "name": "pair_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "psk_sealed": {
+          "name": "psk_sealed",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "node_drains": {
+      "name": "node_drains",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "node_id": {
+          "name": "node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "force": {
+          "name": "force",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'running'"
+        },
+        "moves": {
+          "name": "moves",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "blocked": {
+          "name": "blocked",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "workflow_instance_id": {
+          "name": "workflow_instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "started_by": {
+          "name": "started_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "node_drains_node_idx": {
+          "name": "node_drains_node_idx",
+          "columns": [
+            "node_id",
+            "id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "node_drains_workspace_id_workspaces_id_fk": {
+          "name": "node_drains_workspace_id_workspaces_id_fk",
+          "tableFrom": "node_drains",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "node_drains_node_id_nodes_id_fk": {
+          "name": "node_drains_node_id_nodes_id_fk",
+          "tableFrom": "node_drains",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "node_drains_started_by_users_id_fk": {
+          "name": "node_drains_started_by_users_id_fk",
+          "tableFrom": "node_drains",
+          "tableTo": "users",
+          "columnsFrom": [
+            "started_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "node_join_tokens": {
       "name": "node_join_tokens",
       "columns": {
@@ -6132,6 +6483,169 @@
           "notNull": false,
           "autoincrement": false
         },
+        "mesh_index": {
+          "name": "mesh_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "wg_pubkey_next": {
+          "name": "wg_pubkey_next",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "wg_key_epoch": {
+          "name": "wg_key_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "wg_key_next_epoch": {
+          "name": "wg_key_next_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "wg_key_rotated_at": {
+          "name": "wg_key_rotated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_rotate_requested_at": {
+          "name": "mesh_rotate_requested_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_rotate_generation": {
+          "name": "mesh_rotate_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_rotate_announced_at": {
+          "name": "mesh_rotate_announced_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_activate_epoch": {
+          "name": "mesh_activate_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_mode": {
+          "name": "mesh_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_nat": {
+          "name": "mesh_nat",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_endpoint": {
+          "name": "mesh_endpoint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_endpoint_override": {
+          "name": "mesh_endpoint_override",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_listen_port": {
+          "name": "mesh_listen_port",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_docker_firewall": {
+          "name": "mesh_docker_firewall",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_accept_fwmark": {
+          "name": "mesh_accept_fwmark",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_ready": {
+          "name": "mesh_ready",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "mesh_error": {
+          "name": "mesh_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mesh_status_at": {
+          "name": "mesh_status_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "registry_pull_user": {
+          "name": "registry_pull_user",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "registry_pull_password_sealed": {
+          "name": "registry_pull_password_sealed",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "registry_pull_bcrypt": {
+          "name": "registry_pull_bcrypt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "rescheduled_at": {
+          "name": "rescheduled_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "identity_public_key": {
           "name": "identity_public_key",
           "type": "text",
@@ -6347,6 +6861,14 @@
             "workspace_id"
           ],
           "isUnique": false
+        },
+        "nodes_mesh_index_uq": {
+          "name": "nodes_mesh_index_uq",
+          "columns": [
+            "mesh_index"
+          ],
+          "isUnique": true,
+          "where": "\"nodes\".\"mesh_index\" IS NOT NULL AND \"nodes\".\"deleted_at\" IS NULL"
         }
       },
       "foreignKeys": {
@@ -7285,6 +7807,13 @@
           "autoincrement": false,
           "default": false
         },
+        "net_tag": {
+          "name": "net_tag",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "preview_id": {
           "name": "preview_id",
           "type": "text",
@@ -7322,6 +7851,14 @@
             "slug"
           ],
           "isUnique": true
+        },
+        "environments_net_tag_uq": {
+          "name": "environments_net_tag_uq",
+          "columns": [
+            "net_tag"
+          ],
+          "isUnique": true,
+          "where": "\"environments\".\"net_tag\" IS NOT NULL"
         }
       },
       "foreignKeys": {
@@ -7762,6 +8299,21 @@
         },
         "database_version": {
           "name": "database_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "health": {
+          "name": "health",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'ok'"
+        },
+        "health_reason": {
+          "name": "health_reason",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
