@@ -100,6 +100,7 @@ const ROUTE_MODULES = [
   "cron",
   "access",
   "previews",
+  "environments",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -862,10 +863,71 @@ describe("MSW mocks match the API contract", () => {
       expect(
         await call("POST", `${P}/environments`, { name: "staging", kind: "staging" }),
       ).toMatchObject({ status: 201, body: { slug: "staging-2" } });
+      // ADR 0007: members hold environments:manage.
       as("member");
       expect(
         (await call("POST", `${P}/environments`, { name: "QA", kind: "staging" })).status,
+      ).toBe(201);
+      as("viewer");
+      expect(
+        (await call("POST", `${P}/environments`, { name: "No", kind: "staging" })).status,
       ).toBe(403);
+      as("owner");
+      const cloned = await call("POST", `${P}/environments`, {
+        name: "Clone",
+        kind: "staging",
+        clone: { from_environment_id: SEED.production, variables: "non_secret" },
+      });
+      expect(cloned.status).toBe(201);
+      const clone = { body: cloned.body as { id: string; slug: string } };
+      expect(
+        (
+          await call(
+            "GET",
+            `${P}/environments/diff?base=${SEED.production}&target=${clone.body.id}`,
+          )
+        ).status,
+      ).toBe(200);
+      expect((await call("GET", `${P}/environments/diff?base=${SEED.production}`)).status).toBe(
+        400,
+      );
+      expect(
+        (
+          await call("POST", `/v1/environments/${clone.body.id}/promote`, {
+            from_environment_id: clone.body.id,
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await call("POST", `/v1/environments/${SEED.production}/promote`, {
+            from_environment_id: clone.body.id,
+          })
+        ).status,
+      ).toBe(409);
+      db.deploy.variables.push({
+        ...db.deploy.variables.find(
+          (v) => v.environment_id === clone.body.id && v.tier !== "secret",
+        )!,
+        key: "PROMOTED_FLAG",
+        value: "on",
+      });
+      expect(
+        await call("POST", `/v1/environments/${SEED.production}/promote`, {
+          from_environment_id: clone.body.id,
+        }),
+      ).toMatchObject({ status: 201, body: { source: "promote" } });
+      expect(
+        (await call("DELETE", `/v1/environments/${SEED.production}?confirm=production`)).status,
+      ).toBe(409);
+      expect((await call("DELETE", `/v1/environments/${clone.body.id}?confirm=nope`)).status).toBe(
+        400,
+      );
+      expect((await call("DELETE", `/v1/environments/env_nope?confirm=x`)).status).toBe(404);
+      expect(
+        (await call("DELETE", `/v1/environments/${clone.body.id}?confirm=${clone.body.slug}`))
+          .status,
+      ).toBe(204);
       as(null);
       expect((await call("GET", `${P}/environments`)).status).toBe(401);
       expect(

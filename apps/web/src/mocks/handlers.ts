@@ -45,6 +45,7 @@ import { dataHandlers } from "./data-handlers";
 import { type DbAuditEntry, type DbInvite, type DbMembership, db, nextId } from "./db";
 import { deployHandlers } from "./deploy-handlers";
 import { domainHandlers } from "./domains-mock";
+import { environmentHandlers } from "./environments-handlers";
 import { metricsHandlers } from "./metrics-handlers";
 import { previewHandlers } from "./previews-handlers";
 import { providerHandlers } from "./providers-handlers";
@@ -835,6 +836,7 @@ export const handlers = [
   ...dataHandlers,
   ...cronHandlers,
   ...previewHandlers,
+  ...environmentHandlers,
   ...signingKeyHandlers,
   ...tlsHandlers,
   ...securityHandlers,

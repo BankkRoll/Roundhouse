@@ -1324,16 +1324,45 @@ export const deployHandlers = [
       preview_id: null,
       created_at: Date.now(),
     };
+    const clone =
+      (input.body.clone as
+        | { from_environment_id: string; variables?: string; volumes?: string }
+        | undefined) ??
+      (typeof input.body.copy_from_environment_id === "string"
+        ? { from_environment_id: input.body.copy_from_environment_id, variables: "all" }
+        : undefined);
+    const from = clone ? environmentOf(found.row.id, clone.from_environment_id) : undefined;
+    if (clone && !from) return notFound("Environment");
     db.deploy.environments.push(environment);
-    recordAudit({
-      workspaceId: found.row.workspace_id,
-      actorType: "user",
-      actorId: found.guard.user.id,
-      action: "project.updated",
-      targetType: "project",
-      targetId: found.row.id,
-      metadata: { environment_id: environment.id },
-    });
+    if (from) {
+      const services = db.deploy.services.filter((row) => row.project_id === found.row.id);
+      for (const service of services) {
+        const config = latestConfig(service.id, from.id);
+        if (config) {
+          db.deploy.configs.push({ ...config, environment_id: environment.id, version: 1 });
+        }
+      }
+      const mode = clone?.variables ?? "all";
+      if (mode !== "none") {
+        for (const row of db.deploy.variables.filter((v) => v.environment_id === from.id)) {
+          if (mode === "non_secret" && row.tier === "secret") continue;
+          db.deploy.variables.push({ ...row, environment_id: environment.id, version: 1 });
+        }
+      }
+    }
+    for (const action of from
+      ? (["environment.created", "environment.cloned"] as const)
+      : (["environment.created"] as const)) {
+      recordAudit({
+        workspaceId: found.row.workspace_id,
+        actorType: "user",
+        actorId: found.guard.user.id,
+        action,
+        targetType: "environment",
+        targetId: environment.id,
+        metadata: { environment: slug, from_environment_id: from?.id ?? null },
+      });
+    }
     return HttpResponse.json(environment, { status: 201 });
   }),
 
