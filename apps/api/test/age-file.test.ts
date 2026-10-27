@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { generateAgeKeyPair } from "../src/lib/age";
 import { ageDecrypt, ageEncrypt } from "../src/lib/age-file";
 import { chacha20poly1305Open, chacha20poly1305Seal, poly1305 } from "../src/lib/chacha20-poly1305";
+import cctv from "./fixtures/age/cctv.json";
 import file from "./fixtures/age/file.json";
 import keypair from "./fixtures/age/keypair.json";
 
@@ -63,10 +64,33 @@ describe("age files", () => {
     await expect(ageDecrypt(other.identity, sealed)).rejects.toThrow(/no identity matched/);
     const tampered = sealed.slice();
     tampered[tampered.length - 20] = tampered[tampered.length - 20]! ^ 1;
-    await expect(ageDecrypt(keypair.identity, tampered)).rejects.toThrow();
+    await expect(ageDecrypt(keypair.identity, tampered)).rejects.toThrow(/^age: /);
     // Dropping the final chunk leaves a full chunk not marked last.
     await expect(
       ageDecrypt(keypair.identity, sealed.subarray(0, sealed.length - (70_000 - 65_536) - 16)),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/^age: /);
+  });
+});
+
+async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([bytes as Uint8Array<ArrayBuffer>])
+    .stream()
+    .pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+describe("C2SP CCTV age vectors", () => {
+  it.each(cctv.vectors)("$name: $expect", async (v) => {
+    const raw = fromBase64(v.file);
+    const sealed = v.compressed ? await inflate(raw) : raw;
+    if (v.expect === "success") {
+      const plain = await ageDecrypt(v.identity, sealed);
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", plain));
+      expect(toHex(digest)).toBe(v.payload);
+    } else {
+      // NOTE: ageDecrypt releases no plaintext on any failure, so CCTV's
+      // "payload released before the error" check holds trivially.
+      await expect(ageDecrypt(v.identity, sealed)).rejects.toThrow(/^age: /);
+    }
   });
 });
