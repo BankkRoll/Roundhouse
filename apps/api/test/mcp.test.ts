@@ -339,6 +339,7 @@ describe("tools/list", () => {
       "list_backups",
       "get_metrics",
       "list_cron_runs",
+      "list_previews",
       "list_templates",
       "deploy_template",
     ]);
