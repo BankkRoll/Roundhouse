@@ -241,6 +241,9 @@ type Client struct {
 	// cur is the session whose writer accepts [Client.Send] frames, nil
 	// while disconnected.
 	cur atomic.Pointer[session]
+	// replay drops a verified frame whose ID was already applied; it spans
+	// reconnects, since a replay may arrive on a later connection.
+	replay replayGuard
 }
 
 // ObservedGeneration returns the newest desired_state generation applied.
@@ -560,6 +563,10 @@ func (s *session) handle(data []byte) {
 	msg, err := protocol.VerifyEnvelope(env, key, s.NodeID, s.verifyTime())
 	if err != nil {
 		s.drop(env, err)
+		return
+	}
+	if h := msg.Header(); !s.replay.admit(h.ID, h.ExpiresAt, s.verifyTime().UnixMilli()) {
+		s.Logger.Warn("dropping control frame", "reason", "replayed", "kid", env.KID, "msg_id", h.ID)
 		return
 	}
 	s.trust(env.KID, msg)

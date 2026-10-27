@@ -74,6 +74,34 @@ async function liveEnvironment(
   return scope;
 }
 
+/**
+ * Refuses to copy a protected environment's secrets (by clone or promotion)
+ * for a caller who may not deploy there.
+ *
+ * SECURITY: the copy lands where the caller's code runs with those secrets
+ * and the source's protection rules don't apply. Deploying into the source
+ * already gives that, so the deploy right is the bar.
+ */
+async function requireSecretsCopy(
+  c: AppContext,
+  projectId: string,
+  source: typeof environments.$inferSelect,
+): Promise<void> {
+  if (!source.protected) return;
+  try {
+    await projectScope(c, projectId, "deployments:create", source.id);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 403) {
+      throw new ApiError(
+        403,
+        "forbidden",
+        `${source.name} is protected and you can't deploy there, so its secrets can't be copied; copy with variables "non_secret"`,
+      );
+    }
+    throw err;
+  }
+}
+
 /** Environment lifecycle routes. */
 export const environmentRoutes = createRouter()
   .openapi(createEnvironment, async (c) => {
@@ -96,6 +124,7 @@ export const environmentRoutes = createRouter()
           }
         : undefined);
     const from = clone ? await environmentOf(c, projectId, clone.from_environment_id) : null;
+    if (from && clone?.variables === "all") await requireSecretsCopy(c, projectId, from);
     const live = await liveServices(db, projectId);
     if (clone?.services) {
       const unknown = clone.services.filter((id) => !live.some((s) => s.id === id));
@@ -231,6 +260,7 @@ export const environmentRoutes = createRouter()
     } = await liveEnvironment(c, environmentId, policyOf(promoteEnvironment).action!);
     const db = c.get("db");
     const from = await environmentOf(c, project.id, body.from_environment_id);
+    if (body.include.variables === "all") await requireSecretsCopy(c, project.id, from);
     if (from.id === target.id) {
       throw new ApiError(
         400,
