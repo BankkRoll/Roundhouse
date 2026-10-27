@@ -562,6 +562,16 @@ export const shellRoutes = createRouter()
       if (err instanceof ApiError && err.status === 404) throw notFound("Shell session");
       throw err;
     }
+    // SECURITY: the same bar as opening the shell, whose output this is. The
+    // two-factor gate only covers mutations, so this read checks it itself.
+    const [viewer] = await db
+      .select({ twoFactorEnabled: users.twoFactorEnabled })
+      .from(users)
+      .where(eq(users.id, caller.user.id))
+      .limit(1);
+    if (!viewer?.twoFactorEnabled) {
+      throw new ApiError(403, "two_factor_required", DENIAL_MESSAGES.two_factor_required);
+    }
     if (session.recording !== "stored" || session.recordingParts < 1) {
       throw notFound("Shell recording");
     }
