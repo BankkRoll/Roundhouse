@@ -140,7 +140,7 @@ import { onMigrationVolumeReports } from "../lib/volume-migrations";
 import { type BackupJobFrameBody, onBackupFrame } from "./node/handlers/backups";
 import { onCertFrame } from "./node/handlers/certs";
 import { MAX_QUERIES_PER_NODE, PendingQueries, UserQueryLimiter } from "./node/handlers/data";
-import { onImagePushResult } from "./node/handlers/image-push";
+import { imagePushLogBuild, onImagePushResult } from "./node/handlers/image-push";
 import { jobLogOwner, onJobStatus } from "./node/handlers/jobs";
 import { MetricOwners, onMetrics } from "./node/handlers/metrics";
 import { onVolumeStatus } from "./node/handlers/volumes";
@@ -461,10 +461,20 @@ export class NodeConnection extends DurableObject<Env> {
         await this.onBuildResult(attachment.nodeId, message);
         return;
       case "logs": {
-        // NOTE: task sources (protocol 5) have no ingest here yet; their
-        // lines are dropped rather than filed under a replica.
         const { source } = message;
-        if (source.type === "task") return;
+        if (source.type === "task") {
+          // An image push's progress (ADR 0011) joins its deployment's build
+          // log. Backup, restore and copy tasks report through their own
+          // frames, so their lines are dropped rather than filed elsewhere.
+          if (attachment.protocolVersion < IMAGE_PUSH_PROTOCOL_VERSION) return;
+          const buildId = await imagePushLogBuild(this.db, attachment.nodeId, source.task_id);
+          if (!buildId) return;
+          await this.onLogs(attachment.nodeId, {
+            ...message,
+            source: { type: "build", build_id: buildId },
+          });
+          return;
+        }
         if (source.type === "job" && attachment.protocolVersion < JOBS_PROTOCOL_VERSION) return;
         await this.onLogs(attachment.nodeId, { ...message, source });
         return;

@@ -752,6 +752,43 @@ describe("image_push_result", () => {
     });
     expect(failed).toBe(false);
   });
+
+  it("files the push's task log lines under the deployment's build, and drops others", async () => {
+    const s = await cfStage({ service: GIT_SERVICE });
+    const d = await deploy(s.owner, s.serviceId, s.envId, { commit_sha: COMMIT_SHA });
+    await waitForStatus(s.owner, d.id, ["active", "failed"]);
+    const push = s.agent.received.find(isPush)!;
+    const build = await env.DB.prepare("SELECT id FROM builds WHERE deployment_id = ?")
+      .bind(d.id)
+      .first<{ id: string }>();
+    const task = (taskId: string, text: string) => ({
+      type: "logs",
+      source: { type: "task", task_id: taskId },
+      lines: [{ ts: Date.now(), stream: "stdout", text }],
+    });
+    s.agent.send(task(push.push_id, "pushed 3 layers to registry.cloudflare.com"));
+    s.agent.send(task("psh_someone_else", "not ours"));
+    s.agent.send(task("bak_01JZZZZZZZZZZZZZZZZZZZZZZZ", "a backup line"));
+    const node = env.NODE_CONNECTION.get(env.NODE_CONNECTION.idFromName(s.joined.node_id));
+    await eventually(async () => {
+      await node.flushLogs();
+      const row = await env.DB.prepare(
+        "SELECT sum(line_count) AS n FROM log_chunks WHERE build_id = ?",
+      )
+        .bind(build!.id)
+        .first<{ n: number | null }>();
+      return row?.n ? true : undefined;
+    });
+    const keys = await env.DB.prepare("SELECT r2_key FROM log_chunks WHERE build_id = ?")
+      .bind(build!.id)
+      .all<{ r2_key: string }>();
+    const text = (
+      await Promise.all(keys.results.map(async (k) => (await env.LOGS.get(k.r2_key))!.text()))
+    ).join("");
+    expect(text).toContain("pushed 3 layers");
+    expect(text).not.toContain("not ours");
+    expect(text).not.toContain("a backup line");
+  });
 });
 
 describe("RuntimeEnv.resolveEnv", () => {
