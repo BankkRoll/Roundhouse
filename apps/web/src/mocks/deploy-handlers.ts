@@ -1889,6 +1889,10 @@ export const deployHandlers = [
     if (body.log_retention_days !== undefined)
       instance.log_retention_days = body.log_retention_days;
     if (body.mcp_enabled !== undefined) instance.mcp_enabled = body.mcp_enabled;
+    if (body.shell_recording !== undefined) instance.shell_recording = body.shell_recording;
+    if (body.shell_recording_retention_days !== undefined) {
+      instance.shell_recording_retention_days = body.shell_recording_retention_days;
+    }
     if (instance.tls_mode !== before.tls_mode || instance.apps_domain !== before.apps_domain) {
       syncCertificates();
     }

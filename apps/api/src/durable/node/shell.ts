@@ -22,14 +22,18 @@
  *   {@link OPEN_TIMEOUT_MS}, when the agent's connection goes, and when a
  *   re-check (every `REALTIME_RECHECK_INTERVAL_MS`, and on demand through
  *   {@link ShellRelay.revalidate}) finds access lapsed;
- * - finishes each session's row once (`shell.closed`, see `lib/shell`).
+ * - finishes each session's row once (`shell.closed`, see `lib/shell`);
+ * - records sessions the Worker decided to record (a recipient in the
+ *   descriptor): output, input and resizes go to {@link ShellRecorder}
+ *   (`./recording.ts`), and `opened` tells the client (`recorded`).
  *
  * Every frame to the agent goes through the host's signed `send` with the
  * credential TTL.
  *
- * SECURITY: terminal input and output are never logged, stored or audited.
- * The command's arguments are never persisted either: they travel only in
- * the `exec_open` frame.
+ * SECURITY: terminal input and output are never logged or audited, and are
+ * stored only as a recording, encrypted before it leaves this object. The
+ * command's arguments are never persisted: they travel only in the
+ * `exec_open` frame.
  *
  * @module
  */
@@ -66,6 +70,7 @@ import {
   type ShellDescriptor,
   type ShellEndReason,
 } from "../../lib/shell";
+import { type RecordingSlot, type RecordingState, ShellRecorder } from "./recording";
 
 /** WebSocket tag of every terminal socket. */
 export const SHELL_TAG = "shell";
@@ -114,6 +119,8 @@ interface ShellAttachment {
   nextRecheckAt: number;
   bytesIn: number;
   bytesOut: number;
+  /** The recording's position; `null` when the session isn't recorded. */
+  rec: RecordingState | null;
 }
 
 /** The agent connection as the relay needs it. */
@@ -126,6 +133,8 @@ export interface ShellAgent {
 export interface ShellRelayHost {
   ctx: DurableObjectState;
   db: Db;
+  /** Where recordings go (`LOGS`). */
+  bucket: R2Bucket;
   /** The greeted agent socket, if one is connected. */
   agent(): ShellAgent | undefined;
   /** Signs a control frame with the key the agent pins, validates and sends it. */
@@ -199,8 +208,12 @@ export class ShellRelay {
   /** Serializes batches, so frames leave in `seq` order. */
   private flushing: Promise<void> = Promise.resolve();
   private nodeKey: { nodeId: string; key: string | null } | undefined;
+  /** Records sessions; public so tests can shrink its limits. */
+  readonly recorder: ShellRecorder;
 
-  constructor(private readonly host: ShellRelayHost) {}
+  constructor(private readonly host: ShellRelayHost) {
+    this.recorder = new ShellRecorder({ ctx: host.ctx, db: host.db, bucket: host.bucket });
+  }
 
   /**
    * Whether a socket of this Durable Object is a terminal.
@@ -230,7 +243,13 @@ export class ShellRelay {
       reason: ShellExitReason,
       message: string,
     ): Promise<Response> => {
-      await this.finish(d, { reason, exitCode: null, bytesIn: 0, bytesOut: 0 });
+      await this.finish(d, {
+        reason,
+        exitCode: null,
+        bytesIn: 0,
+        bytesOut: 0,
+        recording: "none",
+      });
       return closedSocket(code, message, { type: "exit", code: null, reason, message });
     };
     const agent = this.host.agent();
@@ -265,6 +284,26 @@ export class ShellRelay {
 
     const { command, ...kept } = d;
     const now = Date.now();
+    let rec: RecordingState | null = null;
+    if (d.recording_recipient) {
+      try {
+        rec = await this.recorder.start(
+          {
+            session_id: d.session_id,
+            project_id: d.project_id,
+            recipient: d.recording_recipient,
+            started_at: d.started_at,
+            cols: d.cols,
+            rows: d.rows,
+            term: d.term,
+          },
+          now,
+        );
+      } catch (err) {
+        console.error("shell recording start failed", err instanceof Error ? err.name : "error");
+        await this.recorder.abandon(d.session_id);
+      }
+    }
     const { 0: client, 1: server } = new WebSocketPair();
     this.host.ctx.acceptWebSocket(server, [SHELL_TAG, sessionTag(d.session_id)]);
     const attachment: ShellAttachment = {
@@ -279,8 +318,10 @@ export class ShellRelay {
       nextRecheckAt: now + REALTIME_RECHECK_INTERVAL_MS,
       bytesIn: 0,
       bytesOut: 0,
+      rec,
     };
     server.serializeAttachment(attachment);
+    void this.recorder.sweep(new Set(this.sessionIds()));
     let sent = false;
     try {
       sent = await this.host.send(agent.ws, {
@@ -332,7 +373,11 @@ export class ShellRelay {
       return;
     }
     if (typeof raw !== "string") {
-      if (raw.byteLength) this.queueInput(ws, a, new Uint8Array(raw));
+      if (raw.byteLength) {
+        const bytes = new Uint8Array(raw);
+        this.recorder.recordBytes(a.d.session_id, this.slot(ws), "i", bytes);
+        this.queueInput(ws, a, bytes);
+      }
       return;
     }
     let message: ShellClientMessage | null = null;
@@ -359,6 +404,7 @@ export class ShellRelay {
       });
       return;
     }
+    this.recorder.recordResize(a.d.session_id, this.slot(ws), message.cols, message.rows);
     const agent = this.host.agent();
     if (!agent) return;
     await this.host.send(agent.ws, {
@@ -409,6 +455,7 @@ export class ShellRelay {
           replica: a.d.replica,
           idle_timeout_s: a.d.idle_timeout_s,
           max_duration_s: a.d.max_duration_s,
+          recorded: a.rec !== null && !a.rec.failed,
         });
         if (this.pending.has(a.d.session_id)) this.scheduleFlush();
         try {
@@ -424,6 +471,7 @@ export class ShellRelay {
       case "exec_output": {
         const bytes = decodeBase64(frame.data);
         this.write(ws, { ...a, bytesOut: a.bytesOut + bytes.byteLength });
+        this.recorder.recordBytes(a.d.session_id, this.slot(ws), "o", bytes);
         // NOTE: Workers WebSockets expose no send buffer to measure, so the
         // relay can't tell a slow client to drop output (ADR 0012's 1 MiB
         // cap); the agent's 64 frames/s cap bounds the rate instead.
@@ -471,6 +519,7 @@ export class ShellRelay {
    * @param now - Current time, unix ms.
    */
   async onAlarm(now = Date.now()): Promise<void> {
+    await this.recorder.sweep(new Set(this.sessionIds()));
     const sockets = this.live();
     if (!sockets.length) return;
     if (!this.host.agent()) {
@@ -618,6 +667,44 @@ export class ShellRelay {
     } catch {
       // Already closed.
     }
+  }
+
+  /**
+   * The recording state of a session's socket, remembered here too so a
+   * recording can still be finished after the socket is gone.
+   */
+  private slot(ws: WebSocket): RecordingSlot {
+    let last: RecordingState | null = null;
+    const current = () => {
+      try {
+        const a = this.read(ws);
+        if (a) last = a.rec;
+      } catch {
+        // The socket is gone; `last` is what it held.
+      }
+      return last;
+    };
+    current();
+    return {
+      get: current,
+      set: (rec) => {
+        last = rec;
+        try {
+          const a = this.read(ws);
+          if (a) this.write(ws, { ...a, rec });
+        } catch {
+          // As above.
+        }
+      },
+    };
+  }
+
+  /** Every session with a socket here, ended or not. */
+  private sessionIds(): string[] {
+    return this.host.ctx
+      .getWebSockets(SHELL_TAG)
+      .map((ws) => this.read(ws)?.d.session_id)
+      .filter((id): id is string => id !== undefined);
   }
 
   private socket(sessionId: string): WebSocket | undefined {
@@ -768,6 +855,8 @@ export class ShellRelay {
     const a = this.read(ws);
     if (!a || a.ended) return false;
     this.write(ws, { ...a, ended: true });
+    const slot = this.slot(ws);
+    this.recorder.hold(a.d.session_id);
     this.pending.delete(a.d.session_id);
     if (ending.execClose) {
       const agent = this.host.agent();
@@ -808,6 +897,7 @@ export class ShellRelay {
       },
       actor,
     );
+    await this.recorder.finish(a.d.session_id, slot);
     return true;
   }
 
@@ -819,6 +909,7 @@ export class ShellRelay {
       bytesIn: number;
       bytesOut: number;
       containerUser?: string | null;
+      recording?: "none";
     },
     actor?: { actorType: "user" | "token"; actorId: string },
   ): Promise<void> {

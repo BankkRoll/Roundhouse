@@ -7,9 +7,10 @@
  *   (re-auth, two-factor, protected environment, forbidden), with the way out of each;
  * - an explicit Connect: xterm.js loads on first use, fits its element, and opens one
  *   socket per session; Reconnect is a new session, as a shell has no resume;
- * - the status line (connection state, server, container user, replica, "not
- *   recorded") and the idle countdown, from `SHELL_IDLE_WARNING_S` before the idle
- *   timeout, measured from the last keystroke;
+ * - the status line (connection state, server, container user, replica, whether the
+ *   session is recorded) and the idle countdown, from `SHELL_IDLE_WARNING_S` before the
+ *   idle timeout, measured from the last keystroke;
+ * - the "This session is recorded." banner in the terminal when the relay says so;
  * - turning exits and close codes into words and a next step;
  * - keyboard: the terminal keeps Tab, Ctrl+] hands focus back to the page;
  * - cleanup of the socket and terminal when the tab is left.
@@ -62,6 +63,8 @@ type Phase =
 
 /** How long Disconnect waits for the relay's `exit` before closing the socket itself. */
 const CLOSE_GRACE_MS = 2_000;
+/** What the terminal says at the start of a recorded session (ADR 0012). */
+export const RECORDED_NOTICE = "This session is recorded.";
 /** Shortcut that moves focus out of the terminal; Tab itself belongs to the shell. */
 const RELEASE_FOCUS_HINT = "Ctrl+]";
 const SCREEN_READER_KEY = "roundhouse.shell.screen-reader";
@@ -307,6 +310,7 @@ export function ShellTab({ workspaceId, projectId, serviceId, createSocket }: Sh
           if (connectionRef.current !== connection) return;
           openedRef.current = message;
           lastInputRef.current = Date.now();
+          if (message.recorded) terminalRef.current?.writeNotice(RECORDED_NOTICE);
           setPhase({ kind: "open", opened: message });
           fitAndResize();
           terminalRef.current?.focus();
@@ -419,7 +423,8 @@ export function ShellTab({ workspaceId, projectId, serviceId, createSocket }: Sh
         <ShieldAlertIcon className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
         <span>
           A shell runs as the container's user and can read every variable, secrets included.
-          Sessions are audited (who, which replica, when, how long) but not recorded.
+          Sessions are audited (who, which replica, when, how long), and this instance may record
+          them in full, keystrokes and output; the terminal says so when it does.
         </span>
       </p>
       {gate ? (
@@ -549,7 +554,7 @@ export function ShellTab({ workspaceId, projectId, serviceId, createSocket }: Sh
             <span>replica {target.replica}</span>
           </>
         ) : null}
-        <span>not recorded</span>
+        {opened ? <span>{opened.recorded ? "recorded" : "not recorded"}</span> : null}
         {phase.kind === "open" && idleWarning && idleLeft !== null ? (
           <span role="timer" aria-label="Idle timeout" className="text-warning">
             closes in {formatCountdown(idleLeft)} if idle

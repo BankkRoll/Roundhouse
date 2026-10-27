@@ -1,7 +1,7 @@
 /**
  * Typed endpoint functions and wire types for the web shell (ADR 0012 "Web shell",
  * ADR 0014 §15): the replicas a service can open a shell in, whether the caller may,
- * the socket URL, and the audit list of sessions.
+ * the socket URL, the audit list of sessions, and a session's recording.
  *
  * Types come from the API's route contracts (`apps/api/src/contracts/shell.ts`), so a
  * contract change that breaks the dashboard fails typecheck.
@@ -105,4 +105,18 @@ export const shellApi = {
    */
   terminateSession: (sessionId: string) =>
     request<TerminatedShellSession>("POST", `/v1/shell-sessions/${seg(sessionId)}/terminate`),
+  /**
+   * Reads a session's recording as asciicast v2 text. Needs `audit:read`, `shell:open`
+   * on the session's environment and a fresh session: a `reauth_required` refusal
+   * prompts for the password and retries once.
+   *
+   * @param sessionId - Session id.
+   * @param signal - Abort signal.
+   * @returns The recording; 404 when none is stored.
+   */
+  getRecording: (sessionId: string, signal?: AbortSignal) =>
+    request<string>("GET", `/v1/shell-sessions/${seg(sessionId)}/recording`, {
+      signal,
+      text: true,
+    }),
 };

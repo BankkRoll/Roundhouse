@@ -50,7 +50,7 @@ import { SEED } from "./deploy-db";
 import { realtimeSubscriptions, sentRealtimeMessages } from "./deploy-handlers";
 import { handlers } from "./handlers";
 import { MOCK_BACKUP_CODES, MOCK_TOTP_CODE } from "./security-db";
-import { resetShellMock, shellMock } from "./shell-handlers";
+import { addRecordedShellSession, resetShellMock, shellMock } from "./shell-handlers";
 
 // -----------------------------------------------------------------------------
 // API route definitions, read from the API source
@@ -63,7 +63,7 @@ interface ZodLike {
 interface RouteConfig {
   method: string;
   path: string;
-  responses: Record<string, { content?: { "application/json"?: { schema: ZodLike } } }>;
+  responses: Record<string, { content?: Record<string, { schema: ZodLike } | undefined> }>;
 }
 
 interface ApiRoute {
@@ -214,7 +214,11 @@ async function call(
   lastLocation = response.headers.get("location");
   const text = await response.text();
   responseTexts.push(text);
-  const parsed: unknown = text ? JSON.parse(text) : undefined;
+  // NOTE: A few routes answer in another media type (a shell recording is asciicast
+  // text); their body is checked as text against that type's schema.
+  const mediaType = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+  const textual = mediaType !== "" && mediaType !== "application/json";
+  const parsed: unknown = textual ? text : text ? JSON.parse(text) : undefined;
   if (BETTER_AUTH_PATHS.has(url.pathname)) {
     exercised.add(`${method} ${url.pathname}`);
     return { status: response.status, body: parsed };
@@ -236,7 +240,7 @@ async function call(
     failures.push(`${label}: status not declared by the API (declares ${statuses})`);
     return { status: response.status, body: parsed };
   }
-  const schema = declared.content?.["application/json"]?.schema;
+  const schema = declared.content?.[textual ? mediaType : "application/json"]?.schema;
   if (schema) {
     const result = schema.safeParse(parsed);
     if (!result.success) {
@@ -4092,6 +4096,8 @@ describe("MSW mocks match the API contract", () => {
         exit_code: null,
         bytes_in: 0,
         bytes_out: 0,
+        recording: "recording",
+        recording_parts: 0,
       });
       expect(await call("GET", `${WS}/shell-sessions?project_id=${SEED.project}`)).toMatchObject({
         status: 200,
@@ -4103,8 +4109,23 @@ describe("MSW mocks match the API contract", () => {
       });
       expect((await call("POST", "/v1/shell-sessions/shl_1/terminate")).status).toBe(409);
       expect((await call("POST", "/v1/shell-sessions/shl_nope/terminate")).status).toBe(404);
+      expect((await call("GET", "/v1/shell-sessions/shl_1/recording")).status).toBe(404);
+      const cast = `${JSON.stringify({ version: 2, width: 80, height: 24 })}\n[0.1,"o","hi"]\n`;
+      addRecordedShellSession({ ...shellMock.rows[0]!, id: "shl_2" }, cast);
+      expect(await call("GET", "/v1/shell-sessions/shl_2/recording")).toMatchObject({
+        status: 200,
+        body: cast,
+      });
+      expect((await call("GET", "/v1/shell-sessions/shl_nope/recording")).status).toBe(404);
+      db.sessionStale = true;
+      expect(await call("GET", "/v1/shell-sessions/shl_2/recording")).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.sessionStale = false;
       as("viewer");
       expect((await call("GET", `${WS}/shell-sessions`)).status).toBe(403);
+      expect((await call("GET", "/v1/shell-sessions/shl_2/recording")).status).toBe(403);
     });
   });
 

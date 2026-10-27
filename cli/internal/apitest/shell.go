@@ -44,6 +44,8 @@ type ShellSession struct {
 	Header http.Header
 	// ExitCode is what the default handler reports on Ctrl-D.
 	ExitCode int
+	// Recorded is what `opened` says about recording.
+	Recorded bool
 
 	conn *websocket.Conn
 
@@ -77,7 +79,7 @@ func (s *ShellSession) CloseRequested() bool {
 // Opened sends the `opened` message for the seeded replica.
 func (s *ShellSession) Opened() {
 	s.SendJSON(map[string]any{"type": "opened", "session_id": "shl_0001", "node_id": NodeID, "node_name": "edge-1",
-		"user": "root", "replica": 0, "idle_timeout_s": 900, "max_duration_s": 28800})
+		"user": "root", "replica": 0, "idle_timeout_s": 900, "max_duration_s": 28800, "recorded": s.Recorded})
 }
 
 // Output sends terminal output.

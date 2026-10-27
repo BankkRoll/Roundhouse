@@ -1,8 +1,8 @@
 /**
  * Web shell sessions (ADR 0012 "Web shell", ADR 0014 §15): who opened a
- * shell into which replica, when, for how long and how it ended. Nothing
- * here holds terminal input or output, and `command` keeps only the program
- * (argv[0]): arguments may carry secrets.
+ * shell into which replica, when, for how long and how it ended, and where
+ * its recording is. Nothing here holds terminal input or output, and
+ * `command` keeps only the program (argv[0]): arguments may carry secrets.
  *
  * @module
  */
@@ -56,6 +56,15 @@ export const shellSessions = sqliteTable(
     exitCode: integer("exit_code"),
     bytesIn: integer("bytes_in").notNull().default(0),
     bytesOut: integer("bytes_out").notNull().default(0),
+    /**
+     * A `ShellRecordingState`: `none`, `recording`, `stored` or `failed`.
+     * The recording itself is in R2, encrypted to the project's age recipient.
+     */
+    recording: text("recording").notNull().default("none"),
+    /** Parts stored in R2 (`shell/<project>/<yyyy>/<mm>/<session>.<part>.cast.gz.age`, from 1). */
+    recordingParts: integer("recording_parts").notNull().default(0),
+    /** Bytes of the stored parts, encrypted. */
+    recordingBytes: integer("recording_bytes").notNull().default(0),
     ...timestamps,
   },
   (t) => [
@@ -63,5 +72,6 @@ export const shellSessions = sqliteTable(
     index("shell_sessions_workspace_idx").on(t.workspaceId, t.startedAt),
     index("shell_sessions_open_node_idx").on(t.nodeId).where(sql`ended_at IS NULL`),
     index("shell_sessions_open_user_idx").on(t.userId).where(sql`ended_at IS NULL`),
+    index("shell_sessions_recording_idx").on(t.endedAt).where(sql`recording_parts > 0`),
   ],
 );

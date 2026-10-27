@@ -56,6 +56,7 @@ import {
   MAX_API_TOKEN_TTL_DAYS,
   MAX_HSTS_MAX_AGE_S,
   MAX_LOG_RETENTION_DAYS,
+  MAX_SHELL_RECORDING_RETENTION_DAYS,
   type NetworkingConfig,
   NODE_STATUSES,
   type PlacementConfig,
@@ -66,6 +67,7 @@ import {
   SERVICE_DATABASE_ENGINES,
   SERVICE_KINDS,
   type ServiceSource,
+  SHELL_RECORDING_MODES,
   secretBuildArgsValid,
   TLS_MODES,
   type TlsMode,
@@ -822,6 +824,13 @@ export const InstanceSettingsSchema = z
      * new installs; while off, `/mcp` answers 404 before authenticating.
      */
     mcp_enabled: z.boolean(),
+    /**
+     * What web shells keep: `metadata` (who, where, when, how long) or
+     * `full` (also an encrypted recording of input and output, ADR 0012).
+     */
+    shell_recording: z.enum(SHELL_RECORDING_MODES),
+    /** Days a shell recording is kept after its session ended; deleted hourly. */
+    shell_recording_retention_days: z.number().int().min(1).max(MAX_SHELL_RECORDING_RETENTION_DAYS),
     /** Servers that run ingress, across workspaces; `acme` mode is for one. */
     ingress_nodes: z.number().int(),
   })
@@ -834,6 +843,13 @@ export const InstanceSettingsPatchSchema = z
     tls_mode: TlsModeSchema.optional(),
     log_retention_days: z.number().int().min(1).max(MAX_LOG_RETENTION_DAYS).optional(),
     mcp_enabled: z.boolean().optional(),
+    shell_recording: z.enum(SHELL_RECORDING_MODES).optional(),
+    shell_recording_retention_days: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_SHELL_RECORDING_RETENTION_DAYS)
+      .optional(),
   })
   .refine((b) => Object.values(b).some((v) => v !== undefined), {
     message: "nothing to update",

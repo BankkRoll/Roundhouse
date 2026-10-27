@@ -1,6 +1,6 @@
 /**
- * The terminal emulator behind the Shell tab, loaded on first connect so xterm.js and
- * its stylesheet stay out of every other page's bundle. The rest of the tab talks to
+ * The terminal emulator behind the Shell tab and the recording player, loaded on first
+ * use so xterm.js and its stylesheet stay out of every other page's bundle. The rest of the tab talks to
  * the small {@link TerminalHandle} interface, which tests replace (jsdom has no canvas).
  *
  * @module
@@ -30,6 +30,8 @@ export interface TerminalHandle {
    * @returns The size afterwards.
    */
   fit(): { cols: number; rows: number };
+  /** Sets the size in cells, for a recording replaying its own size. */
+  resize(cols: number, rows: number): void;
   /** Clears the screen and scrollback for a new session. */
   reset(): void;
   focus(): void;
@@ -50,6 +52,8 @@ export interface TerminalOptions {
   /** Accessible name of the terminal's input. */
   label: string;
   screenReaderMode: boolean;
+  /** A player's terminal: no keyboard input, no blinking cursor. */
+  readOnly?: boolean;
 }
 
 /** Mounts a terminal in an element. */
@@ -76,7 +80,8 @@ export function loadTerminal(): Promise<CreateTerminal> {
           styles.getPropertyValue(name).trim() || fallback;
         const terminal = new Terminal({
           convertEol: false,
-          cursorBlink: true,
+          cursorBlink: !options.readOnly,
+          disableStdin: options.readOnly ?? false,
           fontFamily: '"JetBrains Mono Variable", ui-monospace, monospace',
           fontSize: 13,
           scrollback: 5000,
@@ -110,6 +115,7 @@ export function loadTerminal(): Promise<CreateTerminal> {
             } catch {}
             return { cols: terminal.cols, rows: terminal.rows };
           },
+          resize: (cols, rows) => terminal.resize(cols, rows),
           reset: () => terminal.reset(),
           focus: () => terminal.focus(),
           blur: () => terminal.blur(),

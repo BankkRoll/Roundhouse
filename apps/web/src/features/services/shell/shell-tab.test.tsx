@@ -152,7 +152,7 @@ describe("Shell tab", () => {
   it("warns before connecting and never connects on its own", async () => {
     await openShell();
     expect(screen.getByText(/can read every variable, secrets included/)).toBeInTheDocument();
-    expect(screen.getByText(/audited .* but not recorded/)).toBeInTheDocument();
+    expect(screen.getByText(/audited .* may\s+record them in full/)).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Replica" })).toHaveDisplayValue(
       "Replica 0 on hel-1",
     );
@@ -208,10 +208,19 @@ describe("Shell tab", () => {
     });
     expect(screen.getByText("user node")).toBeInTheDocument();
     expect(screen.getByText("replica 0")).toBeInTheDocument();
-    expect(screen.getByText("not recorded")).toBeInTheDocument();
+    expect(screen.getByText("recorded")).toBeInTheDocument();
+    expect(term().notices).toContain("This session is recorded.");
     expect(term().focused).toBe(true);
     expect(term().label).toBe("Shell in web");
     expect(screen.getByRole("combobox", { name: "Replica" })).toBeDisabled();
+  });
+
+  it("says a session isn't recorded when the instance keeps metadata only", async () => {
+    db.deploy.instance.shell_recording = "metadata";
+    const { user } = await openShell();
+    await connect(user);
+    expect(screen.getByText("not recorded")).toBeInTheDocument();
+    expect(term().notices).not.toContain("This session is recorded.");
   });
 
   it("sends keystrokes as binary frames and writes output to the terminal", async () => {

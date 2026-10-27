@@ -101,7 +101,7 @@ type ShellOptions struct {
 }
 
 // ShellMessage is a JSON control message from the relay. Type selects the
-// fields: "opened" (SessionID through MaxDurationS) or "exit" (Code,
+// fields: "opened" (SessionID through Recorded) or "exit" (Code,
 // Reason, Message).
 type ShellMessage struct {
 	Type         string  `json:"type"`
@@ -112,6 +112,7 @@ type ShellMessage struct {
 	Replica      int     `json:"replica,omitempty"`
 	IdleTimeoutS int     `json:"idle_timeout_s,omitempty"`
 	MaxDurationS int     `json:"max_duration_s,omitempty"`
+	Recorded     bool    `json:"recorded,omitempty"`
 	Code         *int    `json:"code,omitempty"`
 	Reason       string  `json:"reason,omitempty"`
 	Message      *string `json:"message,omitempty"`

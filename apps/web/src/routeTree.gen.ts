@@ -31,6 +31,7 @@ import { Route as AppWWorkspaceIdMembersRouteImport } from './routes/_app/w/$wor
 import { Route as AppWWorkspaceIdPlatformRouteImport } from './routes/_app/w/$workspaceId/platform'
 import { Route as AppWWorkspaceIdSecurityRouteImport } from './routes/_app/w/$workspaceId/security'
 import { Route as AppWWorkspaceIdSettingsRouteImport } from './routes/_app/w/$workspaceId/settings'
+import { Route as AppWWorkspaceIdShellSessionsRouteImport } from './routes/_app/w/$workspaceId/shell-sessions'
 import { Route as AppWWorkspaceIdTokensRouteImport } from './routes/_app/w/$workspaceId/tokens'
 import { Route as AppWWorkspaceIdUsageRouteImport } from './routes/_app/w/$workspaceId/usage'
 import { Route as AppWWorkspaceIdPProjectIdRouteRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/route'
@@ -175,6 +176,12 @@ const AppWWorkspaceIdSettingsRoute = AppWWorkspaceIdSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppWWorkspaceIdRouteRoute,
 } as any)
+const AppWWorkspaceIdShellSessionsRoute =
+  AppWWorkspaceIdShellSessionsRouteImport.update({
+    id: '/shell-sessions',
+    path: '/shell-sessions',
+    getParentRoute: () => AppWWorkspaceIdRouteRoute,
+  } as any)
 const AppWWorkspaceIdTokensRoute = AppWWorkspaceIdTokensRouteImport.update({
   id: '/tokens',
   path: '/tokens',
@@ -369,6 +376,7 @@ export interface FileRoutesByFullPath {
   '/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
   '/w/$workspaceId/security': typeof AppWWorkspaceIdSecurityRoute
   '/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
+  '/w/$workspaceId/shell-sessions': typeof AppWWorkspaceIdShellSessionsRoute
   '/w/$workspaceId/tokens': typeof AppWWorkspaceIdTokensRoute
   '/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
   '/w/$workspaceId/': typeof AppWWorkspaceIdIndexRoute
@@ -420,6 +428,7 @@ export interface FileRoutesByTo {
   '/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
   '/w/$workspaceId/security': typeof AppWWorkspaceIdSecurityRoute
   '/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
+  '/w/$workspaceId/shell-sessions': typeof AppWWorkspaceIdShellSessionsRoute
   '/w/$workspaceId/tokens': typeof AppWWorkspaceIdTokensRoute
   '/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
   '/w/$workspaceId': typeof AppWWorkspaceIdIndexRoute
@@ -472,6 +481,7 @@ export interface FileRoutesById {
   '/_app/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
   '/_app/w/$workspaceId/security': typeof AppWWorkspaceIdSecurityRoute
   '/_app/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
+  '/_app/w/$workspaceId/shell-sessions': typeof AppWWorkspaceIdShellSessionsRoute
   '/_app/w/$workspaceId/tokens': typeof AppWWorkspaceIdTokensRoute
   '/_app/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
   '/_app/w/$workspaceId/': typeof AppWWorkspaceIdIndexRoute
@@ -526,6 +536,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/platform'
     | '/w/$workspaceId/security'
     | '/w/$workspaceId/settings'
+    | '/w/$workspaceId/shell-sessions'
     | '/w/$workspaceId/tokens'
     | '/w/$workspaceId/usage'
     | '/w/$workspaceId/'
@@ -577,6 +588,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/platform'
     | '/w/$workspaceId/security'
     | '/w/$workspaceId/settings'
+    | '/w/$workspaceId/shell-sessions'
     | '/w/$workspaceId/tokens'
     | '/w/$workspaceId/usage'
     | '/w/$workspaceId'
@@ -628,6 +640,7 @@ export interface FileRouteTypes {
     | '/_app/w/$workspaceId/platform'
     | '/_app/w/$workspaceId/security'
     | '/_app/w/$workspaceId/settings'
+    | '/_app/w/$workspaceId/shell-sessions'
     | '/_app/w/$workspaceId/tokens'
     | '/_app/w/$workspaceId/usage'
     | '/_app/w/$workspaceId/'
@@ -822,6 +835,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/w/$workspaceId/settings'
       preLoaderRoute: typeof AppWWorkspaceIdSettingsRouteImport
+      parentRoute: typeof AppWWorkspaceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/shell-sessions': {
+      id: '/_app/w/$workspaceId/shell-sessions'
+      path: '/shell-sessions'
+      fullPath: '/w/$workspaceId/shell-sessions'
+      preLoaderRoute: typeof AppWWorkspaceIdShellSessionsRouteImport
       parentRoute: typeof AppWWorkspaceIdRouteRoute
     }
     '/_app/w/$workspaceId/tokens': {
@@ -1116,6 +1136,7 @@ interface AppWWorkspaceIdRouteRouteChildren {
   AppWWorkspaceIdPlatformRoute: typeof AppWWorkspaceIdPlatformRoute
   AppWWorkspaceIdSecurityRoute: typeof AppWWorkspaceIdSecurityRoute
   AppWWorkspaceIdSettingsRoute: typeof AppWWorkspaceIdSettingsRoute
+  AppWWorkspaceIdShellSessionsRoute: typeof AppWWorkspaceIdShellSessionsRoute
   AppWWorkspaceIdTokensRoute: typeof AppWWorkspaceIdTokensRoute
   AppWWorkspaceIdUsageRoute: typeof AppWWorkspaceIdUsageRoute
   AppWWorkspaceIdIndexRoute: typeof AppWWorkspaceIdIndexRoute
@@ -1143,6 +1164,7 @@ const AppWWorkspaceIdRouteRouteChildren: AppWWorkspaceIdRouteRouteChildren = {
   AppWWorkspaceIdPlatformRoute: AppWWorkspaceIdPlatformRoute,
   AppWWorkspaceIdSecurityRoute: AppWWorkspaceIdSecurityRoute,
   AppWWorkspaceIdSettingsRoute: AppWWorkspaceIdSettingsRoute,
+  AppWWorkspaceIdShellSessionsRoute: AppWWorkspaceIdShellSessionsRoute,
   AppWWorkspaceIdTokensRoute: AppWWorkspaceIdTokensRoute,
   AppWWorkspaceIdUsageRoute: AppWWorkspaceIdUsageRoute,
   AppWWorkspaceIdIndexRoute: AppWWorkspaceIdIndexRoute,

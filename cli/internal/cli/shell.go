@@ -71,7 +71,9 @@ The exit code is the remote program's own. Opening a shell needs the
 shell:open permission (workspace owners and admins), two-factor
 authentication, and a sign-in within the last 10 minutes; an API token
 works too, outside protected environments. Sessions are recorded in the
-audit log; what you type and see is never written to the CLI's --debug
+audit log, and when the instance records shells in full (the default), the
+session itself is recorded too, encrypted; the CLI then prints "This session
+is recorded." What you type and see is never written to the CLI's --debug
 output.`,
 		Example: `  roundhouse shell
   roundhouse shell api --replica 1
@@ -297,10 +299,16 @@ func (s *shellSession) run(ctx context.Context) error {
 		return err
 	}
 	restore := func() {}
-	if s.tty {
-		if m := first.Message; m != nil && m.Type == "opened" {
+	if m := first.Message; m != nil && m.Type == "opened" {
+		if s.tty {
 			s.printOpened(m)
 		}
+		// Said even when piped: what is typed and shown is kept, secrets included.
+		if m.Recorded {
+			fmt.Fprintln(a.IO.Err, "This session is recorded.")
+		}
+	}
+	if s.tty {
 		if restore, err = a.Terminal.MakeRaw(); err != nil {
 			return fmt.Errorf("could not switch the terminal to raw mode: %w", err)
 		}

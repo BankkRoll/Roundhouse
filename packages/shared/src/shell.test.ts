@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { PROJECT_ROLES, projectRoleCan } from "./rbac";
 import {
+  parseAsciicast,
+  parseAsciicastSize,
   SHELL_CLOSE_CODES,
   SHELL_DENIAL_CLOSE_CODES,
   SHELL_DENIALS,
@@ -91,5 +93,40 @@ describe("shell socket messages", () => {
     );
     expect(ShellClientMessageSchema.safeParse({ type: "input", data: "ls" }).success).toBe(false);
     expect(shellPath("wl_1")).toBe("/v1/workloads/wl_1/shell");
+  });
+});
+
+describe("parseAsciicast", () => {
+  it("reads the header and the o, i and r events, skipping the rest", () => {
+    const cast = parseAsciicast(
+      [
+        '{"version":2,"width":80,"height":24,"timestamp":1,"env":{"TERM":"xterm"}}',
+        '[0.1,"o","hi"]',
+        '[0.2,"i","ls\\r"]',
+        "not json",
+        '[0.3,"m","marker"]',
+        '[1.5,"r","100x30"]',
+        "",
+      ].join("\n"),
+    );
+    expect(cast.header).toMatchObject({ width: 80, height: 24 });
+    expect(cast.events).toEqual([
+      [0.1, "o", "hi"],
+      [0.2, "i", "ls\r"],
+      [1.5, "r", "100x30"],
+    ]);
+    expect(cast.duration).toBe(1.5);
+  });
+
+  it("refuses anything but a v2 header", () => {
+    expect(() => parseAsciicast("")).toThrow();
+    expect(() => parseAsciicast('{"version":1,"width":80,"height":24}')).toThrow();
+    expect(() => parseAsciicast('{"version":2,"width":0,"height":24}')).toThrow();
+  });
+
+  it("parses resize sizes", () => {
+    expect(parseAsciicastSize("120x40")).toEqual({ cols: 120, rows: 40 });
+    expect(parseAsciicastSize("0x40")).toBeNull();
+    expect(parseAsciicastSize("big")).toBeNull();
   });
 });

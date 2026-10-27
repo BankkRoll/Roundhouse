@@ -11,6 +11,7 @@ type SettingsPath =
   | "/w/$workspaceId/members"
   | "/w/$workspaceId/teams"
   | "/w/$workspaceId/audit"
+  | "/w/$workspaceId/shell-sessions"
   | "/w/$workspaceId/tokens"
   | "/w/$workspaceId/platform"
   | "/w/$workspaceId/domains-tls"
@@ -67,6 +68,13 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
         ) : null}
         {can("audit:read") ? (
           <Item workspaceId={workspaceId} to="/w/$workspaceId/audit" label="Audit log" />
+        ) : null}
+        {can("audit:read") ? (
+          <Item
+            workspaceId={workspaceId}
+            to="/w/$workspaceId/shell-sessions"
+            label="Shell sessions"
+          />
         ) : null}
         {can("tokens:manage") ? (
           <Item workspaceId={workspaceId} to="/w/$workspaceId/tokens" label="API tokens" />

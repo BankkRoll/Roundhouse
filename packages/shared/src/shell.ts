@@ -7,7 +7,9 @@
  *   should do about it;
  * - the browser ↔ relay frames ({@link ShellClientMessage},
  *   {@link ShellServerMessage}): binary frames carry terminal bytes both
- *   ways, JSON text frames carry control messages.
+ *   ways, JSON text frames carry control messages;
+ * - recording: the instance settings ({@link SHELL_RECORDING_MODES}) and the
+ *   asciicast v2 reader the dashboard player uses ({@link parseAsciicast}).
  *
  * @module
  */
@@ -175,6 +177,8 @@ export type ShellServerMessage =
       replica: number;
       idle_timeout_s: number;
       max_duration_s: number;
+      /** The session is recorded (keystrokes and output); clients say so at start. */
+      recorded: boolean;
     }
   | {
       /** The session ended; the socket closes with 1000 next. */
@@ -199,3 +203,133 @@ export type ShellExitReason =
   | "revoked"
   | "node_disconnected"
   | "timeout";
+
+// -----------------------------------------------------------------------------
+// Recording
+// -----------------------------------------------------------------------------
+
+/**
+ * What the instance setting `shell_recording` keeps of a session:
+ * `metadata` only the `shell_sessions` row and audit entries, `full` also an
+ * encrypted asciicast of its input and output.
+ */
+export const SHELL_RECORDING_MODES = ["metadata", "full"] as const;
+
+/** A `shell_recording` value. */
+export type ShellRecordingMode = (typeof SHELL_RECORDING_MODES)[number];
+
+/** `shell_recording` until an instance admin changes it (ADR 0012). */
+export const DEFAULT_SHELL_RECORDING: ShellRecordingMode = "full";
+
+/** Days recordings are kept until an instance admin changes `shell_recording_retention_days`. */
+export const DEFAULT_SHELL_RECORDING_RETENTION_DAYS = 30;
+
+/** Longest recording retention an instance admin can choose, in days. */
+export const MAX_SHELL_RECORDING_RETENTION_DAYS = 365;
+
+/**
+ * A session row's recording state: `none` (not recorded, or deleted by
+ * retention), `recording` (open, or its last part not yet stored),
+ * `stored` (playable) or `failed` (storing it failed; nothing to play).
+ */
+export const SHELL_RECORDING_STATES = ["none", "recording", "stored", "failed"] as const;
+
+/** A `shell_sessions.recording` value. */
+export type ShellRecordingState = (typeof SHELL_RECORDING_STATES)[number];
+
+/** Media type of a recording as the playback route serves it. */
+export const ASCIICAST_CONTENT_TYPE = "application/x-asciicast";
+
+/** The header line of an asciicast v2 recording. */
+export interface AsciicastHeader {
+  version: 2;
+  width: number;
+  height: number;
+  /** Unix seconds the session opened. */
+  timestamp?: number;
+  env?: Record<string, string>;
+}
+
+/**
+ * One asciicast v2 event: seconds since the start, then `o` (output), `i`
+ * (input) or `r` (resize, `"COLSxROWS"`), then its text.
+ */
+export type AsciicastEvent = [time: number, kind: "o" | "i" | "r", data: string];
+
+/** A parsed asciicast v2 recording. */
+export interface Asciicast {
+  header: AsciicastHeader;
+  events: AsciicastEvent[];
+  /** Time of the last event, in seconds. */
+  duration: number;
+}
+
+/**
+ * Parses asciicast v2 text (newline-delimited JSON: a header, then events).
+ * Lines that aren't events of a known kind are skipped, so a player keeps
+ * working on a recording with event kinds it doesn't know (`m` markers).
+ *
+ * @param text - The recording.
+ * @returns The header and the events in order.
+ * @throws {Error} When the first line isn't a version 2 header.
+ * @example
+ * const cast = parseAsciicast('{"version":2,"width":80,"height":24}\n[0.5,"o","hi"]\n');
+ * cast.events; // [[0.5, "o", "hi"]]
+ */
+export function parseAsciicast(text: string): Asciicast {
+  const lines = text.split("\n");
+  let header: unknown;
+  try {
+    header = JSON.parse(lines[0] ?? "");
+  } catch {
+    throw new Error("Not an asciicast recording");
+  }
+  const h = header as Partial<AsciicastHeader> | null;
+  if (
+    h?.version !== 2 ||
+    !Number.isInteger(h.width) ||
+    !Number.isInteger(h.height) ||
+    (h.width as number) < 1 ||
+    (h.height as number) < 1
+  ) {
+    throw new Error("Not an asciicast v2 recording");
+  }
+  const events: AsciicastEvent[] = [];
+  for (const line of lines.slice(1)) {
+    if (!line.trim()) continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (
+      Array.isArray(event) &&
+      typeof event[0] === "number" &&
+      Number.isFinite(event[0]) &&
+      (event[1] === "o" || event[1] === "i" || event[1] === "r") &&
+      typeof event[2] === "string"
+    ) {
+      events.push([event[0], event[1], event[2]]);
+    }
+  }
+  return {
+    header: h as AsciicastHeader,
+    events,
+    duration: events.reduce((max, [t]) => Math.max(max, t), 0),
+  };
+}
+
+/**
+ * Parses a resize event's `"COLSxROWS"`.
+ *
+ * @param data - The event's text.
+ * @returns The size, or `null` when malformed.
+ */
+export function parseAsciicastSize(data: string): { cols: number; rows: number } | null {
+  const match = /^(\d{1,4})x(\d{1,4})$/.exec(data);
+  if (!match) return null;
+  const cols = Number(match[1]);
+  const rows = Number(match[2]);
+  return cols > 0 && rows > 0 ? { cols, rows } : null;
+}

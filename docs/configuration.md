@@ -172,7 +172,16 @@ handler, both by the Worker name `roundhouse` from `wrangler.jsonc`. See
 
 ### Web shell
 
-The web shell (ADR 0012) has no setting. Its limits are fixed:
+The web shell (ADR 0012) has two instance settings, under Settings →
+Platform → Web shell or `PATCH /v1/instance/settings` (instance admins,
+fresh sign-in, audited as `instance.settings_updated`):
+
+| Setting                          | Default | Purpose                                                           |
+| -------------------------------- | ------- | ----------------------------------------------------------------- |
+| `shell_recording`                | `full`  | `full` records each session; `metadata` keeps only who/where/when |
+| `shell_recording_retention_days` | `30`    | Days a recording is kept after its session ended (1 to 365)       |
+
+Everything else is fixed:
 - **Who.** Project admins (`shell:open`) with two-factor authentication on,
   from a browser session that signed in or re-authenticated in the last 10
   minutes. An API token with the `shell:open` scope works for a creator who
@@ -186,11 +195,38 @@ The web shell (ADR 0012) has no setting. Its limits are fixed:
   is also re-checked each minute.
 - **Records.** Each session is in the audit log (`shell.opened`,
   `shell.closed`, `shell.terminated`) and under
-  `GET /v1/workspaces/{id}/shell-sessions`: who, which replica, when, how it
-  ended and byte counts. Only the program's name is kept, never its
-  arguments, and terminal input and output are never logged or stored.
-  ADR 0012's session recording (asciicast to R2, age-encrypted) isn't
-  implemented yet.
+  `GET /v1/workspaces/{id}/shell-sessions` (Settings → Shell sessions): who,
+  which replica, when, how it ended, byte counts and its recording state.
+  Only the program's name is kept, never its arguments. Terminal input and
+  output are never logged or audited.
+- **Recording.** In `full` mode, decided when a session opens, the terminal
+  says "This session is recorded." (the CLI prints it to stderr). The
+  server's Durable Object writes an asciicast v2 stream (output, input and
+  resizes, with times) to its own storage in small chunks as the session
+  runs, so an eviction loses at most a couple of seconds. Each 16 MiB of it,
+  and the rest when the session ends, is gzipped, encrypted with age to the
+  project's backup recipient (the keypair backups use, created on first
+  use) and stored in the `LOGS` bucket at
+  `shell/<project>/<yyyy>/<mm>/<session>.<part>.cast.gz.age` (parts from 1);
+  the plaintext chunks are deleted right after. A part that fails to store
+  marks the recording `failed` and its chunks are deleted, without ending
+  the session. A project whose key can't be had opens shells unrecorded.
+- **Playback.** `GET /v1/shell-sessions/{id}/recording` returns the
+  decrypted asciicast (`application/x-asciicast`, never cached), or 404
+  while nothing is stored. It needs `audit:read` in the workspace,
+  `shell:open` on the session's environment and a browser session that
+  signed in or re-authenticated in the last 10 minutes (API tokens never
+  can), and is audited as `shell.recording_viewed` with ids only. The
+  dashboard plays it under Settings → Shell sessions, output only. Anyone
+  with the project's backup identity can also read a part offline:
+  `age -d -i key.txt part.cast.gz.age | gunzip`.
+- **Retention.** The hourly retention job deletes the recordings of
+  sessions that ended more than `shell_recording_retention_days` ago; the
+  session rows stay, as audit metadata. Turning recording off doesn't
+  delete existing recordings; they age out.
+- **Compression.** ADR 0012 specifies zstd; Workers have no zstd encoder,
+  so recordings are gzip (`CompressionStream`) instead, which `age` and
+  `gunzip` read with standard tools.
 
 ### Rotating the master key
 

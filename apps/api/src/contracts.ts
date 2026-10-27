@@ -582,6 +582,8 @@ export const getInstanceSettings = defineRoute(sessionOnly("instance:manage"), {
  * their hostnames when `apps_domain` changes, new ones use the new domain.
  * `log_retention_days` applies from the next hourly retention run.
  * `mcp_enabled` turns the MCP endpoint for coding agents on or off at once.
+ * `shell_recording` applies to shells opened afterwards, and
+ * `shell_recording_retention_days` from the next hourly retention run.
  *
  * The change is recorded as an instance-level `instance.settings_updated`
  * entry (no workspace), visible to instance admins only. Needs a fresh

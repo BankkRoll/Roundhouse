@@ -411,6 +411,7 @@
               "shell.opened",
               "shell.closed",
               "shell.terminated",
+              "shell.recording_viewed",
               "service.provider_changed"
             ],
             "type": "string"
@@ -1568,6 +1569,7 @@
               "shell.opened",
               "shell.closed",
               "shell.terminated",
+              "shell.recording_viewed",
               "service.provider_changed"
             ],
             "type": "string"
@@ -5138,6 +5140,18 @@
           "mcp_enabled": {
             "type": "boolean"
           },
+          "shell_recording": {
+            "enum": [
+              "metadata",
+              "full"
+            ],
+            "type": "string"
+          },
+          "shell_recording_retention_days": {
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
+          },
           "tls_mode": {
             "$ref": "#/components/schemas/TlsMode"
           }
@@ -5147,6 +5161,8 @@
           "tls_mode",
           "log_retention_days",
           "mcp_enabled",
+          "shell_recording",
+          "shell_recording_retention_days",
           "ingress_nodes"
         ],
         "type": "object"
@@ -5169,6 +5185,18 @@
           },
           "mcp_enabled": {
             "type": "boolean"
+          },
+          "shell_recording": {
+            "enum": [
+              "metadata",
+              "full"
+            ],
+            "type": "string"
+          },
+          "shell_recording_retention_days": {
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
           },
           "tls_mode": {
             "$ref": "#/components/schemas/TlsMode"
@@ -8369,6 +8397,18 @@
           "project_id": {
             "type": "string"
           },
+          "recording": {
+            "enum": [
+              "none",
+              "recording",
+              "stored",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "recording_parts": {
+            "type": "integer"
+          },
           "replica": {
             "type": "integer"
           },
@@ -8415,7 +8455,9 @@
           "end_reason",
           "exit_code",
           "bytes_in",
-          "bytes_out"
+          "bytes_out",
+          "recording",
+          "recording_parts"
         ],
         "type": "object"
       },
@@ -15573,6 +15615,7 @@
                 "shell.opened",
                 "shell.closed",
                 "shell.terminated",
+                "shell.recording_viewed",
                 "service.provider_changed"
               ],
               "type": "string"
@@ -23382,6 +23425,79 @@
         "tags": [
           "setup"
         ]
+      }
+    },
+    "/v1/shell-sessions/{sessionId}/recording": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-asciicast": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The recording (asciicast v2), never cached"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Play back a shell recording",
+        "tags": [
+          "shell"
+        ],
+        "x-roundhouse-policy": {
+          "action": "audit:read",
+          "audit": [
+            "shell.recording_viewed"
+          ],
+          "auth": "session_only",
+          "reauth": true
+        }
       }
     },
     "/v1/shell-sessions/{sessionId}/terminate": {

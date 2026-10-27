@@ -73,6 +73,9 @@ CREATE TABLE `shell_sessions` (
 	`exit_code` integer,
 	`bytes_in` integer DEFAULT 0 NOT NULL,
 	`bytes_out` integer DEFAULT 0 NOT NULL,
+	`recording` text DEFAULT 'none' NOT NULL,
+	`recording_parts` integer DEFAULT 0 NOT NULL,
+	`recording_bytes` integer DEFAULT 0 NOT NULL,
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
 	FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON UPDATE no action ON DELETE cascade,
@@ -87,4 +90,5 @@ CREATE TABLE `shell_sessions` (
 CREATE INDEX `shell_sessions_project_idx` ON `shell_sessions` (`project_id`,`started_at`);--> statement-breakpoint
 CREATE INDEX `shell_sessions_workspace_idx` ON `shell_sessions` (`workspace_id`,`started_at`);--> statement-breakpoint
 CREATE INDEX `shell_sessions_open_node_idx` ON `shell_sessions` (`node_id`) WHERE ended_at IS NULL;--> statement-breakpoint
-CREATE INDEX `shell_sessions_open_user_idx` ON `shell_sessions` (`user_id`) WHERE ended_at IS NULL;
+CREATE INDEX `shell_sessions_open_user_idx` ON `shell_sessions` (`user_id`) WHERE ended_at IS NULL;--> statement-breakpoint
+CREATE INDEX `shell_sessions_recording_idx` ON `shell_sessions` (`ended_at`) WHERE recording_parts > 0;

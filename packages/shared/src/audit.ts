@@ -141,6 +141,7 @@ export const AUDIT_ACTIONS = [
   "shell.opened",
   "shell.closed",
   "shell.terminated",
+  "shell.recording_viewed",
   "service.provider_changed",
 ] as const;
 

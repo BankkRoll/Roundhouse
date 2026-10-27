@@ -12,6 +12,9 @@
  *   previews the gate for the caller.
  * - `GET /v1/workspaces/{workspaceId}/shell-sessions` is the session history.
  * - `POST /v1/shell-sessions/{sessionId}/terminate` ends an open session.
+ * - `GET /v1/shell-sessions/{sessionId}/recording` plays a recording back
+ *   (decrypted asciicast) to an audit reader who may also open the shell,
+ *   from a fresh browser session; audited `shell.recording_viewed`.
  * - {@link withShellRevocation} re-checks open shells after a sign-out or
  *   after two-factor authentication is turned off.
  *
@@ -40,6 +43,7 @@ import {
   isValidExecCommand,
 } from "@roundhouse/protocol";
 import {
+  ASCIICAST_CONTENT_TYPE,
   newId,
   SHELL_CLOSE_CODES,
   SHELL_DENIAL_CLOSE_CODES,
@@ -61,6 +65,7 @@ import {
   requireWorkspace,
 } from "../context";
 import {
+  getShellRecording,
   listShellSessions,
   listShellTargets,
   openShell,
@@ -81,6 +86,7 @@ import {
   type ShellDescriptor,
   toApiShellSession,
 } from "../lib/shell";
+import { readShellRecording, shellRecordingRecipient } from "../lib/shell-recording";
 
 const SESSION_CURSOR_RE = /^shl_[0-9A-Za-z]{1,64}$/;
 
@@ -275,6 +281,7 @@ export const shellRoutes = createRouter()
     }
 
     const db = c.get("db");
+    const recipient = await shellRecordingRecipient(c.env, db, target.projectId);
     const now = Date.now();
     const sessionId = newId("shellSession");
     const descriptor: ShellDescriptor = {
@@ -298,6 +305,7 @@ export const shellRoutes = createRouter()
       idle_timeout_s: DEFAULT_EXEC_IDLE_TIMEOUT_S,
       max_duration_s: DEFAULT_EXEC_MAX_DURATION_S,
       started_at: now,
+      recording_recipient: recipient,
     };
     const ip = clientIp(c);
     await db.insert(shellSessions).values({
@@ -316,6 +324,7 @@ export const shellRoutes = createRouter()
       clientIp: ip,
       command: command[0]!,
       startedAt: new Date(now),
+      recording: recipient ? "recording" : "none",
     });
     await recordAudit(db, {
       workspaceId: target.workspaceId,
@@ -333,6 +342,7 @@ export const shellRoutes = createRouter()
         node_id: target.node.id,
         // SECURITY: argv[0] only; arguments may carry secrets.
         command: command[0],
+        recorded: recipient !== null,
       },
       ip,
     });
@@ -350,6 +360,7 @@ export const shellRoutes = createRouter()
         exitCode: null,
         bytesIn: 0,
         bytesOut: 0,
+        recording: "none",
       });
       return closedSocket(SHELL_CLOSE_CODES.nodeUnavailable, "The node's relay is unavailable");
     }
@@ -518,4 +529,62 @@ export const shellRoutes = createRouter()
       .where(eq(shellSessions.id, sessionId))
       .limit(1);
     return c.json(toApiShellSession(updated!), 200);
+  })
+  .openapi(getShellRecording, async (c) => {
+    // The router already refused stale sessions and API tokens (`reauth: true`).
+    const { sessionId } = c.req.valid("param");
+    const db = c.get("db");
+    const [row] = await db
+      .select({ session: shellSessions })
+      .from(shellSessions)
+      .innerJoin(projects, eq(projects.id, shellSessions.projectId))
+      .innerJoin(workspaces, eq(workspaces.id, shellSessions.workspaceId))
+      .where(
+        and(
+          eq(shellSessions.id, sessionId),
+          isNull(projects.deletedAt),
+          isNull(workspaces.deletedAt),
+        ),
+      )
+      .limit(1);
+    if (!row) throw notFound("Shell session");
+    const { session } = row;
+    let caller: Awaited<ReturnType<typeof requireWorkspace>>;
+    try {
+      caller = await requireWorkspace(c, session.workspaceId, policyOf(getShellRecording).action!);
+      // SECURITY: a recording shows what the shell showed, secrets included,
+      // so it takes the right to open that shell too.
+      await requireWorkspace(c, session.workspaceId, "shell:open", {
+        projectId: session.projectId,
+        environmentId: session.environmentId,
+      });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) throw notFound("Shell session");
+      throw err;
+    }
+    if (session.recording !== "stored" || session.recordingParts < 1) {
+      throw notFound("Shell recording");
+    }
+    const body = await readShellRecording(c.env, db, session);
+    await recordAudit(db, {
+      workspaceId: session.workspaceId,
+      ...caller.actor,
+      action: "shell.recording_viewed",
+      targetType: "shell_session",
+      targetId: sessionId,
+      metadata: {
+        project_id: session.projectId,
+        environment_id: session.environmentId,
+        service_id: session.serviceId,
+        user_id: session.userId,
+      },
+      ip: clientIp(c),
+    });
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "content-type": `${ASCIICAST_CONTENT_TYPE}; charset=utf-8`,
+        "cache-control": "no-store",
+      },
+    });
   });

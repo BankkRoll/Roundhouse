@@ -441,3 +441,27 @@ func TestClampSize(t *testing.T) {
 		t.Errorf("clampSize = %dx%d", c, r)
 	}
 }
+
+func TestShellSaysWhenRecorded(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	h.fake.HandleShells(func(s *apitest.ShellSession) {
+		s.Recorded = true
+		s.Serve()
+	})
+	r := h.ok("exit\n", "shell")
+	if r.stderr != "This session is recorded.\n" {
+		t.Errorf("piped stderr = %q", r.stderr)
+	}
+	if r.stdout != "exit\n" {
+		t.Errorf("stdout = %q", r.stdout)
+	}
+
+	h.terminal = &fakeTerminal{cols: 80, rows: 24}
+	h.stdin = strings.NewReader("\x04")
+	r = h.ok("", "shell")
+	want := "Connected to API replica 0 on edge-1 as root. Exit the shell or press Ctrl-] then q to disconnect.\nThis session is recorded.\n"
+	if !strings.HasPrefix(r.stderr, want) {
+		t.Errorf("terminal stderr = %q, want it to start with %q", r.stderr, want)
+	}
+}

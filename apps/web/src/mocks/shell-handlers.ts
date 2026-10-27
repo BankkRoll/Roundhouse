@@ -1,6 +1,6 @@
 /**
  * MSW mocks of the web shell (ADR 0012 "Web shell", ADR 0014 §15): the replica list
- * with its gate, the shell socket, and the audit list of sessions.
+ * with its gate, the shell socket, the audit list of sessions, and playing a recording.
  *
  * The socket mirrors the relay: the upgrade is accepted and refusals arrive as close
  * codes; then `opened`, binary output (the mock echoes input back), `resize` and `close`
@@ -9,6 +9,7 @@
  * @module
  */
 import {
+  ASCIICAST_CONTENT_TYPE,
   SHELL_CLOSE_CODES,
   SHELL_DENIAL_CLOSE_CODES,
   type ShellClientMessage,
@@ -19,7 +20,15 @@ import {
 import { HttpResponse, http, ws } from "msw";
 import type { ShellGate, ShellSession, ShellTarget } from "../lib/api/shell-client";
 import { accessFor } from "./access-resolve";
-import { apiError, currentUser, notFound, requireWorkspace, unauthorized } from "./common";
+import {
+  apiError,
+  currentUser,
+  notFound,
+  recordAudit,
+  requireFreshSession,
+  requireWorkspace,
+  unauthorized,
+} from "./common";
 import { db, nextId } from "./db";
 
 /** Default idle timeout the mock relay reports, as the API's default. */
@@ -49,6 +58,8 @@ interface ShellMockState {
   refuseWith: number | null;
   /** Rows of `GET /v1/workspaces/{ws}/shell-sessions`. */
   rows: ShellSession[];
+  /** Asciicast text of sessions whose recording is `stored`, by session id. */
+  recordings: Map<string, string>;
 }
 
 /** The mock relay's state; tests read and steer it. Reset after every test. */
@@ -57,6 +68,7 @@ export const shellMock: ShellMockState = {
   outdatedNodes: new Set(),
   refuseWith: null,
   rows: [],
+  recordings: new Map(),
 };
 
 /** Restores {@link shellMock}. */
@@ -65,6 +77,21 @@ export function resetShellMock(): void {
   shellMock.outdatedNodes = new Set();
   shellMock.refuseWith = null;
   shellMock.rows = [];
+  shellMock.recordings = new Map();
+}
+
+/**
+ * Adds an ended, recorded session to the history, as the relay leaves one.
+ *
+ * @param row - The session; `recording` becomes `stored`.
+ * @param cast - Its asciicast text.
+ * @returns The row.
+ */
+export function addRecordedShellSession(row: ShellSession, cast: string): ShellSession {
+  const stored = { ...row, recording: "stored" as const, recording_parts: 1 };
+  shellMock.rows.push(stored);
+  shellMock.recordings.set(stored.id, cast);
+  return stored;
 }
 
 const decoder = new TextDecoder();
@@ -172,6 +199,7 @@ const socketHandler = shellLink.addEventListener("connection", ({ client }) => {
     return;
   }
 
+  const recorded = db.deploy.instance.shell_recording === "full";
   const session: MockShellSession = {
     id: nextId("shl"),
     url: client.url,
@@ -208,6 +236,8 @@ const socketHandler = shellLink.addEventListener("connection", ({ client }) => {
     exit_code: null,
     bytes_in: 0,
     bytes_out: 0,
+    recording: recorded ? "recording" : "none",
+    recording_parts: 0,
   });
   const opened: ShellServerMessage = {
     type: "opened",
@@ -218,6 +248,7 @@ const socketHandler = shellLink.addEventListener("connection", ({ client }) => {
     replica: placement.replica,
     idle_timeout_s: MOCK_SHELL_IDLE_TIMEOUT_S,
     max_duration_s: 8 * 3600,
+    recorded,
   };
   client.send(JSON.stringify(opened));
 
@@ -316,6 +347,47 @@ export const shellHandlers = [
       exitShellSession(session, { reason: "revoked", code: null });
     }
     return HttpResponse.json(row);
+  }),
+
+  http.get("*/v1/shell-sessions/:sessionId/recording", ({ params }) => {
+    if (!currentUser()) return unauthorized();
+    // NOTE: Like the API, freshness is checked before the session is looked up.
+    const stale = requireFreshSession();
+    if (stale) return stale;
+    const row = shellMock.rows.find((entry) => entry.id === params.sessionId);
+    const project = row
+      ? db.deploy.projects.find((entry) => entry.id === row.project_id)
+      : undefined;
+    if (!row || !project) return notFound("Shell session");
+    const guard = requireWorkspace(project.workspace_id, "audit:read");
+    if (!guard.ok) return guard.response;
+    const mayOpen = accessFor(project.workspace_id, guard.user).check("shell:open", {
+      projectId: row.project_id,
+      environmentId: row.environment_id,
+    }).allowed;
+    if (!mayOpen) return apiError(403, "forbidden", "You can't open a shell here");
+    const cast = shellMock.recordings.get(row.id);
+    if (row.recording !== "stored" || cast === undefined) return notFound("Shell recording");
+    recordAudit({
+      workspaceId: project.workspace_id,
+      actorType: "user",
+      actorId: guard.user.id,
+      action: "shell.recording_viewed",
+      targetType: "shell_session",
+      targetId: row.id,
+      metadata: {
+        project_id: row.project_id,
+        environment_id: row.environment_id,
+        service_id: row.service_id,
+        user_id: row.user_id,
+      },
+    });
+    return new HttpResponse(cast, {
+      headers: {
+        "content-type": `${ASCIICAST_CONTENT_TYPE}; charset=utf-8`,
+        "cache-control": "no-store",
+      },
+    });
   }),
 
   http.get("*/v1/workloads/:workloadId/shell", () =>

@@ -13,7 +13,8 @@
  *   `shell.closed` (ids, reason, duration, byte counts; never terminal data);
  * - {@link expireLostShellSessions}: the minute tick's sweep of rows whose
  *   relay was lost;
- * - {@link toApiShellSession}: the public shape of a row.
+ * - {@link toApiShellSession}: the public shape of a row, recording state
+ *   included.
  *
  * SECURITY: nothing here ever sees terminal input or output.
  *
@@ -31,7 +32,12 @@ import {
   workspaces,
 } from "@roundhouse/db";
 import { DEFAULT_EXEC_MAX_DURATION_S } from "@roundhouse/protocol";
-import { type Action, resolveAccess, type ShellExitReason } from "@roundhouse/shared";
+import {
+  type Action,
+  resolveAccess,
+  type ShellExitReason,
+  type ShellRecordingState,
+} from "@roundhouse/shared";
 import { and, eq, inArray, isNull, lt, or, type SQL } from "drizzle-orm";
 import type { Env } from "../env";
 import { loadWorkspaceAccess } from "./access";
@@ -81,6 +87,11 @@ export interface ShellDescriptor {
   token_id: string | null;
   /** Better Auth session that opened it; `null` for a token. */
   auth_session_id: string | null;
+  /**
+   * The project's age recipient when the session is recorded (decided at
+   * open, `lib/shell-recording`); `null` for metadata only.
+   */
+  recording_recipient: string | null;
   /** argv; only the relay's `exec_open` carries it, the row keeps argv[0]. */
   command: string[];
   cols: number;
@@ -271,6 +282,8 @@ export interface ShellEnding {
   bytesOut: number;
   /** The container user the agent reported, when it opened. */
   containerUser?: string | null;
+  /** `none` when the session never got to record (refused, or unreachable). */
+  recording?: "none";
   /** Who ended it; the system when omitted. */
   actor?: { actorType: "user" | "token" | "system"; actorId: string | null };
 }
@@ -301,6 +314,7 @@ export async function finishShellSession(
       bytesIn: ending.bytesIn,
       bytesOut: ending.bytesOut,
       ...(ending.containerUser ? { containerUser: ending.containerUser } : {}),
+      ...(ending.recording ? { recording: ending.recording } : {}),
     })
     .where(and(eq(shellSessions.id, sessionId), isNull(shellSessions.endedAt)))
     .returning();
@@ -390,5 +404,7 @@ export function toApiShellSession(r: typeof shellSessions.$inferSelect) {
     exit_code: r.exitCode,
     bytes_in: r.bytesIn,
     bytes_out: r.bytesOut,
+    recording: r.recording as ShellRecordingState,
+    recording_parts: r.recordingParts,
   };
 }

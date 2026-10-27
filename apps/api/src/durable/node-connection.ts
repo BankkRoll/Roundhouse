@@ -350,6 +350,7 @@ export class NodeConnection extends DurableObject<Env> {
     this.shell = new ShellRelay({
       ctx,
       db: this.db,
+      bucket: env.LOGS,
       agent: () => {
         const ws = this.greetedSocket();
         return ws

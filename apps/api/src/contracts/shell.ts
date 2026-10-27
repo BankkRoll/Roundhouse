@@ -8,13 +8,15 @@
  *   running replicas and previews the caller's gate, so the dashboard can
  *   ask for re-authentication or 2FA, or explain a protected environment,
  *   before connecting.
- * - There is no recording route: sessions are not recorded yet.
+ * - `GET /v1/shell-sessions/{sessionId}/recording` also needs a fresh
+ *   browser session (`reauth`): a recording holds secrets, as a revealed
+ *   variable would.
  *
  * @module
  */
 import { z } from "@hono/zod-openapi";
 import { MAX_EXEC_ARGS, MAX_EXEC_COLS, MAX_EXEC_ROWS } from "@roundhouse/protocol";
-import { SHELL_DENIALS } from "@roundhouse/shared";
+import { ASCIICAST_CONTENT_TYPE, SHELL_DENIALS, SHELL_RECORDING_STATES } from "@roundhouse/shared";
 import {
   CursorField,
   errors,
@@ -22,10 +24,11 @@ import {
   LimitField,
   Millis,
   sessionAuth,
+  sessionOnlyAuth,
   WorkspaceParams,
 } from "../schemas";
 import { EnvironmentQuery, ServiceParams } from "./params";
-import { defineRoute, session } from "./policy";
+import { defineRoute, session, sessionOnly } from "./policy";
 
 // -----------------------------------------------------------------------------
 // Schemas
@@ -106,6 +109,13 @@ export const ShellSessionSchema = z
     exit_code: z.number().int().nullable(),
     bytes_in: z.number().int(),
     bytes_out: z.number().int(),
+    /**
+     * `none` (not recorded, or deleted by retention), `recording` (still
+     * being written), `stored` (playable) or `failed`.
+     */
+    recording: z.enum(SHELL_RECORDING_STATES),
+    /** Parts of the recording in storage. */
+    recording_parts: z.number().int(),
   })
   .openapi("ShellSession");
 
@@ -191,12 +201,40 @@ export const terminateShellSession = defineRoute(session("shell:open", ["shell.t
   responses: { 200: json(ShellSessionSchema), ...errors(401, 403, 404, 409) },
 });
 
+/**
+ * A session's recording, decrypted: asciicast v2 text (a header line, then
+ * `[t, "o"|"i"|"r", text]` events), its parts joined. Needs `audit:read`
+ * in the workspace, `shell:open` on the session's environment, and a fresh
+ * browser session (403 `reauth_required`; API tokens never qualify). 404
+ * when nothing is stored (not recorded, still being written, failed, or
+ * deleted by retention). Audited `shell.recording_viewed` with ids only.
+ */
+export const getShellRecording = defineRoute(
+  sessionOnly("audit:read", ["shell.recording_viewed"], { reauth: true }),
+  {
+    method: "get",
+    path: "/v1/shell-sessions/{sessionId}/recording",
+    tags: ["shell"],
+    summary: "Play back a shell recording",
+    security: sessionOnlyAuth,
+    request: { params: ShellSessionParams },
+    responses: {
+      200: {
+        description: "The recording (asciicast v2), never cached",
+        content: { [ASCIICAST_CONTENT_TYPE]: { schema: z.string() } },
+      },
+      ...errors(401, 403, 404),
+    },
+  },
+);
+
 /** Every shell route, for the contract tests. */
 export const SHELL_ROUTES = {
   openShell,
   listShellTargets,
   listShellSessions,
   terminateShellSession,
+  getShellRecording,
 } as const;
 
 /** A shell session. */
