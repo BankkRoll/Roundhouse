@@ -101,6 +101,7 @@ const ROUTE_MODULES = [
   "cron",
   "access",
   "mesh",
+  "registry",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -606,6 +607,47 @@ describe("MSW mocks match the API contract", () => {
       as(null);
       expect((await call("GET", `${WS}/mesh`)).status).toBe(401);
       expect((await call("POST", `${WS}/nodes/${MESH_SEED.hel}/mesh/rotate-key`)).status).toBe(401);
+    });
+  });
+
+  it("registry storage: instance admins only, write-only secrets, back to disk", async () => {
+    await fresh(async () => {
+      const path = "/v1/instance/registry-storage";
+      expect(await call("GET", path)).toMatchObject({
+        status: 200,
+        body: { type: "filesystem", secrets_set: false },
+      });
+      const body = {
+        endpoint: "https://s3.example.com",
+        bucket: "acme-registry",
+        access_key_id: "AKIARW",
+        readonly_access_key_id: "AKIARO",
+      };
+      expect((await call("PUT", path, body)).status).toBe(400);
+      const full = {
+        ...body,
+        secret_access_key: "rw-secret",
+        readonly_secret_access_key: "ro-secret",
+      };
+      expect(await call("PUT", path, { ...full, bucket: "unreachable-bucket" })).toMatchObject({
+        status: 422,
+        body: { error: { code: "registry_storage_unreachable" } },
+      });
+      const saved = await call("PUT", path, full);
+      expect(saved).toMatchObject({
+        status: 200,
+        body: { type: "s3", region: "auto", secrets_set: true },
+      });
+      expect(JSON.stringify(saved.body)).not.toMatch(/rw-secret|ro-secret/);
+      expect((await call("PUT", path, body)).status).toBe(200);
+      expect(await call("DELETE", path)).toMatchObject({
+        status: 200,
+        body: { type: "filesystem" },
+      });
+      as("admin");
+      expect((await call("GET", path)).status).toBe(403);
+      as(null);
+      expect((await call("GET", path)).status).toBe(401);
     });
   });
 

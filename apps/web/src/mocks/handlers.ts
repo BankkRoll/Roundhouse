@@ -47,6 +47,7 @@ import { domainHandlers } from "./domains-mock";
 import { meshHandlers } from "./mesh-handlers";
 import { metricsHandlers } from "./metrics-handlers";
 import { providerHandlers } from "./providers-handlers";
+import { registryHandlers } from "./registry-handlers";
 import { securityHandlers } from "./security-handlers";
 import { signingKeyHandlers } from "./signing-keys-mock";
 import { templateHandlers } from "./templates-handlers";
@@ -795,6 +796,7 @@ export const handlers = [
   ...dataHandlers,
   ...cronHandlers,
   ...meshHandlers,
+  ...registryHandlers,
   ...signingKeyHandlers,
   ...tlsHandlers,
   ...securityHandlers,

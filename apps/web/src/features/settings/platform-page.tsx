@@ -43,6 +43,7 @@ import { useMe } from "../../queries/me";
 import { BackupStorageSection } from "./backup-storage-section";
 import { submitGithubManifest } from "./github-manifest";
 import { NetworkSection } from "./network-section";
+import { RegistryStorageSection } from "./registry-storage-section";
 import { SettingsFrame } from "./settings-frame";
 import { SigningKeysSection } from "./signing-keys-section";
 
@@ -448,6 +449,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
               <LogRetentionForm settings={settings.data} />
               <McpSection settings={settings.data} />
               <NetworkSection settings={settings.data} />
+              <RegistryStorageSection />
               <BackupStorageSection />
               <SigningKeysSection />
             </>

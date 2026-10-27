@@ -24,6 +24,20 @@ export interface MeshDb {
   pairs: MeshPair[];
   /** Each server's latest drain, by node id. */
   drains: Record<string, NodeDrain>;
+  /** The registry bucket, secrets kept to mirror the API but never returned; `null` for builder disks. */
+  registry: DbRegistryStorage | null;
+}
+
+/** The registry bucket as the mock stores it. */
+export interface DbRegistryStorage {
+  endpoint: string;
+  bucket: string;
+  region: string;
+  access_key_id: string;
+  secret_access_key: string;
+  readonly_access_key_id: string;
+  readonly_secret_access_key: string;
+  updated_at: number;
 }
 
 /** Ids of the servers {@link seedMeshNetwork} adds or joins, for tests. */
@@ -67,7 +81,7 @@ export function unjoinedMeshNode(node: Pick<Node, "agent_version">): DbMeshNode 
 
 /** @returns Empty mesh tables. */
 export function emptyMesh(): MeshDb {
-  return { nodes: {}, pairs: [], drains: {} };
+  return { nodes: {}, pairs: [], drains: {}, registry: null };
 }
 
 const MINUTE = 60_000;
@@ -133,6 +147,7 @@ export function seededMesh(now: number): MeshDb {
   const { hel, nbg, home, lab, office } = MESH_SEED;
   return {
     drains: {},
+    registry: null,
     nodes: {
       [hel]: joined(1, now, { endpoint: "203.0.113.10:51820", relay: true }),
       [nbg]: joined(2, now, {
