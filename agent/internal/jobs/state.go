@@ -44,6 +44,9 @@ type savedRun struct {
 	Pending bool               `json:"pending,omitempty"`
 	// LastLogNS is the timestamp of the last log line shipped, unix nanos.
 	LastLogNS int64 `json:"last_log_ns,omitempty"`
+	// MeshIP and Network let a re-attached run rejoin the mesh.
+	MeshIP  string `json:"mesh_ip,omitempty"`
+	Network string `json:"network,omitempty"`
 }
 
 // load reads the persisted runs. A missing file means none; a corrupt one
@@ -73,6 +76,7 @@ func (r *Runner) load() {
 			containerID: s.ContainerID, startedAt: s.StartedAt, deadline: s.Deadline,
 			cancelled: s.Cancelled, cancelReason: s.CancelReason, killing: s.Killing,
 			status: s.Status, seq: 1, sent: 1, lastLogNS: s.LastLogNS, cancelCh: make(chan struct{}),
+			meshIP: s.MeshIP, network: s.Network,
 		}
 		if s.Pending {
 			rn.sent = 0
@@ -97,6 +101,7 @@ func (r *Runner) persist() {
 			TimeoutS: rn.timeoutS, KillGraceS: rn.graceS, StartedAt: rn.startedAt, Deadline: rn.deadline,
 			Cancelled: rn.cancelled, CancelReason: rn.cancelReason, Killing: rn.killing,
 			Status: rn.status, Pending: rn.seq != rn.sent, LastLogNS: rn.lastLogNS,
+			MeshIP: rn.meshIP, Network: rn.network,
 		})
 	}
 	r.stateDirty = false
@@ -203,6 +208,7 @@ func (r *Runner) reattach(rn *run) {
 	r.persist()
 	r.poke()
 	if info.State.Running {
+		r.joinMesh(rn, info)
 		r.systemLog(rn, "agent restarted: re-attached to the running job")
 	}
 	r.log.Info("re-attached to job run", "run_id", rn.id, "container", short(info.ID), "running", info.State.Running)

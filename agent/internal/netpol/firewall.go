@@ -71,7 +71,7 @@ func (f *Firewall) Apply(ctx context.Context, script string) error {
 		return fmt.Errorf("nft: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	if f.applied == "" {
-		f.log.Info("applied the mesh nftables table")
+		f.log.Info("applied the nftables table")
 	}
 	f.applied = script
 	return nil
@@ -94,7 +94,7 @@ func (f *Firewall) Remove(ctx context.Context) error {
 	if out, err := f.run(ctx, nil, "nft", "delete", "table", "inet", "roundhouse"); err != nil {
 		return fmt.Errorf("nft delete table: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	f.log.Info("removed the mesh nftables table")
+	f.log.Info("removed the nftables table")
 	return nil
 }
 

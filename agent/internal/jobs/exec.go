@@ -49,7 +49,8 @@ func (r *Runner) execute(ctx context.Context, rn *run, w *protocol.WorkloadSpec)
 		r.finish(rn, protocol.JobFailed, nil, "secret files: "+err.Error(), 0)
 		return
 	}
-	id, err := r.createAndStart(ctx, rn, w, containerCreate(w, rn.id, r.opts.Namespace, bind))
+	cc := withDNS(containerCreate(w, rn.id, r.opts.Namespace, bind), r.privateDNS(ctx, w))
+	id, err := r.createAndStart(ctx, rn, w, cc)
 	if err != nil {
 		if !r.interrupted(rn) {
 			r.finish(rn, protocol.JobFailed, nil, err.Error(), 0)
@@ -58,8 +59,11 @@ func (r *Runner) execute(ctx context.Context, rn *run, w *protocol.WorkloadSpec)
 	}
 
 	started := time.Now()
-	if info, err := r.d.InspectContainer(r.ctx, id); err == nil && !info.State.StartedAt.IsZero() {
-		started = info.State.StartedAt
+	if info, err := r.d.InspectContainer(r.ctx, id); err == nil {
+		if !info.State.StartedAt.IsZero() {
+			started = info.State.StartedAt
+		}
+		r.joinMesh(rn, info)
 	}
 	r.mu.Lock()
 	rn.startedAt = started.UnixMilli()
@@ -224,6 +228,7 @@ wait:
 		}
 	}
 	close(exited)
+	r.leaveMesh(rn)
 
 	code, oom, finishedAt := res.code, false, int64(0)
 	if !res.gone {
@@ -301,6 +306,7 @@ func (r *Runner) finish(rn *run, st protocol.JobState, exitCode *int, message st
 	}
 	r.setStatusLocked(rn, st, exitCode, message, finishedAt)
 	r.mu.Unlock()
+	r.leaveMesh(rn)
 	r.log.Info("job finished", "run_id", rn.id, "state", st, "message", message)
 	r.persist()
 	r.poke()

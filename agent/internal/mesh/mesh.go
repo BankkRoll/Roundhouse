@@ -8,11 +8,15 @@
 //     desired_state.mesh, with the preshared keys opened from its sealed box;
 //   - keep the rh-dns0 dummy interface carrying the node's private DNS
 //     address, and the private DNS zone and listener on it;
-//   - apply the nftables isolation table ([netpol]) and Docker's mark
+//   - apply the nftables table ([netpol]) for replicas and job runs, the
+//     registry listener and a proxy registry's upstream, and Docker's mark
 //     acceptance, and verify both every 30 s;
+//   - keep the ingress source filter (cloudflare_only) in that table,
+//     meshed or not;
 //   - report hello.mesh (public key, implementation, reachability, Docker
 //     firewall) and mesh_status every 30 s and on change;
-//   - tear all of it down when desired_state.mesh is null, keeping the key.
+//   - tear the mesh down when desired_state.mesh is null, keeping the key
+//     and, when set, the ingress filter.
 //
 // Mesh failures are never fatal: local workloads keep running, and
 // mesh_status says ready false with the reason.
@@ -26,10 +30,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -62,12 +68,20 @@ const sendTimeout = 10 * time.Second
 // resolveTimeout bounds resolving one peer endpoint's hostname.
 const resolveTimeout = 5 * time.Second
 
-// Replica is a local container with a mesh IP, as the runtime reports it.
+// Replica is a local container with a mesh IP, as the runtime (replicas)
+// or the job runner (job runs) reports it.
 type Replica struct {
 	MeshIP netip.Addr
 	// BridgeIP is its address on its environment network.
 	BridgeIP netip.Addr
 	Healthy  bool
+}
+
+// RegistryProxy is a running proxy registry container (it has no mesh IP)
+// and the peer registry it pulls through, which the table lets it reach.
+type RegistryProxy struct {
+	BridgeIP netip.Addr
+	Upstream netip.AddrPort
 }
 
 // DNS is the private DNS server; *ingress.PrivateDNS implements it.
@@ -151,6 +165,11 @@ type Manager struct {
 	psks       map[string][]byte
 	pskErr     error
 	replicas   map[netip.Addr]Replica
+	jobs       map[netip.Addr]Replica
+	proxy      RegistryProxy
+	// ingress is desired_state.ingress.allowed_sources, nil for none. It
+	// is kept with the mesh off too: the table then holds only it.
+	ingress *netpol.IngressFilter
 	// settled is false from a desired state turning the mesh on until the
 	// first reconcile of it finished; [Manager.PrivateDNS] reports pending
 	// meanwhile.
@@ -175,6 +194,10 @@ type Manager struct {
 	markRule   uint32
 	lastSig    string
 	lastSentAt time.Time
+	// tableUp is false once the table is known to be gone; tableErr is the
+	// last failure of the table outside the mesh, logged once.
+	tableUp  bool
+	tableErr string
 }
 
 // New opens the key store, creating the key on first use, and returns a
@@ -209,11 +232,11 @@ func New(opts Options) (*Manager, error) {
 	}
 	m := &Manager{
 		opts: opts, log: log, plat: opts.platform, fw: opts.Firewall,
-		wake: make(chan struct{}, 1), replicas: map[netip.Addr]Replica{},
+		wake: make(chan struct{}, 1), replicas: map[netip.Addr]Replica{}, jobs: map[netip.Addr]Replica{},
 		mode: protocol.MeshUnavailable, backend: netpol.BackendIPTables,
 		// NOTE: an earlier agent process may have left wg0, rh-dns0 and the
 		// table behind; a first "mesh off" removes them.
-		installed: true, markRule: DefaultMark,
+		installed: true, tableUp: true, markRule: DefaultMark,
 	}
 	if m.fw == nil {
 		m.fw = netpol.NewFirewall(nil, log)
@@ -301,21 +324,54 @@ func (m *Manager) Apply(generation int64, cfg *protocol.MeshConfig) {
 
 // SetReplicas replaces the local replicas that have a mesh IP. The table
 // and the DNS zone follow at once.
-func (m *Manager) SetReplicas(rs []Replica) {
+func (m *Manager) SetReplicas(rs []Replica) { m.setLocals(&m.replicas, rs) }
+
+// SetJobs replaces the running job containers that have a mesh IP; they
+// get NAT, isolation and private DNS like replicas while they run.
+func (m *Manager) SetJobs(rs []Replica) { m.setLocals(&m.jobs, rs) }
+
+func (m *Manager) setLocals(dst *map[netip.Addr]Replica, rs []Replica) {
 	next := make(map[netip.Addr]Replica, len(rs))
 	for _, r := range rs {
 		next[r.MeshIP] = r
 	}
 	m.mu.Lock()
-	same := len(next) == len(m.replicas)
-	for k, v := range next {
-		if m.replicas[k] != v {
-			same = false
-		}
-	}
-	m.replicas = next
+	same := maps.Equal(next, *dst)
+	*dst = next
 	m.mu.Unlock()
 	if !same {
+		m.poke()
+	}
+}
+
+// SetRegistryProxy sets the local proxy registry the table lets reach its
+// upstream over wg0; the zero value means none.
+func (m *Manager) SetRegistryProxy(p RegistryProxy) {
+	m.mu.Lock()
+	same := m.proxy == p
+	m.proxy = p
+	m.mu.Unlock()
+	if !same {
+		m.poke()
+	}
+}
+
+// SetAllowedSources takes desired_state.ingress.allowed_sources (nil: no
+// filter). The filter lives in the table whether or not the node is
+// meshed. Call it before [Manager.Apply] with the same desired state.
+func (m *Manager) SetAllowedSources(sources *[]string) {
+	f, err := netpol.ParseIngress(sources)
+	if err != nil {
+		m.log.Error("ingress filter: leaving out invalid sources", "err", err)
+	}
+	m.mu.Lock()
+	same := reflect.DeepEqual(m.ingress, f)
+	m.ingress = f
+	m.mu.Unlock()
+	if !same {
+		if f != nil {
+			m.log.Info("ingress filter: admitting 80 and 443 only from the allowed sources", "sources", f.String())
+		}
 		m.poke()
 	}
 }
@@ -359,11 +415,6 @@ func (m *Manager) poke() {
 // Run reconciles until ctx ends. The mesh stays up when it returns: a
 // kernel wg0 and the table outlive the agent process.
 func (m *Manager) Run(ctx context.Context) error {
-	if m.Off() {
-		// Tear down whatever an earlier configuration left once the first
-		// desired state says so, then idle.
-		m.opts.Interval = time.Hour
-	}
 	verify := time.NewTicker(m.opts.Interval)
 	defer verify.Stop()
 	retry := time.NewTimer(time.Hour)
@@ -399,13 +450,20 @@ type snapshot struct {
 	generation int64
 	psks       map[string][]byte
 	pskErr     error
-	replicas   map[netip.Addr]Replica
+	// replicas are the runtime's replicas and the running jobs together.
+	replicas map[netip.Addr]Replica
+	proxy    RegistryProxy
+	ingress  *netpol.IngressFilter
 }
 
 func (m *Manager) snapshot() snapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return snapshot{m.applied, m.desired, m.generation, m.psks, m.pskErr, m.replicas}
+	locals := maps.Clone(m.jobs)
+	// NOTE: the control plane never gives a replica and a run one IP; if
+	// it did, the replica wins.
+	maps.Copy(locals, m.replicas)
+	return snapshot{m.applied, m.desired, m.generation, m.psks, m.pskErr, locals, m.proxy, m.ingress}
 }
 
 // reconcile converges the host to the latest desired state and records
@@ -417,6 +475,7 @@ func (m *Manager) reconcile(ctx context.Context) {
 	}
 	if s.cfg == nil {
 		m.teardown(ctx)
+		m.ingressOnly(ctx, s.ingress)
 		return
 	}
 	var errs []string
@@ -474,10 +533,25 @@ func (m *Manager) reconcile(ctx context.Context) {
 	}
 	if rs, err := netpol.Build(cfg, m.opts.NodeID, bridges); err != nil {
 		fail(err)
-	} else if err := m.fw.Apply(ctx, netpol.Render(rs)); err != nil {
-		fail(err)
+		// SECURITY: a mesh config the table can't take must not lift the
+		// ingress filter.
+		if s.ingress != nil {
+			m.ingressOnly(ctx, s.ingress)
+		}
 	} else {
-		nftUp = true
+		rs.Ingress = s.ingress
+		// SECURITY: the proxy reaches another node's registry port, never a
+		// replica's mesh IP, whatever the runtime was handed.
+		if p := s.proxy; p.BridgeIP.IsValid() && p.Upstream.Port() == netpol.RegistryPort &&
+			slices.Contains(rs.Nodes, p.Upstream.Addr()) && p.Upstream.Addr() != rs.Address {
+			rs.RegistryEgress = []netpol.Egress{{From: p.BridgeIP, To: p.Upstream}}
+		}
+		m.tableUp = true
+		if err := m.fw.Apply(ctx, netpol.Render(rs)); err != nil {
+			fail(err)
+		} else {
+			nftUp = true
+		}
 	}
 
 	backend, accept, why := m.dockerFirewall(ctx, uint32(cfg.AcceptFwmark), true)
@@ -781,8 +855,34 @@ func (m *Manager) dockerFirewall(ctx context.Context, mark uint32, install bool)
 	return backend, true, ""
 }
 
+// ingressOnly keeps the table of a node outside the mesh: just the ingress
+// filter when there is one, else no table at all.
+func (m *Manager) ingressOnly(ctx context.Context, f *netpol.IngressFilter) {
+	var err error
+	switch {
+	case f != nil:
+		m.tableUp = true
+		err = m.fw.Apply(ctx, netpol.Render(netpol.Ruleset{Ingress: f}))
+	case m.tableUp:
+		if err = m.fw.Remove(ctx); err == nil {
+			m.tableUp = false
+		}
+	}
+	text := ""
+	if err != nil {
+		text = err.Error()
+	}
+	if text != m.tableErr {
+		if text != "" {
+			m.log.Error("cannot apply the ingress filter", "err", err)
+		}
+		m.tableErr = text
+	}
+}
+
 // teardown removes everything the mesh put on the host, once per switch to
-// mesh off. The key store stays.
+// mesh off; the table is left to [Manager.ingressOnly]. The key store
+// stays.
 func (m *Manager) teardown(ctx context.Context) {
 	if !m.installed {
 		return
@@ -790,7 +890,6 @@ func (m *Manager) teardown(ctx context.Context) {
 	var errs []error
 	m.opts.DNS.Close()
 	m.opts.DNS.SetZone(ingress.PrivateZone{})
-	errs = append(errs, m.fw.Remove(ctx))
 	m.mu.Lock()
 	backend := m.backend
 	m.mu.Unlock()
@@ -815,7 +914,7 @@ func (m *Manager) teardown(ctx context.Context) {
 		m.log.Warn("mesh teardown incomplete", "err", err)
 		return
 	}
-	m.log.Info("mesh is off: removed wg0, rh-dns0 and the nftables table")
+	m.log.Info("mesh is off: removed wg0 and rh-dns0")
 }
 
 // report sends a pending mesh_key and the mesh_status when it changed, or

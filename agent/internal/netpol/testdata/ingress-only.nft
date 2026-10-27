@@ -1,0 +1,23 @@
+table inet roundhouse {}
+delete table inet roundhouse
+table inet roundhouse {
+	set ingress_v4 {
+		type ipv4_addr
+		flags interval
+		elements = { 103.21.244.0/22, 104.16.0.0/12, 173.245.48.0/20 }
+	}
+	set ingress_v6 {
+		type ipv6_addr
+		flags interval
+		elements = { 2400:cb00::/32, 2606:4700::/32 }
+	}
+	chain ingress_filter {
+		type filter hook input priority filter - 1; policy accept;
+		iifname "lo" accept
+		meta l4proto != { tcp, udp } accept
+		th dport != { 80, 443 } accept
+		ip saddr @ingress_v4 accept
+		ip6 saddr @ingress_v6 accept
+		drop
+	}
+}

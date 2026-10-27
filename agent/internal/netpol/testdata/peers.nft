@@ -54,6 +54,7 @@ table inet roundhouse {
 		iifname "wg0" ip saddr != 10.200.0.0/16 drop
 		iifname != "wg0" ct original ip daddr 10.200.0.0/16 ip saddr vmap @bridge_env
 		iifname != "wg0" ct original ip daddr 10.200.0.0/16 drop
+		iifname "wg0" ip saddr @nodes meta l4proto tcp ct original ip daddr 10.200.1.1 ct original proto-dst 5000 meta mark set meta mark or 0x02000000 accept
 		iifname "wg0" ct original ip daddr vmap @mesh_env_in
 		iifname "wg0" drop
 		oifname "wg0" drop

@@ -1,10 +1,12 @@
-// Package netpol renders and applies the nftables table that isolates
-// environments across the WireGuard mesh (ADR 0005, "Isolation with
-// nftables").
+// Package netpol renders and applies the agent's nftables table: the
+// isolation of environments across the WireGuard mesh (ADR 0005,
+// "Isolation with nftables") and the ingress source filter of
+// cloudflare_only (docs/cloudflare-for-saas.md).
 //
 // Responsibilities:
 //   - build a [Ruleset] from desired_state.mesh and the node's local
-//     replicas (mesh IP to container bridge IP) ([Build]);
+//     replicas (mesh IP to container bridge IP) ([Build]), and the ingress
+//     filter from desired_state.ingress.allowed_sources ([ParseIngress]);
 //   - render it as one nft script that replaces `table inet roundhouse`
 //     atomically ([Render]);
 //   - apply, verify and remove that table, and keep Docker's DOCKER-USER
@@ -38,6 +40,9 @@ const Table = "inet roundhouse"
 // Interface is the WireGuard interface every rule keys on.
 const Interface = "wg0"
 
+// RegistryPort is where a node's registry listens on its mesh address.
+const RegistryPort = 5000
+
 // Local is one replica on this node that has a mesh IP.
 type Local struct {
 	MeshIP netip.Addr
@@ -68,7 +73,23 @@ type Ruleset struct {
 	// Routed are the local (mesh IP, port) pairs with an ingress route,
 	// admitted from Nodes.
 	Routed []netip.AddrPort
+	// RegistryEgress are local containers without a mesh IP that may reach
+	// a peer's registry: a proxy registry and its upstream.
+	RegistryEgress []Egress
+	// Ingress, when set, admits ports 80 and 443 only from its sources. A
+	// ruleset with only Ingress (no Supernet) renders just that filter, for
+	// a node outside the mesh.
+	Ingress *IngressFilter
 }
+
+// Egress admits one local container to one address and port over wg0.
+type Egress struct {
+	From netip.Addr
+	To   netip.AddrPort
+}
+
+// meshed reports whether r carries the mesh part of the table.
+func (r Ruleset) meshed() bool { return r.Supernet.IsValid() }
 
 // Build derives a ruleset from desired_state.mesh. self is this node's ID;
 // bridges maps the mesh IP of each local replica that runs to its bridge
@@ -146,13 +167,27 @@ func Render(r Ruleset) string {
 		fmt.Fprintf(&b, format, args...)
 		b.WriteByte('\n')
 	}
-	mark := fmt.Sprintf("meta mark set meta mark or 0x%08x", r.Mark)
-	supernet := r.Supernet.String()
-	tags := envTags(r.Envs)
-
 	w(0, "table %s {}", Table)
 	w(0, "delete table %s", Table)
 	w(0, "table %s {", Table)
+	if r.meshed() {
+		renderMesh(w, r)
+	}
+	if r.Ingress != nil {
+		renderIngress(w, r)
+	}
+	w(0, "}")
+	return b.String()
+}
+
+// writer writes one line of the script at an indent.
+type writer func(indent int, format string, args ...any)
+
+// renderMesh writes the mesh's sets, maps and chains.
+func renderMesh(w writer, r Ruleset) {
+	mark := fmt.Sprintf("meta mark set meta mark or 0x%08x", r.Mark)
+	supernet := r.Supernet.String()
+	tags := envTags(r.Envs)
 
 	// Sets and env chains come before the maps whose verdicts jump to those
 	// chains, and the maps before the base chains that look them up.
@@ -208,6 +243,12 @@ func Render(r Ruleset) string {
 	w(2, "ct state established,related ct original ip daddr %s %s accept", supernet, mark)
 	w(2, "ct state established,related ct original ip saddr %s %s accept", supernet, mark)
 	w(2, `iifname "%s" ip saddr != %s drop`, Interface, supernet)
+	egress := slices.Clone(r.RegistryEgress)
+	slices.SortFunc(egress, func(a, b Egress) int { return cmp.Or(a.From.Compare(b.From), a.To.Compare(b.To)) })
+	for _, e := range slices.Compact(egress) {
+		w(2, `iifname != "%s" oifname "%s" ip saddr %s ip daddr %s tcp dport %d %s accept`,
+			Interface, Interface, e.From, e.To.Addr(), e.To.Port(), mark)
+	}
 	w(2, `iifname != "%s" ct original ip daddr %s ip saddr vmap @bridge_env`, Interface, supernet)
 	// SECURITY: a container without a mesh IP (or with one this node does
 	// not know yet) never reaches the mesh; Docker would masquerade it to
@@ -222,6 +263,10 @@ func Render(r Ruleset) string {
 			w(2, `iifname "%s" oifname "%s" ip saddr %s ip daddr %s %s accept`, Interface, Interface, dir[0], dir[1], mark)
 		}
 	}
+	// NOTE: a primary's mesh registry listener is a container published on
+	// .1, so Docker's DNAT makes its connections forwarded, not input.
+	w(2, `iifname "%s" ip saddr @nodes meta l4proto tcp ct original ip daddr %s ct original proto-dst %d %s accept`,
+		Interface, r.Address, RegistryPort, mark)
 	w(2, `iifname "%s" ct original ip daddr vmap @mesh_env_in`, Interface)
 	w(2, `iifname "%s" drop`, Interface)
 	w(2, `oifname "%s" drop`, Interface)
@@ -234,24 +279,25 @@ func Render(r Ruleset) string {
 	w(2, `ip daddr %s udp dport 53 iifname != "%s" accept`, r.DNSAddress, Interface)
 	w(2, `ip daddr %s tcp dport 53 iifname != "%s" accept`, r.DNSAddress, Interface)
 	w(2, "ip daddr %s drop", r.DNSAddress)
-	w(2, `iifname "%s" ip daddr %s tcp dport 5000 ip saddr @nodes accept`, Interface, r.Address)
+	w(2, `iifname "%s" ip daddr %s tcp dport %d ip saddr @nodes accept`, Interface, r.Address, RegistryPort)
 	w(2, `iifname "%s" ip daddr %s icmp type echo-request accept`, Interface, r.Address)
 	// SECURITY: nothing else on this host answers over the mesh, whichever
 	// local address a peer puts in its packets.
 	w(2, `iifname "%s" drop`, Interface)
 	w(1, "}")
-	w(0, "}")
-	return b.String()
 }
 
 // set writes a set or map declaration; kind is a set name, or "map " and a
 // map name. An empty set has no elements line, which nft would reject.
-func set(w func(int, string, ...any), kind, typ string, elements []string) {
+func set(w writer, kind, typ string, elements []string, flags ...string) {
 	if !strings.HasPrefix(kind, "map ") {
 		kind = "set " + kind
 	}
 	w(1, "%s {", kind)
 	w(2, "type %s", typ)
+	if len(flags) > 0 {
+		w(2, "flags %s", strings.Join(flags, ", "))
+	}
 	if len(elements) > 0 {
 		w(2, "elements = { %s }", strings.Join(elements, ", "))
 	}

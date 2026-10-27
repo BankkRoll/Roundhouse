@@ -792,3 +792,135 @@ func TestResolveUDP(t *testing.T) {
 		t.Error("accepted a bad endpoint")
 	}
 }
+
+func TestJobsShareTheTableWithReplicas(t *testing.T) {
+	h := newHarness(t)
+	cfg := meshConfig(peerKey(t))
+	cfg.Addresses = append(cfg.Addresses, protocol.MeshAddress{IP: "10.200.1.20", EnvTag: 4, NodeID: "node_a", PrivateDomain: "cron.production.shop.internal"})
+	h.m.Apply(1, cfg)
+	h.m.SetReplicas([]Replica{{MeshIP: netip.MustParseAddr("10.200.1.10"), BridgeIP: netip.MustParseAddr("172.18.0.2"), Healthy: true}})
+	h.m.SetJobs([]Replica{{MeshIP: netip.MustParseAddr("10.200.1.20"), BridgeIP: netip.MustParseAddr("172.18.0.9"), Healthy: true}})
+	h.pass(t)
+	for _, want := range []string{"10.200.1.10 : 172.18.0.2", "10.200.1.20 : 172.18.0.9", "172.18.0.9 : jump env_4_out"} {
+		if !strings.Contains(h.fw.script, want) {
+			t.Errorf("table lacks %q:\n%s", want, h.fw.script)
+		}
+	}
+	if h.dns.zone.Askers[netip.MustParseAddr("172.18.0.9")] != 4 {
+		t.Errorf("the job run cannot ask the private DNS: %+v", h.dns.zone.Askers)
+	}
+	// A runtime update leaves the jobs alone, and the run leaves when it exits.
+	h.m.SetReplicas(nil)
+	h.pass(t)
+	if !strings.Contains(h.fw.script, "10.200.1.20 : 172.18.0.9") || strings.Contains(h.fw.script, "172.18.0.2") {
+		t.Errorf("after replicas left:\n%s", h.fw.script)
+	}
+	h.m.SetJobs(nil)
+	h.pass(t)
+	if strings.Contains(h.fw.script, "172.18.0.9") {
+		t.Errorf("job run still in the table after it exited:\n%s", h.fw.script)
+	}
+}
+
+func TestRegistryProxyEgress(t *testing.T) {
+	h := newHarness(t)
+	h.m.Apply(1, meshConfig(peerKey(t)))
+	const rule = `ip saddr 172.20.0.2 ip daddr 10.200.2.1 tcp dport 5000`
+	for _, tc := range []struct {
+		upstream string
+		want     bool
+	}{
+		{"10.200.2.1:5000", true},
+		{"10.200.2.10:5000", false}, // a replica's mesh IP, not a node
+		{"10.200.1.1:5000", false},  // this node
+		{"10.200.2.1:6000", false},
+	} {
+		h.m.SetRegistryProxy(RegistryProxy{BridgeIP: netip.MustParseAddr("172.20.0.2"), Upstream: netip.MustParseAddrPort(tc.upstream)})
+		h.pass(t)
+		got := strings.Contains(h.fw.script, "oifname \"wg0\" ip saddr 172.20.0.2")
+		if got != tc.want || (tc.want && !strings.Contains(h.fw.script, rule)) {
+			t.Errorf("upstream %s: egress rule %v, want %v:\n%s", tc.upstream, got, tc.want, h.fw.script)
+		}
+	}
+	h.m.SetRegistryProxy(RegistryProxy{})
+	h.pass(t)
+	if strings.Contains(h.fw.script, "172.20.0.2") {
+		t.Error("egress rule kept after the proxy left")
+	}
+}
+
+func TestIngressFilterWithAndWithoutMesh(t *testing.T) {
+	h := newHarness(t)
+	sources := []string{"173.245.48.0/20", "2400:cb00::/32"}
+	h.m.SetAllowedSources(&sources)
+	h.pass(t)
+	if h.fw.script != "" {
+		t.Fatal("the table changed before any desired state")
+	}
+
+	// No mesh: the table holds only the filter.
+	h.m.Apply(1, nil)
+	h.pass(t)
+	if !strings.Contains(h.fw.script, "chain ingress_filter") || strings.Contains(h.fw.script, "filter_forward") ||
+		!strings.Contains(h.fw.script, "173.245.48.0/20") || !strings.Contains(h.fw.script, "2400:cb00::/32") {
+		t.Errorf("ingress-only table:\n%s", h.fw.script)
+	}
+
+	// Meshed: both, and other nodes over wg0 are admitted.
+	h.m.Apply(2, meshConfig(peerKey(t)))
+	h.pass(t)
+	if !strings.Contains(h.fw.script, "chain ingress_filter") || !strings.Contains(h.fw.script, "chain filter_forward") ||
+		!strings.Contains(h.fw.script, `iifname "wg0" ip saddr @nodes accept`) {
+		t.Errorf("meshed table:\n%s", h.fw.script)
+	}
+	if ok, why := h.m.Ready(); !ok {
+		t.Errorf("not ready: %s", why)
+	}
+
+	// Leaving the mesh keeps the filter.
+	h.m.Apply(3, nil)
+	h.pass(t)
+	if !strings.Contains(h.fw.script, "chain ingress_filter") || strings.Contains(h.fw.script, "filter_forward") || h.fw.removed {
+		t.Errorf("after the mesh left:\n%s", h.fw.script)
+	}
+
+	// No sources: the table goes, once.
+	h.m.SetAllowedSources(nil)
+	h.pass(t)
+	if !h.fw.removed || h.fw.script != "" {
+		t.Errorf("table kept without sources or mesh:\n%s", h.fw.script)
+	}
+	h.fw.removed = false
+	h.pass(t)
+	if h.fw.removed {
+		t.Error("removed the table again")
+	}
+}
+
+func TestOffModeKeepsIngressFilter(t *testing.T) {
+	h := newHarness(t)
+	h.m.opts.Mode = ModeOff
+	sources := []string{"198.51.100.0/24"}
+	h.m.SetAllowedSources(&sources)
+	h.m.Apply(1, meshConfig(peerKey(t)))
+	h.pass(t)
+	if h.plat.dev != nil || !strings.Contains(h.fw.script, "chain ingress_filter") || strings.Contains(h.fw.script, "filter_forward") {
+		t.Errorf("off mode: device %v table:\n%s", h.plat.dev, h.fw.script)
+	}
+}
+
+func TestIngressFilterSurvivesABadMeshConfig(t *testing.T) {
+	h := newHarness(t)
+	sources := []string{"198.51.100.0/24"}
+	h.m.SetAllowedSources(&sources)
+	cfg := meshConfig(peerKey(t))
+	cfg.Addresses = []protocol.MeshAddress{{IP: "10.9.0.1", EnvTag: 1, NodeID: "node_a"}}
+	h.m.Apply(1, cfg)
+	h.pass(t)
+	if ok, _ := h.m.Ready(); ok {
+		t.Error("ready with a mesh config the table refused")
+	}
+	if !strings.Contains(h.fw.script, "chain ingress_filter") {
+		t.Errorf("ingress filter lifted by a bad mesh config:\n%s", h.fw.script)
+	}
+}

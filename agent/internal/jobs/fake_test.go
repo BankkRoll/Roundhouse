@@ -38,6 +38,8 @@ type fakeContainer struct {
 	exited  chan struct{}
 	logs    []fakeLine
 	signals []string
+	// ip is its address on its network while it runs.
+	ip string
 }
 
 // fakeDocker is an in-memory engine for the runner.
@@ -102,8 +104,15 @@ func (f *fakeDocker) InspectContainer(_ context.Context, id string) (docker.Cont
 	if c == nil {
 		return docker.ContainerInfo{}, notFound("container")
 	}
-	return docker.ContainerInfo{ID: c.id, Name: "/" + c.name, State: c.state,
-		Config: docker.ContainerConfig{Image: c.spec.Image, Labels: c.spec.Labels, Env: c.spec.Env}}, nil
+	info := docker.ContainerInfo{ID: c.id, Name: "/" + c.name, State: c.state,
+		Config: docker.ContainerConfig{Image: c.spec.Image, Labels: c.spec.Labels, Env: c.spec.Env}}
+	if c.state.Running && c.spec.NetworkingConfig != nil {
+		info.NetworkSettings.Networks = map[string]docker.EndpointInfo{}
+		for name := range c.spec.NetworkingConfig.EndpointsConfig {
+			info.NetworkSettings.Networks[name] = docker.EndpointInfo{IPAddress: c.ip}
+		}
+	}
+	return info, nil
 }
 
 func (f *fakeDocker) CreateContainer(ctx context.Context, name string, spec docker.ContainerCreate) (string, error) {
@@ -122,7 +131,7 @@ func (f *fakeDocker) CreateContainer(ctx context.Context, name string, spec dock
 	}
 	f.nextID++
 	id := fmt.Sprintf("%064x", f.nextID)
-	f.containers[id] = &fakeContainer{id: id, name: name, spec: spec, exited: make(chan struct{}),
+	f.containers[id] = &fakeContainer{id: id, name: name, spec: spec, exited: make(chan struct{}), ip: fmt.Sprintf("172.30.0.%d", f.nextID+1),
 		state: docker.ContainerState{Status: "created"}}
 	return id, ctx.Err()
 }

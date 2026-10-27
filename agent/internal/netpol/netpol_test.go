@@ -93,6 +93,89 @@ func TestRenderGolden(t *testing.T) {
 	}
 }
 
+// cloudflareSources is a slice of Cloudflare's published ranges, with an
+// overlap and a duplicate the agent must fold away.
+var cloudflareSources = []string{
+	"173.245.48.0/20", "103.21.244.0/22", "104.16.0.0/13", "104.24.0.0/14", "104.16.0.0/12", "104.16.5.0/24",
+	"2400:cb00::/32", "2606:4700::/32", "2400:cb00::/32",
+}
+
+func TestRenderIngressGolden(t *testing.T) {
+	filter, err := ParseIngress(&cloudflareSources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("ingress-only", func(t *testing.T) {
+		golden(t, "ingress-only", Render(Ruleset{Ingress: filter}))
+	})
+	t.Run("ingress-meshed", func(t *testing.T) {
+		m := base()
+		m.NodeAddresses = []string{"10.200.1.1", "10.200.2.1"}
+		r, err := Build(m, "node_a", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Ingress = filter
+		golden(t, "ingress-meshed", Render(r))
+	})
+	t.Run("ingress-v4-only", func(t *testing.T) {
+		f, err := ParseIngress(&[]string{"198.51.100.0/24"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		golden(t, "ingress-v4-only", Render(Ruleset{Ingress: f}))
+	})
+}
+
+func TestRenderRegistryEgressGolden(t *testing.T) {
+	m := base()
+	m.NodeAddresses = []string{"10.200.1.1", "10.200.2.1"}
+	r, err := Build(m, "node_a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := netip.MustParseAddrPort("10.200.2.1:5000")
+	r.RegistryEgress = []Egress{{From: addr("172.20.0.2"), To: upstream}, {From: addr("172.20.0.2"), To: upstream}}
+	golden(t, "registry-egress", Render(r))
+}
+
+func TestParseIngress(t *testing.T) {
+	if f, err := ParseIngress(nil); f != nil || err != nil {
+		t.Errorf("nil sources: %v, %v", f, err)
+	}
+	f, err := ParseIngress(&cloudflareSources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want4 := []string{"103.21.244.0/22", "104.16.0.0/12", "173.245.48.0/20"}
+	want6 := []string{"2400:cb00::/32", "2606:4700::/32"}
+	if got := prefixes(f.V4); !slices.Equal(got, want4) {
+		t.Errorf("v4 = %v, want %v", got, want4)
+	}
+	if got := prefixes(f.V6); !slices.Equal(got, want6) {
+		t.Errorf("v6 = %v, want %v", got, want6)
+	}
+	f, err = ParseIngress(&[]string{"10.1.2.3/8"})
+	if err != nil || prefixes(f.V4)[0] != "10.0.0.0/8" {
+		t.Errorf("unmasked prefix: %v, %v", f, err)
+	}
+	if f.String() != "1 IPv4 and 0 IPv6 ranges" || (*IngressFilter)(nil).String() != "none" {
+		t.Errorf("String = %q", f.String())
+	}
+	// Fails closed: bad entries are left out, the filter stays.
+	f, err = ParseIngress(&[]string{"10.0.0.0", "198.51.100.0/24"})
+	if err == nil || f == nil || !slices.Equal(prefixes(f.V4), []string{"198.51.100.0/24"}) {
+		t.Errorf("partly bad sources: %v, %v", f, err)
+	}
+	f, err = ParseIngress(&[]string{"nope/8"})
+	if err == nil || f == nil || len(f.V4)+len(f.V6) != 0 {
+		t.Errorf("all bad sources: %v, %v", f, err)
+	}
+	if f, err := ParseIngress(&[]string{}); err != nil || f == nil {
+		t.Errorf("empty sources: %v, %v", f, err)
+	}
+}
+
 func TestRenderDeterministic(t *testing.T) {
 	m := base()
 	m.Addresses = []protocol.MeshAddress{

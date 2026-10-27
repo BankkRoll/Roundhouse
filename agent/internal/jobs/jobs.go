@@ -118,6 +118,14 @@ type Options struct {
 	// Network makes sure the run's environment network exists and is
 	// firewalled before its container joins it; nil assumes it does.
 	Network func(ctx context.Context, w *protocol.WorkloadSpec) error
+	// PrivateDNS returns the mesh's private DNS address for runs with
+	// private_dns, "" when none is listening; pending means the mesh is
+	// still coming up and the answer will change shortly. Nil means no
+	// mesh.
+	PrivateDNS func() (addr string, pending bool)
+	// MeshRuns receives the running runs with a mesh IP whenever they
+	// change (ADR 0005); nil means no mesh.
+	MeshRuns func([]MeshRun)
 	// Namespace labels job containers (roundhouse.namespace) and limits
 	// orphan removal to them; the agent sets the node ID. Empty disables
 	// orphan removal, since another agent's jobs would look like orphans.
@@ -187,6 +195,12 @@ type run struct {
 	// attached means a goroutine of this process works on the run.
 	attached bool
 	cleaning bool
+	// meshIP is the workload's mesh IP, "" for none; network is its
+	// environment network. Both are persisted, so a re-attached run
+	// rejoins the mesh.
+	meshIP, network string
+	// mesh is the run's mesh IP and bridge IP while it runs on the mesh.
+	mesh *MeshRun
 }
 
 func (rn *run) terminal() bool { return rn.status.State.Terminal() }
@@ -209,6 +223,8 @@ type Runner struct {
 	// saveMu orders writes of jobs.json, so an older snapshot never
 	// overwrites a newer one.
 	saveMu sync.Mutex
+	// meshMu orders reports to [Options.MeshRuns].
+	meshMu sync.Mutex
 
 	mu   sync.Mutex
 	runs map[string]*run
@@ -265,7 +281,10 @@ func (r *Runner) Start(m *protocol.JobRun) {
 		r.poke()
 		return
 	}
-	rn := &run{id: m.RunID, workloadID: w.ID, timeoutS: m.TimeoutS, graceS: m.KillGraceS, cancelCh: make(chan struct{})}
+	rn := &run{
+		id: m.RunID, workloadID: w.ID, timeoutS: m.TimeoutS, graceS: m.KillGraceS, cancelCh: make(chan struct{}),
+		meshIP: w.MeshIP, network: w.Network,
+	}
 	r.runs[rn.id] = rn
 	reason := admit(m, r.opts.Refusal)
 	if reason == "" && r.inFlightLocked() > r.opts.MaxConcurrent {
