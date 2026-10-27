@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { clearToasts } from "@roundhouse/ui";
 import { act, cleanup, configure } from "@testing-library/react";
-import { afterAll, afterEach, beforeAll } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
 import { resetCloudflareMock } from "../mocks/cloudflare-handlers";
 import { resetDb } from "../mocks/db";
 import { resetRealtime } from "../mocks/deploy-handlers";
@@ -35,6 +35,11 @@ window.scrollTo = () => {};
 configure({ asyncUtilTimeout: 4_000 });
 
 beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
+
+// NOTE: The seed stamps heartbeats and other ages from Date.now() when it is built. The
+// first test in a file would otherwise get the copy built at import time, which can be
+// tens of seconds old under a loaded parallel run, so "seen 4s ago" reads "1m ago".
+beforeEach(() => resetDb());
 
 afterEach(() => {
   cleanup();
