@@ -62,6 +62,19 @@ describe("environment protection", () => {
     expect(db.access.rules[SEED.production]?.deploy.roles).toEqual(["developer", "deployer"]);
   });
 
+  it("requires approval for staged changes once switched on", async () => {
+    production().protected = true;
+    const { user } = renderAs("owner");
+    const toggle = await screen.findByRole("switch", {
+      name: "Require approval for staged changes",
+    });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(db.changes.requireApproval[SEED.production]).toBe(true));
+    expect(production().protected).toBe(true);
+  });
+
   it("turns protection off after confirming the password", async () => {
     production().protected = true;
     db.sessionStale = true;

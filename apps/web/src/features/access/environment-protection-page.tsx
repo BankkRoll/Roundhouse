@@ -260,16 +260,21 @@ function ProtectionForm({
   const put = usePutProtection(workspaceId, projectId, environment.id);
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [rules, setRules] = useState<Rules | null>(null);
+  const [approval, setApproval] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const switchId = useId();
+  const approvalId = useId();
   const nextEnabled = enabled ?? protection.protected;
+  const nextApproval = approval ?? protection.require_approval;
+  const approvalDirty = nextApproval !== protection.require_approval;
   const nextRules = rules ?? protection.rules;
   const rulesDirty = rules !== null && JSON.stringify(rules) !== JSON.stringify(protection.rules);
-  const dirty = nextEnabled !== protection.protected || rulesDirty;
+  const dirty = nextEnabled !== protection.protected || rulesDirty || approvalDirty;
 
   function discard() {
     setEnabled(null);
     setRules(null);
+    setApproval(null);
     setError(null);
   }
 
@@ -277,7 +282,11 @@ function ProtectionForm({
     event.preventDefault();
     setError(null);
     put.mutate(
-      { protected: nextEnabled, ...(rulesDirty ? { rules: nextRules } : {}) },
+      {
+        protected: nextEnabled,
+        ...(rulesDirty ? { rules: nextRules } : {}),
+        ...(approvalDirty ? { require_approval: nextApproval } : {}),
+      },
       {
         onSuccess: (saved) => {
           discard();
@@ -326,6 +335,24 @@ function ProtectionForm({
               disabled={!canManage}
               aria-describedby={`${switchId}-description`}
               onCheckedChange={(checked) => setEnabled(checked)}
+            />
+          </SettingsRow>
+          <SettingsRow
+            label="Require approval for staged changes"
+            description={
+              nextEnabled
+                ? "Change sets apply here only after someone with approval rights, who neither staged them nor applies them, approves the exact revision. Direct edits still follow the rules below."
+                : "Takes effect while the environment is protected."
+            }
+            htmlFor={approvalId}
+            control="switch"
+          >
+            <Switch
+              id={approvalId}
+              checked={nextApproval}
+              disabled={!canManage}
+              aria-describedby={`${approvalId}-description`}
+              onCheckedChange={(checked) => setApproval(checked)}
             />
           </SettingsRow>
         </SettingsSection>
