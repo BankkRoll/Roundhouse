@@ -399,6 +399,7 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `servers list\|add [--provider]`                         | Servers; `add` prints the install command, or provisions  |
 | `servers remove <server> [--keep-server] [-y]`           | Remove a server; deletes a provisioned cloud server too   |
 | `servers cancel <provision-id> [--no-wait]`              | Cancel a provisioning run and delete what it created      |
+| `servers label <server> [key=value ...] [--remove key]`  | Show or change the labels placement selectors match       |
 | `servers metrics <server> [--range] [-m]`                | A server's CPU, memory, disk and load                     |
 | `db create\|list\|info\|query\|tables`                   | Database services and read-only queries                   |
 | `db volume [resize\|move\|migrations\|delete\|undelete]` | A database's volume; moves it between servers             |

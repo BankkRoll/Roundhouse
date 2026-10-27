@@ -112,7 +112,7 @@ func (a *App) serversCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "servers",
 		Aliases: []string{"server", "nodes"},
-		Short:   "List, add and remove servers, and show their usage",
+		Short:   "List, add, label and remove servers, and show their usage",
 		Example: `  roundhouse servers list
   roundhouse servers add
   roundhouse servers remove web-1`,
@@ -146,13 +146,13 @@ func (a *App) serversCmd() *cobra.Command {
 				fmt.Fprintf(a.IO.Out, "No servers in %s. Add one with `roundhouse servers add`.\n", ws.Name)
 				return nil
 			}
-			t := a.newTable("name", "id", "provider", "ip", "arch", "agent", "est. cost", "last seen", "status")
+			t := a.newTable("name", "id", "provider", "ip", "arch", "agent", "labels", "est. cost", "last seen", "status")
 			for _, n := range nodes {
 				seen := "-"
 				if n.LastHeartbeatAt != nil {
 					seen = ago(a.Now(), *n.LastHeartbeatAt)
 				}
-				t.row(n.Name, n.ID, orDash(n.Provider), orDash(deref(n.PublicIP)), orDash(deref(n.Arch)), orDash(deref(n.AgentVersion)), estimateLabel(n.EstimatedMonthlyCost), seen, a.IO.OutColor().Status(n.Status))
+				t.row(n.Name, n.ID, orDash(n.Provider), orDash(deref(n.PublicIP)), orDash(deref(n.Arch)), orDash(deref(n.AgentVersion)), orDash(formatLabels(n.Labels)), estimateLabel(n.EstimatedMonthlyCost), seen, a.IO.OutColor().Status(n.Status))
 			}
 			t.flush()
 			if totals := estimateTotals(nodes); len(totals) > 0 {
@@ -223,7 +223,7 @@ API tokens cannot provision.`,
 	}
 	add.Flags().StringVarP(&addWorkspace, "workspace", "w", "", "workspace ID, slug or name")
 	pf.register(add)
-	cmd.AddCommand(list, add, a.serversMetricsCmd(), a.serversRemoveCmd(), a.serversCancelCmd())
+	cmd.AddCommand(list, add, a.serversMetricsCmd(), a.serversRemoveCmd(), a.serversCancelCmd(), a.serversLabelCmd())
 	return cmd
 }
 

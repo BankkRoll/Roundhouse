@@ -3,6 +3,9 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
+	"net/http"
 	"slices"
 	"testing"
 
@@ -213,5 +216,112 @@ func TestFormatMoney(t *testing.T) {
 	}
 	if estimateLabel(nil) != "-" {
 		t.Error("nil estimate should render as -")
+	}
+}
+
+func labelBodies(t *testing.T, h *harness) []map[string]string {
+	t.Helper()
+	var out []map[string]string
+	for _, req := range h.fake.Requests() {
+		if req.Pattern == api.RouteNodeLabels.Method+" "+api.RouteNodeLabels.Path {
+			var in api.NodeLabelsInput
+			if err := json.Unmarshal([]byte(req.Body), &in); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, in.Labels)
+		}
+	}
+	return out
+}
+
+func TestServersLabel(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+
+	r := h.ok("", "servers", "label", "edge-1")
+	contains(t, r.stdout, "edge-1 has no labels")
+
+	r = h.ok("", "servers", "label", "edge-1", "builder=fork", "zone=eu", "empty=")
+	contains(t, r.stdout, "builder   fork")
+	contains(t, r.stdout, "zone      eu")
+	r = h.ok("", "servers", "label", apitest.NodeID, "zone=us", "--remove", "builder,empty", "--json")
+	var n api.Node
+	if err := json.Unmarshal([]byte(r.stdout), &n); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"zone": "us"}; !maps.Equal(n.Labels, want) {
+		t.Fatalf("labels = %v, want %v", n.Labels, want)
+	}
+	bodies := labelBodies(t, h)
+	if len(bodies) != 2 || !maps.Equal(bodies[0], map[string]string{"builder": "fork", "zone": "eu", "empty": ""}) {
+		t.Fatalf("PUT bodies: %v", bodies)
+	}
+
+	r = h.ok("", "servers", "list")
+	contains(t, r.stdout, "zone=us")
+	r = h.ok("", "servers", "list", "--json")
+	contains(t, r.stdout, `"labels": {`)
+
+	// Nothing changes: no request, and removing a missing label warns.
+	r = h.ok("", "servers", "label", "edge-1", "zone=us", "--remove", "nope")
+	contains(t, r.stderr, "edge-1 has no label nope")
+	if len(labelBodies(t, h)) != 2 {
+		t.Fatal("an unchanged set was sent")
+	}
+	h.ok("", "servers", "label", "edge-1", "--remove", "zone")
+	if got := labelBodies(t, h); len(got) != 3 || len(got[2]) != 0 {
+		t.Fatalf("removing the last label sent %v", got)
+	}
+
+	for _, args := range [][]string{
+		{"Zone=eu"}, {"zone"}, {"zone=-eu"}, {"zone=a b"}, {"zone=eu", "zone=us"}, {"zone=eu", "--remove", "zone"},
+	} {
+		r = h.expect(exitcode.Usage, "", append([]string{"servers", "label", "edge-1"}, args...)...)
+		if len(labelBodies(t, h)) != 3 {
+			t.Fatalf("%v sent a request", args)
+		}
+	}
+	var many []string
+	for i := range 17 {
+		many = append(many, fmt.Sprintf("k%d=v", i))
+	}
+	r = h.expect(exitcode.Usage, "", append([]string{"servers", "label", "edge-1"}, many...)...)
+	contains(t, r.stderr, "at most 16 labels")
+	h.expect(exitcode.NotFound, "", "servers", "label", "nope", "a=b")
+}
+
+func TestServersLabelNeedsNodesManage(t *testing.T) {
+	h := newHarness(t)
+	h.env[EnvURL] = h.fake.URL
+	h.env[EnvToken] = h.fake.AddToken("ci", "workspace:read", "nodes:read")
+	r := h.ok("", "servers", "label", "edge-1", "--insecure")
+	contains(t, r.stdout, "no labels")
+	r = h.expect(exitcode.Forbidden, "", "servers", "label", "edge-1", "builder=fork", "--insecure")
+	contains(t, r.stderr, "lacks the nodes:manage scope")
+	if n := h.fake.Nodes()[0]; len(n.Labels) != 0 {
+		t.Fatalf("forbidden request changed labels: %v", n.Labels)
+	}
+}
+
+// TestFakeValidatesNodeLabels checks the fake refuses what the API refuses,
+// for requests that skip the CLI's own checks.
+func TestFakeValidatesNodeLabels(t *testing.T) {
+	h := newHarness(t)
+	c, err := api.New(api.Options{BaseURL: h.fake.URL, Insecure: true,
+		Credential: api.BearerToken(h.fake.AddToken("ci", "nodes:manage"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	many := map[string]string{}
+	for i := range 17 {
+		many[fmt.Sprintf("k%d", i)] = "v"
+	}
+	for _, labels := range []map[string]string{{"Bad": "x"}, {"ok": "-x"}, many} {
+		if _, err := c.SetNodeLabels(context.Background(), apitest.WorkspaceID, apitest.NodeID, labels); !api.IsStatus(err, http.StatusBadRequest) {
+			t.Errorf("SetNodeLabels(%v) = %v, want 400", labels, err)
+		}
+	}
+	if _, err := c.SetNodeLabels(context.Background(), apitest.WorkspaceID, "node_missing", nil); !api.IsStatus(err, http.StatusNotFound) {
+		t.Errorf("missing server: %v, want 404", err)
 	}
 }

@@ -427,7 +427,8 @@
               "preview.approved",
               "preview.expired",
               "preview.closed",
-              "preview.deleted"
+              "preview.deleted",
+              "node.labels_updated"
             ],
             "type": "string"
           },
@@ -1587,7 +1588,8 @@
               "preview.approved",
               "preview.expired",
               "preview.closed",
-              "preview.deleted"
+              "preview.deleted",
+              "node.labels_updated"
             ],
             "type": "string"
           },
@@ -5508,6 +5510,12 @@
               "null"
             ]
           },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "last_heartbeat_at": {
             "description": "Unix time in milliseconds",
             "example": 1767225600000,
@@ -5613,6 +5621,7 @@
           "agent_version",
           "workloads_blocked",
           "capabilities",
+          "labels",
           "cpu_total",
           "mem_total",
           "disk_total",
@@ -5622,6 +5631,21 @@
           "load1",
           "last_heartbeat_at",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "NodeLabels": {
+        "properties": {
+          "labels": {
+            "additionalProperties": {
+              "pattern": "^([A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?)?$",
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "labels"
         ],
         "type": "object"
       },
@@ -15446,7 +15470,8 @@
                 "preview.approved",
                 "preview.expired",
                 "preview.closed",
-                "preview.deleted"
+                "preview.deleted",
+                "node.labels_updated"
               ],
               "type": "string"
             }
@@ -26780,6 +26805,103 @@
           }
         ],
         "summary": "Get a server",
+        "tags": [
+          "nodes"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspaceId}/nodes/{nodeId}/labels": {
+      "put": {
+        "description": "Labels are matched by placement selectors and by a project's preview build node selector. Changing them never moves running workloads.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeLabels"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Replace a server's labels",
         "tags": [
           "nodes"
         ]

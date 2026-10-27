@@ -43,6 +43,7 @@ var (
 	RouteNodeProvision   = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/node-provisions/{provisionId}"}
 	RouteCancelProvision = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/node-provisions/{provisionId}/cancel"}
 	RouteRemoveNode      = Route{http.MethodDelete, "/v1/workspaces/{workspaceId}/nodes/{nodeId}"}
+	RouteNodeLabels      = Route{http.MethodPut, "/v1/workspaces/{workspaceId}/nodes/{nodeId}/labels"}
 	RouteRealtime        = Route{http.MethodGet, "/v1/projects/{projectId}/realtime"}
 	RouteListTokens      = Route{http.MethodGet, "/v1/workspaces/{workspaceId}/tokens"}
 	RouteCreateToken     = Route{http.MethodPost, "/v1/workspaces/{workspaceId}/tokens"}
@@ -72,7 +73,7 @@ var Routes = []Route{
 	RouteDeploymentLogs, RouteBuildLogs, RouteListDomains, RouteListNodes, RouteJoinToken,
 	RouteAddDomain, RouteGetDomain, RouteUpdateDomain, RouteCheckDomain, RouteRemoveDomain,
 	RouteIntegrations, RouteProviderOffers, RouteProvisionNode, RouteNodeProvision,
-	RouteCancelProvision, RouteRemoveNode,
+	RouteCancelProvision, RouteRemoveNode, RouteNodeLabels,
 	RouteRealtime, RouteListTokens, RouteCreateToken, RouteRevokeToken,
 	RouteListTemplates, RouteGetTemplate, RouteFromTemplate, RouteDeployTemplate,
 	RouteListChangeSets, RouteGetDraft, RouteGetChangeSet, RouteReviewChangeSet,
@@ -507,6 +508,21 @@ func (c *Client) RemoveNode(ctx context.Context, workspaceID, nodeID string, kee
 		q = url.Values{"keep_server": {"true"}}
 	}
 	return c.call(ctx, RouteRemoveNode, q, nil, nil, workspaceID, nodeID)
+}
+
+// NodeLabelsInput is the body of PUT …/nodes/{nodeId}/labels.
+type NodeLabelsInput struct {
+	// Labels is the complete new set; labels left out are removed.
+	Labels map[string]string `json:"labels"`
+}
+
+// SetNodeLabels replaces a server's labels with labels. Running workloads
+// stay where they are; selectors match the new labels from then on.
+func (c *Client) SetNodeLabels(ctx context.Context, workspaceID, nodeID string, labels map[string]string) (*Node, error) {
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	return fetch[Node](ctx, c, RouteNodeLabels, nil, NodeLabelsInput{Labels: labels}, workspaceID, nodeID)
 }
 
 // -----------------------------------------------------------------------------

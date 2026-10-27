@@ -200,6 +200,7 @@ func TestWireTypesMatchSchemas(t *testing.T) {
 		"CronEnvironment":           CronEnvironmentInput{},
 		"UpdateService":             UpdateServiceInput{},
 		"UpdatedService":            UpdatedService{},
+		"NodeLabels":                NodeLabelsInput{},
 		"Preview":                   Preview{},
 		"PreviewService":            PreviewService{},
 		"ApprovePreview":            ApprovePreviewInput{},

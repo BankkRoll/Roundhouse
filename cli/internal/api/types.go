@@ -449,17 +449,20 @@ type Node struct {
 	AgentVersion         *string       `json:"agent_version"`
 	// WorkloadsBlocked says why the server takes no workloads, e.g.
 	// "upgrade_agent"; nil when it takes them.
-	WorkloadsBlocked *string         `json:"workloads_blocked"`
-	Capabilities     json.RawMessage `json:"capabilities"`
-	CPUTotal         *float64        `json:"cpu_total"`
-	MemTotal         *float64        `json:"mem_total"`
-	DiskTotal        *float64        `json:"disk_total"`
-	CPUPercent       *float64        `json:"cpu_percent"`
-	MemUsed          *float64        `json:"mem_used"`
-	DiskUsed         *float64        `json:"disk_used"`
-	Load1            *float64        `json:"load1"`
-	LastHeartbeatAt  *int64          `json:"last_heartbeat_at"`
-	CreatedAt        int64           `json:"created_at"`
+	WorkloadsBlocked *string `json:"workloads_blocked"`
+	// Labels are operator-set key/value pairs that placement selectors and
+	// a project's preview build node selector match.
+	Labels          map[string]string `json:"labels"`
+	Capabilities    json.RawMessage   `json:"capabilities"`
+	CPUTotal        *float64          `json:"cpu_total"`
+	MemTotal        *float64          `json:"mem_total"`
+	DiskTotal       *float64          `json:"disk_total"`
+	CPUPercent      *float64          `json:"cpu_percent"`
+	MemUsed         *float64          `json:"mem_used"`
+	DiskUsed        *float64          `json:"disk_used"`
+	Load1           *float64          `json:"load1"`
+	LastHeartbeatAt *int64            `json:"last_heartbeat_at"`
+	CreatedAt       int64             `json:"created_at"`
 }
 
 // JoinToken is a single-use node join token and the command that uses it.
