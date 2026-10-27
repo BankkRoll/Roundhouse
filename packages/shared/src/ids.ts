@@ -68,6 +68,8 @@ export const ID_PREFIXES = {
   dbQuery: "dbq",
   /** A published TCP port of a single-replica service (ADR 0004). */
   tcpProxy: "tcp",
+  /** A control-plane-issued TLS certificate (ADR 0009); also names its workflow instances. */
+  certificate: "cer",
 } as const;
 
 /** An entity kind that has an ID prefix. */

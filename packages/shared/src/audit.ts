@@ -92,6 +92,10 @@ export const AUDIT_ACTIONS = [
   "domain.verified",
   "domain.failed",
   "domain.removed",
+  "domain.updated",
+  "certificate.issued",
+  "certificate.renewed",
+  "certificate.failed",
   "mcp_client.authorized",
   "mcp_client.revoked",
   "template.deployed",
@@ -161,4 +165,11 @@ export const INSTANCE_AUDIT_ACTIONS = [
   "auth.session_revoked",
   /** Recorded in the invite's workspace instead when the token matches an expired or used invite. */
   "invite.rejected_token",
+  /**
+   * The apps wildcard certificate belongs to no workspace; a custom domain's
+   * certificate events are recorded in that domain's workspace instead.
+   */
+  "certificate.issued",
+  "certificate.renewed",
+  "certificate.failed",
 ] as const satisfies readonly AuditAction[];
