@@ -194,8 +194,7 @@ sets one under Settings → Backups) backup commands exit 6 with
 
 `restore` asks for the database's slug (`--confirm` in scripts); `in_place`
 takes a safety backup first unless `--skip-safety-backup` is given.
-Restoring and decrypting need a recent sign-in: on `reauth_required` (exit
-4) run `roundhouse login` again. API tokens never qualify.
+Restoring and decrypting need a recent sign-in: on `reauth_required` (exit 4) run `roundhouse login` again. API tokens never qualify.
 
 `download` fetches the encrypted object straight from object storage,
 without the control plane's credential, verifies its SHA-256, and writes it
@@ -205,6 +204,38 @@ decrypts with [age](https://age-encryption.org) as it downloads; the key is
 never printed or saved. The result is a zstd-compressed RHBK1 archive
 (`packages/protocol/rhbk.md`). `-o -` writes to stdout; an existing file is
 replaced only with `--force`.
+
+## Cron services
+
+```sh
+roundhouse services create nightly --kind cron --image ghcr.io/acme/report:1 \
+  --schedule "0 3 * * *" --timezone Europe/Berlin
+roundhouse cron set --retries 2 --retry-backoff 2m --timeout 30m
+roundhouse cron status                      # schedule, paused or not, next runs
+roundhouse cron runs --status failed
+roundhouse cron run --wait                  # run now and stream its output
+roundhouse cron logs crn_01J9Z6Y4M0V8 -f
+roundhouse cron cancel crn_01J9Z6Y4M0V8
+roundhouse cron pause                       # and `cron resume`
+roundhouse cron preview "*/15 9-17 * * MON-FRI" --timezone Europe/Berlin
+```
+
+Commands act on `--service`, else the linked service when it is a cron
+service, else the project's only one. `cron run` exits 6 with
+`run_in_progress` while a run is in progress; `--force` cancels that run
+first. With `--wait` it exits 1 unless the run succeeds. `cron preview`
+exits 7 for an invalid schedule or zone and underlines the offending part.
+
+`services create --kind cron` needs `--schedule` (`--timezone` defaults to
+UTC). `cron set` changes only the flags given: `--schedule`, `--timezone`,
+`--concurrency forbid|replace|allow`, `--timeout` (10s to 24h),
+`--starting-deadline` (0s to 1h), `--retries` (0 to 5), `--retry-backoff`
+(10s to 1h) and `--history-limit` (10 to 1000). Durations take seconds or a
+value such as `90s`, `15m` or `2h`; a value out of bounds exits 2 before any
+request. The change is saved as a new config version in the environment and
+applies on the next `roundhouse deploy`; until then `cron status` shows the
+saved schedule next to the armed one. An invalid schedule or zone exits 7
+with the same underline as `cron preview`.
 
 ## Variables
 
@@ -298,7 +329,7 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `run -- <cmd>`                                      | Run a local command with the service's variables         |
 | `projects list\|create\|delete`                     | Projects; deletes need the typed slug                    |
 | `templates list\|show\|deploy`                      | Built-in templates; deploy as a new project or into one  |
-| `services list\|create\|delete`                     | Services; deletes need the typed slug                    |
+| `services list\|create\|delete`                     | Services; cron ones need `--schedule`; typed deletes     |
 | `domain [--all]`                                    | The service's domains                                    |
 | `servers list\|add [--provider]`                    | Servers; `add` prints the install command, or provisions |
 | `servers remove <server> [--keep-server] [-y]`      | Remove a server; deletes a provisioned cloud server too  |
@@ -307,6 +338,9 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `db create\|list\|info\|query\|tables`              | Database services and read-only queries                  |
 | `db volume [resize\|delete\|undelete]`              | A database's volume                                      |
 | `db backups list\|run\|policy\|restore\|download`   | Backups, schedules, restores, decrypted downloads        |
+| `cron status\|runs\|run\|cancel\|logs`              | Cron services: schedule, run history, run now, output    |
+| `cron set [--schedule] [--timezone] [--retries] …`  | Change a cron service's schedule and run rules           |
+| `cron pause\|resume`, `cron preview <schedule>`     | Pause or resume scheduling; a schedule's next slots      |
 | `tokens list\|create\|revoke`                       | Workspace API tokens for CI and scripts                  |
 | `version`, `completion`                             | Build info, shell completion                             |
 | `up`, `shell`, `db connect`                         | Not available on the control plane yet (exit 10)         |

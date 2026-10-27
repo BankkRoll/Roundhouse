@@ -125,12 +125,32 @@ type ServiceConfig struct {
 	Healthcheck   json.RawMessage  `json:"healthcheck"`
 	Networking    NetworkingConfig `json:"networking"`
 	Placement     json.RawMessage  `json:"placement"`
+	// Cron is set for a cron service; nil for any other.
+	Cron *CronConfig `json:"cron"`
 }
 
 // CreatedService is the response of POST /v1/projects/{projectId}/services.
 type CreatedService struct {
 	Service Service         `json:"service"`
 	Configs []ServiceConfig `json:"configs"`
+}
+
+// UpdateServiceInput is the body of PATCH /v1/services/{serviceId}, limited
+// to the parts the CLI changes.
+type UpdateServiceInput struct {
+	// EnvironmentID is required with any config part.
+	EnvironmentID string `json:"environment_id,omitempty"`
+	// ExpectedVersion makes the change a 409 unless the latest config
+	// version still is this one.
+	ExpectedVersion int              `json:"expected_version,omitempty"`
+	Cron            *CronConfigPatch `json:"cron,omitempty"`
+}
+
+// UpdatedService is the response of PATCH /v1/services/{serviceId}.
+type UpdatedService struct {
+	Service Service `json:"service"`
+	// Config is the new config version; nil when no config part changed.
+	Config *ServiceConfig `json:"config"`
 }
 
 // Variable tiers, from VARIABLE_TIERS in packages/shared.

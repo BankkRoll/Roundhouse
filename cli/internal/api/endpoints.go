@@ -19,6 +19,7 @@ var (
 	RouteListServices    = Route{http.MethodGet, "/v1/projects/{projectId}/services"}
 	RouteCreateService   = Route{http.MethodPost, "/v1/projects/{projectId}/services"}
 	RouteGetService      = Route{http.MethodGet, "/v1/services/{serviceId}"}
+	RouteUpdateService   = Route{http.MethodPatch, "/v1/services/{serviceId}"}
 	RouteDeleteService   = Route{http.MethodDelete, "/v1/services/{serviceId}"}
 	RouteServiceConfig   = Route{http.MethodGet, "/v1/services/{serviceId}/config"}
 	RouteServiceVars     = Route{http.MethodGet, "/v1/services/{serviceId}/variables"}
@@ -64,7 +65,7 @@ var (
 // Routes lists every REST route in the OpenAPI document that the client calls.
 var Routes = []Route{
 	RouteMe, RouteListProjects, RouteCreateProject, RouteGetProject, RouteDeleteProject,
-	RouteListServices, RouteCreateService, RouteGetService, RouteDeleteService, RouteServiceConfig,
+	RouteListServices, RouteCreateService, RouteGetService, RouteUpdateService, RouteDeleteService, RouteServiceConfig,
 	RouteServiceVars, RoutePutServiceVars, RouteResolveVars,
 	RouteSharedVars, RoutePutSharedVars,
 	RouteListDeployments, RouteCreateDeploy, RouteGetDeployment, RouteRollback, RouteCancel,
@@ -81,6 +82,8 @@ var Routes = []Route{
 	RouteDatabaseQuery, RouteDatabaseSchema,
 	RouteBackupPolicy, RoutePutBackupPolicy, RouteListBackups, RouteCreateBackup, RouteGetBackup,
 	RouteBackupDownload, RouteBackupKey, RouteRestoreBackup, RouteGetRestore,
+	RouteCronState, RouteListCronRuns, RouteTriggerCron, RouteGetCronRun, RouteCronRunLogs,
+	RouteCancelCronRun, RoutePauseCron, RouteResumeCron, RouteCronPreview,
 }
 
 // AuthRoutes lists the Better Auth routes the client calls.
@@ -284,6 +287,13 @@ func (c *Client) CreateService(ctx context.Context, projectID string, in CreateS
 // GetService returns a service.
 func (c *Client) GetService(ctx context.Context, serviceID string) (*Service, error) {
 	return fetch[Service](ctx, c, RouteGetService, nil, nil, serviceID)
+}
+
+// UpdateService changes a service or, with EnvironmentID, stores a new
+// config version in that environment. A config change applies on the next
+// deployment.
+func (c *Client) UpdateService(ctx context.Context, serviceID string, in UpdateServiceInput) (*UpdatedService, error) {
+	return fetch[UpdatedService](ctx, c, RouteUpdateService, nil, in, serviceID)
 }
 
 // DeleteService deletes a service and removes its workloads.

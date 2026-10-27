@@ -408,7 +408,7 @@ func parseMoment(s string, now time.Time) (time.Time, bool) {
 
 // logPrinter writes log lines. Where history and live lines overlap it
 // drops lines already printed, identified by timestamp, stream, replica and
-// text.
+// [dedupe].
 type logPrinter struct {
 	a        *App
 	pal      ui.Palette
@@ -420,7 +420,7 @@ type logPrinter struct {
 // remembered earlier.
 func (p *logPrinter) print(lines []api.LogEntry, skipSeen bool) {
 	for _, l := range lines {
-		if !p.seen.add(fmt.Sprintf("%d\x00%s\x00%s\x00%s", l.TS, l.Stream, l.WorkloadID, l.Text)) && skipSeen {
+		if !p.seen.add(logKey(l)) && skipSeen {
 			continue
 		}
 		if p.a.jsonOut {
@@ -473,4 +473,16 @@ func (d *dedupe) add(key string) bool {
 	d.set[key] = struct{}{}
 	d.next = (d.next + 1) % len(d.ring)
 	return true
+}
+
+// logKey identifies a line by timestamp, stream, replica and text, for
+// [dedupe].
+func logKey(l api.LogEntry) string {
+	return fmt.Sprintf("%d\x00%s\x00%s\x00%s", l.TS, l.Stream, l.WorkloadID, l.Text)
+}
+
+// has reports whether key is remembered.
+func (d *dedupe) has(key string) bool {
+	_, ok := d.set[key]
+	return ok
 }
