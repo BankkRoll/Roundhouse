@@ -41,6 +41,7 @@ import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
 import { refreshNodes } from "../lib/desired-state";
 import { degradeService, placeReplacement, replicasOnNode } from "../lib/moves";
+import { drainBlockers } from "../lib/node-lifecycle";
 import { rolloutTimeoutMs } from "./deploy";
 
 /** Parameters of one drain. */
@@ -163,18 +164,7 @@ export class DrainWorkflow extends WorkflowEntrypoint<Env, DrainParams> {
     const replicas = await replicasOnNode(db, drain.nodeId);
     const stateful = replicas.filter((r) => r.stateful);
     if (stateful.length && !drain.force) {
-      const blocked = [
-        ...new Map(
-          stateful.map((r) => [
-            `${r.serviceId}:${r.environmentId}`,
-            {
-              serviceId: r.serviceId,
-              environmentId: r.environmentId,
-              serviceName: r.serviceName,
-            },
-          ]),
-        ).values(),
-      ];
+      const blocked = drainBlockers(stateful);
       await this.db()
         .update(nodeDrains)
         .set({ status: "blocked", blocked, finishedAt: new Date(), updatedAt: new Date() })

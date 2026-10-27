@@ -11,11 +11,13 @@
  *
  * Domains are listed read-only (`list_domains`); adding, changing (HSTS,
  * preload consent) and removing them need a human. The private network
- * between servers is read-only too (`get_mesh`).
+ * between servers is read-only too (`get_mesh`). Of a server's lifecycle,
+ * only draining and resuming it are tools (`./node-tools`, `nodes:manage`).
  *
  * Deliberately absent: reading secret values (there is no API for it),
- * deleting anything, the shell, database access, domain mutations, node,
- * token and member management. Those need a human in the dashboard.
+ * deleting anything, the shell, database access, domain mutations, adding
+ * or removing servers, token and member management. Those need a human in
+ * the dashboard.
  *
  * @module
  */
@@ -93,6 +95,7 @@ import { CHANGE_TOOLS } from "./change-tools";
 import { CRON_TOOLS } from "./cron-tools";
 import { DATA_TOOLS } from "./data-tools";
 import { MESH_TOOLS } from "./mesh-tools";
+import { NODE_TOOLS } from "./node-tools";
 import { PREVIEW_TOOLS } from "./preview-tools";
 import { deployTemplateTool, listTemplatesTool } from "./template-tools";
 
@@ -809,6 +812,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   listDomainsTool,
   listNodesTool,
   ...MESH_TOOLS,
+  ...NODE_TOOLS,
   ...DATA_TOOLS,
   ...CRON_TOOLS,
   ...PREVIEW_TOOLS,
