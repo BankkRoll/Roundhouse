@@ -28,6 +28,7 @@ import {
   type KeyValuePair,
   toPairs,
 } from "../services/settings/key-value-editor";
+import { MatchingBuilders } from "./matching-builders";
 
 /** The form's editable copy of the settings; numbers stay text until saved. */
 interface Draft {
@@ -202,6 +203,7 @@ function SwitchRow({
 
 /** Props for {@link PreviewSettingsForm}. */
 export interface PreviewSettingsFormProps {
+  workspaceId: string;
   projectId: string;
   settings: PreviewSettings;
   /** The project's environments; preview environments are left out of the base choice. */
@@ -216,10 +218,11 @@ export interface PreviewSettingsFormProps {
  * approval requires a build node selector, so untrusted builds stay on dedicated
  * builders. Read-only without `previews:manage`.
  *
- * @param props - Project, saved settings, environments and edit permission.
+ * @param props - Workspace, project, saved settings, environments and edit permission.
  * @returns The form.
  */
 export function PreviewSettingsForm({
+  workspaceId,
   projectId,
   settings,
   environments,
@@ -517,6 +520,10 @@ export function PreviewSettingsForm({
                   max={16}
                 />
                 <FieldError id={`${ids.build}-error`} error={errors.build_node_selector} />
+                <MatchingBuilders
+                  workspaceId={workspaceId}
+                  selector={fromPairs(draft.build_node_selector)}
+                />
               </SettingsRow>
               <SettingsField
                 label="Approval label"

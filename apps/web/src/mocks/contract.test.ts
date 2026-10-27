@@ -528,7 +528,20 @@ describe("MSW mocks match the API contract", () => {
       expect(install_command).toMatch(/\| sudo bash -s -- --token njt_/);
       expect((await call("POST", `${OTHER_WS}/nodes/join-tokens`)).status).toBe(404);
 
+      const labels = `${WS}/nodes/node_hel1/labels`;
+      expect(await call("PUT", labels, { labels: { pool: "untrusted", tier: "" } })).toMatchObject({
+        status: 200,
+        body: { labels: { pool: "untrusted", tier: "" } },
+      });
+      expect(db.audit.at(-1)?.action).toBe("node.labels_updated");
+      expect((await call("PUT", labels, { labels: { Pool: "x" } })).status).toBe(400);
+      expect((await call("PUT", labels, { labels: { pool: "-x" } })).status).toBe(400);
+      const many = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`k${i}`, "v"]));
+      expect((await call("PUT", labels, { labels: many })).status).toBe(400);
+      expect((await call("PUT", `${WS}/nodes/node_nope/labels`, { labels: {} })).status).toBe(404);
+
       as("member");
+      expect((await call("PUT", labels, { labels: {} })).status).toBe(403);
       expect((await call("POST", `${WS}/nodes/join-tokens`)).status).toBe(403);
       expect((await call("DELETE", `${WS}/nodes/node_hel1`)).status).toBe(403);
       as(null);

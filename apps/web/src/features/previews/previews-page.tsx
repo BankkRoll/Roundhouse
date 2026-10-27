@@ -65,6 +65,7 @@ export function PreviewsPage({
           />
         ) : (
           <PreviewSettingsForm
+            workspaceId={workspaceId}
             projectId={projectId}
             settings={settings.data}
             environments={project.data.environments}

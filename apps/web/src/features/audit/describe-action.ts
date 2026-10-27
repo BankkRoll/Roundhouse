@@ -47,6 +47,7 @@ const VERBS: Record<AuditAction, string> = {
   "node.provision_failed": "failed to create server",
   "node.deprovisioned": "deleted cloud server",
   "node.provision_cancelled": "cancelled creating server",
+  "node.labels_updated": "changed the labels of server",
   "provider.connected": "connected",
   "provider.disconnected": "disconnected",
   "project.created": "created project",

@@ -68,6 +68,24 @@ export function useDeleteNode(workspaceId: string) {
 }
 
 /**
+ * Replaces a node's labels, then caches the node and refreshes the node list.
+ *
+ * @param workspaceId - Workspace id.
+ * @param nodeId - Node id.
+ * @returns A mutation taking the complete new label set.
+ */
+export function useUpdateNodeLabels(workspaceId: string, nodeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (labels: Record<string, string>) => api.putNodeLabels(workspaceId, nodeId, labels),
+    onSuccess: (node) => {
+      queryClient.setQueryData(queryKeys.node(workspaceId, nodeId), node);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.nodes(workspaceId), exact: true });
+    },
+  });
+}
+
+/**
  * Drops a removed node's cached detail.
  *
  * @param queryClient - Shared query client.

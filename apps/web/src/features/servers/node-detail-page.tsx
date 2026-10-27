@@ -29,6 +29,7 @@ import { usePermissions } from "../../lib/permissions";
 import { useNow } from "../../lib/use-now";
 import { forgetNode, useDeleteNode, useNode } from "../../queries/nodes";
 import { COST_ESTIMATE_NOTE, formatCostEstimate } from "./cost-estimate";
+import { NodeLabelsSection } from "./node-labels-section";
 import { nodeMeterRows, nodeSubtitle } from "./node-metrics";
 import { managedProvider, ProviderBadges } from "./provider-badge";
 
@@ -120,7 +121,7 @@ function removeErrorMessage(error: unknown, provider: string | undefined): strin
 }
 
 /**
- * Detail view for one server: usage, hardware facts, capabilities and removal.
+ * Detail view for one server: usage, hardware facts, capabilities, labels and removal.
  *
  * @param props - Workspace and node ids.
  * @returns The page.
@@ -257,6 +258,7 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
             )}
           </div>
         </section>
+        <NodeLabelsSection workspaceId={workspaceId} node={data} canEdit={can("nodes:manage")} />
       </div>
 
       <ConfirmDialog
