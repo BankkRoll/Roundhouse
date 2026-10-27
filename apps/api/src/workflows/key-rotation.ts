@@ -12,7 +12,8 @@
  *    current KEK with the v2 AAD; `kek_kid` and `dek_id` set.
  * 2. `rewrap-instance-<n>`: the instance secrets in `instance_settings`
  *    ({@link INSTANCE_SECRET_FIELDS}), then `provider_credentials` tokens,
- *    certificate keys and the mesh's preshared keys (`mesh_psks`).
+ *    certificate keys, the mesh's preshared keys (`mesh_psks`) and the
+ *    nodes' registry pull passwords.
  *    `rewrap-two-factor-<n>`: TOTP secrets and backup codes, which Better
  *    Auth encrypts with the auth secret of the key current at enrollment.
  * 3. `reseal-variables-<n>`: variables in format 1 or without a fingerprint:
@@ -35,6 +36,8 @@ import {
   type Db,
   deployments,
   instanceSettings,
+  meshPsks,
+  nodes,
   projectKeys,
   projects,
   providerCredentials,
@@ -56,9 +59,16 @@ import {
   sealDeploymentBuild,
   sealDeploymentEnv,
 } from "../lib/desired-state";
+import { SAAS_TOKEN_FIELD } from "../lib/domains/saas";
 import { sealInstanceSecret, unsealInstanceSecret } from "../lib/instance-secrets";
 import { type KeyEnv, keyringOf } from "../lib/keyring";
-import { resealPairPsks } from "../lib/mesh";
+import { resealPairPsks, stalePairPsks } from "../lib/mesh";
+import {
+  REGISTRY_READONLY_SECRET_FIELD,
+  REGISTRY_SECRET_FIELD,
+  resealPullPasswords,
+  stalePullPasswords,
+} from "../lib/registry";
 import { getSetting, putSetting, SettingKey } from "../lib/settings";
 import { rewrapTwoFactorBatch, staleTwoFactorCondition } from "../lib/two-factor";
 import { openVariable, projectKey, sealVariable } from "../lib/variables";
@@ -115,6 +125,17 @@ export const INSTANCE_SECRET_FIELDS: readonly InstanceSecretField[] = [
   },
   { setting: SettingKey.cloudflareDns, property: "api_token", field: CLOUDFLARE_TOKEN_FIELD },
   { setting: SettingKey.acmeAccount, property: "key", field: ACME_ACCOUNT_KEY_FIELD },
+  {
+    setting: SettingKey.registryStorage,
+    property: "secret_access_key",
+    field: REGISTRY_SECRET_FIELD,
+  },
+  {
+    setting: SettingKey.registryStorage,
+    property: "readonly_secret_access_key",
+    field: REGISTRY_READONLY_SECRET_FIELD,
+  },
+  { setting: SettingKey.saas, property: "api_token", field: SAAS_TOKEN_FIELD },
 ];
 
 // Mirrors `lib/cloud-providers.ts`, which seals every provider token through
@@ -281,7 +302,8 @@ export async function rewrapInstanceBatch(db: Db, keys: KeyEnv): Promise<number>
       );
   }
   const psks = await resealPairPsks(db, keys, current, ROTATION_BATCH);
-  return touched + creds.length + certs.length + psks;
+  const pulls = await resealPullPasswords(db, keys, current, ROTATION_BATCH);
+  return touched + creds.length + certs.length + psks + pulls;
 }
 
 /** Certificates holding a key not sealed under the current KEK. */
@@ -428,43 +450,56 @@ const count = sql<number>`count(*)`;
 export async function keyStatus(db: Db, keys: KeyEnv): Promise<KeyStatus> {
   const ring = await keyringOf(keys);
   const current = ring.current.kid;
-  const [[dek], [v1Vars], [noFp], [v1Deps], [creds], [tfa], [certKeys], settings, rotation] =
-    await Promise.all([
-      db
-        .select({ n: count })
-        .from(projectKeys)
-        .where(or(isNull(projectKeys.kekKid), ne(projectKeys.kekKid, current))),
-      db
-        .select({ n: count })
-        .from(variables)
-        .where(sql`${formatOf(variables.valueSealed)} = 1`),
-      db.select({ n: count }).from(variables).where(isNull(variables.fingerprint)),
-      db
-        .select({ n: count })
-        .from(deployments)
-        .where(
-          or(
-            sql`${formatOf(deployments.envSealed)} = 1`,
-            sql`${formatOf(deployments.buildEnvSealed)} = 1`,
-          ),
+  const [
+    [dek],
+    [v1Vars],
+    [noFp],
+    [v1Deps],
+    [creds],
+    [tfa],
+    [certKeys],
+    [psks],
+    [pulls],
+    settings,
+    rotation,
+  ] = await Promise.all([
+    db
+      .select({ n: count })
+      .from(projectKeys)
+      .where(or(isNull(projectKeys.kekKid), ne(projectKeys.kekKid, current))),
+    db
+      .select({ n: count })
+      .from(variables)
+      .where(sql`${formatOf(variables.valueSealed)} = 1`),
+    db.select({ n: count }).from(variables).where(isNull(variables.fingerprint)),
+    db
+      .select({ n: count })
+      .from(deployments)
+      .where(
+        or(
+          sql`${formatOf(deployments.envSealed)} = 1`,
+          sql`${formatOf(deployments.buildEnvSealed)} = 1`,
         ),
-      db
-        .select({ n: count })
-        .from(providerCredentials)
-        .where(notUnder(providerCredentials.tokenSealed, current)),
-      db
-        .select({ n: count })
-        .from(twoFactors)
-        .where(staleTwoFactorCondition(authSecretVersion(current))),
-      db.select({ n: count }).from(certificates).where(staleCertificateKeys(current)),
-      db
-        .select({ key: instanceSettings.key, value: instanceSettings.value })
-        .from(instanceSettings)
-        .where(
-          inArray(instanceSettings.key, [...new Set(INSTANCE_SECRET_FIELDS.map((f) => f.setting))]),
-        ),
-      getSetting<KeyRotationState>(db, KEY_ROTATION_SETTING),
-    ]);
+      ),
+    db
+      .select({ n: count })
+      .from(providerCredentials)
+      .where(notUnder(providerCredentials.tokenSealed, current)),
+    db
+      .select({ n: count })
+      .from(twoFactors)
+      .where(staleTwoFactorCondition(authSecretVersion(current))),
+    db.select({ n: count }).from(certificates).where(staleCertificateKeys(current)),
+    db.select({ n: count }).from(meshPsks).where(stalePairPsks(current)),
+    db.select({ n: count }).from(nodes).where(stalePullPasswords(current)),
+    db
+      .select({ key: instanceSettings.key, value: instanceSettings.value })
+      .from(instanceSettings)
+      .where(
+        inArray(instanceSettings.key, [...new Set(INSTANCE_SECRET_FIELDS.map((f) => f.setting))]),
+      ),
+    getSetting<KeyRotationState>(db, KEY_ROTATION_SETTING),
+  ]);
   let staleSettings = 0;
   for (const row of settings) {
     const value = row.value as Record<string, Sealed | undefined>;
@@ -476,7 +511,12 @@ export async function keyStatus(db: Db, keys: KeyEnv): Promise<KeyStatus> {
   const remaining = {
     project_keys: Number(dek?.n ?? 0),
     instance_secrets:
-      staleSettings + Number(creds?.n ?? 0) + Number(tfa?.n ?? 0) + Number(certKeys?.n ?? 0),
+      staleSettings +
+      Number(creds?.n ?? 0) +
+      Number(tfa?.n ?? 0) +
+      Number(certKeys?.n ?? 0) +
+      Number(psks?.n ?? 0) +
+      Number(pulls?.n ?? 0),
     v1_variables: Number(v1Vars?.n ?? 0),
     v1_deployments: Number(v1Deps?.n ?? 0),
     missing_fingerprints: Number(noFp?.n ?? 0),

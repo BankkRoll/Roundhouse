@@ -45,12 +45,14 @@ import {
 } from "@roundhouse/shared";
 import { and, asc, eq, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import { recordAudit } from "../audit";
+import { CloudflareApiError } from "../certificates/cloudflare-dns";
 import {
   LIVE_DEPLOYMENT_STATUSES,
   nodesOfDeployments,
   type RefreshEnv,
   refreshNodes,
 } from "../desired-state";
+import type { KeyEnv } from "../instance-secrets";
 import { getIngressSettings } from "../settings";
 import { type DnsEnv, DnsLookupError, domainFetch, type Resolution, resolveDomain } from "./dns";
 import {
@@ -60,12 +62,16 @@ import {
   type RoutingTargets,
   routingTargets,
 } from "./records";
+import { getSaasHostname, loadSaasZone, planSaasCheck, type SaasHostnameState } from "./saas";
 import { pairKey, servingNodes } from "./serving";
 
 type DomainRow = typeof domains.$inferSelect;
 
-/** Bindings a check needs: the resolver and the node namespace. */
-export type CheckEnv = DnsEnv & RefreshEnv;
+/**
+ * Bindings a check needs: the resolver, the node namespace, and the keyring
+ * (a SaaS domain's check opens the Cloudflare token).
+ */
+export type CheckEnv = DnsEnv & RefreshEnv & KeyEnv;
 
 /** How long a verified domain waits for its first certificate before `tls_status` reads `failed`. */
 export const TLS_ISSUE_GRACE_MS = 24 * 60 * 60 * 1000;
@@ -411,6 +417,11 @@ export async function checkDomain(
   if (d.type !== "custom") return d;
   const { db, env } = ctx;
   const ingress = await getIngressSettings(db);
+  const now = ctx.now ?? Date.now();
+  if (d.mode === "cloudflare_saas") {
+    const plan = await planSaasDomainCheck({ db, env, now }, d, ingress.tlsMode, options);
+    return applyCheck({ db, env }, d, workspaceId, actor, plan);
+  }
   const targets = await routingTargets(
     db,
     { workspaceId, serviceId: d.serviceId, environmentId: d.environmentId },
@@ -434,7 +445,6 @@ export async function checkDomain(
     (await needsProbe(db, d))
       ? await probeTls(d.hostname)
       : undefined;
-  const now = ctx.now ?? Date.now();
   const plan = planCheck(d, {
     now,
     seen,
@@ -443,6 +453,67 @@ export async function checkDomain(
     tlsMode: ingress.tlsMode,
     ...(tls ? { tls } : {}),
   });
+  return applyCheck({ db, env }, d, workspaceId, actor, plan);
+}
+
+/**
+ * Asks Cloudflare and DNS about a SaaS custom domain and plans the check.
+ *
+ * @param ctx - Database, bindings (the keyring opens the SaaS token) and time.
+ * @param d - The domain.
+ * @param tlsMode - The install's TLS mode.
+ * @param options - Answers already fetched when the domain was added.
+ * @returns The plan.
+ */
+async function planSaasDomainCheck(
+  ctx: { db: Db; env: CheckEnv; now: number },
+  d: DomainRow,
+  tlsMode: TlsMode,
+  options: { resolution?: Resolution },
+): Promise<CheckPlan> {
+  const { db, env, now } = ctx;
+  const zone = await loadSaasZone(db, env);
+  let cf: SaasHostnameState | null = null;
+  let cfError: string | undefined;
+  if (!zone) cfError = "the Cloudflare for SaaS zone is no longer configured";
+  else if (!d.cfCustomHostnameId) cfError = "the custom hostname was never created at Cloudflare";
+  else {
+    try {
+      cf = await getSaasHostname(zone, d.cfCustomHostnameId);
+    } catch (err) {
+      cfError = err instanceof CloudflareApiError ? err.message : "request failed";
+    }
+  }
+  let seen: Resolution | null = options.resolution ?? null;
+  if (!seen) {
+    try {
+      seen = await resolveDomain(env, d.hostname);
+    } catch {
+      // The ownership state keeps its last value; the next check retries.
+    }
+  }
+  return planSaasCheck(d, {
+    now,
+    cf,
+    ...(cfError ? { cfError } : {}),
+    seen: seen ? { cname: seen.cname, addresses: seen.addresses, txt: seen.txt } : null,
+    tlsMode,
+  });
+}
+
+/**
+ * Stores a check's plan, audits its event and pushes routes once verified.
+ *
+ * @returns The updated row.
+ */
+async function applyCheck(
+  ctx: { db: Db; env: CheckEnv },
+  d: DomainRow,
+  workspaceId: string,
+  actor: CheckActor,
+  plan: CheckPlan,
+): Promise<DomainRow> {
+  const { db, env } = ctx;
   const [row] = await db.update(domains).set(plan.patch).where(eq(domains.id, d.id)).returning();
   if (!row) return { ...d, ...plan.patch };
   if (plan.event) {

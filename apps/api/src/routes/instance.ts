@@ -13,6 +13,10 @@
  *   `acme_mode_single_ingress_only`): each node's Caddy would order its own
  *   certificates, and a validation reaching another node fails.
  *
+ * Leaving `managed` while custom domains go through Cloudflare for SaaS
+ * is refused (409 `saas_requires_managed_tls`): their origin certificates
+ * come from it.
+ *
  * Turning the mesh on (`mesh_enabled`, ADR 0005) lets every node that
  * reported a WireGuard key join it and re-sends desired state everywhere;
  * `mesh_supernet` is refused with 409 `mesh_supernet_locked` once a node
@@ -32,6 +36,7 @@ import { recordAudit } from "../lib/audit";
 import { claimDueCertificates, syncCertificates } from "../lib/certificates/schedule";
 import { managedTlsProblems } from "../lib/certificates/settings";
 import { refreshAllNodes } from "../lib/desired-state";
+import { getCustomDomainsMode } from "../lib/domains/saas";
 import { isIngressNode } from "../lib/domains/serving";
 import { ApiError } from "../lib/errors";
 import { joinWaitingNodes } from "../lib/mesh";
@@ -115,6 +120,18 @@ export const instanceRoutes = createRouter()
       if (problems.length) {
         throw new ApiError(422, "managed_tls_unavailable", problems.join(" "));
       }
+    }
+    if (
+      body.tls_mode !== undefined &&
+      body.tls_mode !== "managed" &&
+      (await getCustomDomainsMode(db)) === "cloudflare_saas"
+    ) {
+      throw new ApiError(
+        409,
+        "saas_requires_managed_tls",
+        "Custom domains are served through Cloudflare for SaaS, whose origin certificates come " +
+          "from the managed TLS mode; switch custom domains to direct first.",
+      );
     }
     if (body.tls_mode === "acme" && before.tls_mode !== "acme" && before.ingress_nodes > 1) {
       throw new ApiError(

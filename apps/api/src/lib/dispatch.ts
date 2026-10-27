@@ -17,8 +17,9 @@ import type { Env } from "../env";
 import { claimDueBackups } from "./backups/schedule";
 import { claimDueCertificates, syncCertificates } from "./certificates/schedule";
 import { claimDueCronRuns } from "./cron/schedule";
-import { refreshNodes } from "./desired-state";
+import { refreshAllNodes, refreshNodes } from "./desired-state";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
+import { runSaasTick } from "./domains/saas";
 import { progressRotations } from "./mesh";
 import { claimMigrationCleanups } from "./volume-migrations";
 import { claimVolumeDeletions } from "./volumes";
@@ -73,6 +74,12 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
       const db = createDb(env.DB);
       return progressRotations(db, (ids) => refreshNodes(env, db, ids), { now, scheduled: true });
     },
+  },
+  {
+    // Cloudflare for SaaS (ADR 0009): origin records when the ingress
+    // servers change, the fallback origin until active, the daily IP ranges.
+    name: "saas",
+    run: (env, now) => runSaasTick(env, now, () => refreshAllNodes(env, createDb(env.DB))),
   },
 ];
 

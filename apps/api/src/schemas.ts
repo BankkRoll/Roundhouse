@@ -45,6 +45,7 @@ import {
   DNS_RECORD_PURPOSES,
   DNS_RECORD_STATES,
   DNS_RECORD_TYPES,
+  DOMAIN_MODES,
   DOMAIN_STATUSES,
   DOMAIN_TLS_STATUSES,
   DOMAIN_TYPES,
@@ -58,12 +59,15 @@ import {
   MAX_LOG_RETENTION_DAYS,
   type NetworkingConfig,
   NODE_STATUSES,
+  PLACEMENT_ONLY_STATES,
   type PlacementConfig,
   RESERVED_SERVICE_SLUGS,
   RESTART_POLICIES,
   type ResourcesConfig,
   ROLES,
   SERVICE_DATABASE_ENGINES,
+  SERVICE_HEALTH,
+  SERVICE_HEALTH_REASONS,
   SERVICE_KINDS,
   type ServiceSource,
   secretBuildArgsValid,
@@ -366,6 +370,13 @@ export const ServiceSchema = z
       .object({ engine: z.enum(SERVICE_DATABASE_ENGINES), version: z.string() })
       .nullable()
       .optional(),
+    /**
+     * Service-level health (ADR 0005), separate from deployment status:
+     * `degraded` while a stateful replica's server is offline
+     * (`node_offline`) or was drained by force (`node_maintenance`).
+     */
+    health: z.enum(SERVICE_HEALTH),
+    health_reason: z.enum(SERVICE_HEALTH_REASONS).nullable(),
     created_at: Millis,
     updated_at: Millis,
   })
@@ -646,7 +657,11 @@ export const PlacementSchema = z
     node_name: z.string().nullable(),
     workload_id: z.string(),
     container_id: z.string().nullable(),
-    state: z.enum(WORKLOAD_STATES),
+    /**
+     * The agent's last report, or `lost` (its server went offline and it was
+     * rescheduled) or `parked` (stopped by a forced drain) (ADR 0005).
+     */
+    state: z.enum([...WORKLOAD_STATES, ...PLACEMENT_ONLY_STATES]),
     last_status_at: Millis.nullable(),
   })
   .openapi("Placement");
@@ -779,6 +794,20 @@ export const DomainSchema = z
      * Ingress servers in the service's workspace. When some don't serve the
      * service, `records` asks for A/AAAA records of the ones that do.
      */
+    /** `cloudflare_saas` when served through Cloudflare for SaaS (ADR 0009). */
+    mode: z.enum(DOMAIN_MODES),
+    /**
+     * Cloudflare's view of a SaaS domain's custom hostname: `status` and
+     * `ssl_status` as Cloudflare words them, and its errors verbatim; `null`
+     * in direct mode.
+     */
+    cf: z
+      .object({
+        status: z.string().nullable(),
+        ssl_status: z.string().nullable(),
+        errors: z.array(z.string()),
+      })
+      .nullable(),
     routing_nodes: z.array(DomainRoutingNodeSchema),
     last_checked_at: Millis.nullable(),
     /** `null` when no check is scheduled (failed domains wait for a manual check). */

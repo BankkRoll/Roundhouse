@@ -14,10 +14,11 @@
  *   provisioning (`ProvisionWorkflow`), and backups and restores
  *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), volume moves
  *   (`VolumeMigrationWorkflow`, ADR 0004), cron runs (`CronRunWorkflow`,
- *   ADR 0010) and certificate orders (`CertificateWorkflow`, ADR 0009),
- *   exported for their bindings
- * - The public ACME HTTP-01 responder (`routes/acme.ts`) and the Domains &
- *   TLS settings (`routes/tls.ts`)
+ *   ADR 0010), certificate orders (`CertificateWorkflow`, ADR 0009) and
+ *   node drains (`DrainWorkflow`, ADR 0005), exported for their bindings
+ * - The public ACME HTTP-01 responder (`routes/acme.ts`), the Domains &
+ *   TLS settings (`routes/tls.ts`, Cloudflare for SaaS included) and the
+ *   registry storage setting (`routes/registry.ts`)
  * - `Cache-Control: no-store` on every API and auth response, and the
  *   two-factor gate in front of `/v1/*` mutations (ADR 0014)
  * - Service, project and node metrics (`routes/metrics.ts`, ADR 0008)
@@ -69,6 +70,7 @@ import { nodeRoutes } from "./routes/nodes";
 import { projectRoutes } from "./routes/projects";
 import { providerRoutes } from "./routes/providers";
 import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
+import { registryRoutes } from "./routes/registry";
 import { serviceRoutes } from "./routes/services";
 import { setupRoutes } from "./routes/setup";
 import { signingKeyRoutes } from "./routes/signing-keys";
@@ -86,6 +88,7 @@ export { BackupWorkflow } from "./workflows/backup";
 export { CertificateWorkflow } from "./workflows/certificate";
 export { CronRunWorkflow } from "./workflows/cron-run";
 export { DeployWorkflow } from "./workflows/deploy";
+export { DrainWorkflow } from "./workflows/drain";
 export { KeyRotationWorkflow } from "./workflows/key-rotation";
 export { ProvisionWorkflow } from "./workflows/provision";
 export { RestoreWorkflow } from "./workflows/restore";
@@ -139,6 +142,7 @@ app
   .route("/", deploymentRoutes)
   .route("/", instanceRoutes)
   .route("/", tlsRoutes)
+  .route("/", registryRoutes)
   .route("/", githubRoutes)
   .route("/", tokenRoutes)
   .route("/", realtimeRoutes)

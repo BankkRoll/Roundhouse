@@ -2,7 +2,8 @@
  * The node Durable Object's job frames (ADR 0010):
  *
  * - `job_status`: moves the run to `running` or its terminal status and,
- *   once terminal, wakes the run's workflow, which reads it back from D1;
+ *   once terminal, wakes the run's workflow, which reads it back from D1,
+ *   and re-sends the meshed nodes their addresses when the run held a mesh IP;
  * - {@link jobLogOwner}: where a `job` log source's lines belong.
  *
  * SECURITY: every report is checked against the run's `node_id` and
@@ -19,6 +20,9 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { Env } from "../../../env";
 import { scrubError } from "../../../lib/backups/backups";
 import { publishCronRuns, wakeCronRunWorkflow } from "../../../lib/cron/runs";
+import { refreshNodes } from "../../../lib/desired-state";
+import { meshRefreshTargets } from "../../../lib/mesh";
+import { getMeshSettings } from "../../../lib/settings";
 
 /** What the handlers need from the Durable Object. */
 export interface JobFrameContext {
@@ -88,6 +92,20 @@ export async function onJobStatus(ctx: JobFrameContext, frame: JobStatus): Promi
     .limit(1);
   if (owner) await publishCronRuns(ctx.env, owner.projectId, [run]);
   if (terminal) await wakeCronRunWorkflow(ctx.env, run.id);
+  if (terminal && run.meshIp) {
+    try {
+      // The run's address is free again; peers drop it from their rules.
+      // This node's own frame follows its next change: calling its own
+      // Durable Object from inside it would wait on itself.
+      const mesh = await getMeshSettings(ctx.db);
+      const peers = (await meshRefreshTargets(ctx.db, [ctx.nodeId], mesh)).filter(
+        (id) => id !== ctx.nodeId,
+      );
+      if (peers.length) await refreshNodes(ctx.env, ctx.db, peers);
+    } catch (err) {
+      console.error("mesh refresh failed", err instanceof Error ? err.message : "error");
+    }
+  }
 }
 
 function defaultMessage(status: CronRunStatus, exitCode: number | undefined): string {

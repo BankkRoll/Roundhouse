@@ -8,6 +8,11 @@
  *   and audits which fields changed, never a token.
  * - Changes that affect certificates (the zone, the CA) start the
  *   certificate sync at once instead of at the next tick.
+ * - Cloudflare for SaaS (`lib/domains/saas.ts`): the token is checked on
+ *   the SaaS zone, switching modes is gated on the managed TLS mode and a
+ *   ready mesh on every ingress server, and setup writes the origin records
+ *   and sets the fallback origin at once (the minute tick follows it until
+ *   Cloudflare reports it active, and retries a failed setup).
  *
  * @module
  */
@@ -19,6 +24,7 @@ import {
   type Db,
 } from "@roundhouse/db";
 import type { InstanceAction } from "@roundhouse/shared";
+import { SAAS_INCLUDED_HOSTNAMES } from "@roundhouse/shared";
 import { asc, count, eq, isNotNull, sql } from "drizzle-orm";
 import { clientIp, createRouter, requireInstanceAction } from "../context";
 import {
@@ -41,7 +47,22 @@ import {
   putAcmeConfig,
   sealCloudflareDns,
 } from "../lib/certificates/settings";
+import { refreshAllNodes } from "../lib/desired-state";
 import { INGRESS_HOSTNAME_SETTING } from "../lib/domains/records";
+import {
+  getCustomDomainsMode,
+  getSaasView,
+  loadSaasZone,
+  prepareSaas,
+  putSaas,
+  refreshCloudflareIps,
+  type SaasZone,
+  type StoredSaas,
+  saasHostnameCount,
+  saasProblems,
+  setFallbackOrigin,
+  syncOriginRecords,
+} from "../lib/domains/saas";
 import { ApiError } from "../lib/errors";
 import type { OriginEnv } from "../lib/origin";
 import { getIngressSettings, getSetting, putSetting, SettingKey } from "../lib/settings";
@@ -62,14 +83,18 @@ const ms = (d: Date | null) => (d ? +d : null);
  * @returns The settings.
  */
 export async function readDomainSettings(db: Db, env: OriginEnv) {
-  const [ingress, ingressHostname, acme, accountUrl, dns, ingressNodes] = await Promise.all([
-    getIngressSettings(db),
-    getSetting<unknown>(db, INGRESS_HOSTNAME_SETTING),
-    getAcmeConfig(db),
-    acmeAccountUrl(db),
-    getCloudflareDnsView(db),
-    countIngressNodes(db),
-  ]);
+  const [ingress, ingressHostname, acme, accountUrl, dns, ingressNodes, mode, saas, used] =
+    await Promise.all([
+      getIngressSettings(db),
+      getSetting<unknown>(db, INGRESS_HOSTNAME_SETTING),
+      getAcmeConfig(db),
+      acmeAccountUrl(db),
+      getCloudflareDnsView(db),
+      countIngressNodes(db),
+      getCustomDomainsMode(db),
+      getSaasView(db),
+      saasHostnameCount(db),
+    ]);
   const problems = managedTlsProblems(env);
   const dns01 = dns01Available(ingress.appsDomain, dns);
   return {
@@ -84,6 +109,11 @@ export async function readDomainSettings(db: Db, env: OriginEnv) {
       problems,
       apps_wildcard: dns01,
       wildcard_domains: ingress.tlsMode === "managed" && dns01,
+    },
+    custom_domains: {
+      mode,
+      saas,
+      quota: { used, included: SAAS_INCLUDED_HOSTNAMES },
     },
   };
 }
@@ -152,8 +182,78 @@ export const tlsRoutes = createRouter()
       statements.push(putSetting(db, SettingKey.cloudflareDns, sealed));
       changed.push("cloudflare_dns");
     }
+    let saas: { stored: StoredSaas; zone: SaasZone } | null = null;
+    if (body.saas === null && before.custom_domains.saas) {
+      if (await saasHostnameCount(db)) {
+        throw new ApiError(
+          409,
+          "saas_in_use",
+          "Custom domains are still served through Cloudflare for SaaS; remove them first.",
+        );
+      }
+      statements.push(putSaas(db, null), putSetting(db, SettingKey.customDomainsMode, null));
+      changed.push("saas");
+    } else if (body.saas) {
+      saas = await prepareSaas(db, c.env, body.saas);
+      statements.push(putSaas(db, saas.stored));
+      changed.push("saas");
+    }
+    const mode =
+      body.saas === null ? "direct" : (body.custom_domains_mode ?? before.custom_domains.mode);
+    if (mode !== before.custom_domains.mode) {
+      changed.push("custom_domains_mode");
+      statements.push(putSetting(db, SettingKey.customDomainsMode, mode));
+    }
+    const zoneChanged = !!saas && saas.stored.zone_id !== before.custom_domains.saas?.zone_id;
+    const setUp =
+      mode === "cloudflare_saas" && (before.custom_domains.mode !== mode || zoneChanged);
+    const firewall = saas?.stored.ingress_firewall ?? before.custom_domains.saas?.ingress_firewall;
+    if (mode === "cloudflare_saas") {
+      if (!saas && !before.custom_domains.saas) {
+        throw new ApiError(400, "invalid_request", "saas is required for cloudflare_saas");
+      }
+      if (setUp) {
+        const problem = await saasProblems(db, before.tls_mode);
+        if (problem) throw problem;
+      }
+      if (
+        firewall === "cloudflare_only" &&
+        before.custom_domains.saas?.ingress_firewall !== firewall
+      ) {
+        try {
+          await refreshCloudflareIps(db);
+        } catch (err) {
+          throw new ApiError(
+            422,
+            "cloudflare_saas_invalid",
+            `Cloudflare's IP ranges couldn't be fetched for the origin firewall: ${
+              err instanceof CloudflareApiError ? err.message : "request failed"
+            }`,
+          );
+        }
+      }
+    }
     if (statements.length) {
       await db.batch(statements as [(typeof statements)[number], ...typeof statements]);
+    }
+    if (setUp) {
+      const live = saas?.zone ?? (await loadSaasZone(db, c.env));
+      if (live) {
+        try {
+          await syncOriginRecords(db, live, { force: true });
+          await setFallbackOrigin(db, live);
+        } catch (err) {
+          // Stored as the fallback origin's errors; the minute tick retries.
+          console.warn("saas setup", err instanceof Error ? err.message : "error");
+        }
+      }
+    }
+    if (
+      changed.includes("custom_domains_mode") ||
+      (changed.includes("saas") && firewall !== before.custom_domains.saas?.ingress_firewall)
+    ) {
+      // The origin firewall rides in every node's desired state.
+      await refreshAllNodes(c.env, db);
     }
     const after = await readDomainSettings(db, c.env);
     if (changed.length) {
@@ -169,16 +269,25 @@ export const tlsRoutes = createRouter()
             ingress_hostname: before.ingress_hostname,
             acme: { directory_url: before.acme.directory_url, email: before.acme.email },
             cloudflare_zone: before.cloudflare_dns?.zone_name ?? null,
+            custom_domains_mode: before.custom_domains.mode,
+            saas_zone: before.custom_domains.saas?.zone_name ?? null,
+            ingress_firewall: before.custom_domains.saas?.ingress_firewall ?? null,
           },
           after: {
             ingress_hostname: after.ingress_hostname,
             acme: { directory_url: after.acme.directory_url, email: after.acme.email },
             cloudflare_zone: after.cloudflare_dns?.zone_name ?? null,
+            custom_domains_mode: after.custom_domains.mode,
+            saas_zone: after.custom_domains.saas?.zone_name ?? null,
+            ingress_firewall: after.custom_domains.saas?.ingress_firewall ?? null,
           },
         },
         ip: clientIp(c),
       });
-      if (after.tls_mode === "managed" && changed.some((k) => k !== "ingress_hostname")) {
+      if (
+        after.tls_mode === "managed" &&
+        changed.some((k) => !["ingress_hostname", "saas", "custom_domains_mode"].includes(k))
+      ) {
         await syncCertificates(db);
         await claimDueCertificates(c.env, db);
       }

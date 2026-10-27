@@ -67,6 +67,38 @@ export const InstanceDomainSettingsSchema = z
       /** Wildcard custom domains can be added (managed mode with DNS-01). */
       wildcard_domains: z.boolean(),
     }),
+    /** How new custom domains are served (ADR 0009). */
+    custom_domains: z.object({
+      /**
+       * `direct`: customers point DNS at the ingress servers. `cloudflare_saas`:
+       * customers CNAME to `saas.cname_target` and Cloudflare for SaaS fronts them.
+       */
+      mode: z.enum(["direct", "cloudflare_saas"]),
+      /** The SaaS zone; the token is never returned. */
+      saas: z
+        .object({
+          zone_id: z.string(),
+          zone_name: z.string(),
+          /** `customers.<zone>`: what customers CNAME their hostnames to. */
+          cname_target: z.string(),
+          /** `origin.<zone>`: proxied A/AAAA records of every ingress server. */
+          fallback_origin: z.string(),
+          /** Cloudflare's fallback origin state; hostnames serve once it is `active`. */
+          fallback_status: z.string().nullable(),
+          fallback_errors: z.array(z.string()),
+          /** Wildcard custom hostnames are allowed (Cloudflare Enterprise). */
+          enterprise: z.boolean(),
+          /** `cloudflare_only`: servers admit 80/443 only from Cloudflare's ranges. */
+          ingress_firewall: z.enum(["off", "cloudflare_only"]),
+          updated_at: Millis,
+        })
+        .nullable(),
+      /**
+       * SaaS custom hostnames in use, against the plan's 100 included ones
+       * (then $0.10 per hostname a month).
+       */
+      quota: z.object({ used: z.number().int(), included: z.number().int() }),
+    }),
   })
   .openapi("InstanceDomainSettings");
 
@@ -86,6 +118,22 @@ export const PutInstanceDomainsBody = z
         zone_id: z.string().regex(/^[a-f0-9]{32}$/, "expected a 32-character zone ID"),
         /** Zone → DNS → Edit and Zone → Zone → Read on that zone. */
         api_token: z.string().min(20).max(256),
+      })
+      .nullable()
+      .optional(),
+    /** How new custom domains are served; existing domains keep their mode. */
+    custom_domains_mode: z.enum(["direct", "cloudflare_saas"]).optional(),
+    /** The Cloudflare for SaaS zone; `null` removes it (409 `saas_in_use` while SaaS domains exist). */
+    saas: z
+      .object({
+        zone_id: z.string().regex(/^[a-f0-9]{32}$/, "expected a 32-character zone ID"),
+        /**
+         * SSL and Certificates → Edit and DNS → Edit on the zone. Omit to keep
+         * the stored token (same zone only).
+         */
+        api_token: z.string().min(20).max(256).optional(),
+        enterprise: z.boolean().optional(),
+        ingress_firewall: z.enum(["off", "cloudflare_only"]).optional(),
       })
       .nullable()
       .optional(),
@@ -136,6 +184,14 @@ export const getInstanceDomains = defineRoute(sessionOnly("instance:manage"), {
  * the zone first (422 `cloudflare_dns_invalid`) and stored sealed. A new CA
  * directory starts a new account at the next order. Audited as
  * `instance.settings_updated`, never with a token.
+ *
+ * Cloudflare for SaaS (`saas`, `custom_domains_mode`): the token is checked
+ * on the zone (422 `cloudflare_saas_invalid`); switching to
+ * `cloudflare_saas` needs the managed TLS mode (409
+ * `saas_requires_managed_tls`) and every ingress server on a ready mesh
+ * (409 `saas_requires_mesh`), then writes the origin records and sets the
+ * fallback origin (502 `cloudflare_unavailable` when Cloudflare fails).
+ * `ingress_firewall: "cloudflare_only"` fetches Cloudflare's ranges first.
  */
 export const putInstanceDomains = defineRoute(
   sessionOnly("instance:manage", ["instance.settings_updated"], { reauth: true }),
@@ -146,7 +202,10 @@ export const putInstanceDomains = defineRoute(
     summary: "Update domain and TLS settings",
     security: sessionOnlyAuth,
     request: body(PutInstanceDomainsBody),
-    responses: { 200: json(InstanceDomainSettingsSchema), ...errors(400, 401, 403, 422) },
+    responses: {
+      200: json(InstanceDomainSettingsSchema),
+      ...errors(400, 401, 403, 409, 422, 502),
+    },
   },
 );
 

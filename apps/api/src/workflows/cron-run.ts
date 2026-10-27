@@ -10,11 +10,15 @@
  *    with `force`) sends them `job_cancel` and waits up to 30 s for them to
  *    end; `allow` (and plain run now) carries on.
  * 3. `place`: pick a node with `schedule()` at `JOBS_PROTOCOL_VERSION`,
- *    counting running jobs as allocated, and mark the run `starting` with a
- *    fresh `wl_…` workload ID. No node is a failure (`unschedulable: …`).
+ *    counting running jobs as allocated and keeping the run where its
+ *    environment can reach it (the mesh span rule), and mark the run
+ *    `starting` with a fresh `wl_…` workload ID and, on a meshed node, a
+ *    mesh IP (ADR 0005). No node is a failure (`unschedulable: …`).
  * 4. `send`: open the deployment's sealed environment, seal it to the node
- *    as a `job-env` box bound to the run and workload, and send a signed
- *    `job_run` (60 s credential TTL) through the node's Durable Object.
+ *    as a `job-env` box bound to the run and workload, push the run's mesh
+ *    address to the workspace's meshed nodes, and send a signed `job_run`
+ *    (60 s credential TTL, `mesh_ip` and `private_dns` on a meshed node)
+ *    through the node's Durable Object.
  * 5. Wait for the `job` event the Durable Object sends on a terminal
  *    `job_status`, until `timeout_s + 300 s`; without one the run is `lost`.
  * 6. `retry`: after `failed`, `timed_out` or `lost` with attempts left,
@@ -34,7 +38,6 @@
  */
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import {
-  builds,
   createDb,
   cronRuns,
   type Db,
@@ -83,8 +86,10 @@ import {
 } from "../lib/cron/runs";
 import type { Sealed } from "../lib/crypto";
 import { disposeRpc, wakeWorkflow } from "../lib/deployments";
-import { openDeploymentEnv } from "../lib/desired-state";
-import { schedulerSnapshot } from "../lib/scheduling";
+import { openDeploymentEnv, refreshNodes } from "../lib/desired-state";
+import { assignRunMeshIp, isMeshed } from "../lib/mesh";
+import { builderOfDeployment, environmentNodeIds, schedulerSnapshot } from "../lib/scheduling";
+import { getMeshSettings } from "../lib/settings";
 import { projectKey } from "../lib/variables";
 
 /** How a cron run workflow ended. */
@@ -310,7 +315,7 @@ export class CronRunWorkflow extends WorkflowEntrypoint<Env, CronRunParams> {
         triggeredBy: run.triggeredBy,
         image: deployment.image!,
         registryNodeId: deployment.image!.startsWith(`${REGISTRY_LISTEN}/`)
-          ? await builderOf(db, deployment.id)
+          ? await builderOfDeployment(db, deployment.id)
           : null,
         command: command ?? null,
         cpuMillis: spec.resources.cpu_millis,
@@ -395,6 +400,9 @@ export class CronRunWorkflow extends WorkflowEntrypoint<Env, CronRunParams> {
         nodeSelector: plan.nodeSelector,
         requiresRegistry: plan.registryNodeId !== null,
         minProtocolVersion: JOBS_PROTOCOL_VERSION,
+        // A run reaches its environment's services like a replica does, so
+        // it spans servers only over a ready mesh (ADR 0005).
+        environmentNodeIds: await environmentNodeIds(db, plan.environmentId, plan.serviceId),
       },
       candidates,
     );
@@ -413,8 +421,23 @@ export class CronRunWorkflow extends WorkflowEntrypoint<Env, CronRunParams> {
       .where(and(eq(cronRuns.id, plan.runId), eq(cronRuns.status, "queued")))
       .returning();
     if (!claimed) return { kind: "done", status: await this.statusOf(plan.runId) };
+    await this.assignMeshIp(db, plan.runId, nodeId);
     await publishCronRunsById(this.env, db, [plan.runId]);
     return { kind: "ok", nodeId, workloadId };
+  }
+
+  /**
+   * On a meshed node, gives the run a mesh IP from the node's /24 (ADR
+   * 0005), so it reaches its environment's replicas on other nodes and they
+   * admit it. Best effort: without one the job still runs, reaching only
+   * replicas on its own node.
+   */
+  private async assignMeshIp(db: Db, runId: string, nodeId: string): Promise<void> {
+    const mesh = await getMeshSettings(db);
+    if (!mesh.enabled) return;
+    const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node || !isMeshed(node, mesh)) return;
+    await assignRunMeshIp(db, { id: node.id, meshIndex: node.meshIndex! }, mesh.supernet, runId);
   }
 
   private async send(plan: Plan, nodeId: string, workloadId: string): Promise<Verdict> {
@@ -426,6 +449,12 @@ export class CronRunWorkflow extends WorkflowEntrypoint<Env, CronRunParams> {
       .from(nodes)
       .where(and(eq(nodes.id, nodeId), isNull(nodes.deletedAt)))
       .limit(1);
+    const [placed] = await db
+      .select({ meshIp: cronRuns.meshIp })
+      .from(cronRuns)
+      .where(eq(cronRuns.id, plan.runId))
+      .limit(1);
+    const meshIp = placed?.meshIp ?? null;
     const [deployment] = await db
       .select({ envSealed: deployments.envSealed })
       .from(deployments)
@@ -472,7 +501,13 @@ export class CronRunWorkflow extends WorkflowEntrypoint<Env, CronRunParams> {
       network: await environmentNetworkName(plan.projectId, plan.environmentId),
       labels: {},
       drain_s: 0,
+      ...(meshIp ? { mesh_ip: meshIp, private_dns: true } : {}),
     };
+    if (meshIp) {
+      // Every meshed node of the workspace lists the run's address before
+      // the job starts, so its first connection is admitted.
+      await refreshNodes(this.env, db, [nodeId]);
+    }
     const stub = this.env.NODE_CONNECTION.get(this.env.NODE_CONNECTION.idFromName(nodeId));
     const result = await stub.sendJobRun({
       run_id: plan.runId,
@@ -520,27 +555,4 @@ export class CronRunWorkflow extends WorkflowEntrypoint<Env, CronRunParams> {
     await startCronRunWorkflow(this.env, { runId: id });
     return id;
   }
-}
-
-/** The node that built a deployment's image, following rollbacks to the build. */
-async function builderOf(db: Db, deploymentId: string): Promise<string | null> {
-  let id: string | null = deploymentId;
-  for (let hops = 0; id && hops < 32; hops++) {
-    const [row]: { buildId: string | null; rollbackOf: string | null }[] = await db
-      .select({ buildId: deployments.buildId, rollbackOf: deployments.rollbackOf })
-      .from(deployments)
-      .where(eq(deployments.id, id))
-      .limit(1);
-    if (!row) return null;
-    if (row.buildId) {
-      const [build] = await db
-        .select({ nodeId: builds.nodeId })
-        .from(builds)
-        .where(eq(builds.id, row.buildId))
-        .limit(1);
-      return build?.nodeId ?? null;
-    }
-    id = row.rollbackOf;
-  }
-  return null;
 }

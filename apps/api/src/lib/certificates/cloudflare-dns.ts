@@ -1,6 +1,8 @@
 /**
  * The few Cloudflare DNS API calls DNS-01 needs (ADR 0009): check a token
- * against a zone, write a challenge TXT record, delete it afterwards.
+ * against a zone, write a challenge TXT record, delete it afterwards. The
+ * transport and {@link cloudflareCall} are shared with the Cloudflare for
+ * SaaS client (`lib/domains/saas.ts`), so one fake serves both in tests.
  *
  * The token needs Zone → DNS → Edit and Zone → Zone → Read on the apps
  * domain's zone, nothing account-wide.
@@ -52,8 +54,18 @@ interface Envelope<T> {
   result?: T;
 }
 
-async function call<T>(
-  zone: CloudflareZone,
+/**
+ * One Cloudflare API call through the injectable transport.
+ *
+ * @param zone - The token to authenticate with (`apiToken` empty for public endpoints).
+ * @param method - HTTP method.
+ * @param path - Path under {@link CLOUDFLARE_API}, e.g. `/zones/<id>`.
+ * @param body - JSON body, if any.
+ * @returns The envelope's `result`.
+ * @throws {CloudflareApiError} On a non-success answer or no answer.
+ */
+export async function cloudflareCall<T>(
+  zone: Pick<CloudflareZone, "apiToken">,
   method: string,
   path: string,
   body?: unknown,
@@ -63,7 +75,7 @@ async function call<T>(
     res = await (transport ?? fetch)(`${CLOUDFLARE_API}${path}`, {
       method,
       headers: {
-        authorization: `Bearer ${zone.apiToken}`,
+        ...(zone.apiToken ? { authorization: `Bearer ${zone.apiToken}` } : {}),
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -105,11 +117,15 @@ export async function verifyZone(zone: CloudflareZone): Promise<string> {
   if (!/^[a-f0-9]{32}$/.test(zone.zoneId)) {
     throw new CloudflareApiError("A zone ID is 32 hexadecimal characters.", 400);
   }
-  const info = await call<{ name?: string; status?: string }>(zone, "GET", `/zones/${zone.zoneId}`);
+  const info = await cloudflareCall<{ name?: string; status?: string }>(
+    zone,
+    "GET",
+    `/zones/${zone.zoneId}`,
+  );
   if (typeof info?.name !== "string" || !info.name) {
     throw new CloudflareApiError("Cloudflare returned the zone without a name.", 200);
   }
-  await call<unknown[]>(zone, "GET", `/zones/${zone.zoneId}/dns_records?per_page=1`);
+  await cloudflareCall<unknown[]>(zone, "GET", `/zones/${zone.zoneId}/dns_records?per_page=1`);
   return info.name.toLowerCase();
 }
 
@@ -137,15 +153,20 @@ export async function createTxtRecord(
   name: string,
   value: string,
 ): Promise<string> {
-  const record = await call<{ id?: string }>(zone, "POST", `/zones/${zone.zoneId}/dns_records`, {
-    type: "TXT",
-    name,
-    // NOTE: Cloudflare warns about unquoted TXT content; the quotes are
-    // not part of the value resolvers return.
-    content: `"${value}"`,
-    ttl: CHALLENGE_TTL_S,
-    comment: "Roundhouse ACME challenge; removed automatically",
-  });
+  const record = await cloudflareCall<{ id?: string }>(
+    zone,
+    "POST",
+    `/zones/${zone.zoneId}/dns_records`,
+    {
+      type: "TXT",
+      name,
+      // NOTE: Cloudflare warns about unquoted TXT content; the quotes are
+      // not part of the value resolvers return.
+      content: `"${value}"`,
+      ttl: CHALLENGE_TTL_S,
+      comment: "Roundhouse ACME challenge; removed automatically",
+    },
+  );
   if (typeof record?.id !== "string") {
     throw new CloudflareApiError("Cloudflare created the record without an ID.", 200);
   }
@@ -160,7 +181,11 @@ export async function createTxtRecord(
  */
 export async function deleteRecord(zone: CloudflareZone, recordId: string): Promise<void> {
   try {
-    await call(zone, "DELETE", `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(recordId)}`);
+    await cloudflareCall(
+      zone,
+      "DELETE",
+      `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(recordId)}`,
+    );
   } catch (err) {
     if (err instanceof CloudflareApiError && err.status === 404) return;
     throw err;

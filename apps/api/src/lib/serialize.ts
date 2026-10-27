@@ -73,6 +73,8 @@ export function toApiService(s: Row<typeof services>) {
       s.databaseEngine && s.databaseVersion
         ? { engine: s.databaseEngine, version: s.databaseVersion }
         : null,
+    health: s.health,
+    health_reason: s.healthReason,
     created_at: +s.createdAt,
     updated_at: +s.updatedAt,
   };
@@ -258,6 +260,11 @@ export function toApiDomain(
       updated_at: ms(d.tlsUpdatedAt),
       nodes: extra.tlsNodes ?? [],
     },
+    mode: d.mode,
+    cf:
+      d.mode === "cloudflare_saas"
+        ? { status: d.cfStatus, ssl_status: d.cfSslStatus, errors: d.cfErrors ?? [] }
+        : null,
     routing_nodes: (extra.routingNodes ?? []).map((n) => ({
       id: n.id,
       name: n.name,

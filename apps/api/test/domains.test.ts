@@ -736,6 +736,11 @@ describe("check evaluation", () => {
       tlsNotAfter: null,
       tlsError: null,
       tlsUpdatedAt: null,
+      cfCustomHostnameId: null,
+      cfStatus: null,
+      cfSslStatus: null,
+      cfErrors: null,
+      cfDcv: null,
       createdAt: new Date(now - DOMAIN_VERIFY_WINDOW_MS - 1),
       updatedAt: new Date(now),
     };

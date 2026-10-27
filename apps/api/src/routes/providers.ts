@@ -58,6 +58,7 @@ import {
   finishCancel,
   toApiProvision,
 } from "../lib/provisioning";
+import { assertBuilderAllowed } from "../lib/registry";
 import type { OffersSchema } from "../schemas/providers";
 
 /** How long offers stay cached: prices and stock change rarely, and a stale pick fails cleanly. */
@@ -283,6 +284,7 @@ export const providerRoutes = createRouter()
         "Cloud servers join over HTTPS; serve the control plane on an https:// origin first",
       );
     }
+    if (input.builder) await assertBuilderAllowed(db, workspaceId);
     const cred = await loadCredential(db, workspaceId, input.provider);
     if (!cred) {
       throw new ApiError(

@@ -8,9 +8,15 @@
  *   with `agent_outdated`;
  * - register the signed `hello.encryption_key` of a node that joined
  *   without one (only while it has none);
- * - persist heartbeat snapshots and detect silent nodes with an alarm;
+ * - persist heartbeat snapshots and detect silent nodes with an alarm,
+ *   which also reschedules a node's stateless replicas once it has been
+ *   silent `RESCHEDULE_AFTER_MS` past offline and degrades its stateful
+ *   services (ADR 0005, `../lib/moves.ts`); a returning node recovers them;
  * - apply `workload_status` (and `hello.statuses`) to placements, move
- *   deployments between `active` and `crashed`, and wake deploy workflows;
+ *   deployments between `active` and `crashed` (a replica with two rows
+ *   during a move counts once), and wake deploy workflows; a healthy
+ *   replacement deletes the `lost` row it stood in for and wakes running
+ *   drains;
  * - record `build_result`s and wake the waiting workflow;
  * - send `job_run` and `job_cancel` (ADR 0010) to agents at
  *   `JOBS_PROTOCOL_VERSION`, apply `job_status` to cron runs and file `job`
@@ -59,7 +65,10 @@ import {
   type Db,
   deployments,
   logChunks,
+  nodeDrains,
   nodes,
+  PLACEMENT_ONLY_STATES,
+  type PlacementState,
   placements,
   services,
 } from "@roundhouse/db";
@@ -104,9 +113,10 @@ import {
   type NodeStatus,
   newId,
   OFFLINE_AFTER_MS,
+  RESCHEDULE_AFTER_MS,
   redact,
 } from "@roundhouse/shared";
-import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
 import {
@@ -117,6 +127,7 @@ import {
 } from "../lib/db-query";
 import {
   addDeploymentEvent,
+  disposeRpc,
   IllegalTransitionError,
   transitionDeployment,
   wakeWorkflow,
@@ -135,6 +146,7 @@ import {
 } from "../lib/mesh";
 import { metricsIntervalMs } from "../lib/metrics/backend";
 import { nodeRow, writeMetricRows } from "../lib/metrics/write";
+import { onReplacementHealthy, recoverNodeServices, rescheduleOfflineNode } from "../lib/moves";
 import { NODE_ID_HEADER } from "../lib/nodes";
 import { projectRoom } from "../lib/realtime";
 import { getMeshSettings } from "../lib/settings";
@@ -249,6 +261,32 @@ const AGENT_DRIVEN_STATUSES: NodeStatus[] = ["pending", "offline", "online", "de
 
 /** Replica states that mean a deployment is not (or no longer) serving. */
 const BAD_STATES: readonly WorkloadState[] = ["unhealthy", "crashed", "exited"];
+
+/** Whether a placement state is one of {@link BAD_STATES}. */
+const isBadState = (s: PlacementState) => (BAD_STATES as readonly string[]).includes(s);
+
+/**
+ * One state per replica of a deployment. During a move (ADR 0005) a replica
+ * has two rows: it counts as healthy when either is, and as bad only when
+ * every one is. `lost` and `parked` rows don't run anywhere and don't count.
+ *
+ * @param rows - The deployment's placements.
+ * @returns The replicas' states, in replica order.
+ */
+export function replicaStates(
+  rows: readonly { state: PlacementState; replica: number }[],
+): PlacementState[] {
+  const byReplica = new Map<number, PlacementState[]>();
+  for (const r of rows) {
+    if ((PLACEMENT_ONLY_STATES as readonly string[]).includes(r.state)) continue;
+    byReplica.set(r.replica, [...(byReplica.get(r.replica) ?? []), r.state]);
+  }
+  return [...byReplica.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, states]) =>
+      states.includes("healthy") ? "healthy" : (states.find((s) => !isBadState(s)) ?? states[0]!),
+    );
+}
 
 /**
  * SET expression that marks a node online unless an operator has put it in
@@ -614,6 +652,20 @@ export class NodeConnection extends DurableObject<Env> {
         metadata: { silent_for_ms: silentFor },
       });
     }
+    if (silentFor < OFFLINE_AFTER_MS + RESCHEDULE_AFTER_MS) {
+      // ADR 0005, "Offline handling": a second deadline rides out agent
+      // restarts and network blips before replicas are moved.
+      await this.ctx.storage.setAlarm(lastSeen + OFFLINE_AFTER_MS + RESCHEDULE_AFTER_MS);
+      return;
+    }
+    try {
+      const moved = await rescheduleOfflineNode(this.env, this.db, nodeId);
+      if (moved.moved || moved.degraded || moved.unplaced) {
+        console.log("offline node rescheduled", nodeId, JSON.stringify(moved));
+      }
+    } catch (err) {
+      console.error("offline reschedule failed", err instanceof Error ? err.message : "error");
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -921,6 +973,12 @@ export class NodeConnection extends DurableObject<Env> {
       await this.registerEncryptionKey(node, hello.encryption_key);
     }
 
+    try {
+      await this.onBackOnline(node.id);
+    } catch (err) {
+      console.error("recovery after outage failed", err instanceof Error ? err.message : "error");
+    }
+
     if (hello.protocol_version >= MESH_PROTOCOL_VERSION) {
       try {
         await this.onHelloMesh(node, hello, attachment.observedIp ?? null);
@@ -945,6 +1003,20 @@ export class NodeConnection extends DurableObject<Env> {
     if (hello.statuses?.length && hello.protocol_version >= WORKLOADS_PROTOCOL_VERSION) {
       await this.applyStatuses(attachment.nodeId, hello.statuses);
     }
+  }
+
+  /**
+   * A node that was offline is back: the next outage may reschedule again,
+   * and services degraded because it was offline recover (its stateful
+   * replicas never moved). Replicas rescheduled away stay `lost` here until
+   * their replacement is healthy or the agent reports them removed.
+   */
+  private async onBackOnline(nodeId: string): Promise<void> {
+    await this.db
+      .update(nodes)
+      .set({ rescheduledAt: null })
+      .where(and(eq(nodes.id, nodeId), sql`${nodes.rescheduledAt} IS NOT NULL`));
+    await recoverNodeServices(this.db, nodeId, ["node_offline"]);
   }
 
   /**
@@ -1163,9 +1235,23 @@ export class NodeConnection extends DurableObject<Env> {
     const touched = new Set<string>();
     // Other nodes' private DNS and ingress answer healthy replicas first.
     let meshHealth = false;
+    const vacated = new Set<string>();
+    let moved = false;
     for (const r of reports) {
       // System workloads have no placement.
       if (!r.deployment_id) continue;
+      if (r.state === "removed") {
+        // A rescheduled replica's node is back and confirms it is gone.
+        await this.db
+          .delete(placements)
+          .where(
+            and(
+              eq(placements.workloadId, r.workload_id),
+              eq(placements.nodeId, nodeId),
+              eq(placements.state, "lost"),
+            ),
+          );
+      }
       // SECURITY: Scoped to this node's placements, so an agent can only
       // report on replicas it was asked to run. Older reports never
       // overwrite newer ones.
@@ -1182,6 +1268,9 @@ export class NodeConnection extends DurableObject<Env> {
             eq(placements.workloadId, r.workload_id),
             eq(placements.nodeId, nodeId),
             eq(placements.deploymentId, r.deployment_id),
+            // Placement-only states are the control plane's: a report from
+            // a container still winding down never revives a lost replica.
+            notInArray(placements.state, [...PLACEMENT_ONLY_STATES]),
             or(isNull(placements.lastStatusAt), lte(placements.lastStatusAt, new Date(r.ts))),
           ),
         )
@@ -1189,15 +1278,29 @@ export class NodeConnection extends DurableObject<Env> {
           deploymentId: placements.deploymentId,
           replica: placements.replica,
           meshIp: placements.meshIp,
+          replaces: placements.replacesWorkloadId,
         });
       if (!row) continue;
       touched.add(row.deploymentId);
+      if (row.replaces && r.state === "healthy") {
+        moved = true;
+        const old = await onReplacementHealthy(this.db, row.replaces);
+        if (old) vacated.add(old);
+      }
       if (row.meshIp && (r.state === "healthy" || BAD_STATES.includes(r.state))) {
         meshHealth = true;
       }
       await this.onReplicaStatus(row.deploymentId, row.replica, r);
     }
     for (const deploymentId of touched) await this.evaluateDeployment(deploymentId);
+    if (moved) await this.wakeDrains();
+    if (vacated.size) {
+      try {
+        await refreshNodes(this.env, this.db, [...vacated]);
+      } catch (err) {
+        console.error("refresh after a move failed", err instanceof Error ? err.message : "error");
+      }
+    }
     if (meshHealth) {
       try {
         await this.refreshPeers(nodeId);
@@ -1244,6 +1347,31 @@ export class NodeConnection extends DurableObject<Env> {
     });
   }
 
+  /**
+   * Wakes running drain workflows: a replacement became healthy, so a
+   * drain waiting on it can move on now instead of at its next look.
+   */
+  private async wakeDrains(): Promise<void> {
+    const running = await this.db
+      .select({ instance: nodeDrains.workflowInstanceId })
+      .from(nodeDrains)
+      .where(eq(nodeDrains.status, "running"))
+      .limit(20);
+    for (const d of running) {
+      if (!d.instance) continue;
+      try {
+        const instance = await this.env.DRAIN_WORKFLOW.get(d.instance);
+        try {
+          await instance.sendEvent({ type: "moved", payload: {} });
+        } finally {
+          disposeRpc(instance);
+        }
+      } catch (err) {
+        console.warn("drain wake-up failed", d.instance, err);
+      }
+    }
+  }
+
   private async deploymentContext(deploymentId: string) {
     const [row] = await this.db
       .select({ deployment: deployments, projectId: services.projectId })
@@ -1279,14 +1407,14 @@ export class NodeConnection extends DurableObject<Env> {
     const row = await this.deploymentContext(deploymentId);
     if (!row) return;
     const { deployment, projectId } = row;
-    const states = (
+    const states = replicaStates(
       await this.db
-        .select({ state: placements.state })
+        .select({ state: placements.state, replica: placements.replica })
         .from(placements)
-        .where(eq(placements.deploymentId, deploymentId))
-    ).map((p) => p.state);
+        .where(eq(placements.deploymentId, deploymentId)),
+    );
     const allHealthy = states.length > 0 && states.every((s) => s === "healthy");
-    const anyBad = states.some((s) => BAD_STATES.includes(s));
+    const anyBad = states.some((s) => isBadState(s));
     const ctx = this.lifecycle();
     try {
       if (deployment.status === "deploying" && (allHealthy || anyBad)) {

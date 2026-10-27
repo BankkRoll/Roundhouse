@@ -133,7 +133,10 @@ function tlsPatch(d: DomainRow, summary: TlsSummary, now: number): Partial<Domai
     tlsError: summary.error,
     tlsUpdatedAt: new Date(now),
   };
-  if (summary.status === "issued" && d.status === "issuing") {
+  // A SaaS hostname also waits for Cloudflare's edge certificate; the
+  // checker activates it once that is active too.
+  const edgeReady = d.mode !== "cloudflare_saas" || d.cfSslStatus === "active";
+  if (summary.status === "issued" && d.status === "issuing" && edgeReady) {
     patch.status = "active";
     patch.error = null;
   }

@@ -23,6 +23,7 @@ import { newId } from "@roundhouse/shared";
 import { eq, isNotNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startCronRunWorkflow } from "../src/lib/cron/runs";
+import { buildDesiredState } from "../src/lib/desired-state";
 import { allAuditText, auditRows } from "./backups-helpers";
 import {
   addMember,
@@ -33,6 +34,7 @@ import {
   joinNode,
   NODE_ENCRYPTION_PRIVATE_KEY,
 } from "./helpers";
+import { enableMesh, meshHello, wgKey } from "./mesh-helpers";
 import {
   connectWorkloadAgent,
   createProject,
@@ -97,12 +99,13 @@ async function connectJobAgent(
   owner: Client,
   workspaceId: string,
   script: JobAgent["script"],
+  helloOverrides: Record<string, unknown> = {},
 ): Promise<JobAgent> {
   const joined = await joinNode(owner, workspaceId);
   const agent = await connectWorkloadAgent(
     joined,
     { health: "healthy" },
-    { protocol_version: PROTOCOL_VERSION },
+    { protocol_version: PROTOCOL_VERSION, ...helloOverrides },
   );
   const job: JobAgent = {
     agent,
@@ -206,9 +209,16 @@ interface CronStage {
 async function armedCronStage(
   script: JobAgent["script"],
   cron: Record<string, unknown> = {},
+  options: { mesh?: boolean } = {},
 ): Promise<CronStage> {
   const { owner, workspaceId } = await install();
-  const job = await connectJobAgent(owner, workspaceId, script);
+  if (options.mesh) await enableMesh(owner);
+  const job = await connectJobAgent(
+    owner,
+    workspaceId,
+    script,
+    options.mesh ? meshHello(wgKey(0x61), "198.51.100.61:51820") : {},
+  );
   const project = await createProject(owner, workspaceId);
   const envId = project.environments[0]!.id;
   const created = await createService(owner, project.id, {
@@ -667,5 +677,35 @@ describe("protected environments", { timeout: RUN_TEST_TIMEOUT_MS }, () => {
     );
     expect(staged.status).toBe(422);
     expect(staged.body.error.code).toBe("cron_has_no_endpoint");
+  });
+});
+
+describe("cron runs on the mesh (ADR 0005)", { timeout: RUN_TEST_TIMEOUT_MS }, () => {
+  it("gives a run on a meshed node a mesh IP and private DNS, listed while it runs", async () => {
+    const s = await armedCronStage(() => ({ kind: "hang" }), {}, { mesh: true });
+    const started = await runNow(s);
+    expect(started.status).toBe(201);
+    await waitRun(s.owner, started.body.id, ["running"]);
+    const frame = s.job.jobs[0]!.frame;
+    // Runs take addresses from the top of the node's range; replicas from the bottom.
+    expect(frame.workload).toMatchObject({ mesh_ip: "10.200.1.254", private_dns: true });
+
+    const db = createDb(env.DB);
+    const desired = (await buildDesiredState(db, env, s.job.nodeId))!;
+    expect(desired.mesh!.addresses).toEqual([
+      expect.objectContaining({
+        ip: "10.200.1.254",
+        node_id: s.job.nodeId,
+        private_domain: expect.stringMatching(/^report\.production\..+\.internal$/),
+        healthy: true,
+      }),
+    ]);
+
+    // Once it ends, the address is no longer live.
+    await env.DB.prepare("UPDATE cron_runs SET status = 'succeeded' WHERE id = ?")
+      .bind(started.body.id)
+      .run();
+    const after = (await buildDesiredState(db, env, s.job.nodeId))!;
+    expect(after.mesh!.addresses).toEqual([]);
   });
 });

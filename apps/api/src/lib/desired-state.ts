@@ -4,8 +4,12 @@
  * node's Durable Object.
  *
  * - {@link buildDesiredState}: every `service` workload placed on the node
- *   whose deployment is live (`deploying`, `active`, `crashed`), plus the
- *   install's ingress settings and, for builder nodes, the registry. From
+ *   whose deployment is live (`deploying`, `active`, `crashed`), except
+ *   placements that are `lost` or `parked` (ADR 0005, moves), plus the
+ *   install's ingress settings (with Cloudflare's ranges as
+ *   `allowed_sources` when the SaaS origin firewall is on) and the
+ *   registry the node runs (`lib/registry.ts`: a builder's primary, a
+ *   meshed node's proxy, or an S3 replica). From
  *   `VOLUMES_PROTOCOL_VERSION` it also lists every live volume pinned to the
  *   node (ADR 0004), and a volume service's workload mounts its volume,
  *   stops before it is replaced, and a database gets its `exec` probe.
@@ -18,7 +22,8 @@
  * - From `MESH_PROTOCOL_VERSION`, `mesh` (ADR 0005, `lib/mesh.ts`):
  *   `null` tears the mesh down; on a meshed node every replica carries its
  *   mesh IP and uses the private DNS, the frame lists peers, sealed
- *   preshared keys and the mesh IPs of every environment the node runs, and
+ *   preshared keys and the mesh IPs of every environment the node runs
+ *   (running cron jobs' included), and
  *   an ingress node gets a route-only workload for every routed service
  *   with replicas on other nodes, so any ingress node serves any hostname
  *   and falls back to remote replicas when its local ones are unhealthy. Without the mesh a node routes a hostname only while it runs
@@ -36,6 +41,7 @@ import {
   domains,
   environments,
   nodes,
+  PLACEMENT_ONLY_STATES,
   placements,
   projects,
   serviceConfigs,
@@ -53,8 +59,6 @@ import {
   MAX_VOLUMES_PER_NODE,
   MAX_WORKLOADS_PER_NODE,
   MESH_PROTOCOL_VERSION,
-  REGISTRY_LISTEN,
-  type RegistryConfig,
   type RouteHsts,
   SEALED_ENV_PROTOCOL_VERSION,
   type SealedBox,
@@ -81,6 +85,7 @@ import { and, asc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-
 import type { NodeConnection } from "../durable/node-connection";
 import { nodeTls, type RoutedDomain, routeHsts } from "./certificates/manifest";
 import { type KeyEnv, type Sealed, sealWith, unsealWith } from "./crypto";
+import { ingressAllowedSources } from "./domains/saas";
 import { isIngressNode } from "./domains/serving";
 import { deploymentBuildAadV2, deploymentEnvAadV2 } from "./keyring";
 import {
@@ -92,8 +97,10 @@ import {
   meshedNodes,
   meshRefreshTargets,
   meshReplicas,
+  meshRunAddresses,
 } from "./mesh";
 import type { OriginEnv } from "./origin";
+import { registryConfigFor } from "./registry";
 import { getIngressSettings, getMeshSettings } from "./settings";
 import { publishHostIp, tcpProxiesFor } from "./tcp-proxies";
 import { deploymentEnvAad, projectKey } from "./variables";
@@ -490,12 +497,6 @@ export function runsSealedWorkloads(node: {
   return node.protocolVersion >= SEALED_ENV_PROTOCOL_VERSION && node.encryptionPublicKey !== null;
 }
 
-/** Registry a builder node runs. Phase 1 always stores blobs on the builder's disk. */
-export const BUILDER_REGISTRY: RegistryConfig = {
-  listen: REGISTRY_LISTEN,
-  storage: { type: "filesystem" },
-};
-
 /**
  * Computes a node's complete desired state from D1.
  *
@@ -536,11 +537,21 @@ export async function buildDesiredState(
     workloads: [],
     tls_mode: ingress.tlsMode,
     apps_domain: ingress.appsDomain,
-    registry: runsWorkloads && node.capabilities?.builder ? BUILDER_REGISTRY : null,
+    registry: null,
     // A mesh-capable agent is told explicitly when it has no mesh, so it
     // tears down one it ran before.
     ...(meshSettings ? { mesh: null } : {}),
   };
+  // The cluster as the mesh sees it: peers, and every replica with a mesh IP.
+  const meshNodes = meshed ? await meshedNodes(db, row.workspaceId, meshSettings) : [];
+  if (runsWorkloads) {
+    body.registry = await registryConfigFor(db, keys, {
+      node: row,
+      meshNodes,
+      mesh: meshSettings ?? { enabled: false, supernet: "" },
+      generation: node.generation,
+    });
+  }
   const certsCapable = node.protocolVersion >= CERTS_PROTOCOL_VERSION;
   const routesAllowed = certsCapable || ingress.tlsMode !== "managed";
   const holdsVolumes = node.protocolVersion >= VOLUMES_PROTOCOL_VERSION;
@@ -587,8 +598,6 @@ export async function buildDesiredState(
       }),
     );
   }
-  // The cluster as the mesh sees it: peers, and every replica with a mesh IP.
-  const meshNodes = meshed ? await meshedNodes(db, row.workspaceId, meshSettings) : [];
   // Every node's replicas, not only this one's: a peer's replica placed
   // since its last refresh must still be listed here.
   for (const n of meshNodes) {
@@ -597,10 +606,14 @@ export async function buildDesiredState(
   const cluster = meshed
     ? await meshReplicas(db, row.workspaceId, new Set(meshNodes.map((n) => n.id)))
     : [];
+  const runs = meshed
+    ? await meshRunAddresses(db, row.workspaceId, new Set(meshNodes.map((n) => n.id)))
+    : [];
+  const allowedSources = certsCapable ? await ingressAllowedSources(db) : null;
   if (!runsWorkloads || nodeKey === null) {
     if (certsCapable) {
       const tls = await nodeTls(db, keys, [], ingress.tlsMode);
-      body.ingress = tls.ingress;
+      body.ingress = { ...tls.ingress, allowed_sources: allowedSources };
       body.certificates = tls.certificates;
     }
     return body;
@@ -635,6 +648,9 @@ export async function buildDesiredState(
       and(
         eq(placements.nodeId, nodeId),
         inArray(deployments.status, [...LIVE_DEPLOYMENT_STATUSES]),
+        // A lost replica was rescheduled and a parked one stopped for
+        // maintenance: leaving them out is what makes the agent remove them.
+        notInArray(placements.state, [...PLACEMENT_ONLY_STATES]),
         isNull(services.deletedAt),
         isNull(projects.deletedAt),
       ),
@@ -802,8 +818,12 @@ export async function buildDesiredState(
     );
   }
   if (meshed) {
-    const localEnvironments = new Set(rows.map((r) => r.deployment.environmentId));
-    const addresses = cluster.filter((c) => localEnvironments.has(c.environmentId));
+    // A cron run here needs its environment's addresses like a replica does.
+    const localEnvironments = new Set([
+      ...rows.map((r) => r.deployment.environmentId),
+      ...runs.filter((r) => r.nodeId === nodeId).map((r) => r.environmentId),
+    ]);
+    const addresses = [...cluster, ...runs].filter((c) => localEnvironments.has(c.environmentId));
     const routedPairs = new Set(
       await routedServicePairs(
         db,
@@ -816,11 +836,14 @@ export async function buildDesiredState(
       all: meshNodes,
       settings: meshSettings,
       generation: node.generation,
-      addresses: addresses.map((a) => ({
-        ...a,
-        routedPorts:
-          a.port !== null && routedPairs.has(`${a.serviceId}:${a.environmentId}`) ? [a.port] : [],
-      })),
+      addresses: addresses.map((a) => {
+        const port = "port" in a ? (a as ClusterReplica).port : null;
+        return {
+          ...a,
+          routedPorts:
+            port !== null && routedPairs.has(`${a.serviceId}:${a.environmentId}`) ? [port] : [],
+        };
+      }),
       netTags: await assignNetTags(db, [...localEnvironments]),
     });
   }
@@ -830,6 +853,7 @@ export async function buildDesiredState(
     const routed = new Set(body.workloads.flatMap((w) => w.routes.map((r) => r.hostname)));
     body.ingress = {
       ...tls.ingress,
+      allowed_sources: allowedSources,
       managed_hosts: tls.ingress.managed_hosts.filter((h) => routed.has(h)),
     };
     body.certificates = tls.certificates.filter((c) =>

@@ -1,6 +1,7 @@
 /**
- * Adding and removing custom domains (ADR 0009, direct mode), shared by the
- * domain routes and change set apply so both enforce the same rules:
+ * Adding and removing custom domains (ADR 0009, direct and Cloudflare for
+ * SaaS mode), shared by the domain routes and change set apply so both
+ * enforce the same rules:
  *
  * - {@link checkCustomHostname}: normalisation and the names the install owns.
  * - {@link assertServesTraffic}: cron services (ADR 0010) take no domains.
@@ -9,7 +10,8 @@
  * - {@link hostnameHolder}: instance-wide uniqueness, with takeover of a
  *   hostname that failed long ago or whose service is gone.
  * - {@link addCustomDomain} / {@link removeCustomDomain}: the writes, their
- *   audit records, the first DNS check and the route refresh on removal.
+ *   audit records, the first DNS check and the route refresh on removal;
+ *   in SaaS mode also the Cloudflare custom hostname (`./saas.ts`).
  *
  * @module
  */
@@ -18,6 +20,7 @@ import {
   CUSTOM_HOSTNAME_PROBLEM_MESSAGES,
   customHostnameProblem,
   DOMAIN_TAKEOVER_AFTER_MS,
+  isWildcardHostname,
   MAX_CUSTOM_DOMAINS_PER_SERVICE,
   newId,
   normalizeHostname,
@@ -25,6 +28,7 @@ import {
 import { and, count, eq } from "drizzle-orm";
 import { type AppContext, type AuditActor, clientIp } from "../../context";
 import { recordAudit } from "../audit";
+import { CloudflareApiError } from "../certificates/cloudflare-dns";
 import { dns01Available, getCloudflareDnsView } from "../certificates/settings";
 import { ApiError, conflict, isUniqueViolation, notFound } from "../errors";
 import { publicOrigin } from "../origin";
@@ -33,6 +37,13 @@ import { getIngressSettings, getSetting } from "../settings";
 import { checkDomain, refreshServiceNodes } from "./check";
 import { type DnsLookupError, type Resolution, resolveDomain } from "./dns";
 import { INGRESS_HOSTNAME_SETTING } from "./records";
+import {
+  createSaasHostname,
+  deleteSaasHostname,
+  getCustomDomainsMode,
+  getSaasView,
+  loadSaasZone,
+} from "./saas";
 
 /** A `domains` row. */
 export type DomainRow = typeof domains.$inferSelect;
@@ -85,6 +96,19 @@ export async function checkCustomHostname(c: AppContext, db: Db, input: string):
   );
   if (problem === "invalid") {
     throw new ApiError(400, "invalid_request", CUSTOM_HOSTNAME_PROBLEM_MESSAGES.invalid);
+  }
+  // Checked before the install's own wildcard rule: in SaaS mode the plan
+  // is what the customer has to change.
+  if (
+    isWildcardHostname(hostname) &&
+    (await getCustomDomainsMode(db)) === "cloudflare_saas" &&
+    !(await getSaasView(db))?.enterprise
+  ) {
+    throw new ApiError(
+      422,
+      "wildcard_requires_enterprise",
+      "Cloudflare for SaaS takes wildcard custom hostnames on Enterprise plans only.",
+    );
   }
   if (problem) {
     throw new ApiError(422, "hostname_not_allowed", CUSTOM_HOSTNAME_PROBLEM_MESSAGES[problem]);
@@ -215,6 +239,25 @@ export async function assertHostnameFree(
   return holder;
 }
 
+/**
+ * Runs a Cloudflare for SaaS call, turning its failure into a 502 the
+ * caller can retry.
+ *
+ * @param fn - The call.
+ * @returns Its result.
+ * @throws {ApiError} 502 `cloudflare_unavailable`.
+ */
+async function callCloudflare<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof CloudflareApiError) {
+      throw new ApiError(502, "cloudflare_unavailable", `Cloudflare: ${err.message}`);
+    }
+    throw err;
+  }
+}
+
 function randomToken(): string {
   return [...crypto.getRandomValues(new Uint8Array(32))]
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -265,6 +308,17 @@ export async function addCustomDomain(c: AppContext, input: AddDomainInput): Pro
   }
 
   const id = newId("domain");
+  // SECURITY: SaaS mode creates the Cloudflare hostname before the row, so a
+  // failure leaves nothing half-made; it only ever reaches the workspace's
+  // own origin record.
+  const saasZone =
+    (await getCustomDomainsMode(db)) === "cloudflare_saas" ? await loadSaasZone(db, c.env) : null;
+  if (existing.taken && existing.row.cfCustomHostnameId && saasZone) {
+    await callCloudflare(() => deleteSaasHostname(saasZone, existing.row.cfCustomHostnameId!));
+  }
+  const cf = saasZone
+    ? await callCloudflare(() => createSaasHostname(saasZone, hostname, input.workspaceId))
+    : null;
   const insert = db
     .insert(domains)
     .values({
@@ -277,7 +331,16 @@ export async function addCustomDomain(c: AppContext, input: AddDomainInput): Pro
       verificationStatus: "pending",
       tlsStatus: ingress.tlsMode === "off" ? "disabled" : "pending",
       status: "pending_dns",
-      mode: "direct",
+      mode: cf ? "cloudflare_saas" : "direct",
+      ...(cf
+        ? {
+            cfCustomHostnameId: cf.id,
+            cfStatus: cf.status,
+            cfSslStatus: cf.sslStatus,
+            cfErrors: cf.errors,
+            cfDcv: cf.dcv,
+          }
+        : {}),
       verificationToken: randomToken(),
       apex: resolution?.apex ?? false,
       pendingSince: new Date(now),
@@ -305,6 +368,11 @@ export async function addCustomDomain(c: AppContext, input: AddDomainInput): Pro
       [row] = (await insert) as [DomainRow];
     }
   } catch (err) {
+    if (cf && saasZone) {
+      await deleteSaasHostname(saasZone, cf.id).catch((e) =>
+        console.warn("custom hostname cleanup failed", e instanceof Error ? e.message : "error"),
+      );
+    }
     if (isUniqueViolation(err, "domains.hostname")) throw domainTaken(hostname);
     throw err;
   }
@@ -352,6 +420,12 @@ export async function removeCustomDomain(
     throw conflict("Turn off the generated domain under Networking instead");
   }
   const db = c.get("db");
+  if (domain.cfCustomHostnameId) {
+    // Fail closed: a hostname left at Cloudflare keeps costing and keeps
+    // pointing at the install, so the domain stays until it is gone there.
+    const zone = await loadSaasZone(db, c.env);
+    if (zone) await callCloudflare(() => deleteSaasHostname(zone, domain.cfCustomHostnameId!));
+  }
   const [gone] = await db.delete(domains).where(eq(domains.id, domain.id)).returning();
   if (!gone) throw notFound("Domain");
   await recordAudit(db, {

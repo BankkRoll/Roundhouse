@@ -134,6 +134,7 @@ import {
   mintRepoToken,
 } from "../lib/github";
 import { effectiveStatus } from "../lib/nodes";
+import { buildCandidates } from "../lib/registry";
 import { resolveServiceEnvironment } from "../lib/resolve-env";
 import { environmentNodeIds, schedulerSnapshot } from "../lib/scheduling";
 import { loadEnvironmentVariables, projectKey } from "../lib/variables";
@@ -854,21 +855,13 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     const stopped = await this.stopped(db, plan, ["queued"]);
     if (stopped) return stopped;
 
-    const candidates = (
-      await db
-        .select()
-        .from(nodes)
-        .where(and(eq(nodes.workspaceId, plan.workspaceId), isNull(nodes.deletedAt)))
-    ).filter(
-      (n) =>
-        effectiveStatus(n) === "online" &&
-        n.capabilities?.builder &&
-        n.capabilities.docker &&
-        runsSealedWorkloads(n),
-    );
+    // With filesystem registry storage only the workspace's designated
+    // builder builds, so every image lives in the one registry the other
+    // nodes pull through over the mesh (ADR 0005).
+    const candidates = (await buildCandidates(db, plan.workspaceId)).filter(runsSealedWorkloads);
     if (!candidates.length) {
       return fail(
-        `No online builder node: one needs the builder capability, agent protocol ${SEALED_ENV_PROTOCOL_VERSION} or later and a registered encryption key`,
+        `No online builder node: one needs the builder capability, agent protocol ${SEALED_ENV_PROTOCOL_VERSION} or later and a registered encryption key. Without S3 registry storage only the workspace's first builder builds.`,
       );
     }
     // Reusing the last builder keeps BuildKit's layer cache warm.

@@ -1,17 +1,20 @@
 /**
  * The cluster snapshot `schedule()` places replicas and job runs against:
  * every node of a workspace that can run sealed workloads, with what is
- * already allocated on it. Shared by the deploy pipeline and the cron
+ * already allocated on it, its zone label, its mesh readiness and whether
+ * it can pull the image's registry (`lib/registry.ts`). Shared by the deploy pipeline and the cron
  * runner (ADR 0010), so a running job counts against its node exactly like
  * a replica does.
  *
  * @module
  */
 import {
+  builds,
   cronRuns,
   type Db,
   deployments,
   nodes,
+  PLACEMENT_ONLY_STATES,
   placements,
   serviceConfigs,
   volumes,
@@ -22,11 +25,13 @@ import {
   PLACED_CRON_RUN_STATUSES,
   type ResourcesConfig,
   type SchedulerNode,
+  ZONE_LABEL,
 } from "@roundhouse/shared";
-import { and, eq, inArray, isNotNull, isNull, ne, sum } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne, notInArray, sum } from "drizzle-orm";
 import { LIVE_DEPLOYMENT_STATUSES, runsSealedWorkloads } from "./desired-state";
 import { isMeshed } from "./mesh";
 import { effectiveStatus } from "./nodes";
+import { nodesReachingRegistry } from "./registry";
 import { getMeshSettings } from "./settings";
 
 /** Memory kept back on every node for the OS, Docker, the agent and Caddy. */
@@ -66,6 +71,7 @@ export async function environmentNodeIds(
         eq(deployments.environmentId, environmentId),
         ne(deployments.serviceId, serviceId),
         inArray(deployments.status, [...LIVE_DEPLOYMENT_STATUSES]),
+        notInArray(placements.state, [...PLACEMENT_ONLY_STATES]),
       ),
     );
   return rows.map((r) => r.nodeId);
@@ -81,8 +87,8 @@ export async function environmentNodeIds(
  *
  * @param db - Database client.
  * @param options - The workspace; the deployment being placed, whose own
- *   placements don't count; and the node whose local registry holds the
- *   image (only it can pull it until the mesh).
+ *   placements don't count; and the builder whose registry holds the image
+ *   (`nodesReachingRegistry` decides who can pull from it).
  * @returns The snapshot.
  */
 export async function schedulerSnapshot(
@@ -118,6 +124,7 @@ export async function schedulerSnapshot(
       .where(
         and(
           inArray(deployments.status, [...LIVE_DEPLOYMENT_STATUSES]),
+          notInArray(placements.state, [...PLACEMENT_ONLY_STATES]),
           ...(options.excludeDeploymentId ? [ne(deployments.id, options.excludeDeploymentId)] : []),
         ),
       ),
@@ -144,6 +151,7 @@ export async function schedulerSnapshot(
     ...jobs.map((j) => ({ ...j, nodeId: j.nodeId! })),
   ];
   const quotaOf = new Map(volumeQuotas.map((q) => [q.nodeId, Number(q.total ?? 0)]));
+  const reaching = await nodesReachingRegistry(db, workspaceNodes, options.registryNodeId, mesh);
   const schedulerNodes = workspaceNodes.map((n): SchedulerNode => {
     const mine = allocations.filter((a) => a.nodeId === n.id);
     const serviceReplicas: Record<string, number> = {};
@@ -161,13 +169,43 @@ export async function schedulerSnapshot(
       allocatedCpuMillis: mine.reduce((total, a) => total + a.resources.cpu_millis, 0),
       allocatedMemoryMb: mine.reduce((total, a) => total + a.resources.memory_mb, 0),
       serviceReplicas,
-      // Until the Phase 2 mesh, only the builder itself can pull from its registry.
-      reachesRegistry: options.registryNodeId !== null && n.id === options.registryNodeId,
+      reachesRegistry: reaching.has(n.id),
       protocolVersion: n.protocolVersion,
       ...(n.diskTotal ? { diskMb: Math.floor(n.diskTotal / 2 ** 20) } : {}),
       allocatedDiskMb: quotaOf.get(n.id) ?? 0,
       meshReady: isMeshed(n, mesh) && n.meshReady,
+      zone: n.labels[ZONE_LABEL] ?? null,
     };
   });
   return { nodes: schedulerNodes, rows: new Map(workspaceNodes.map((n) => [n.id, n])) };
+}
+
+/**
+ * The node that built a deployment's image, following rollbacks to the
+ * build: the registry holding it.
+ *
+ * @param db - Database client.
+ * @param deploymentId - The deployment.
+ * @returns The builder's ID, or `null` for images from elsewhere.
+ */
+export async function builderOfDeployment(db: Db, deploymentId: string): Promise<string | null> {
+  let id: string | null = deploymentId;
+  for (let hops = 0; id && hops < 32; hops++) {
+    const [row]: { buildId: string | null; rollbackOf: string | null }[] = await db
+      .select({ buildId: deployments.buildId, rollbackOf: deployments.rollbackOf })
+      .from(deployments)
+      .where(eq(deployments.id, id))
+      .limit(1);
+    if (!row) return null;
+    if (row.buildId) {
+      const [build] = await db
+        .select({ nodeId: builds.nodeId })
+        .from(builds)
+        .where(eq(builds.id, row.buildId))
+        .limit(1);
+      return build?.nodeId ?? null;
+    }
+    id = row.rollbackOf;
+  }
+  return null;
 }

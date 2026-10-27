@@ -76,6 +76,22 @@ export const SettingKey = {
    * Fixed once the first server joined the mesh.
    */
   meshSupernet: "mesh_supernet",
+  /**
+   * S3-compatible bucket the build registry stores blobs in (ADR 0005,
+   * "Registry over the mesh"), with a read-write and a read-only key pair,
+   * both secrets sealed. Unset means each workspace's builder keeps them on
+   * its disk. See `lib/registry.ts`.
+   */
+  registryStorage: "registry_storage",
+  /** `direct` or `cloudflare_saas`: how new custom domains are served (ADR 0009). */
+  customDomainsMode: "custom_domains_mode",
+  /**
+   * The Cloudflare for SaaS zone: zone, API token (sealed), fallback origin
+   * state and the origin firewall choice. See `lib/domains/saas.ts`.
+   */
+  saas: "saas",
+  /** Cloudflare's published IP ranges and when they were fetched (`ingress_firewall`). */
+  cloudflareIps: "cloudflare_ips",
 } as const;
 
 /**

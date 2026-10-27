@@ -12,6 +12,7 @@ import type { VolumeMigrationParams } from "./lib/volume-migrations";
 import type { BackupParams } from "./workflows/backup";
 import type { CertificateParams } from "./workflows/certificate";
 import type { DeployParams } from "./workflows/deploy";
+import type { DrainParams } from "./workflows/drain";
 import type { KeyRotationParams } from "./workflows/key-rotation";
 import type { ProvisionParams } from "./workflows/provision";
 import type { RestoreParams } from "./workflows/restore";
@@ -95,6 +96,11 @@ export interface Env {
    * instance ID `<cer_… id>-<attempt>`.
    */
   CERT_WORKFLOW: Workflow<CertificateParams>;
+  /**
+   * Drains one node (ADR 0005, "Node lifecycle"); instance ID
+   * `drain-<node>-<ts>`, progress in `node_drains`.
+   */
+  DRAIN_WORKFLOW: Workflow<DrainParams>;
   /**
    * Seconds a provisioned server gets to join, overriding `JOIN_TIMEOUT_MS`;
    * and seconds between join checks. For development and tests; unset in production.

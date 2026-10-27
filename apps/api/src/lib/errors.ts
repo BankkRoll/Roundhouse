@@ -71,6 +71,17 @@ export type ErrorCode =
   | "cron_schedule_required"
   | "cron_has_no_endpoint"
   | "run_in_progress"
+  | "registry_requires_s3"
+  | "registry_storage_unreachable"
+  | "drain_in_progress"
+  | "node_not_drainable"
+  | "node_not_draining"
+  | "saas_requires_mesh"
+  | "saas_requires_managed_tls"
+  | "saas_in_use"
+  | "cloudflare_saas_invalid"
+  | "cloudflare_unavailable"
+  | "wildcard_requires_enterprise"
   | "internal";
 
 /**

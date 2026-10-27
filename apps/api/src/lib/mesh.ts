@@ -4,8 +4,9 @@
  * decides everything else:
  *
  * - the address plan: each node's /24 ({@link joinMesh}), each live
- *   replica's mesh IP ({@link assignMeshIps}) and each environment's
- *   nftables tag ({@link assignNetTags});
+ *   replica's and running cron job's mesh IP ({@link assignMeshIps},
+ *   {@link assignRunMeshIp}) and each environment's nftables tag
+ *   ({@link assignNetTags});
  * - reachability: a node's endpoint ({@link meshEndpoint}) and each pair's
  *   path, direct or through a relay ({@link choosePaths}, a pure function,
  *   plus the fallback state in `mesh_paths`);
@@ -21,6 +22,7 @@
  * @module
  */
 import {
+  cronRuns,
   type Db,
   deployments,
   environments,
@@ -29,6 +31,7 @@ import {
   meshPaths,
   meshPsks,
   nodes,
+  PLACEMENT_ONLY_STATES,
   placements,
   projects,
   serviceConfigs,
@@ -44,6 +47,7 @@ import {
   sealBox,
   toBase64,
 } from "@roundhouse/protocol";
+import { PLACED_CRON_RUN_STATUSES } from "@roundhouse/shared";
 import { and, asc, eq, inArray, isNotNull, isNull, like, notInArray, or, sql } from "drizzle-orm";
 import type { Mesh, MeshNode, MeshPair } from "../contracts/mesh";
 import type { Sealed } from "./crypto";
@@ -263,7 +267,9 @@ export async function joinMesh(
 /**
  * Hands every live replica on a meshed node a mesh IP in the node's /24,
  * lowest free first, and frees the IPs of replicas whose deployment is no
- * longer live (so the next replica can take them).
+ * longer live (so the next replica can take them). Addresses of running
+ * cron jobs ({@link assignRunMeshIp}, taken from the top of the range) are
+ * never handed out.
  *
  * @param db - Database client.
  * @param node - The node's ID and mesh index.
@@ -307,7 +313,10 @@ export async function assignMeshIps(
         ),
       )
       .orderBy(asc(placements.workloadId));
-    const used = new Set(rows.flatMap((r) => (r.meshIp ? [r.meshIp] : [])));
+    const used = new Set([
+      ...rows.flatMap((r) => (r.meshIp ? [r.meshIp] : [])),
+      ...(await liveRunIps(db, node.id)),
+    ]);
     const missing = rows.filter((r) => r.meshIp === null);
     if (!missing.length) return assigned;
     let host = MESH_FIRST_REPLICA_HOST;
@@ -335,6 +344,90 @@ export async function assignMeshIps(
     if (!conflict) return assigned;
   }
   return assigned;
+}
+
+/**
+ * Mesh IPs held by a node's cron runs that are starting or running.
+ *
+ * @param db - Database client.
+ * @param nodeId - The node.
+ * @returns The addresses.
+ */
+async function liveRunIps(db: Db, nodeId: string): Promise<string[]> {
+  const rows = await db
+    .select({ ip: cronRuns.meshIp })
+    .from(cronRuns)
+    .where(
+      and(
+        eq(cronRuns.nodeId, nodeId),
+        isNotNull(cronRuns.meshIp),
+        inArray(cronRuns.status, [...PLACED_CRON_RUN_STATUSES]),
+      ),
+    );
+  return rows.flatMap((r) => (r.ip ? [r.ip] : []));
+}
+
+/**
+ * Gives a cron run placed on a meshed node a mesh IP from the node's /24.
+ * Runs take addresses from the top of the replica range down while
+ * replicas take them from the bottom up, so the two allocators only meet
+ * on a nearly full node; a collision found after the write gives the
+ * address back and tries the next one.
+ *
+ * @param db - Database client.
+ * @param node - The node's ID and mesh index.
+ * @param supernet - The mesh supernet.
+ * @param runId - The run, already `starting` on the node.
+ * @returns The address, or `null` when the node has none free.
+ */
+export async function assignRunMeshIp(
+  db: Db,
+  node: { id: string; meshIndex: number },
+  supernet: string,
+  runId: string,
+): Promise<string | null> {
+  const subnetPrefix = `${prefix16(supernet)}.${node.meshIndex}.`;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const [run] = await db
+      .select({ ip: cronRuns.meshIp })
+      .from(cronRuns)
+      .where(eq(cronRuns.id, runId))
+      .limit(1);
+    if (!run) return null;
+    if (run.ip?.startsWith(subnetPrefix)) return run.ip;
+    const placed = await db
+      .select({ ip: placements.meshIp })
+      .from(placements)
+      .where(and(eq(placements.nodeId, node.id), isNotNull(placements.meshIp)));
+    const used = new Set([
+      ...placed.flatMap((p) => (p.ip ? [p.ip] : [])),
+      ...(await liveRunIps(db, node.id)),
+    ]);
+    let host = MESH_LAST_REPLICA_HOST;
+    while (host >= MESH_FIRST_REPLICA_HOST && used.has(`${subnetPrefix}${host}`)) host--;
+    if (host < MESH_FIRST_REPLICA_HOST) return null;
+    const ip = `${subnetPrefix}${host}`;
+    try {
+      await db
+        .update(cronRuns)
+        .set({ meshIp: ip })
+        .where(
+          and(eq(cronRuns.id, runId), inArray(cronRuns.status, [...PLACED_CRON_RUN_STATUSES])),
+        );
+    } catch (err) {
+      if (!isUniqueViolation(err, "cron_runs.")) throw err;
+      continue;
+    }
+    const [clash] = await db
+      .select({ id: placements.id })
+      .from(placements)
+      .where(and(eq(placements.nodeId, node.id), eq(placements.meshIp, ip)))
+      .limit(1);
+    if (!clash) return ip;
+    // A replica took the address between the read and the write; replicas win.
+    await db.update(cronRuns).set({ meshIp: null }).where(eq(cronRuns.id, runId));
+  }
+  return null;
 }
 
 /**
@@ -691,6 +784,16 @@ export async function dropPairPsks(db: Db, nodeId: string): Promise<void> {
 }
 
 /**
+ * Preshared keys not sealed under `currentKid`, for rotation and key status.
+ *
+ * @param currentKid - The current KEK id.
+ * @returns The condition.
+ */
+export function stalePairPsks(currentKid: string) {
+  return sql`(json_extract(${meshPsks.pskSealed}, '$.v') IS NOT 2 OR json_extract(${meshPsks.pskSealed}, '$.kid') IS NOT ${currentKid})`;
+}
+
+/**
  * Re-seals up to `limit` preshared keys not sealed under the current KEK;
  * part of the master key rotation.
  *
@@ -713,9 +816,7 @@ export async function resealPairPsks(
       raw: sql<string>`CAST(${meshPsks.pskSealed} AS TEXT)`,
     })
     .from(meshPsks)
-    .where(
-      sql`(json_extract(${meshPsks.pskSealed}, '$.v') IS NOT 2 OR json_extract(${meshPsks.pskSealed}, '$.kid') IS NOT ${currentKid})`,
-    )
+    .where(stalePairPsks(currentKid))
     .limit(limit);
   for (const r of rows) {
     const psk = await unsealInstanceSecret(keys, r.pskSealed as Sealed, PSK_SETTING, r.pairKey);
@@ -804,6 +905,7 @@ export async function meshReplicas(
         eq(projects.workspaceId, workspaceId),
         isNotNull(placements.meshIp),
         inArray(deployments.status, [...LIVE_DEPLOYMENT_STATUSES]),
+        notInArray(placements.state, [...PLACEMENT_ONLY_STATES]),
         isNull(services.deletedAt),
         isNull(projects.deletedAt),
       ),
@@ -824,6 +926,59 @@ export async function meshReplicas(
       routedPorts: [],
       port: r.networking.port ?? null,
       generatedDomain: r.networking.generated_domain !== false,
+    }));
+}
+
+/**
+ * Every cron run with a mesh IP that is starting or running on the
+ * workspace's meshed nodes, as mesh addresses (ADR 0005 and 0010): other
+ * nodes admit their environment's traffic from them, and the private DNS
+ * names them after the cron service.
+ *
+ * @param db - Database client.
+ * @param workspaceId - The workspace.
+ * @param nodeIds - Its meshed nodes.
+ * @returns The runs' addresses, by IP.
+ */
+export async function meshRunAddresses(
+  db: Db,
+  workspaceId: string,
+  nodeIds: ReadonlySet<string>,
+): Promise<MeshReplica[]> {
+  if (!nodeIds.size) return [];
+  const rows = await db
+    .select({
+      ip: cronRuns.meshIp,
+      nodeId: cronRuns.nodeId,
+      status: cronRuns.status,
+      environmentId: cronRuns.environmentId,
+      serviceId: cronRuns.serviceId,
+      serviceSlug: services.slug,
+      environmentSlug: environments.slug,
+      projectSlug: projects.slug,
+    })
+    .from(cronRuns)
+    .innerJoin(services, eq(services.id, cronRuns.serviceId))
+    .innerJoin(projects, eq(projects.id, services.projectId))
+    .innerJoin(environments, eq(environments.id, cronRuns.environmentId))
+    .where(
+      and(
+        eq(projects.workspaceId, workspaceId),
+        isNotNull(cronRuns.meshIp),
+        inArray(cronRuns.status, [...PLACED_CRON_RUN_STATUSES]),
+      ),
+    )
+    .orderBy(asc(cronRuns.meshIp));
+  return rows
+    .filter((r) => r.nodeId !== null && nodeIds.has(r.nodeId) && r.ip !== null)
+    .map((r) => ({
+      ip: r.ip!,
+      nodeId: r.nodeId!,
+      environmentId: r.environmentId,
+      serviceId: r.serviceId,
+      privateDomain: `${r.serviceSlug}.${r.environmentSlug}.${r.projectSlug}.internal`,
+      healthy: r.status === "running",
+      routedPorts: [],
     }));
 }
 
