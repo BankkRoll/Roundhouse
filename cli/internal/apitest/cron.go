@@ -42,7 +42,7 @@ func (f *Fake) SeedCron() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	p := f.projects[ProjectID]
-	p.Services = append(p.Services, api.Service{ID: CronServiceID, ProjectID: ProjectID, Name: "Nightly report", Slug: "nightly",
+	p.Services = append(p.Services, api.Service{Health: "ok", ID: CronServiceID, ProjectID: ProjectID, Name: "Nightly report", Slug: "nightly",
 		Kind: api.ServiceKindCron, CreatedAt: Now - 86400000, UpdatedAt: Now - 86400000})
 	c := f.cronState()
 	c.states[CronServiceID+"/"+ProductionID] = &api.CronState{ServiceID: CronServiceID, EnvironmentID: ProductionID,

@@ -123,6 +123,8 @@ type Fake struct {
 
 	// mesh is the workspace's WireGuard mesh; see [Fake.SetMesh].
 	mesh *api.Mesh
+	// drains holds each server's latest drain.
+	drains map[string]api.NodeDrain
 
 	// cron holds cron schedule states and runs; see [Fake.cronState].
 	cron *cronState
@@ -212,8 +214,8 @@ func (f *Fake) seed() {
 		{ID: StagingID, ProjectID: ProjectID, Name: "staging", Slug: "staging", Kind: "staging", CreatedAt: Now - 86400000},
 	}
 	services := []api.Service{
-		{ID: APIServiceID, ProjectID: ProjectID, Name: "API", Slug: "api", Kind: "app", CreatedAt: Now - 86400000, UpdatedAt: Now - 86400000},
-		{ID: DBServiceID, ProjectID: ProjectID, Name: "Postgres", Slug: "db", Kind: "database", CreatedAt: Now - 86400000, UpdatedAt: Now - 86400000},
+		{Health: "ok", ID: APIServiceID, ProjectID: ProjectID, Name: "API", Slug: "api", Kind: "app", CreatedAt: Now - 86400000, UpdatedAt: Now - 86400000},
+		{Health: "ok", ID: DBServiceID, ProjectID: ProjectID, Name: "Postgres", Slug: "db", Kind: "database", CreatedAt: Now - 86400000, UpdatedAt: Now - 86400000},
 	}
 	f.projects[ProjectID] = &api.ProjectDetail{
 		Project:      api.Project{ID: ProjectID, WorkspaceID: WorkspaceID, Name: "Shop", Slug: "shop", Description: str("Storefront"), CreatedAt: Now - 86400000, UpdatedAt: Now - 86400000},
@@ -269,9 +271,9 @@ func (f *Fake) seed() {
 		{TS: Now - 3410000, Stream: "stderr", Text: "npm warn deprecated"},
 	}
 	f.domains = []api.Domain{
-		{ID: "dom_0002", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "shop.example.com", URL: "https://shop.example.com", Type: "custom", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 1000), CreatedAt: Now - 1000},
-		{ID: "dom_0001", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "api-production-x7k2.apps.example.com", URL: "https://api-production-x7k2.apps.example.com", Type: "generated", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 86400000), CreatedAt: Now - 86400000},
-		{ID: "dom_0003", ServiceID: APIServiceID, EnvironmentID: StagingID, Hostname: "api-staging-q9p1.apps.example.com", URL: "https://api-staging-q9p1.apps.example.com", Type: "generated", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 86400000), CreatedAt: Now - 86400000},
+		{ID: "dom_0002", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "shop.example.com", URL: "https://shop.example.com", Type: "custom", Mode: "direct", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 1000), CreatedAt: Now - 1000},
+		{ID: "dom_0001", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "api-production-x7k2.apps.example.com", URL: "https://api-production-x7k2.apps.example.com", Type: "generated", Mode: "direct", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 86400000), CreatedAt: Now - 86400000},
+		{ID: "dom_0003", ServiceID: APIServiceID, EnvironmentID: StagingID, Hostname: "api-staging-q9p1.apps.example.com", URL: "https://api-staging-q9p1.apps.example.com", Type: "generated", Mode: "direct", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 86400000), CreatedAt: Now - 86400000},
 	}
 	f.routingNodes = []api.DomainRoutingNode{{ID: NodeID, Name: "edge-1", PublicIP: str("203.0.113.10"), Serves: true}}
 	for i := range f.domains {
@@ -721,6 +723,7 @@ func (f *Fake) routes(mux *http.ServeMux) {
 	f.dataRoutes(mux, handlers)
 	f.cronRoutes(handlers)
 	f.meshRoutes(handlers)
+	f.drainRoutes(handlers)
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
 	}
@@ -999,7 +1002,7 @@ func (f *Fake) createService(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	svc := api.Service{ID: f.nextID("svc"), ProjectID: p.ID, Name: in.Name, Slug: slug, Kind: kind, CreatedAt: Now, UpdatedAt: Now}
+	svc := api.Service{Health: "ok", ID: f.nextID("svc"), ProjectID: p.ID, Name: in.Name, Slug: slug, Kind: kind, CreatedAt: Now, UpdatedAt: Now}
 	p.Services = append(p.Services, svc)
 	port := 8080
 	if n, ok := in.Config["networking"].(map[string]any); ok {

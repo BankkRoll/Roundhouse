@@ -280,7 +280,7 @@ func (f *Fake) applyTemplate(t *fakeTemplate, p *api.ProjectDetail, env api.Envi
 		slug := uniqueSlug(ts.Ref, func(s string) bool {
 			return s == sharedNamespace || slices.ContainsFunc(p.Services, func(x api.Service) bool { return x.Slug == s })
 		})
-		svc := api.Service{ID: f.nextID("svc"), ProjectID: p.ID, Name: ts.Name, Slug: slug, Kind: ts.Kind, Icon: ts.Icon, CreatedAt: Now, UpdatedAt: Now}
+		svc := api.Service{Health: "ok", ID: f.nextID("svc"), ProjectID: p.ID, Name: ts.Name, Slug: slug, Kind: ts.Kind, Icon: ts.Icon, CreatedAt: Now, UpdatedAt: Now}
 		p.Services = append(p.Services, svc)
 		src := api.ServiceSource{Type: ts.Source.Type, Image: ts.Source.Image, RepoURL: ts.Source.RepoURL, Branch: ts.Source.Branch, RootDir: ts.Source.RootDir}
 		for _, e := range p.Environments {

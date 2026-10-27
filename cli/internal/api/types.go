@@ -85,6 +85,12 @@ type Service struct {
 	Slug      string  `json:"slug"`
 	Kind      string  `json:"kind"`
 	Icon      *string `json:"icon"`
+	// Health is "ok" or "degraded" (ADR 0005): service-level health,
+	// separate from deployment status.
+	Health string `json:"health"`
+	// HealthReason says why a service is degraded: "node_offline" or
+	// "node_maintenance"; nil while it is ok.
+	HealthReason *string `json:"health_reason"`
 	// Database is set for a database service; nil for any other.
 	Database  *ServiceDatabase `json:"database,omitempty"`
 	CreatedAt int64            `json:"created_at"`
@@ -328,15 +334,19 @@ type LogPage struct {
 
 // Domain is a hostname routed to a service.
 type Domain struct {
-	ID                 string `json:"id"`
-	ServiceID          string `json:"service_id"`
-	EnvironmentID      string `json:"environment_id"`
-	Hostname           string `json:"hostname"`
-	URL                string `json:"url"`
-	Type               string `json:"type"`
-	TargetPort         int    `json:"target_port"`
-	VerificationStatus string `json:"verification_status"`
-	TLSStatus          string `json:"tls_status"`
+	ID            string `json:"id"`
+	ServiceID     string `json:"service_id"`
+	EnvironmentID string `json:"environment_id"`
+	Hostname      string `json:"hostname"`
+	URL           string `json:"url"`
+	Type          string `json:"type"`
+	// Mode is "direct" or "cloudflare_saas" (ADR 0009).
+	Mode string `json:"mode"`
+	// CF is Cloudflare's view of a Cloudflare for SaaS domain; nil in direct mode.
+	CF                 *DomainCloudflare `json:"cf"`
+	TargetPort         int               `json:"target_port"`
+	VerificationStatus string            `json:"verification_status"`
+	TLSStatus          string            `json:"tls_status"`
 	// Status is the domain's overall state, e.g. "pending_dns" or "active".
 	Status string `json:"status"`
 	// Apex is set for a bare domain (example.com), which needs A/AAAA records.
@@ -921,4 +931,13 @@ type TemplateDeployment struct {
 	Deployments  []Deployment          `json:"deployments"`
 	DeployErrors []TemplateDeployError `json:"deploy_errors"`
 	Warnings     []VariableWarning     `json:"warnings"`
+}
+
+// DomainCloudflare is Cloudflare's view of a Cloudflare for SaaS domain's
+// custom hostname: its status and certificate status as Cloudflare words
+// them, and its errors verbatim.
+type DomainCloudflare struct {
+	Status    *string  `json:"status"`
+	SSLStatus *string  `json:"ssl_status"`
+	Errors    []string `json:"errors"`
 }

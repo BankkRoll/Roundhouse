@@ -423,7 +423,7 @@ func (f *Fake) createDatabase(w http.ResponseWriter, r *http.Request) {
 	slug = uniqueSlug(slug, func(s string) bool {
 		return s == sharedNamespace || slices.ContainsFunc(p.Services, func(x api.Service) bool { return x.Slug == s })
 	})
-	svc := api.Service{ID: f.nextID("svc"), ProjectID: p.ID, Name: name, Slug: slug, Kind: "database",
+	svc := api.Service{Health: "ok", ID: f.nextID("svc"), ProjectID: p.ID, Name: name, Slug: slug, Kind: "database",
 		Database: &api.ServiceDatabase{Engine: in.Engine, Version: version}, CreatedAt: Now, UpdatedAt: Now}
 	p.Services = append(p.Services, svc)
 	out := api.CreatedDatabase{ChangeSetID: f.nextID("chs"), Service: svc, Engine: in.Engine, Version: version,
@@ -946,7 +946,7 @@ func (f *Fake) restoreNewService(w http.ResponseWriter, b *api.Backup, s *api.Se
 		version = s.Database.Version
 	}
 	spec := engineSpecs[engine]
-	svc := api.Service{ID: f.nextID("svc"), ProjectID: p.ID, Name: s.Name + " restore " + time.UnixMilli(Now).UTC().Format("2006-01-02"),
+	svc := api.Service{Health: "ok", ID: f.nextID("svc"), ProjectID: p.ID, Name: s.Name + " restore " + time.UnixMilli(Now).UTC().Format("2006-01-02"),
 		Slug: slug, Kind: "database", Database: &api.ServiceDatabase{Engine: engine, Version: version}, CreatedAt: Now, UpdatedAt: Now}
 	p.Services = append(p.Services, svc)
 	port := spec.port

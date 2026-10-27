@@ -6,6 +6,8 @@
     "slug": "web",
     "kind": "app",
     "icon": null,
+    "health": "ok",
+    "health_reason": null,
     "created_at": 1792670400000,
     "updated_at": 1792670400000
   },

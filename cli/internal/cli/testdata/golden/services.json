@@ -6,6 +6,8 @@
     "slug": "api",
     "kind": "app",
     "icon": null,
+    "health": "ok",
+    "health_reason": null,
     "created_at": 1792584000000,
     "updated_at": 1792584000000
   },
@@ -16,6 +18,8 @@
     "slug": "db",
     "kind": "database",
     "icon": null,
+    "health": "ok",
+    "health_reason": null,
     "created_at": 1792584000000,
     "updated_at": 1792584000000
   }

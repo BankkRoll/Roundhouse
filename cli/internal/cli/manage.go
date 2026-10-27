@@ -224,7 +224,7 @@ API tokens cannot provision.`,
 	}
 	add.Flags().StringVarP(&addWorkspace, "workspace", "w", "", "workspace ID, slug or name")
 	pf.register(add)
-	cmd.AddCommand(list, add, a.serversMetricsCmd(), a.serversRemoveCmd(), a.serversCancelCmd(), a.serversMeshCmd())
+	cmd.AddCommand(list, add, a.serversMetricsCmd(), a.serversRemoveCmd(), a.serversCancelCmd(), a.serversMeshCmd(), a.serversDrainCmd(), a.serversResumeCmd())
 	return cmd
 }
 

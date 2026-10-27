@@ -159,7 +159,7 @@ func (f *Fake) addDomain(w http.ResponseWriter, r *http.Request) {
 	id := f.nextID("dom")
 	d := api.Domain{
 		ID: id, ServiceID: s.ID, EnvironmentID: in.EnvironmentID, Hostname: host, URL: "https://" + host,
-		Type: "custom", TargetPort: 8080, VerificationStatus: "pending", TLSStatus: "pending", Status: "pending_dns",
+		Type: "custom", Mode: "direct", TargetPort: 8080, VerificationStatus: "pending", TLSStatus: "pending", Status: "pending_dns",
 		Records: []api.DNSRecord{
 			{Type: "CNAME", Name: host, Value: target, Purpose: "routing", State: "unknown"},
 			{Type: "TXT", Name: "_roundhouse." + host, Value: fmt.Sprintf("rh-verify=%064d", f.seq), Purpose: "ownership", State: "unknown"},

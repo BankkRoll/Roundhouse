@@ -408,7 +408,12 @@
               "cron.paused",
               "cron.resumed",
               "node.mesh_joined",
-              "node.mesh_key_rotated"
+              "node.mesh_key_rotated",
+              "node.drain_started",
+              "node.drained",
+              "node.resumed",
+              "service.degraded",
+              "service.recovered"
             ],
             "type": "string"
           },
@@ -1563,7 +1568,12 @@
               "cron.paused",
               "cron.resumed",
               "node.mesh_joined",
-              "node.mesh_key_rotated"
+              "node.mesh_key_rotated",
+              "node.drain_started",
+              "node.drained",
+              "node.resumed",
+              "service.degraded",
+              "service.recovered"
             ],
             "type": "string"
           },
@@ -3779,7 +3789,8 @@
             "enum": [
               "routing",
               "ownership",
-              "acme_delegation"
+              "acme_delegation",
+              "cf_dcv"
             ],
             "type": "string"
           },
@@ -3820,6 +3831,37 @@
           "apex": {
             "type": "boolean"
           },
+          "cf": {
+            "properties": {
+              "errors": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "ssl_status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "ssl_status",
+              "errors"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "created_at": {
             "description": "Unix time in milliseconds",
             "example": 1767225600000,
@@ -3850,6 +3892,13 @@
               "integer",
               "null"
             ]
+          },
+          "mode": {
+            "enum": [
+              "direct",
+              "cloudflare_saas"
+            ],
+            "type": "string"
           },
           "next_check_at": {
             "description": "Unix time in milliseconds",
@@ -3946,6 +3995,8 @@
           "wildcard",
           "hsts",
           "tls",
+          "mode",
+          "cf",
           "routing_nodes",
           "last_checked_at",
           "next_check_at",
@@ -4128,6 +4179,74 @@
         "required": [
           "change_set"
         ],
+        "type": "object"
+      },
+      "DrainMove": {
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "new_workload_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replica": {
+            "type": "integer"
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "moving",
+              "done",
+              "failed",
+              "stopped"
+            ],
+            "type": "string"
+          },
+          "to_node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workload_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workload_id",
+          "deployment_id",
+          "service_id",
+          "environment_id",
+          "replica",
+          "state",
+          "to_node_id",
+          "new_workload_id",
+          "error"
+        ],
+        "type": "object"
+      },
+      "DrainNode": {
+        "properties": {
+          "force": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "EffectiveAccess": {
@@ -4851,6 +4970,96 @@
               "null"
             ]
           },
+          "custom_domains": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "direct",
+                  "cloudflare_saas"
+                ],
+                "type": "string"
+              },
+              "quota": {
+                "properties": {
+                  "included": {
+                    "type": "integer"
+                  },
+                  "used": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "used",
+                  "included"
+                ],
+                "type": "object"
+              },
+              "saas": {
+                "properties": {
+                  "cname_target": {
+                    "type": "string"
+                  },
+                  "enterprise": {
+                    "type": "boolean"
+                  },
+                  "fallback_errors": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "fallback_origin": {
+                    "type": "string"
+                  },
+                  "fallback_status": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "ingress_firewall": {
+                    "enum": [
+                      "off",
+                      "cloudflare_only"
+                    ],
+                    "type": "string"
+                  },
+                  "updated_at": {
+                    "description": "Unix time in milliseconds",
+                    "example": 1767225600000,
+                    "type": "integer"
+                  },
+                  "zone_id": {
+                    "type": "string"
+                  },
+                  "zone_name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "zone_id",
+                  "zone_name",
+                  "cname_target",
+                  "fallback_origin",
+                  "fallback_status",
+                  "fallback_errors",
+                  "enterprise",
+                  "ingress_firewall",
+                  "updated_at"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "mode",
+              "saas",
+              "quota"
+            ],
+            "type": "object"
+          },
           "ingress_hostname": {
             "type": [
               "string",
@@ -4897,7 +5106,8 @@
           "ingress_nodes",
           "acme",
           "cloudflare_dns",
-          "managed"
+          "managed",
+          "custom_domains"
         ],
         "type": "object"
       },
@@ -5872,6 +6082,95 @@
         ],
         "type": "object"
       },
+      "NodeDrain": {
+        "properties": {
+          "blocked": {
+            "items": {
+              "properties": {
+                "environment_id": {
+                  "type": "string"
+                },
+                "service_id": {
+                  "type": "string"
+                },
+                "service_name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "service_id",
+                "environment_id",
+                "service_name"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "moves": {
+            "items": {
+              "$ref": "#/components/schemas/DrainMove"
+            },
+            "type": "array"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          },
+          "started_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "running",
+              "blocked",
+              "failed",
+              "completed",
+              "cancelled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "node_id",
+          "status",
+          "force",
+          "moves",
+          "blocked",
+          "error",
+          "started_by",
+          "started_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
       "NodeMetrics": {
         "properties": {
           "backend": {
@@ -6343,7 +6642,9 @@
               "unhealthy",
               "exited",
               "crashed",
-              "removed"
+              "removed",
+              "lost",
+              "parked"
             ],
             "type": "string"
           },
@@ -7031,12 +7332,49 @@
               "null"
             ]
           },
+          "custom_domains_mode": {
+            "enum": [
+              "direct",
+              "cloudflare_saas"
+            ],
+            "type": "string"
+          },
           "ingress_hostname": {
             "example": "apps.example.com",
             "maxLength": 253,
             "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "saas": {
+            "properties": {
+              "api_token": {
+                "maxLength": 256,
+                "minLength": 20,
+                "type": "string"
+              },
+              "enterprise": {
+                "type": "boolean"
+              },
+              "ingress_firewall": {
+                "enum": [
+                  "off",
+                  "cloudflare_only"
+                ],
+                "type": "string"
+              },
+              "zone_id": {
+                "pattern": "^[a-f0-9]{32}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "zone_id"
+            ],
+            "type": [
+              "object",
               "null"
             ]
           }
@@ -7055,6 +7393,51 @@
         "required": [
           "principal",
           "role"
+        ],
+        "type": "object"
+      },
+      "PutRegistryStorage": {
+        "properties": {
+          "access_key_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "bucket": {
+            "example": "roundhouse-registry",
+            "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$",
+            "type": "string"
+          },
+          "endpoint": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          "readonly_access_key_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "readonly_secret_access_key": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "region": {
+            "pattern": "^[a-z0-9-]{1,32}$",
+            "type": "string"
+          },
+          "secret_access_key": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "bucket",
+          "access_key_id",
+          "readonly_access_key_id"
         ],
         "type": "object"
       },
@@ -7179,6 +7562,69 @@
           "change_set",
           "rebased",
           "conflicts"
+        ],
+        "type": "object"
+      },
+      "RegistryStorage": {
+        "properties": {
+          "access_key_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bucket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "readonly_access_key_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "secrets_set": {
+            "type": "boolean"
+          },
+          "type": {
+            "enum": [
+              "filesystem",
+              "s3"
+            ],
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "endpoint",
+          "bucket",
+          "region",
+          "access_key_id",
+          "readonly_access_key_id",
+          "secrets_set",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -7543,6 +7989,24 @@
               "null"
             ]
           },
+          "health": {
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "type": "string"
+          },
+          "health_reason": {
+            "enum": [
+              "node_offline",
+              "node_maintenance",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "icon": {
             "type": [
               "string",
@@ -7582,6 +8046,8 @@
           "slug",
           "kind",
           "icon",
+          "health",
+          "health_reason",
           "created_at",
           "updated_at"
         ],
@@ -15226,7 +15692,12 @@
                 "cron.paused",
                 "cron.resumed",
                 "node.mesh_joined",
-                "node.mesh_key_rotated"
+                "node.mesh_key_rotated",
+                "node.drain_started",
+                "node.drained",
+                "node.resumed",
+                "service.degraded",
+                "service.recovered"
               ],
               "type": "string"
             }
@@ -15673,7 +16144,27 @@
             },
             "description": "Error"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
           "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "502": {
             "content": {
               "application/json": {
                 "schema": {
@@ -15818,6 +16309,198 @@
             "instance.key_rotation_started"
           ],
           "auth": "session",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/instance/registry-storage": {
+      "delete": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryStorage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Use filesystem registry storage",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "instance.settings_updated"
+          ],
+          "auth": "session_only",
+          "reauth": true
+        }
+      },
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryStorage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Get registry storage",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [],
+          "auth": "session_only"
+        }
+      },
+      "put": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutRegistryStorage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryStorage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Set registry storage",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "instance.settings_updated"
+          ],
+          "auth": "session_only",
           "reauth": true
         }
       }
@@ -26029,6 +26712,216 @@
         ]
       }
     },
+    "/v1/workspaces/{workspaceId}/nodes/{nodeId}/drain": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "drain": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/NodeDrain"
+                        },
+                        {
+                          "type": [
+                            "object",
+                            "null"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "drain"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a server's drain progress",
+        "tags": [
+          "nodes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:read",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DrainNode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeDrain"
+                }
+              }
+            },
+            "description": "Drain started"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Drain a server",
+        "tags": [
+          "nodes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [
+            "node.drain_started"
+          ],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/workspaces/{workspaceId}/nodes/{nodeId}/mesh/rotate-key": {
       "post": {
         "parameters": [
@@ -26259,6 +27152,99 @@
         "x-roundhouse-policy": {
           "action": "nodes:read",
           "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/nodes/{nodeId}/resume": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Resume a server",
+        "tags": [
+          "nodes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [
+            "node.resumed"
+          ],
           "auth": "session"
         }
       }

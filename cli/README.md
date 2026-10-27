@@ -374,6 +374,8 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `servers cancel <provision-id> [--no-wait]`              | Cancel a provisioning run and delete what it created      |
 | `servers metrics <server> [--range] [-m]`                | A server's CPU, memory, disk and load                     |
 | `servers mesh [rotate-key <server> [-y]]`                | The private network between servers; rotate a WG key      |
+| `servers drain <server> [--force] [--status] [-y]`       | Move replicas off a server; maintenance, safe to reboot   |
+| `servers resume <server>`                                | Take a drained server back into service                   |
 | `db create\|list\|info\|query\|tables`                   | Database services and read-only queries                   |
 | `db volume [resize\|move\|migrations\|delete\|undelete]` | A database's volume; moves it between servers             |
 | `db tcp-proxy [show\|enable\|disable]`                   | Publish a database's port behind a source allowlist       |

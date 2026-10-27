@@ -17,6 +17,8 @@
     "slug": "api",
     "kind": "app",
     "icon": null,
+    "health": "ok",
+    "health_reason": null,
     "created_at": 1792584000000,
     "updated_at": 1792584000000
   },
@@ -28,6 +30,8 @@
       "slug": "api",
       "kind": "app",
       "icon": null,
+      "health": "ok",
+      "health_reason": null,
       "created_at": 1792584000000,
       "updated_at": 1792584000000
     },
@@ -38,6 +42,8 @@
       "slug": "db",
       "kind": "database",
       "icon": null,
+      "health": "ok",
+      "health_reason": null,
       "created_at": 1792584000000,
       "updated_at": 1792584000000
     }
@@ -84,6 +90,8 @@
       "hostname": "api-production-x7k2.apps.example.com",
       "url": "https://api-production-x7k2.apps.example.com",
       "type": "generated",
+      "mode": "direct",
+      "cf": null,
       "target_port": 8080,
       "verification_status": "verified",
       "tls_status": "issued",
@@ -134,6 +142,8 @@
       "hostname": "shop.example.com",
       "url": "https://shop.example.com",
       "type": "custom",
+      "mode": "direct",
+      "cf": null,
       "target_port": 8080,
       "verification_status": "verified",
       "tls_status": "issued",
