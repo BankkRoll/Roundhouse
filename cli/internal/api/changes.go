@@ -15,6 +15,10 @@ var (
 	RouteReviewChangeSet  = Route{http.MethodGet, "/v1/change-sets/{changeSetId}/diff"}
 	RouteApplyChangeSet   = Route{http.MethodPost, "/v1/change-sets/{changeSetId}/apply"}
 	RouteDiscardChangeSet = Route{http.MethodPost, "/v1/change-sets/{changeSetId}/discard"}
+	RouteSubmitChangeSet  = Route{http.MethodPost, "/v1/change-sets/{changeSetId}/submit"}
+	RouteApproveChangeSet = Route{http.MethodPost, "/v1/change-sets/{changeSetId}/approve"}
+	RouteRejectChangeSet  = Route{http.MethodPost, "/v1/change-sets/{changeSetId}/reject"}
+	RouteRebaseChangeSet  = Route{http.MethodPost, "/v1/change-sets/{changeSetId}/rebase"}
 )
 
 // Change set statuses.
@@ -28,6 +32,17 @@ const (
 
 // ChangeSetStatuses lists every change set status, in the API's order.
 var ChangeSetStatuses = []string{ChangeSetOpen, ChangeSetApplying, ChangeSetApplied, ChangeSetDiscarded, ChangeSetFailed}
+
+// Review statuses of a change set.
+const (
+	ReviewNone      = "none"
+	ReviewSubmitted = "submitted"
+	ReviewApproved  = "approved"
+	ReviewRejected  = "rejected"
+)
+
+// ReviewStatuses lists every review status, in the API's order.
+var ReviewStatuses = []string{ReviewNone, ReviewSubmitted, ReviewApproved, ReviewRejected}
 
 // Staged change statuses.
 const (
@@ -69,12 +84,23 @@ type ChangeSetSummary struct {
 	ConflictedCount int     `json:"conflicted_count"`
 	CreatedBy       *string `json:"created_by"`
 	// CreatedByToken is the API token that proposed the set, if any.
-	CreatedByToken *string         `json:"created_by_token"`
-	AppliedBy      *string         `json:"applied_by"`
-	AppliedAt      *int64          `json:"applied_at"`
-	Error          *ChangeSetError `json:"error"`
-	CreatedAt      int64           `json:"created_at"`
-	UpdatedAt      int64           `json:"updated_at"`
+	CreatedByToken *string `json:"created_by_token"`
+	// ReviewStatus is one of [ReviewStatuses]. An approval always covers
+	// the current revision: any edit moves the set back to submitted.
+	ReviewStatus string  `json:"review_status"`
+	SubmittedBy  *string `json:"submitted_by"`
+	SubmittedAt  *int64  `json:"submitted_at"`
+	ApprovedBy   *string `json:"approved_by"`
+	ApprovedAt   *int64  `json:"approved_at"`
+	RejectedBy   *string `json:"rejected_by"`
+	RejectedAt   *int64  `json:"rejected_at"`
+	// ReviewNote is the latest submitter's or reviewer's note, user-written.
+	ReviewNote *string         `json:"review_note"`
+	AppliedBy  *string         `json:"applied_by"`
+	AppliedAt  *int64          `json:"applied_at"`
+	Error      *ChangeSetError `json:"error"`
+	CreatedAt  int64           `json:"created_at"`
+	UpdatedAt  int64           `json:"updated_at"`
 }
 
 // ChangeSet is a change set with its ops in apply order.
@@ -132,8 +158,20 @@ type PlannedDeploy struct {
 	// Service is a service ID, or "new:<n>" for one the set creates.
 	Service string `json:"service"`
 	Name    string `json:"name"`
-	// Reason is config, variables, created or references.
+	// Reason is config, variables, created, references or volume.
 	Reason string `json:"reason"`
+}
+
+// ChangeSetApproval is what review requires before a change set applies,
+// and who may not review it.
+type ChangeSetApproval struct {
+	// Required is set when the environment's protection requires approval.
+	Required bool `json:"required"`
+	// Approved is set when the set is approved at its current revision.
+	Approved bool `json:"approved"`
+	// Authors are the users who opened the set or staged ops in it; none
+	// of them may approve or reject it.
+	Authors []string `json:"authors"`
 }
 
 // ChangeSetReview is a change set checked against the current state.
@@ -144,7 +182,8 @@ type ChangeSetReview struct {
 	// Conflicts are ops that need a decision before the set can apply.
 	Conflicts []ChangeSetConflict `json:"conflicts"`
 	// Deploys is what applying with [DeployAffected] would start.
-	Deploys []PlannedDeploy `json:"deploys"`
+	Deploys  []PlannedDeploy   `json:"deploys"`
+	Approval ChangeSetApproval `json:"approval"`
 }
 
 // ApplyChangeSetInput is the body of POST /v1/change-sets/{id}/apply.
@@ -160,6 +199,37 @@ type ApplyChangeSetInput struct {
 type DiscardChangeSetInput struct {
 	// ExpectedRevision, when set, refuses the discard if the set changed.
 	ExpectedRevision int `json:"expected_revision,omitempty"`
+}
+
+// SubmitChangeSetInput is the body of POST /v1/change-sets/{id}/submit.
+type SubmitChangeSetInput struct {
+	// ExpectedRevision, when set, refuses the submit if the set changed.
+	ExpectedRevision int `json:"expected_revision,omitempty"`
+	// Note is what reviewers should know.
+	Note string `json:"note,omitempty"`
+}
+
+// ReviewDecisionInput is the body of POST /v1/change-sets/{id}/approve and
+// /reject.
+type ReviewDecisionInput struct {
+	// ExpectedRevision is the revision the reviewer looked at; the decision
+	// covers exactly it.
+	ExpectedRevision int    `json:"expected_revision"`
+	Note             string `json:"note,omitempty"`
+}
+
+// RebaseChangeSetInput is the body of POST /v1/change-sets/{id}/rebase.
+type RebaseChangeSetInput struct {
+	ExpectedRevision int `json:"expected_revision"`
+}
+
+// RebasedChangeSet is the response of the rebase route.
+type RebasedChangeSet struct {
+	ChangeSet ChangeSet `json:"change_set"`
+	// Rebased are ops moved onto the current state, diffs recomputed.
+	Rebased []string `json:"rebased"`
+	// Conflicts are ops that need a decision in the dashboard.
+	Conflicts []ChangeSetConflict `json:"conflicts"`
 }
 
 // SkippedDeploy is an affected service an apply did not deploy.
@@ -215,8 +285,9 @@ func (c *Client) ReviewChangeSet(ctx context.Context, changeSetID string) (*Chan
 }
 
 // ApplyChangeSet applies a change set exactly as reviewed. The API answers
-// 409 change_set_changed or change_set_conflict (details name each
-// conflicted op), and 422 invalid_references.
+// 409 change_set_changed, change_set_conflict (details name each
+// conflicted op) or change_set_rejected, 403 approval_required or forbidden
+// (whoever approved a set can't also apply it), and 422 invalid_references.
 func (c *Client) ApplyChangeSet(ctx context.Context, changeSetID string, in ApplyChangeSetInput) (*AppliedChangeSet, error) {
 	return fetch[AppliedChangeSet](ctx, c, RouteApplyChangeSet, nil, in, changeSetID)
 }
@@ -224,4 +295,29 @@ func (c *Client) ApplyChangeSet(ctx context.Context, changeSetID string, in Appl
 // DiscardChangeSet throws a change set away.
 func (c *Client) DiscardChangeSet(ctx context.Context, changeSetID string, in DiscardChangeSetInput) (*ChangeSet, error) {
 	return fetch[ChangeSet](ctx, c, RouteDiscardChangeSet, nil, in, changeSetID)
+}
+
+// SubmitChangeSet asks for a review of a change set. Submitting a set that
+// already waits for or holds a decision leaves it as it is.
+func (c *Client) SubmitChangeSet(ctx context.Context, changeSetID string, in SubmitChangeSetInput) (*ChangeSet, error) {
+	return fetch[ChangeSet](ctx, c, RouteSubmitChangeSet, nil, in, changeSetID)
+}
+
+// ApproveChangeSet approves a change set at the revision the reviewer saw.
+// The API answers 403 self_review to whoever opened the set or staged an op
+// in it, and 409 change_set_changed when the set moved on.
+func (c *Client) ApproveChangeSet(ctx context.Context, changeSetID string, in ReviewDecisionInput) (*ChangeSet, error) {
+	return fetch[ChangeSet](ctx, c, RouteApproveChangeSet, nil, in, changeSetID)
+}
+
+// RejectChangeSet rejects a change set at the revision the reviewer saw; it
+// can't apply until edited. Refused like [Client.ApproveChangeSet].
+func (c *Client) RejectChangeSet(ctx context.Context, changeSetID string, in ReviewDecisionInput) (*ChangeSet, error) {
+	return fetch[ChangeSet](ctx, c, RouteRejectChangeSet, nil, in, changeSetID)
+}
+
+// RebaseChangeSet moves a change set onto the current state: ops whose base
+// drifted on other fields are rebased, the rest are marked conflicted.
+func (c *Client) RebaseChangeSet(ctx context.Context, changeSetID string, in RebaseChangeSetInput) (*RebasedChangeSet, error) {
+	return fetch[RebasedChangeSet](ctx, c, RouteRebaseChangeSet, nil, in, changeSetID)
 }

@@ -254,3 +254,215 @@ func TestChangesDiscard(t *testing.T) {
 	r = h.expect(exitcode.Conflict, "", "changes", "discard", id, "--yes")
 	contains(t, r.stderr, "is discarded")
 }
+
+// stageForReview stages a production set that another user opened, in an
+// environment that requires approval, and returns its ID.
+func stageForReview(h *harness) string {
+	h.t.Helper()
+	return h.fake.StageChangeSet(apitest.ChangeSetSpec{
+		EnvironmentID: apitest.ProductionID, Draft: true, CreatedBy: "usr_grace", RequireApproval: true,
+		Changes: []api.StagedChange{
+			{Summary: "update API config", Diff: []api.DiffEntry{{Path: "/deploy/replicas", Before: json.RawMessage(`1`), After: json.RawMessage(`3`)}}},
+			{Summary: "set API volume", Op: json.RawMessage(`{"type":"volume.set","service":"svc_api","mount_path":"/data","size_gb":10}`)},
+		},
+		Deploys: []api.PlannedDeploy{{Service: apitest.APIServiceID, Name: "API", Reason: "volume"}},
+	})
+}
+
+// sentBody returns the body of the last request to route.
+func sentBody(h *harness, route api.Route) string {
+	h.t.Helper()
+	body := ""
+	for _, req := range h.fake.Requests() {
+		if req.Pattern == route.Method+" "+route.Path {
+			body = req.Body
+		}
+	}
+	return body
+}
+
+func TestChangesSubmit(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	id := stageDraft(h)
+
+	r := h.ok("", "changes", "submit", "--note", "Rotates the key")
+	contains(t, r.stdout, "Submitted the draft of production for review (2 changes, revision 1)")
+	if body := sentBody(h, api.RouteSubmitChangeSet); body != `{"expected_revision":1,"note":"Rotates the key"}` {
+		t.Errorf("submit body %s", body)
+	}
+	if cs := h.fake.ChangeSet(id); cs.ReviewStatus != api.ReviewSubmitted || cs.SubmittedBy == nil {
+		t.Fatalf("review status %s", cs.ReviewStatus)
+	}
+
+	r = h.ok("", "changes", "submit", id)
+	contains(t, r.stdout, "The draft of production is already waiting for a reviewer")
+
+	r = h.ok("", "changes", "diff")
+	contains(t, r.stdout, id+" (draft of production, open, revision 1, 2 changes, submitted)")
+	contains(t, r.stdout, "review: waiting for a reviewer")
+	contains(t, r.stdout, "note: Rotates the key")
+
+	r = h.ok("", "changes", "list")
+	contains(t, r.stdout, "REVIEW")
+	contains(t, r.stdout, "submitted")
+
+	r = h.ok("", "changes", "submit", "--json")
+	var out api.ChangeSet
+	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.ReviewStatus != api.ReviewSubmitted {
+		t.Fatalf("json: %v %+v", err, out)
+	}
+
+	empty := h.fake.StageChangeSet(apitest.ChangeSetSpec{EnvironmentID: apitest.StagingID, Title: "Nothing yet"})
+	r = h.expect(exitcode.Conflict, "", "changes", "submit", empty)
+	contains(t, r.stderr, "Nothing is staged")
+}
+
+func TestChangesApproveOwnChangeSet(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	id := stageDraft(h)
+	r := h.expect(exitcode.Forbidden, "", "changes", "approve", "--yes")
+	contains(t, r.stderr, "someone else must review it")
+	contains(t, r.stderr, "ask someone else with the changes:approve permission to review it with `roundhouse changes diff "+id+"`")
+	r = h.expect(exitcode.Forbidden, "", "changes", "reject", id, "--yes")
+	contains(t, r.stderr, "someone else must review it")
+	if cs := h.fake.ChangeSet(id); cs.ReviewStatus != api.ReviewNone {
+		t.Fatalf("review status %s", cs.ReviewStatus)
+	}
+}
+
+func TestChangesApprovalRequired(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	id := stageForReview(h)
+
+	r := h.ok("", "changes", "diff")
+	contains(t, r.stdout, "will deploy: API (volume)")
+	contains(t, r.stdout, "review: not submitted; approval required before applying")
+
+	before := len(h.fake.Requests())
+	r = h.expect(exitcode.Forbidden, "", "changes", "apply", "--yes")
+	contains(t, r.stderr, "production requires an approval before changes apply")
+	contains(t, r.stderr, "roundhouse changes submit "+id)
+	for _, req := range h.fake.Requests()[before:] {
+		if req.Pattern == "POST "+api.RouteApplyChangeSet.Path {
+			t.Error("applied a set that waits for approval")
+		}
+	}
+
+	r = h.expect(exitcode.InputRequired, "", "changes", "approve")
+	contains(t, r.stderr, "pass --yes")
+	r = h.interactive("n\n", "changes", "approve")
+	if r.code != exitcode.Error || !strings.Contains(r.stderr, "Approve 2 changes to production at revision 1?") {
+		t.Fatalf("declined approve: exit %d\n%s", r.code, r.stderr)
+	}
+	contains(t, r.stdout, "/deploy/replicas: 1 -> 3")
+
+	r = h.interactive("y\n", "changes", "approve", "--note", "Looks right")
+	if r.code != 0 {
+		t.Fatalf("confirmed approve: exit %d\n%s", r.code, r.stderr)
+	}
+	contains(t, r.stdout, "Approved the draft of production at revision 1")
+	contains(t, r.stdout, "Someone else applies it: `roundhouse changes apply "+id+"`")
+	if body := sentBody(h, api.RouteApproveChangeSet); body != `{"expected_revision":1,"note":"Looks right"}` {
+		t.Errorf("approve body %s", body)
+	}
+
+	r = h.ok("", "changes", "diff")
+	contains(t, r.stdout, "2 changes, approved)")
+	contains(t, r.stdout, "review: approved by usr_ada")
+	notContains(t, r.stdout, "approval required")
+
+	// The fake's caller approved it, so it may not also apply it.
+	r = h.expect(exitcode.Forbidden, "", "changes", "apply", "--yes")
+	contains(t, r.stderr, "someone else must apply it")
+	contains(t, r.stderr, "ask someone else to run `roundhouse changes apply "+id+"`")
+
+	h.fake.ApproveAs(id, "usr_linus")
+	r = h.ok("", "changes", "apply", "--yes")
+	contains(t, r.stdout, "Applied 2 changes to production ("+id+")")
+}
+
+func TestChangesReject(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	id := stageForReview(h)
+
+	r := h.interactive("n\n", "changes", "reject", id)
+	if r.code != exitcode.Error || !strings.Contains(r.stderr, "Reject 2 changes to production at revision 1?") {
+		t.Fatalf("declined reject: exit %d\n%s", r.code, r.stderr)
+	}
+	r = h.ok("", "changes", "reject", "--yes", "--note", "Scale staging\x1b[2J first")
+	contains(t, r.stdout, "Rejected the draft of production at revision 1")
+	if cs := h.fake.ChangeSet(id); cs.ReviewStatus != api.ReviewRejected || cs.RejectedBy == nil {
+		t.Fatalf("review status %s", cs.ReviewStatus)
+	}
+
+	r = h.ok("", "changes", "diff")
+	contains(t, r.stdout, "review: rejected by usr_ada; approval required before applying")
+	contains(t, r.stdout, `note: Scale staging\u001b[2J first`)
+	notContains(t, r.stdout, "\x1b[2J")
+
+	r = h.expect(exitcode.Conflict, "", "changes", "apply", "--yes")
+	contains(t, r.stderr, "The draft of production was rejected by usr_ada at revision 1")
+	contains(t, r.stderr, "roundhouse changes submit "+id)
+
+	r = h.ok("", "changes", "submit")
+	contains(t, r.stdout, "Submitted the draft of production for review")
+	if cs := h.fake.ChangeSet(id); cs.ReviewStatus != api.ReviewSubmitted || cs.RejectedBy != nil {
+		t.Fatalf("after resubmit: %+v", cs.ChangeSetSummary)
+	}
+
+	r = h.ok("", "changes", "reject", "--yes", "--json")
+	var out api.ChangeSet
+	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.ReviewStatus != api.ReviewRejected {
+		t.Fatalf("json: %v %+v", err, out)
+	}
+	if body := sentBody(h, api.RouteRejectChangeSet); body != `{"expected_revision":1}` {
+		t.Errorf("reject body %s", body)
+	}
+}
+
+func TestChangesRebase(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	id := stageForReview(h)
+
+	r := h.ok("", "changes", "rebase")
+	contains(t, r.stdout, "The draft of production is up to date")
+	if body := sentBody(h, api.RouteRebaseChangeSet); body != `{"expected_revision":1}` {
+		t.Errorf("rebase body %s", body)
+	}
+
+	h.fake.ApproveAs(id, "usr_linus")
+	h.fake.DriftOnRebase(id, "op_"+id+"_1")
+	h.fake.DriftOnApply(id, "op_"+id+"_2", true)
+	r = h.ok("", "changes", "diff")
+	contains(t, r.stdout, "update API config  rebases")
+
+	r = h.ok("", "changes", "rebase", id)
+	contains(t, r.stdout, "Rebased 1 change onto the current state (revision 2)")
+	contains(t, r.stdout, "rebased:  update API config")
+	contains(t, r.stdout, "conflict: set API volume: its target no longer exists")
+	contains(t, r.stdout, "The approval no longer applies")
+	contains(t, r.stdout, "Next: resolve the conflicts in the dashboard")
+	if cs := h.fake.ChangeSet(id); cs.Revision != 2 || cs.ReviewStatus != api.ReviewSubmitted || cs.ConflictedCount != 1 {
+		t.Fatalf("after rebase: %+v", cs.ChangeSetSummary)
+	}
+
+	r = h.ok("", "changes", "rebase", "--json")
+	var out api.RebasedChangeSet
+	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ChangeSet.ID != id || len(out.Rebased) != 0 || len(out.Conflicts) != 1 || !out.Conflicts[0].Conflict.Deleted {
+		t.Fatalf("json: %+v", out)
+	}
+
+	h.ok("", "changes", "discard", "--yes")
+	r = h.expect(exitcode.NotFound, "", "changes", "rebase")
+	contains(t, r.stderr, "nothing staged in production")
+	r = h.expect(exitcode.Conflict, "", "changes", "rebase", id)
+	contains(t, r.stderr, "only open change sets can be rebased")
+}
