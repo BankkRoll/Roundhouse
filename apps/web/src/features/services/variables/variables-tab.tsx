@@ -14,10 +14,10 @@ import {
   Undo2Icon,
 } from "lucide-react";
 import { type FormEvent, useCallback, useId, useMemo, useState } from "react";
+import { ConfirmDialog } from "../../../components/confirm-dialog";
 import { ErrorState } from "../../../components/error-state";
 import { errorMessage, isApiError } from "../../../lib/api/client";
 import { deployApi } from "../../../lib/api/deploy-client";
-import { usePermissions } from "../../../lib/permissions";
 import { useDeploy } from "../../../queries/deployments";
 import { queryKeys } from "../../../queries/keys";
 import {
@@ -25,6 +25,7 @@ import {
   useServiceVariables,
   useSharedVariables,
 } from "../../../queries/variables";
+import { LockedNote, useEnvironmentGate } from "../../access/environment-gate";
 import { findService, useProjectEnvironment } from "../../projects/use-project-environment";
 import type { ServicePageProps } from "../service-layout";
 import { BulkPasteDialog } from "./bulk-paste-dialog";
@@ -34,8 +35,10 @@ import {
   EMPTY_DRAFT,
   errorsFromDetails,
   type FieldError,
+  lockedTier,
   mapApiError,
   mergeRows,
+  type PutConsent,
   type ReferenceCatalog,
   referenceErrors,
   stageDelete,
@@ -141,6 +144,14 @@ function RowEditor({
   // reference is still being typed (an unfinished `${{api` is not a mistake yet).
   const [checked, setChecked] = useState(false);
   const syntax = referenceErrors(editor.value).length > 0;
+  const hintId = useId();
+  const locked = lockedTier(editor.key.trim(), editor.value);
+  const isSecret = locked ? locked.tier === "secret" : editor.isSecret;
+  const hint = locked
+    ? locked.reason === "public_prefix"
+      ? `${locked.publicPrefix?.prefix ?? "These"} variables ship to the browser, so they can't be secret.`
+      : "Looks like a credential, so it is always stored as a write-only secret."
+    : null;
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -194,8 +205,10 @@ function RowEditor({
         <div className="flex h-8 items-center gap-1.5">
           <Switch
             id={secretId}
-            checked={editor.isSecret}
-            onCheckedChange={(isSecret) => onChange({ ...editor, isSecret })}
+            checked={isSecret}
+            disabled={locked !== null}
+            aria-describedby={hint ? hintId : undefined}
+            onCheckedChange={(next) => onChange({ ...editor, isSecret: next })}
           />
           <Label htmlFor={secretId}>Secret</Label>
         </div>
@@ -207,6 +220,11 @@ function RowEditor({
           Cancel
         </Button>
       </div>
+      {hint ? (
+        <p id={hintId} className="text-xs text-muted-foreground md:col-span-3">
+          {hint}
+        </p>
+      ) : null}
     </form>
   );
 }
@@ -222,8 +240,9 @@ function RowEditor({
 export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageProps) {
   const { project, environment } = useProjectEnvironment(projectId);
   const service = findService(project.data, serviceId);
-  const { can } = usePermissions(workspaceId);
-  const canManage = can("variables:manage");
+  const gate = useEnvironmentGate(workspaceId, projectId, environment);
+  const canManage = gate.can("variables:manage");
+  const lockedReason = gate.locked("variables:manage");
   const variables = useServiceVariables(serviceId, environment?.id);
   const shared = useSharedVariables(projectId, environment?.id, canManage);
   const save = useSaveVariables(serviceId, environment?.id ?? "");
@@ -236,6 +255,11 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
   const [savedPrompt, setSavedPrompt] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [namespaces, setNamespaces] = useState<ReadonlySet<string>>(new Set());
+  const [asking, setAsking] = useState<{
+    kind: "write_only" | "public";
+    keys: string[];
+    consent: PutConsent;
+  } | null>(null);
 
   const others = useMemo(
     () => (project.data?.services ?? []).filter((entry) => entry.id !== serviceId),
@@ -316,15 +340,19 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
       }
       return;
     }
+    const locked = lockedTier(key, editor.value);
     setDraft((current) =>
-      stageSet(current, key, { value: editor.value, isSecret: editor.isSecret }),
+      stageSet(current, key, {
+        value: editor.value,
+        isSecret: locked ? locked.tier === "secret" : editor.isSecret,
+      }),
     );
     setFieldErrors(({ [key]: _fixed, ...rest }) => rest);
     setSavedPrompt(false);
     setEditor(null);
   }
 
-  function onSave() {
+  function onSave(consent: PutConsent = {}) {
     if (!environment) return;
     const invalid = [...draft.set].find(([, staged]) => referenceErrors(staged.value).length > 0);
     if (invalid) {
@@ -340,16 +368,30 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
       });
       return;
     }
-    const { body, setKeys } = toPutBody(draft);
+    const { body, setKeys } = toPutBody(draft, consent);
     setSaveError(null);
     setFieldErrors({});
     save.mutate(body, {
       onSuccess: () => {
+        setAsking(null);
         setDraft(EMPTY_DRAFT);
         setSavedPrompt(true);
         toast({ title: "Variables saved", description: "Deploy to apply them.", tone: "success" });
       },
       onError: (error) => {
+        // NOTE: The API names the keys that need consent; ask, then resend with it.
+        if (
+          isApiError(error, "confirmation_required") ||
+          isApiError(error, "public_prefix_secret_value")
+        ) {
+          setAsking({
+            kind: error.code === "confirmation_required" ? "write_only" : "public",
+            keys: error.details.map((detail) => detail.field),
+            consent,
+          });
+          return;
+        }
+        setAsking(null);
         if (isApiError(error, 400) && error.details.length > 0) {
           setFieldErrors(errorsFromDetails(error.details));
           setSaveError(errorMessage(error));
@@ -415,6 +457,7 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
 
   return (
     <section aria-label="Variables" className="grid gap-4">
+      {lockedReason ? <LockedNote reason={lockedReason} /> : null}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           {rows.length} {rows.length === 1 ? "variable" : "variables"} in{" "}
@@ -454,7 +497,7 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
             <Button variant="ghost" size="sm" onClick={() => setSavedPrompt(false)}>
               Later
             </Button>
-            {can("deployments:create") ? (
+            {gate.can("deployments:create") ? (
               <Button variant="primary" size="sm" loading={deploy.isPending} onClick={onDeploy}>
                 {deploy.isPending ? null : <RocketIcon />}
                 Deploy to apply
@@ -624,12 +667,55 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
             >
               Discard
             </Button>
-            <Button variant="primary" loading={save.isPending} onClick={onSave}>
+            <Button variant="primary" loading={save.isPending} onClick={() => onSave()}>
               Save changes
             </Button>
           </div>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={asking !== null}
+        onOpenChange={(open) => {
+          if (!open) setAsking(null);
+        }}
+        title={
+          asking?.kind === "public"
+            ? `Ship ${asking.keys.length === 1 ? asking.keys[0] : `${asking.keys.length} variables`} to every browser?`
+            : `Store ${asking?.keys.length === 1 ? "this value" : "these values"} write-only?`
+        }
+        description={
+          <>
+            {asking?.kind === "public"
+              ? "They look like credentials, but their prefix makes the framework build them into the pages it serves, where anyone can read them."
+              : "Secrets can never be shown again, not to you and not to admins. You can replace them, and fingerprints tell values apart."}
+            <span className="mt-3 flex flex-wrap gap-1.5">
+              {asking?.keys.map((key) => (
+                <code
+                  key={key}
+                  className="rounded-sm border border-border-strong bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground"
+                >
+                  {key}
+                </code>
+              ))}
+            </span>
+          </>
+        }
+        confirmLabel={asking?.kind === "public" ? "Store as public" : "Store write-only"}
+        destructive={asking?.kind === "public"}
+        pending={save.isPending}
+        onConfirm={() => {
+          if (!asking) return;
+          onSave(
+            asking.kind === "public"
+              ? {
+                  ...asking.consent,
+                  acknowledgePublic: [...(asking.consent.acknowledgePublic ?? []), ...asking.keys],
+                }
+              : { ...asking.consent, confirmWriteOnly: true },
+          );
+        }}
+      />
 
       <BulkPasteDialog
         open={bulkOpen}
@@ -637,10 +723,13 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
         existingKeys={savedKeys}
         onApply={(entries, secret) => {
           setDraft((current) =>
-            entries.reduce(
-              (next, entry) => stageSet(next, entry.key, { value: entry.value, isSecret: secret }),
-              current,
-            ),
+            entries.reduce((next, entry) => {
+              const locked = lockedTier(entry.key, entry.value);
+              return stageSet(next, entry.key, {
+                value: entry.value,
+                isSecret: locked ? locked.tier === "secret" : secret,
+              });
+            }, current),
           );
           setSavedPrompt(false);
           toast({
