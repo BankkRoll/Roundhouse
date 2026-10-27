@@ -650,7 +650,7 @@ describe("protected environments", { timeout: RUN_TEST_TIMEOUT_MS }, () => {
     expect((await runNow(s)).status).toBe(201);
   });
 
-  it("refuses a custom domain on a cron service", async () => {
+  it("refuses a custom domain on a cron service, directly or staged", async () => {
     const s = await armedCronStage(() => ({ kind: "exit", code: 0 }));
     const res = await s.owner.json<{ error: { code: string } }>(
       `/v1/services/${s.serviceId}/domains`,
@@ -658,5 +658,14 @@ describe("protected environments", { timeout: RUN_TEST_TIMEOUT_MS }, () => {
     );
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe("cron_has_no_endpoint");
+    const staged = await s.owner.json<{ error: { code: string } }>(
+      `/v1/environments/${s.envId}/draft/ops`,
+      {
+        method: "POST",
+        json: { op: { type: "domain.add", service: s.serviceId, hostname: "jobs.example.com" } },
+      },
+    );
+    expect(staged.status).toBe(422);
+    expect(staged.body.error.code).toBe("cron_has_no_endpoint");
   });
 });

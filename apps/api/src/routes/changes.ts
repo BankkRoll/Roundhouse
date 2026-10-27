@@ -5,28 +5,43 @@
  *
  * @module
  */
-import { changeSets } from "@roundhouse/db";
+import { changeSets, environments, projects } from "@roundhouse/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { type AppContext, clientIp, createRouter, requireKeys } from "../context";
+import { type AppContext, clientIp, createRouter, requireKeys, visibleProjects } from "../context";
 import {
+  addServiceEdge,
   applyChangeSet,
+  approveChangeSet,
   createChangeSet,
   discardChangeSet,
   getCanvas,
   getChangeSet,
   getDraft,
   listChangeSets,
+  listWorkspaceChangeSets,
   policyOf,
+  rebaseChangeSet,
+  rejectChangeSet,
+  removeServiceEdge,
   resolveOp,
   reviewChangeSet,
   stageDraftOp,
   stageOp,
+  submitChangeSet,
   unstageOp,
   updateCanvasLayout,
 } from "../contracts";
 import { recordAudit } from "../lib/audit";
 import { applySet, reviewSet } from "../lib/changes/apply";
 import { buildCanvas, updateLayout } from "../lib/changes/canvas";
+import { addEdge, removeEdge, toApiEdge } from "../lib/changes/edges";
+import {
+  assertCanEdit,
+  decideSet,
+  rebaseSet,
+  requiresApproval,
+  submitSet,
+} from "../lib/changes/review";
 import {
   authorizeStaging,
   discardSet,
@@ -47,27 +62,20 @@ import {
   publishChangeSet,
   toApiChangeSetSummary,
 } from "../lib/changes/store";
-import { ApiError, notFound } from "../lib/errors";
+import { notFound } from "../lib/errors";
 import { publish } from "../lib/realtime";
 import { environmentOf, projectScope } from "../lib/scope";
 
 /** Most sets `status=all` lists. */
 const LIST_LIMIT = 50;
 
-/** Anyone who can propose some change may edit or throw away a set. */
-function assertCanEdit(caller: StagingContext["caller"]): void {
-  if (!caller.allows("services:manage") && !caller.allows("variables:manage")) {
-    throw new ApiError(
-      403,
-      "forbidden",
-      "Editing staged changes needs services:manage or variables:manage",
-    );
-  }
-}
+/** Most sets the workspace review queue lists. */
+const QUEUE_LIMIT = 100;
 
 async function stagingContext(c: AppContext, changeSetId: string) {
   const scope = await changeSetScope(c, changeSetId, "projects:read");
   const ctx: StagingContext = {
+    c,
     db: c.get("db"),
     keys: requireKeys(c),
     project: scope.project,
@@ -120,6 +128,50 @@ export const changeRoutes = createRouter()
     });
     return c.json(layout, 200);
   })
+  .openapi(addServiceEdge, async (c) => {
+    const { projectId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { project, caller } = await projectScope(c, projectId, policyOf(addServiceEdge).action!);
+    const db = c.get("db");
+    const edge = await addEdge(db, {
+      projectId: project.id,
+      from: body.from_service_id,
+      to: body.to_service_id,
+      userId: caller.user.id,
+    });
+    await recordAudit(db, {
+      workspaceId: project.workspaceId,
+      ...caller.actor,
+      action: "canvas.edge_added",
+      targetType: "project",
+      targetId: project.id,
+      metadata: { edge_id: edge.id, from: edge.fromServiceId, to: edge.toServiceId },
+      ip: clientIp(c),
+    });
+    await publish(c.env, project.id, { type: "canvas.edges_updated", by_user_id: caller.user.id });
+    return c.json(toApiEdge(edge), 201);
+  })
+  .openapi(removeServiceEdge, async (c) => {
+    const { projectId, edgeId } = c.req.valid("param");
+    const { project, caller } = await projectScope(
+      c,
+      projectId,
+      policyOf(removeServiceEdge).action!,
+    );
+    const db = c.get("db");
+    const edge = await removeEdge(db, project.id, edgeId);
+    await recordAudit(db, {
+      workspaceId: project.workspaceId,
+      ...caller.actor,
+      action: "canvas.edge_removed",
+      targetType: "project",
+      targetId: project.id,
+      metadata: { edge_id: edge.id, from: edge.fromServiceId, to: edge.toServiceId },
+      ip: clientIp(c),
+    });
+    await publish(c.env, project.id, { type: "canvas.edges_updated", by_user_id: caller.user.id });
+    return c.body(null, 204);
+  })
   .openapi(listChangeSets, async (c) => {
     const { environmentId } = c.req.valid("param");
     const { status } = c.req.valid("query");
@@ -143,7 +195,41 @@ export const changeRoutes = createRouter()
     const summaries = await Promise.all(
       sets.map(async (s) => toApiChangeSetSummary(s, await loadOps(db, s.id))),
     );
-    return c.json({ change_sets: summaries }, 200);
+    return c.json(
+      { change_sets: summaries, environment_requires_approval: requiresApproval(environment) },
+      200,
+    );
+  })
+  .openapi(listWorkspaceChangeSets, async (c) => {
+    const { workspaceId } = c.req.valid("param");
+    const { review } = c.req.valid("query");
+    const visible = await visibleProjects(c, workspaceId, "projects:read");
+    if (!visible.size) return c.json({ change_sets: [] }, 200);
+    const db = c.get("db");
+    const rows = await db
+      .select({ set: changeSets, environment: environments, projectName: projects.name })
+      .from(changeSets)
+      .innerJoin(environments, eq(environments.id, changeSets.environmentId))
+      .innerJoin(projects, eq(projects.id, changeSets.projectId))
+      .where(
+        and(
+          inArray(changeSets.projectId, [...visible]),
+          inArray(changeSets.status, ["open", "applying"]),
+          ...(review === "pending" ? [eq(changeSets.reviewStatus, "submitted")] : []),
+        ),
+      )
+      .orderBy(desc(changeSets.updatedAt), desc(changeSets.id))
+      .limit(QUEUE_LIMIT);
+    const out = await Promise.all(
+      rows.map(async (r) => ({
+        ...toApiChangeSetSummary(r.set, await loadOps(db, r.set.id)),
+        project_name: r.projectName,
+        environment_name: r.environment.name,
+        environment_requires_approval: requiresApproval(r.environment),
+      })),
+    );
+    // A draft nothing is staged in yet is noise in a review queue.
+    return c.json({ change_sets: out.filter((s) => s.op_count > 0) }, 200);
   })
   .openapi(createChangeSet, async (c) => {
     const { environmentId } = c.req.valid("param");
@@ -157,6 +243,7 @@ export const changeRoutes = createRouter()
     for (const op of body.ops) authorizeStaging(caller, op);
     const db = c.get("db");
     const ctx: StagingContext = {
+      c,
       db,
       keys: requireKeys(c),
       project,
@@ -212,6 +299,7 @@ export const changeRoutes = createRouter()
     authorizeStaging(caller, body.op);
     const db = c.get("db");
     const ctx: StagingContext = {
+      c,
       db,
       keys: requireKeys(c),
       project,
@@ -242,6 +330,7 @@ export const changeRoutes = createRouter()
         rebases: review.rebases,
         conflicts: review.conflicts,
         deploys: review.deploys,
+        approval: review.approval,
       },
       200,
     );
@@ -269,6 +358,80 @@ export const changeRoutes = createRouter()
     const { set, ctx } = await stagingContext(c, changeSetId);
     const updated = await resolveConflict(ctx, set, opId, body.keep, body.expected_revision);
     return c.json(await respond(c, updated), 200);
+  })
+  .openapi(rebaseChangeSet, async (c) => {
+    const { changeSetId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { set, ctx } = await stagingContext(c, changeSetId);
+    const result = await rebaseSet(ctx, {
+      set,
+      caller: ctx.caller,
+      expectedRevision: body.expected_revision,
+    });
+    return c.json(
+      {
+        change_set: await respond(c, result.set),
+        rebased: result.rebased,
+        conflicts: result.conflicts,
+      },
+      200,
+    );
+  })
+  .openapi(submitChangeSet, async (c) => {
+    const { changeSetId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { set, project, caller } = await changeSetScope(
+      c,
+      changeSetId,
+      policyOf(submitChangeSet).action!,
+    );
+    const submitted = await submitSet(c.get("db"), {
+      set,
+      project,
+      caller,
+      ...(body.expected_revision !== undefined ? { expectedRevision: body.expected_revision } : {}),
+      ...(body.note !== undefined ? { note: body.note } : {}),
+      ip: clientIp(c),
+    });
+    return c.json(await respond(c, submitted), 200);
+  })
+  .openapi(approveChangeSet, async (c) => {
+    const { changeSetId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { set, project, caller } = await changeSetScope(
+      c,
+      changeSetId,
+      policyOf(approveChangeSet).action!,
+    );
+    const approved = await decideSet(c.get("db"), {
+      set,
+      project,
+      caller,
+      decision: "approve",
+      expectedRevision: body.expected_revision,
+      ...(body.note !== undefined ? { note: body.note } : {}),
+      ip: clientIp(c),
+    });
+    return c.json(await respond(c, approved), 200);
+  })
+  .openapi(rejectChangeSet, async (c) => {
+    const { changeSetId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { set, project, caller } = await changeSetScope(
+      c,
+      changeSetId,
+      policyOf(rejectChangeSet).action!,
+    );
+    const rejected = await decideSet(c.get("db"), {
+      set,
+      project,
+      caller,
+      decision: "reject",
+      expectedRevision: body.expected_revision,
+      ...(body.note !== undefined ? { note: body.note } : {}),
+      ip: clientIp(c),
+    });
+    return c.json(await respond(c, rejected), 200);
   })
   .openapi(applyChangeSet, async (c) => {
     const { changeSetId } = c.req.valid("param");

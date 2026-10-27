@@ -9,7 +9,14 @@
  * @module
  */
 import { z } from "@hono/zod-openapi";
-import { CHANGE_SET_SOURCES, CHANGE_SET_STATUSES } from "@roundhouse/shared";
+import {
+  CHANGE_SET_REVIEW_STATUSES,
+  CHANGE_SET_SOURCES,
+  CHANGE_SET_STATUSES,
+  MAX_PRESENCE_SELECTION,
+  PRESENCE_COLORS,
+  PRESENCE_EDIT_PARTS,
+} from "@roundhouse/shared";
 
 const Millis = z.number().int().openapi({ description: "Unix time in milliseconds" });
 
@@ -31,6 +38,19 @@ export const ChangeSetSummarySchema = z
     created_by: z.string().nullable(),
     /** The API token that proposed it, for sets staged over MCP or the API. */
     created_by_token: z.string().nullable(),
+    /**
+     * Where the set is in review. `approved` always covers the current
+     * revision: any edit moves an approved or rejected set back to `submitted`.
+     */
+    review_status: z.enum(CHANGE_SET_REVIEW_STATUSES),
+    submitted_by: z.string().nullable(),
+    submitted_at: Millis.nullable(),
+    approved_by: z.string().nullable(),
+    approved_at: Millis.nullable(),
+    rejected_by: z.string().nullable(),
+    rejected_at: Millis.nullable(),
+    /** The latest submitter's or reviewer's note. User-written: show it as text. */
+    review_note: z.string().nullable(),
     applied_by: z.string().nullable(),
     applied_at: Millis.nullable(),
     /** Why the last apply stopped, if it did. */
@@ -75,3 +95,36 @@ export const CanvasLayoutUpdatedMessageSchema = z.object({
   version: z.number().int().positive(),
   by_user_id: z.string(),
 });
+
+/** Realtime frame: someone added or removed a "connects to" edge. */
+export const CanvasEdgesUpdatedMessageSchema = z.object({
+  type: z.literal("canvas.edges_updated"),
+  by_user_id: z.string(),
+});
+
+/** Which part of which service a user has open for editing. */
+export const PresenceEditingSchema = z
+  .object({ service_id: z.string().max(128), part: z.enum(PRESENCE_EDIT_PARTS) })
+  .openapi("PresenceEditing");
+
+const PresenceTarget = z
+  .string()
+  .regex(/^([a-z]{1,8}_[A-Za-z0-9]{1,64}|new:[1-9][0-9]{0,3})$/, "expected a service ID");
+
+/**
+ * Browser → server: what this tab is looking at (ADR 0006). Only IDs: the
+ * room never relays names or values a client sends.
+ */
+export const PresenceUpdateMessageSchema = z.object({
+  type: z.literal("presence.update"),
+  environment_id: PresenceTarget.nullable(),
+  selection: z.array(PresenceTarget).max(MAX_PRESENCE_SELECTION),
+  editing: z.object({ service_id: PresenceTarget, part: z.enum(PRESENCE_EDIT_PARTS) }).nullable(),
+});
+
+/** A presence colour index; see `presenceColor`. */
+export const PresenceColorSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(PRESENCE_COLORS - 1);

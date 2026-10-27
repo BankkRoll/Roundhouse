@@ -157,6 +157,7 @@ function toProtection(environmentId: string) {
       config: toApiRule(rules.config),
       variables: toApiRule(rules.variables),
     },
+    require_approval: db.changes.requireApproval[environmentId] === true,
   };
 }
 
@@ -615,6 +616,7 @@ export const accessHandlers = [
     if (!found.ok) return found.response;
     const body = input.body as {
       protected: boolean;
+      require_approval?: boolean;
       rules?: Partial<Record<(typeof PROTECTED_OPERATIONS)[number], ApiRule>>;
     };
     const given = PROTECTED_OPERATIONS.filter((op) => body.rules?.[op] !== undefined);
@@ -643,7 +645,11 @@ export const accessHandlers = [
       ) as ProtectionRules;
     }
     const from = environment.protected;
+    const approvalBefore = db.changes.requireApproval[environment.id] === true;
     environment.protected = body.protected;
+    if (body.require_approval !== undefined) {
+      db.changes.requireApproval[environment.id] = body.require_approval;
+    }
     recordAudit({
       workspaceId: found.workspaceId,
       actorType: "user",
@@ -653,8 +659,11 @@ export const accessHandlers = [
       targetId: environment.id,
       metadata: {
         project_id: environment.project_id,
-        from: { protected: from },
-        to: { protected: body.protected },
+        from: { protected: from, require_approval: approvalBefore },
+        to: {
+          protected: body.protected,
+          require_approval: body.require_approval ?? approvalBefore,
+        },
         rules_changed: given,
       },
     });

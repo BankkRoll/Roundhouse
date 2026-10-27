@@ -11,7 +11,12 @@
  * - fans out `deployment.updated`, `deployment.event`, `service.updated` and
  *   `presence` to every socket, and `log.lines` only to subscribers;
  * - lists only browser sessions in `presence`: CLI sockets and API tokens
- *   watch without being shown;
+ *   watch without being shown, and their `presence.update` frames are
+ *   ignored;
+ * - keeps each browser socket's latest `presence.update` (environment,
+ *   selection, what it edits; IDs only), accepts at most
+ *   `PRESENCE_UPDATES_PER_SECOND` per socket (extras are dropped) and
+ *   broadcasts presence at most every `PRESENCE_BROADCAST_INTERVAL_MS`;
  * - re-checks every socket's session or token, the project, membership and
  *   project access (`resolveAccess`, grants and teams included) once a
  *   minute (an alarm) and on every `subscribe`, closing it with 4401, 4404
@@ -32,6 +37,9 @@ import { apiTokens, createDb, projects, sessions, workspaces } from "@roundhouse
 import type { AnyLogSource, LogLine } from "@roundhouse/protocol";
 import {
   type Action,
+  PRESENCE_BROADCAST_INTERVAL_MS,
+  PRESENCE_UPDATES_PER_SECOND,
+  presenceColor,
   REALTIME_CLOSE_CODES,
   REALTIME_RECHECK_INTERVAL_MS,
   resolveAccess,
@@ -117,10 +125,17 @@ export interface RevalidateFilter {
   tokenIds?: readonly string[];
 }
 
+type PresenceUpdate = Extract<RealtimeClientMessage, { type: "presence.update" }>;
+type PresenceUser = Extract<RealtimeServerMessage, { type: "presence" }>["users"][number];
+
 interface Attachment {
   viewer: RoomViewer;
-  /** `deployment_logs:<id>` or `build_logs:<id>`. */
+  /** `deployment_logs:<id>`, `build_logs:<id>` or `cron_run_logs:<id>`. */
   topics: string[];
+  /** The socket's latest `presence.update`, and when it arrived. */
+  presence?: Omit<PresenceUpdate, "type"> & { at: number };
+  /** Start (unix ms) and count of the current one-second presence window. */
+  presenceWindow?: { start: number; count: number };
 }
 
 type LogLinesMessage = Extract<RealtimeServerMessage, { type: "log.lines" }>;
@@ -137,7 +152,9 @@ interface Queue {
   bytes: number;
 }
 
-function topicKey(topic: RealtimeClientMessage["topic"]): string {
+function topicKey(
+  topic: Extract<RealtimeClientMessage, { type: "subscribe" | "unsubscribe" }>["topic"],
+): string {
   switch (topic.kind) {
     case "deployment_logs":
       return `deployment_logs:${topic.deployment_id}`;
@@ -166,6 +183,7 @@ export class ProjectRoom extends DurableObject<Env> {
   /** By topic key; in memory only, so hibernation forgets it (nothing to replay then). */
   private replays = new Map<string, Replay>();
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private presenceTimer: ReturnType<typeof setTimeout> | undefined;
 
   override async fetch(request: Request): Promise<Response> {
     let viewer: RoomViewer;
@@ -230,6 +248,10 @@ export class ProjectRoom extends DurableObject<Env> {
       return ws.close(RoomCloseCode.policy, "invalid json");
     }
     const attachment = ws.deserializeAttachment() as Attachment;
+    if (message.type === "presence.update") {
+      this.updatePresence(ws, attachment, message);
+      return;
+    }
     const key = topicKey(message.topic);
     if (message.type === "unsubscribe") {
       attachment.topics = attachment.topics.filter((t) => t !== key);
@@ -502,21 +524,60 @@ export class ProjectRoom extends DurableObject<Env> {
     return null;
   }
 
+  /**
+   * Keeps a browser socket's latest presence and schedules a broadcast.
+   * Frames from sockets that aren't shown (CLI, API tokens) and frames past
+   * the per-second budget are dropped silently: presence is best effort, and
+   * the next frame carries the full state again.
+   */
+  private updatePresence(ws: WebSocket, attachment: Attachment, message: PresenceUpdate): void {
+    if (!attachment.viewer.presence) return;
+    const now = Date.now();
+    const window = attachment.presenceWindow;
+    if (window && now - window.start < 1000) {
+      if (window.count >= PRESENCE_UPDATES_PER_SECOND) return;
+      window.count += 1;
+    } else {
+      attachment.presenceWindow = { start: now, count: 1 };
+    }
+    attachment.presence = {
+      environment_id: message.environment_id,
+      selection: [...new Set(message.selection)],
+      editing: message.editing,
+      at: now,
+    };
+    ws.serializeAttachment(attachment);
+    this.presenceTimer ??= setTimeout(() => {
+      this.presenceTimer = undefined;
+      this.sendPresence();
+    }, PRESENCE_BROADCAST_INTERVAL_MS);
+  }
+
   private sendPresence(except?: WebSocket): void {
-    const users = new Map<string, { user_id: string; name: string; image: string | null }>();
+    const users = new Map<string, PresenceUser & { at: number }>();
     const sockets = this.ctx.getWebSockets().filter((ws) => ws !== except);
     for (const ws of sockets) {
-      const { viewer } = ws.deserializeAttachment() as Attachment;
+      const { viewer, presence } = ws.deserializeAttachment() as Attachment;
       if (!viewer.presence) continue;
+      const known = users.get(viewer.user_id);
+      // A user with several tabs shows what their most recently active tab shows.
+      if (known && known.at >= (presence?.at ?? 0)) continue;
       users.set(viewer.user_id, {
         user_id: viewer.user_id,
         name: viewer.name,
         image: viewer.image,
+        color: presenceColor(viewer.user_id),
+        environment_id: presence?.environment_id ?? null,
+        selection: presence?.selection ?? [],
+        editing: presence?.editing ?? null,
+        at: presence?.at ?? 0,
       });
     }
     const data = JSON.stringify({
       type: "presence",
-      users: [...users.values()].sort((a, b) => (a.user_id < b.user_id ? -1 : 1)),
+      users: [...users.values()]
+        .sort((a, b) => (a.user_id < b.user_id ? -1 : 1))
+        .map(({ at: _, ...user }) => user),
     } satisfies RealtimeServerMessage);
     for (const ws of sockets) this.enqueue(ws, data, false);
   }

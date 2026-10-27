@@ -1,8 +1,10 @@
 /**
  * The project canvas (ADR 0006 "Canvas data model"): nodes are the live
- * services plus those the environment's draft creates, edges are derived on
- * read from `${{slug.VAR}}` references (before and after the draft), and
- * positions are stored per project.
+ * services plus those the environment's draft creates, each with its
+ * database engine, volume and custom domains in the environment (and what
+ * the draft does to them); edges are derived on read from `${{slug.VAR}}`
+ * references (before and after the draft) or drawn explicitly; positions are
+ * stored per project.
  *
  * SECURITY: Edges are computed from decrypted values, staged ones included,
  * but only the referenced names (`slug.NAME`) leave this module, which a
@@ -10,19 +12,23 @@
  *
  * @module
  */
-import { canvasLayouts, type Db, services } from "@roundhouse/db";
+import { canvasLayouts, type Db, domains, services, volumes, workspaces } from "@roundhouse/db";
 import {
   isNewServiceRef,
+  type ServiceDatabaseEngine,
   type ServiceKind,
   SHARED_NAMESPACE,
   serviceOfOp,
   variableDependencies,
 } from "@roundhouse/shared";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notInArray } from "drizzle-orm";
 import type { KeyEnv, Sealed } from "../crypto";
 import { ApiError } from "../errors";
 import { slugFor } from "../projects";
 import { loadEnvironmentVariables, projectKey } from "../variables";
+import { GONE_VOLUME_STATUSES } from "../volumes";
+import { listEdges } from "./edges";
+import { requiresApproval } from "./review";
 import { openStagedValue } from "./secrets";
 import {
   type EnvironmentRow,
@@ -39,6 +45,36 @@ export interface Position {
 }
 
 type EdgeState = "current" | "staged" | "removed";
+
+interface CanvasVolume {
+  id: string | null;
+  mount_path: string;
+  size_mb: number;
+  status: string | null;
+  delete_after: number | null;
+  staged: "create" | "resize" | "delete" | null;
+  staged_size_mb: number | null;
+}
+
+interface CanvasDomain {
+  id: string | null;
+  hostname: string;
+  status: string | null;
+  staged: "add" | "remove" | null;
+}
+
+interface CanvasNode {
+  id: string;
+  name: string;
+  slug: string;
+  kind: ServiceKind;
+  icon: string | null;
+  staged: "create" | "update" | "delete" | null;
+  staged_ops: number;
+  database: { engine: ServiceDatabaseEngine; version: string } | null;
+  volume: CanvasVolume | null;
+  domains: CanvasDomain[];
+}
 
 const PRIVATE_DOMAIN = ".ROUNDHOUSE_PRIVATE_DOMAIN";
 
@@ -69,7 +105,7 @@ export async function buildCanvas(ctx: {
   environment: EnvironmentRow;
 }) {
   const { db, project, environment } = ctx;
-  const [live, draft, layout] = await Promise.all([
+  const [live, draft, layout, explicit, workspace] = await Promise.all([
     db
       .select()
       .from(services)
@@ -77,22 +113,44 @@ export async function buildCanvas(ctx: {
       .orderBy(services.id),
     findDraft(db, environment.id),
     loadLayout(db, project.id),
+    listEdges(db, project.id),
+    db.query.workspaces.findFirst({
+      where: eq(workspaces.id, project.workspaceId),
+      columns: { stagedChanges: true },
+    }),
   ]);
   const rows = draft ? (await loadOps(db, draft.id)).filter((r) => r.status !== "applied") : [];
+  const liveIds = live.map((s) => s.id);
+  const [envVolumes, envDomains] = liveIds.length
+    ? await Promise.all([
+        db
+          .select()
+          .from(volumes)
+          .where(
+            and(
+              inArray(volumes.serviceId, liveIds),
+              eq(volumes.environmentId, environment.id),
+              notInArray(volumes.status, [...GONE_VOLUME_STATUSES]),
+            ),
+          )
+          .orderBy(desc(volumes.id)),
+        db
+          .select()
+          .from(domains)
+          .where(
+            and(
+              inArray(domains.serviceId, liveIds),
+              eq(domains.environmentId, environment.id),
+              eq(domains.type, "custom"),
+            ),
+          )
+          .orderBy(domains.hostname),
+      ])
+    : [[], []];
 
-  const nodes = new Map<
-    string,
-    {
-      id: string;
-      name: string;
-      slug: string;
-      kind: ServiceKind;
-      icon: string | null;
-      staged: "create" | "update" | "delete" | null;
-      staged_ops: number;
-    }
-  >();
+  const nodes = new Map<string, CanvasNode>();
   for (const s of live) {
+    const v = envVolumes.find((x) => x.serviceId === s.id);
     nodes.set(s.id, {
       id: s.id,
       name: s.name,
@@ -101,10 +159,29 @@ export async function buildCanvas(ctx: {
       icon: s.icon,
       staged: null,
       staged_ops: 0,
+      database:
+        s.databaseEngine && s.databaseVersion
+          ? { engine: s.databaseEngine, version: s.databaseVersion }
+          : null,
+      volume: v
+        ? {
+            id: v.id,
+            mount_path: v.mountPath,
+            size_mb: v.sizeMb,
+            status: v.status,
+            delete_after: v.deleteAfter ? +v.deleteAfter : null,
+            staged: null,
+            staged_size_mb: null,
+          }
+        : null,
+      domains: envDomains
+        .filter((d) => d.serviceId === s.id)
+        .map((d) => ({ id: d.id, hostname: d.hostname, status: d.status, staged: null })),
     });
   }
   for (const r of rows) {
     if (r.op.type !== "service.create") continue;
+    const db0 = r.op.database;
     nodes.set(r.op.ref, {
       id: r.op.ref,
       name: r.op.name,
@@ -113,6 +190,19 @@ export async function buildCanvas(ctx: {
       icon: r.op.icon ?? null,
       staged: "create",
       staged_ops: 0,
+      database: db0 ? { engine: db0.engine, version: db0.version } : null,
+      volume: db0
+        ? {
+            id: null,
+            mount_path: "",
+            size_mb: db0.size_mb,
+            status: null,
+            delete_after: null,
+            staged: "create",
+            staged_size_mb: db0.size_mb,
+          }
+        : null,
+      domains: [],
     });
   }
   for (const r of rows) {
@@ -120,8 +210,29 @@ export async function buildCanvas(ctx: {
     const node = id ? nodes.get(id) : undefined;
     if (!node) continue;
     node.staged_ops += 1;
-    if (r.op.type === "service.delete") node.staged = "delete";
+    const op = r.op;
+    if (op.type === "service.delete") node.staged = "delete";
     else if (node.staged === null) node.staged = "update";
+    if (op.type === "volume.set") {
+      node.volume = node.volume
+        ? { ...node.volume, staged: "resize", staged_size_mb: op.size_mb }
+        : {
+            id: null,
+            mount_path: op.mount_path ?? "",
+            size_mb: op.size_mb,
+            status: null,
+            delete_after: null,
+            staged: "create",
+            staged_size_mb: op.size_mb,
+          };
+    } else if (op.type === "volume.delete" && node.volume) {
+      node.volume = { ...node.volume, staged: "delete" };
+    } else if (op.type === "domain.add") {
+      node.domains.push({ id: null, hostname: op.hostname, status: null, staged: "add" });
+    } else if (op.type === "domain.remove") {
+      const d = node.domains.find((x) => x.id === op.domain_id);
+      if (d) d.staged = "remove";
+    }
   }
 
   // Raw values before and after the draft, by slug.
@@ -197,23 +308,35 @@ export async function buildCanvas(ctx: {
     project_id: project.id,
     environment_id: environment.id,
     environment_protected: environment.protected,
+    environment_requires_approval: requiresApproval(environment),
+    staging: workspace?.stagedChanges ?? false,
     nodes: [...nodes.values()],
-    edges: [...edges]
-      .filter(([, e]) => known.has(e.from) && known.has(e.to))
-      .map(([id, e]) => {
-        const variables = [...e.variables].sort();
-        const state: EdgeState = e.before && e.after ? "current" : e.after ? "staged" : "removed";
-        return {
-          id,
-          from: e.from,
-          to: e.to,
-          kind: variables.some((v) => v.endsWith(PRIVATE_DOMAIN))
-            ? ("private_network" as const)
-            : ("reference" as const),
-          variables,
-          state,
-        };
-      }),
+    edges: [
+      ...[...edges]
+        .filter(([, e]) => known.has(e.from) && known.has(e.to))
+        .map(([id, e]) => {
+          const variables = [...e.variables].sort();
+          const state: EdgeState = e.before && e.after ? "current" : e.after ? "staged" : "removed";
+          return {
+            id,
+            from: e.from,
+            to: e.to,
+            kind: variables.some((v) => v.endsWith(PRIVATE_DOMAIN))
+              ? ("private_network" as const)
+              : ("reference" as const),
+            variables,
+            state,
+          };
+        }),
+      ...explicit.map((e) => ({
+        id: e.id,
+        from: e.fromServiceId,
+        to: e.toServiceId,
+        kind: "explicit" as const,
+        variables: [],
+        state: "current" as const,
+      })),
+    ],
     positions: Object.fromEntries(
       Object.entries(layout.positions).filter(([id]) => known.has(id) && !isNewServiceRef(id)),
     ),

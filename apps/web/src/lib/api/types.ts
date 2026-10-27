@@ -99,6 +99,11 @@ export interface Workspace {
   name: string;
   slug: string;
   role: Role;
+  /**
+   * Canvas edits stage into a draft for review (ADR 0006); off, they apply as saved.
+   * Optional so fixtures written before the flag still type-check.
+   */
+  staged_changes?: boolean;
   created_at: Millis;
 }
 

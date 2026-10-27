@@ -41,3 +41,50 @@ export const REALTIME_RECHECK_INTERVAL_MS = 60_000;
 export function shouldReconnect(code: number): boolean {
   return !(Object.values(REALTIME_CLOSE_CODES) as number[]).includes(code);
 }
+
+// -----------------------------------------------------------------------------
+// Presence (ADR 0006 "Realtime and multiplayer")
+// -----------------------------------------------------------------------------
+
+/** Distinct presence colours; a user's colour is a stable index below this. */
+export const PRESENCE_COLORS = 12;
+
+/** Most service IDs one user's selection carries. */
+export const MAX_PRESENCE_SELECTION = 32;
+
+/** `presence.update` frames one socket may send per second; extras are dropped. */
+export const PRESENCE_UPDATES_PER_SECOND = 10;
+
+/** Shortest time between two presence broadcasts of one project. */
+export const PRESENCE_BROADCAST_INTERVAL_MS = 100;
+
+/** What part of a service someone is editing, as the canvas shows it. */
+export const PRESENCE_EDIT_PARTS = [
+  "service",
+  "config",
+  "variables",
+  "volume",
+  "domains",
+  "connections",
+] as const;
+
+/** A part of a service being edited; see {@link PRESENCE_EDIT_PARTS}. */
+export type PresenceEditPart = (typeof PRESENCE_EDIT_PARTS)[number];
+
+/**
+ * A user's presence colour: FNV-1a of the user ID, so every client picks the
+ * same colour for the same person without asking the server.
+ *
+ * @param userId - The user's ID.
+ * @returns An index in `0 … PRESENCE_COLORS - 1`.
+ * @example
+ * presenceColor("usr_01J9"); // the same number on every client
+ */
+export function presenceColor(userId: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < userId.length; i++) {
+    hash ^= userId.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash % PRESENCE_COLORS;
+}

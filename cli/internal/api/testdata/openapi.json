@@ -44,6 +44,25 @@
         ],
         "type": "object"
       },
+      "AddServiceEdge": {
+        "properties": {
+          "from_service_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "to_service_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_service_id",
+          "to_service_id"
+        ],
+        "type": "object"
+      },
       "ApiToken": {
         "properties": {
           "created_at": {
@@ -154,7 +173,9 @@
           "data:read",
           "data:write",
           "backups:manage",
-          "backups:restore"
+          "backups:restore",
+          "changes:approve",
+          "changes:auto_apply"
         ],
         "type": "string"
       },
@@ -268,6 +289,7 @@
               "instance.setup_completed",
               "workspace.created",
               "workspace.renamed",
+              "workspace.settings_updated",
               "member.role_changed",
               "member.removed",
               "member.left",
@@ -346,9 +368,15 @@
               "change_set.created",
               "change_set.applied",
               "change_set.discarded",
+              "change_set.submitted",
+              "change_set.approved",
+              "change_set.rejected",
+              "canvas.edge_added",
+              "canvas.edge_removed",
               "database.query_executed",
               "database.browser_opened",
               "database.credentials_rotated",
+              "volume.created",
               "volume.resized",
               "volume.deleted",
               "volume.undeleted",
@@ -963,6 +991,9 @@
           "environment_protected": {
             "type": "boolean"
           },
+          "environment_requires_approval": {
+            "type": "boolean"
+          },
           "layout_version": {
             "minimum": 0,
             "type": "integer"
@@ -978,17 +1009,59 @@
           },
           "project_id": {
             "type": "string"
+          },
+          "staging": {
+            "type": "boolean"
           }
         },
         "required": [
           "project_id",
           "environment_id",
           "environment_protected",
+          "environment_requires_approval",
+          "staging",
           "nodes",
           "edges",
           "positions",
           "layout_version",
           "draft"
+        ],
+        "type": "object"
+      },
+      "CanvasDomain": {
+        "properties": {
+          "hostname": {
+            "type": "string"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "staged": {
+            "enum": [
+              "add",
+              "remove",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "hostname",
+          "status",
+          "staged"
         ],
         "type": "object"
       },
@@ -1003,7 +1076,8 @@
           "kind": {
             "enum": [
               "reference",
-              "private_network"
+              "private_network",
+              "explicit"
             ],
             "type": "string"
           },
@@ -1053,6 +1127,36 @@
       },
       "CanvasNode": {
         "properties": {
+          "database": {
+            "properties": {
+              "engine": {
+                "enum": [
+                  "postgres",
+                  "mysql",
+                  "redis",
+                  "mongodb"
+                ],
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "engine",
+              "version"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "domains": {
+            "items": {
+              "$ref": "#/components/schemas/CanvasDomain"
+            },
+            "type": "array"
+          },
           "icon": {
             "type": [
               "string",
@@ -1091,6 +1195,9 @@
           "staged_ops": {
             "minimum": 0,
             "type": "integer"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/CanvasVolume"
           }
         },
         "required": [
@@ -1100,7 +1207,10 @@
           "kind",
           "icon",
           "staged",
-          "staged_ops"
+          "staged_ops",
+          "database",
+          "volume",
+          "domains"
         ],
         "type": "object"
       },
@@ -1129,6 +1239,65 @@
         },
         "type": "object"
       },
+      "CanvasVolume": {
+        "properties": {
+          "delete_after": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mount_path": {
+            "type": "string"
+          },
+          "size_mb": {
+            "type": "integer"
+          },
+          "staged": {
+            "enum": [
+              "create",
+              "resize",
+              "delete",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "staged_size_mb": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "mount_path",
+          "size_mb",
+          "status",
+          "delete_after",
+          "staged",
+          "staged_size_mb"
+        ],
+        "type": [
+          "object",
+          "null"
+        ]
+      },
       "ChainedAuditLog": {
         "properties": {
           "action": {
@@ -1136,6 +1305,7 @@
               "instance.setup_completed",
               "workspace.created",
               "workspace.renamed",
+              "workspace.settings_updated",
               "member.role_changed",
               "member.removed",
               "member.left",
@@ -1214,9 +1384,15 @@
               "change_set.created",
               "change_set.applied",
               "change_set.discarded",
+              "change_set.submitted",
+              "change_set.approved",
+              "change_set.rejected",
+              "canvas.edge_added",
+              "canvas.edge_removed",
               "database.query_executed",
               "database.browser_opened",
               "database.credentials_rotated",
+              "volume.created",
               "volume.resized",
               "volume.deleted",
               "volume.undeleted",
@@ -1356,6 +1532,28 @@
           }
         ]
       },
+      "ChangeSetApproval": {
+        "properties": {
+          "approved": {
+            "type": "boolean"
+          },
+          "authors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "required",
+          "approved",
+          "authors"
+        ],
+        "type": "object"
+      },
       "ChangeSetList": {
         "properties": {
           "change_sets": {
@@ -1363,15 +1561,22 @@
               "$ref": "#/components/schemas/ChangeSetSummary"
             },
             "type": "array"
+          },
+          "environment_requires_approval": {
+            "type": "boolean"
           }
         },
         "required": [
-          "change_sets"
+          "change_sets",
+          "environment_requires_approval"
         ],
         "type": "object"
       },
       "ChangeSetReview": {
         "properties": {
+          "approval": {
+            "$ref": "#/components/schemas/ChangeSetApproval"
+          },
           "change_set": {
             "$ref": "#/components/schemas/ChangeSet"
           },
@@ -1410,7 +1615,8 @@
           "change_set",
           "rebases",
           "conflicts",
-          "deploys"
+          "deploys",
+          "approval"
         ],
         "type": "object"
       },
@@ -1424,6 +1630,19 @@
             ]
           },
           "applied_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approved_at": {
+            "description": "Unix time in milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "approved_by": {
             "type": [
               "string",
               "null"
@@ -1483,6 +1702,34 @@
           "project_id": {
             "type": "string"
           },
+          "rejected_at": {
+            "description": "Unix time in milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rejected_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "review_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "review_status": {
+            "enum": [
+              "none",
+              "submitted",
+              "approved",
+              "rejected"
+            ],
+            "type": "string"
+          },
           "revision": {
             "exclusiveMinimum": 0,
             "type": "integer"
@@ -1508,6 +1755,19 @@
             ],
             "type": "string"
           },
+          "submitted_at": {
+            "description": "Unix time in milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "submitted_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "title": {
             "type": [
               "string",
@@ -1532,6 +1792,14 @@
           "conflicted_count",
           "created_by",
           "created_by_token",
+          "review_status",
+          "submitted_by",
+          "submitted_at",
+          "approved_by",
+          "approved_at",
+          "rejected_by",
+          "rejected_at",
+          "review_note",
           "applied_by",
           "applied_at",
           "error",
@@ -1645,7 +1913,9 @@
                 "data:read",
                 "data:write",
                 "backups:manage",
-                "backups:restore"
+                "backups:restore",
+                "changes:approve",
+                "changes:auto_apply"
               ],
               "type": "string"
             },
@@ -1717,7 +1987,7 @@
             "items": {
               "$ref": "#/components/schemas/ApiTokenScope"
             },
-            "maxItems": 24,
+            "maxItems": 26,
             "minItems": 1,
             "type": "array"
           }
@@ -3462,6 +3732,8 @@
                 "data:write",
                 "backups:manage",
                 "backups:restore",
+                "changes:approve",
+                "changes:auto_apply",
                 "instance:manage",
                 "workspaces:create"
               ],
@@ -3502,6 +3774,8 @@
                       "data:write",
                       "backups:manage",
                       "backups:restore",
+                      "changes:approve",
+                      "changes:auto_apply",
                       "instance:manage",
                       "workspaces:create"
                     ],
@@ -3541,6 +3815,8 @@
                                 "data:write",
                                 "backups:manage",
                                 "backups:restore",
+                                "changes:approve",
+                                "changes:auto_apply",
                                 "instance:manage",
                                 "workspaces:create"
                               ],
@@ -3688,6 +3964,9 @@
           "protected": {
             "type": "boolean"
           },
+          "require_approval": {
+            "type": "boolean"
+          },
           "rules": {
             "properties": {
               "config": {
@@ -3711,7 +3990,8 @@
         "required": [
           "environment_id",
           "protected",
-          "rules"
+          "rules",
+          "require_approval"
         ],
         "type": "object"
       },
@@ -4946,7 +5226,9 @@
                 "data:read",
                 "data:write",
                 "backups:manage",
-                "backups:restore"
+                "backups:restore",
+                "changes:approve",
+                "changes:auto_apply"
               ],
               "type": "string"
             },
@@ -4981,7 +5263,9 @@
                       "data:read",
                       "data:write",
                       "backups:manage",
-                      "backups:restore"
+                      "backups:restore",
+                      "changes:approve",
+                      "changes:auto_apply"
                     ],
                     "type": "string"
                   },
@@ -5066,11 +5350,13 @@
                 "data:read",
                 "data:write",
                 "backups:manage",
-                "backups:restore"
+                "backups:restore",
+                "changes:approve",
+                "changes:auto_apply"
               ],
               "type": "string"
             },
-            "maxItems": 24,
+            "maxItems": 26,
             "type": "array"
           },
           "workspace_id": {
@@ -5187,7 +5473,8 @@
               "config",
               "variables",
               "created",
-              "references"
+              "references",
+              "volume"
             ],
             "type": "string"
           },
@@ -5758,6 +6045,9 @@
           "protected": {
             "type": "boolean"
           },
+          "require_approval": {
+            "type": "boolean"
+          },
           "rules": {
             "properties": {
               "config": {
@@ -5846,6 +6136,55 @@
         },
         "required": [
           "fresh_until"
+        ],
+        "type": "object"
+      },
+      "RebaseChangeSet": {
+        "properties": {
+          "expected_revision": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "RebasedChangeSet": {
+        "properties": {
+          "change_set": {
+            "$ref": "#/components/schemas/ChangeSet"
+          },
+          "conflicts": {
+            "items": {
+              "properties": {
+                "conflict": {
+                  "$ref": "#/components/schemas/StagedConflict"
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "conflict"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "rebased": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change_set",
+          "rebased",
+          "conflicts"
         ],
         "type": "object"
       },
@@ -6038,6 +6377,23 @@
         "required": [
           "mode",
           "confirm"
+        ],
+        "type": "object"
+      },
+      "ReviewDecision": {
+        "properties": {
+          "expected_revision": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "note": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision"
         ],
         "type": "object"
       },
@@ -6455,6 +6811,40 @@
             "$ref": "#/components/schemas/ServiceSource"
           }
         },
+        "type": "object"
+      },
+      "ServiceEdge": {
+        "properties": {
+          "created_at": {
+            "type": "integer"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "from_service_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "to_service_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "from_service_id",
+          "to_service_id",
+          "created_by",
+          "created_at"
+        ],
         "type": "object"
       },
       "ServiceMetrics": {
@@ -7415,6 +7805,116 @@
               "key"
             ],
             "type": "object"
+          },
+          {
+            "properties": {
+              "mount_path": {
+                "example": "/data",
+                "maxLength": 1024,
+                "minLength": 2,
+                "type": "string"
+              },
+              "service": {
+                "description": "A live service ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "size_mb": {
+                "maximum": 1048576,
+                "minimum": 256,
+                "type": "integer"
+              },
+              "type": {
+                "enum": [
+                  "volume.set"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service",
+              "size_mb"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "service": {
+                "description": "A live service ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "volume.delete"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "hostname": {
+                "example": "shop.example.com",
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              "service": {
+                "description": "A live service ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "domain.add"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service",
+              "hostname"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "domain_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "hostname": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "domain.remove"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "domain_id",
+              "hostname",
+              "service"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -7833,6 +8333,108 @@
               "key"
             ],
             "type": "object"
+          },
+          {
+            "properties": {
+              "mount_path": {
+                "example": "/data",
+                "maxLength": 1024,
+                "minLength": 2,
+                "type": "string"
+              },
+              "service": {
+                "description": "A live service ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "size_mb": {
+                "maximum": 1048576,
+                "minimum": 256,
+                "type": "integer"
+              },
+              "type": {
+                "enum": [
+                  "volume.set"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service",
+              "size_mb"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "service": {
+                "description": "A live service ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "volume.delete"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "hostname": {
+                "example": "shop.example.com",
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              "service": {
+                "description": "A live service ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "domain.add"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "service",
+              "hostname"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "domain_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "domain.remove"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "domain_id"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -7845,6 +8447,20 @@
         "required": [
           "workspace_id"
         ],
+        "type": "object"
+      },
+      "SubmitChangeSet": {
+        "properties": {
+          "expected_revision": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "note": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "Team": {
@@ -8847,6 +9463,9 @@
           },
           "slug": {
             "type": "string"
+          },
+          "staged_changes": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -8854,6 +9473,7 @@
           "name",
           "slug",
           "role",
+          "staged_changes",
           "created_at"
         ],
         "type": "object"
@@ -8902,6 +9522,46 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "WorkspaceChangeSet": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ChangeSetSummary"
+          },
+          {
+            "properties": {
+              "environment_name": {
+                "type": "string"
+              },
+              "environment_requires_approval": {
+                "type": "boolean"
+              },
+              "project_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_name",
+              "environment_name",
+              "environment_requires_approval"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "WorkspaceChangeSetList": {
+        "properties": {
+          "change_sets": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceChangeSet"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change_sets"
+        ],
         "type": "object"
       }
     },
@@ -9976,6 +10636,111 @@
         }
       }
     },
+    "/v1/change-sets/{changeSetId}/approve": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "Approved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Approve a change set",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "changes:approve",
+          "audit": [
+            "change_set.approved"
+          ],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/change-sets/{changeSetId}/diff": {
       "get": {
         "parameters": [
@@ -10236,6 +11001,16 @@
               }
             },
             "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
           }
         },
         "security": [
@@ -10474,6 +11249,319 @@
         "x-roundhouse-policy": {
           "action": "projects:read",
           "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/change-sets/{changeSetId}/rebase": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RebaseChangeSet"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RebasedChangeSet"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Rebase a change set",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/change-sets/{changeSetId}/reject": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "Rejected"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Reject a change set",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "changes:approve",
+          "audit": [
+            "change_set.rejected"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/change-sets/{changeSetId}/submit": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "changeSetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitChangeSet"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSet"
+                }
+              }
+            },
+            "description": "Submitted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Submit a change set for review",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [
+            "change_set.submitted"
+          ],
           "auth": "session"
         }
       }
@@ -11508,6 +12596,16 @@
               }
             },
             "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
           }
         },
         "security": [
@@ -11678,6 +12776,16 @@
             "description": "Error"
           },
           "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
             "content": {
               "application/json": {
                 "schema": {
@@ -12623,6 +13731,7 @@
                 "instance.setup_completed",
                 "workspace.created",
                 "workspace.renamed",
+                "workspace.settings_updated",
                 "member.role_changed",
                 "member.removed",
                 "member.left",
@@ -12701,9 +13810,15 @@
                 "change_set.created",
                 "change_set.applied",
                 "change_set.discarded",
+                "change_set.submitted",
+                "change_set.approved",
+                "change_set.rejected",
+                "canvas.edge_added",
+                "canvas.edge_removed",
                 "database.query_executed",
                 "database.browser_opened",
                 "database.credentials_rotated",
+                "volume.created",
                 "volume.resized",
                 "volume.deleted",
                 "volume.undeleted",
@@ -15473,6 +16588,187 @@
             "service.created",
             "variables.updated",
             "deployment.created"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/projects/{projectId}/edges": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddServiceEdge"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceEdge"
+                }
+              }
+            },
+            "description": "Added"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Connect two services",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "canvas.edge_added"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/projects/{projectId}/edges/{edgeId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "edgeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Disconnect two services",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "canvas.edge_removed"
           ],
           "auth": "session"
         }
@@ -20034,11 +21330,11 @@
                     "maxLength": 100,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "staged_changes": {
+                    "type": "boolean"
                   }
                 },
-                "required": [
-                  "name"
-                ],
                 "type": "object"
               }
             }
@@ -20105,7 +21401,7 @@
             "api_token": []
           }
         ],
-        "summary": "Rename a workspace",
+        "summary": "Rename a workspace or change its settings",
         "tags": [
           "workspaces"
         ]
@@ -20464,6 +21760,102 @@
         "tags": [
           "audit"
         ]
+      }
+    },
+    "/v1/workspaces/{workspaceId}/change-sets": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "review",
+            "required": false,
+            "schema": {
+              "default": "open",
+              "enum": [
+                "open",
+                "pending"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceChangeSetList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List a workspace's open change sets",
+        "tags": [
+          "changes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
       }
     },
     "/v1/workspaces/{workspaceId}/integrations": {

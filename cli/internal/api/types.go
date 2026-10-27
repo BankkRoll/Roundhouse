@@ -490,6 +490,7 @@ var APITokenScopes = []string{
 	"services:read", "services:manage", "deployments:create",
 	"variables:read", "variables:read_plain", "variables:manage",
 	"data:read", "data:write", "backups:manage", "backups:restore",
+	"changes:approve", "changes:auto_apply",
 }
 
 // APITokenPresets are the named scope sets of API_TOKEN_PRESETS.

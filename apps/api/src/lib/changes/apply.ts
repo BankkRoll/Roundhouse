@@ -3,11 +3,15 @@
  *
  * Apply runs, in order:
  * 1. **Authorize** every op for the applier, in the set's environment, with
- *    the same per-action checks as the direct routes (ADR 0014): config and
- *    variable ops against the environment, so its protection applies;
- *    service creation and renames against the project; a deletion against
- *    every environment of the project. Nothing is locked yet, so a refusal
- *    leaves the set untouched.
+ *    the same per-action checks as the direct routes (ADR 0014): config,
+ *    variable, volume and domain ops against the environment, so its
+ *    protection applies; service creation and renames against the project; a
+ *    deletion against every environment of the project. Then review: a
+ *    rejected set never applies, an environment whose protection requires
+ *    approval needs one from someone other than the applier, and an API
+ *    token needs `changes:auto_apply` unless a person approved the set
+ *    (`./review`). Nothing is locked yet, so a refusal leaves the set
+ *    untouched.
  * 2. **Lock** with a guarded `open → applying` update on the reviewed
  *    revision, so a set is applied exactly as reviewed and only once.
  * 3. **Rebase**: ops whose base drifted either merge (a config patch on
@@ -19,7 +23,8 @@
  *    transaction) with their audit rows (a database also gets its volume
  *    and generated credentials in every environment in that batch, so it
  *    never exists without them); then variables through `putVariables`,
- *    the normal write path, one batch per scope.
+ *    the normal write path, one batch per scope; then volumes and custom
+ *    domains through the same functions as their direct routes.
  * 6. **Deploy** the affected services with `createDeployment`.
  *
  * Steps 5's two phases are separate transactions because variables must go
@@ -39,6 +44,7 @@ import {
   changeSets,
   type Db,
   deployments,
+  domains,
   environments,
   type StagedBase,
   type StagedConflict,
@@ -55,9 +61,12 @@ import {
   configDiff,
   conflictingPointers,
   type DiffEntry,
+  type DomainAddOp,
+  type DomainRemoveOp,
   defaultServiceConfig,
   describeOp,
   isNewServiceRef,
+  LIVE_VOLUME_STATUSES,
   newId,
   opAction,
   patchPointers,
@@ -69,14 +78,27 @@ import {
   SHARED_NAMESPACE,
   type VariableDeleteOp,
   type VariableSetOp,
+  type VolumeDeleteOp,
+  type VolumeSetOp,
 } from "@roundhouse/shared";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { type AppContext, clientIp, originOf, requireKeys } from "../../context";
 import type { Env } from "../../env";
 import { auditInsert, recordAudit } from "../audit";
 import type { KeyEnv, Sealed } from "../crypto";
 import { databaseVariableRows, databaseVariables, resolveDatabaseVersion } from "../databases";
 import { createDeployment } from "../deployments";
+import { refreshNodes } from "../desired-state";
+import {
+  addCustomDomain,
+  assertDomainCapacity,
+  assertHostnameFree,
+  assertServesTraffic,
+  checkCustomHostname,
+  type DomainRow,
+  domainPort,
+  removeCustomDomain,
+} from "../domains/manage";
 import { ApiError, conflict, type ErrorDetail, isUniqueViolation } from "../errors";
 import { assertSourceInstallation } from "../github";
 import {
@@ -99,7 +121,17 @@ import {
   type VariableSetEntry,
   type VariableTarget,
 } from "../variables";
-import { assertSingleReplica, volumeRowsFor } from "../volumes";
+import {
+  assertSingleReplica,
+  resizeVolume,
+  singleReplicaError,
+  deleteVolume as softDeleteVolume,
+  type VolumeRow,
+  volumeInUse,
+  volumeOf,
+  volumeRowsFor,
+} from "../volumes";
+import { applyBlocker, authorsOf, requiresApproval } from "./review";
 import { openStagedValue } from "./secrets";
 import {
   checkVariableWrite,
@@ -114,6 +146,7 @@ import {
   type ChangeSetRow,
   changeSetChanged,
   type EnvironmentRow,
+  hasValidApproval,
   loadOps,
   notOpen,
   type ProjectRow,
@@ -269,6 +302,40 @@ export async function checkDrift(
         }
         break;
       }
+      case "volume.set":
+      case "volume.delete": {
+        const svc = await serviceRow(db, op.service);
+        if (!svc || svc.deletedAt) {
+          found = deleted(null);
+          break;
+        }
+        const base = row.base.volume ?? null;
+        const current = await volumeOf(db, op.service, environment.id);
+        const live = current && current.status !== "pending_deletion" ? current : undefined;
+        if (base === null && !live) break;
+        if (base !== null && live?.id === base.id && live.sizeMb === base.size_mb) break;
+        if (base !== null && live?.id !== base.id) {
+          found = deleted(base.size_mb, live?.sizeMb ?? null);
+          break;
+        }
+        found = {
+          theirs: live ? { mount_path: live.mountPath, size_mb: live.sizeMb } : null,
+          paths: ["/volume/size_mb"],
+          base_version: base?.size_mb ?? null,
+          current_version: live?.sizeMb ?? null,
+        };
+        break;
+      }
+      case "domain.add": {
+        const svc = await serviceRow(db, op.service);
+        if (!svc || svc.deletedAt) found = deleted(null);
+        break;
+      }
+      case "domain.remove": {
+        const domain = await db.query.domains.findFirst({ where: eq(domains.id, op.domain_id) });
+        if (!domain) found = deleted(null);
+        break;
+      }
     }
     if (found) drift.conflicts.set(row.id, found);
     else if (row.status === "conflicted") drift.cleared.push(row.id);
@@ -307,6 +374,25 @@ interface PlannedVariable {
   value?: string;
 }
 
+interface PlannedVolume {
+  row: StagedRow;
+  op: VolumeSetOp | VolumeDeleteOp;
+  service: ServiceRow;
+  /** The volume as it is; `undefined` when a `volume.set` creates one. */
+  current: VolumeRow | undefined;
+}
+
+interface PlannedDomain {
+  row: StagedRow;
+  op: DomainAddOp | DomainRemoveOp;
+  service: ServiceRow;
+  /** The domain a `domain.remove` removes. */
+  domain?: DomainRow;
+}
+
+/** Why an apply deploys a service. */
+type DeployReason = "config" | "variables" | "created" | "references" | "volume";
+
 /** Everything an apply will write, resolved and validated. */
 interface Plan {
   live: ServiceRow[];
@@ -321,10 +407,14 @@ interface Plan {
   deletes: { row: StagedRow; service: ServiceRow }[];
   patches: PlannedPatch[];
   vars: PlannedVariable[];
+  volumes: PlannedVolume[];
+  domains: PlannedDomain[];
+  /** Nodes holding a volume the apply changed, whose desired state must be refreshed. */
+  nodeIds: Set<string>;
   /** Final slug of every service that exists after the apply, by ID. */
   slugOf: Map<string, string>;
   /** Slugs to deploy with `deploy: "affected"`, and why. */
-  affected: { slug: string; reason: "config" | "variables" | "created" | "references" }[];
+  affected: { slug: string; reason: DeployReason }[];
 }
 
 function resolveRefs(rows: readonly StagedRow[]): Map<string, string> {
@@ -335,6 +425,52 @@ function resolveRefs(rows: readonly StagedRow[]): Map<string, string> {
     }
   }
   return refs;
+}
+
+/**
+ * The refusals of the volume routes, for a staged volume op against the
+ * volume as it is and the config the apply leaves.
+ *
+ * @param db - Database client.
+ * @param op - The op.
+ * @param service - Its service.
+ * @param found - The service's volume in the environment, live or soft-deleted.
+ * @param spec - The service's config after the apply.
+ * @throws {ApiError} 409 for a volume being deleted, in use or missing; 422 to shrink or with replicas.
+ */
+async function checkVolumeOp(
+  db: Db,
+  op: VolumeSetOp | VolumeDeleteOp,
+  service: ServiceRow,
+  found: VolumeRow | undefined,
+  spec: ServiceConfigSpec | null,
+): Promise<void> {
+  const live = (s: VolumeRow) => (LIVE_VOLUME_STATUSES as readonly string[]).includes(s.status);
+  if (found?.status === "pending_deletion") {
+    throw conflict(`${service.name}'s volume is scheduled for deletion; undelete it first`);
+  }
+  if (op.type === "volume.delete") {
+    if (!found || !live(found)) throw conflict(`${service.name} has no volume to delete here`);
+    if (await volumeInUse(db, found)) {
+      throw conflict(`${service.name} still runs here; scale it to 0 or delete it first`);
+    }
+    return;
+  }
+  if (found) {
+    if (!live(found))
+      throw conflict(`${service.name}'s volume is ${found.status.replace(/_/g, " ")}`);
+    if (op.size_mb < found.sizeMb) {
+      throw new ApiError(
+        422,
+        "volume_shrink_unsupported",
+        `Volumes only grow; ${service.name}'s is ${found.sizeMb} MiB`,
+      );
+    }
+    return;
+  }
+  if (!op.mount_path)
+    throw new ApiError(400, "invalid_request", "mount_path: Required for a new volume");
+  if ((spec?.deploy.replicas ?? 1) > 1) throw singleReplicaError();
 }
 
 /**
@@ -367,6 +503,9 @@ async function buildPlan(
     deletes: [],
     patches: [],
     vars: [],
+    volumes: [],
+    domains: [],
+    nodeIds: new Set(),
     slugOf: new Map(live.map((s) => [s.id, s.slug])),
     affected: [],
   };
@@ -452,6 +591,57 @@ async function buildPlan(
     });
   }
 
+  // Volumes and domains, checked against the config the apply leaves.
+  const specAfter = async (service: ServiceRow): Promise<ServiceConfigSpec | null> => {
+    const patched = plan.patches.find((p) => p.service.id === service.id);
+    if (patched) return patched.spec;
+    const latest = await configAt(db, service.id, environment.id);
+    return latest ? specOf(latest) : null;
+  };
+  for (const row of pending) {
+    const op = row.op;
+    if (op.type !== "volume.set" && op.type !== "volume.delete") continue;
+    const service = byId.get(op.service);
+    if (!service || deleted.has(service.id)) continue;
+    const found = await volumeOf(db, service.id, environment.id);
+    const current = found && found.status !== "pending_deletion" ? found : undefined;
+    if (options.strict) await checkVolumeOp(db, op, service, found, await specAfter(service));
+    plan.volumes.push({ row, op, service, current });
+  }
+  const adding = new Map<string, number>();
+  for (const row of pending) {
+    const op = row.op;
+    if (op.type !== "domain.add" && op.type !== "domain.remove") continue;
+    const service = byId.get(op.service);
+    if (!service || deleted.has(service.id)) continue;
+    if (op.type === "domain.remove") {
+      const domain = await db.query.domains.findFirst({ where: eq(domains.id, op.domain_id) });
+      if (!domain) {
+        if (options.strict) throw conflict(`${op.hostname} was already removed`);
+        continue;
+      }
+      adding.set(service.id, (adding.get(service.id) ?? 0) - 1);
+      plan.domains.push({ row, op, service, domain });
+      continue;
+    }
+    adding.set(service.id, (adding.get(service.id) ?? 0) + 1);
+    if (options.strict) {
+      assertServesTraffic(service);
+      await checkCustomHostname(ctx.c, db, op.hostname);
+      await assertHostnameFree(db, op.hostname, Date.now());
+      domainPort((await specAfter(service))?.networking.port, {
+        service: service.name,
+        environment: environment.name,
+      });
+    }
+    plan.domains.push({ row, op, service });
+  }
+  if (options.strict) {
+    for (const [serviceId, n] of adding) {
+      if (n > 0) await assertDomainCapacity(db, serviceId, environment.id, n);
+    }
+  }
+
   // Variables: the environment as it is, moved to the final slugs, with the staged ops on top.
   const dek = await projectKey(db, keys, project.id);
   const current = await loadEnvironmentVariables(db, dek, project.id, environment.id);
@@ -530,10 +720,16 @@ async function buildPlan(
     throw new ApiError(400, first.code as never, `${first.field}: ${first.message}`, refusals);
   }
 
-  // Which services the set redeploys.
+  // Which services the set redeploys. A new volume is only mounted by a new deployment.
+  const mounted = new Set(
+    plan.volumes
+      .filter((v) => v.op.type === "volume.set" && !v.current)
+      .map((v) => plan.slugOf.get(v.service.id)!),
+  );
   const changedServices = [
     ...plan.patches.map((p) => plan.slugOf.get(p.service.id)!),
     ...plan.creates.map((c) => c.slug),
+    ...mounted,
   ];
   const affected = affectedServices({ services: after, shared, changedVariables, changedServices });
   const ownVars = new Set(
@@ -547,9 +743,11 @@ async function buildPlan(
       ? "created"
       : patched.has(slug)
         ? "config"
-        : ownVars.has(slug)
-          ? "variables"
-          : "references",
+        : mounted.has(slug)
+          ? "volume"
+          : ownVars.has(slug)
+            ? "variables"
+            : "references",
   }));
 
   // Every reference of every service whose environment changes must still resolve.
@@ -598,7 +796,7 @@ export async function reviewSet(ctx: ApplyContext, set: ChangeSetRow) {
   const keys = requireKeys(ctx.c);
   const rows = await loadOps(ctx.db, set.id);
   const drift = await checkDrift({ ...ctx, keys }, rows);
-  let deploys: { service: string; name: string; reason: Plan["affected"][number]["reason"] }[] = [];
+  let deploys: { service: string; name: string; reason: DeployReason }[] = [];
   try {
     const plan = await buildPlan(ctx, rows, { strict: false });
     const idOf = new Map([...plan.slugOf].map(([id, slug]) => [slug, id]));
@@ -620,6 +818,11 @@ export async function reviewSet(ctx: ApplyContext, set: ChangeSetRow) {
     rebases: [...drift.rebases.keys()],
     conflicts: [...drift.conflicts].map(([id, c]) => ({ id, conflict: c })),
     deploys,
+    approval: {
+      required: requiresApproval(ctx.environment),
+      approved: hasValidApproval(set),
+      authors: authorsOf(set, rows),
+    },
   };
 }
 
@@ -633,6 +836,12 @@ export interface ApplyOptions {
   deploy: "affected" | "none";
   /** Extra audit metadata, e.g. `{ via: "mcp", tool }`. */
   auditMetadata?: Record<string, unknown>;
+  /**
+   * The set carries out a direct route's request (`POST …/databases`), which
+   * like every direct edit needs no review (ADR 0006 "Rollout"). Per-op
+   * authorization still applies.
+   */
+  direct?: boolean;
 }
 
 /** Result of {@link applySet}. */
@@ -741,10 +950,27 @@ export async function applySet(
   const pending = rows.filter((r) => r.status !== "applied");
   if (!rows.length) throw new ApiError(400, "invalid_request", "Nothing is staged");
   const caller = await authorizeApply(ctx, pending);
+  if (!options.direct) {
+    const blocker = applyBlocker(set, environment, caller);
+    if (blocker) {
+      throw new ApiError(
+        blocker.code === "change_set_rejected" ? 409 : 403,
+        blocker.code,
+        blocker.message,
+      );
+    }
+  }
 
   const [locked] = await db
     .update(changeSets)
-    .set({ status: "applying", revision: set.revision + 1, updatedAt: new Date() })
+    .set({
+      status: "applying",
+      revision: set.revision + 1,
+      // The lock bumps the revision but changes no op, so an approval of the
+      // reviewed revision follows it; a failed apply keeps it.
+      approvedRevision: sql`CASE WHEN ${changeSets.approvedRevision} = ${changeSets.revision} THEN ${changeSets.revision} + 1 ELSE ${changeSets.approvedRevision} END`,
+      updatedAt: new Date(),
+    })
     .where(
       and(
         eq(changeSets.id, set.id),
@@ -1058,6 +1284,76 @@ export async function applySet(
       await db.batch(marks as [(typeof marks)[number], ...typeof marks]);
     }
 
+    // Volumes and domains, through the direct routes' functions.
+    const auditExtra = { change_set_id: set.id, ...options.auditMetadata };
+    for (const v of plan.volumes) {
+      const meta = { service_id: v.service.id, environment_id: environment.id };
+      if (v.op.type === "volume.delete") {
+        const row = await softDeleteVolume(db, v.current!);
+        if (row.nodeId) plan.nodeIds.add(row.nodeId);
+        await db.batch([
+          appliedRow(db, v.row, { volume_id: row.id }),
+          audit({
+            action: "volume.deleted",
+            targetType: "volume",
+            targetId: row.id,
+            metadata: { ...meta, delete_after: row.deleteAfter ? +row.deleteAfter : null },
+          }),
+        ]);
+      } else if (v.current) {
+        const row = await resizeVolume(db, v.current, v.op.size_mb);
+        if (row.nodeId) plan.nodeIds.add(row.nodeId);
+        await db.batch([
+          appliedRow(db, v.row, { volume_id: row.id }),
+          audit({
+            action: "volume.resized",
+            targetType: "volume",
+            targetId: row.id,
+            metadata: { ...meta, from_mb: v.current.sizeMb, to_mb: row.sizeMb },
+          }),
+        ]);
+      } else {
+        const [row] = volumeRowsFor({
+          projectId: project.id,
+          serviceId: v.service.id,
+          environmentIds: [environment.id],
+          mountPath: v.op.mount_path!,
+          sizeMb: v.op.size_mb,
+        });
+        await db.batch([
+          db.insert(volumes).values(row!),
+          appliedRow(db, v.row, { volume_id: row!.id }),
+          audit({
+            action: "volume.created",
+            targetType: "volume",
+            targetId: row!.id,
+            metadata: { ...meta, mount_path: row!.mountPath, size_mb: row!.sizeMb },
+          }),
+        ]);
+      }
+    }
+    for (const d of plan.domains) {
+      if (d.op.type === "domain.add") {
+        const row = await addCustomDomain(c, {
+          workspaceId: project.workspaceId,
+          service: d.service,
+          environment,
+          hostname: d.op.hostname,
+          actor: caller.actor,
+          auditMetadata: auditExtra,
+        });
+        await appliedRow(db, d.row, { domain_id: row.id });
+      } else {
+        await removeCustomDomain(c, {
+          workspaceId: project.workspaceId,
+          domain: d.domain!,
+          actor: caller.actor,
+          auditMetadata: auditExtra,
+        });
+        await appliedRow(db, d.row);
+      }
+    }
+
     const [done] = await db
       .update(changeSets)
       .set({
@@ -1141,6 +1437,7 @@ async function finish(
       ingress,
     );
   }
+  if (plan.nodeIds.size) await refreshNodes(ctx.env, db, [...plan.nodeIds]);
   if (plan.deletes.length) {
     await tearDownServices(
       lifecycle,

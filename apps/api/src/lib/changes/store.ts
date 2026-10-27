@@ -15,6 +15,7 @@ import {
   workspaces,
 } from "@roundhouse/db";
 import {
+  type ChangeSetReviewStatus,
   type ChangeSetSource,
   describeOp,
   isNewServiceRef,
@@ -227,6 +228,9 @@ export async function draftFor(
  * Moves an open set to its next revision, but only from `revision`; the
  * guard is what makes concurrent edits of one set safe.
  *
+ * An edit voids any review decision: an approved or rejected set goes back to
+ * `submitted`, so an approval always covers exactly the ops that apply.
+ *
  * @param db - Database client.
  * @param set - The set as the caller loaded it.
  * @returns The updated row.
@@ -235,7 +239,17 @@ export async function draftFor(
 export async function bumpRevision(db: Db, set: ChangeSetRow): Promise<ChangeSetRow> {
   const [row] = await db
     .update(changeSets)
-    .set({ revision: sql`${changeSets.revision} + 1`, error: null, updatedAt: new Date() })
+    .set({
+      revision: sql`${changeSets.revision} + 1`,
+      error: null,
+      reviewStatus: sql`CASE WHEN ${changeSets.reviewStatus} = 'none' THEN 'none' ELSE 'submitted' END`,
+      approvedBy: null,
+      approvedAt: null,
+      approvedRevision: null,
+      rejectedBy: null,
+      rejectedAt: null,
+      updatedAt: new Date(),
+    })
     .where(
       and(
         eq(changeSets.id, set.id),
@@ -292,6 +306,34 @@ export async function serviceNamer(
 }
 
 /**
+ * Whether the set carries an approval of exactly its current revision.
+ *
+ * @param set - Change set row.
+ * @returns `true` when approved and nothing changed since.
+ */
+export function hasValidApproval(
+  set: Pick<ChangeSetRow, "reviewStatus" | "approvedBy" | "approvedRevision" | "revision">,
+): boolean {
+  return (
+    set.reviewStatus === "approved" &&
+    set.approvedBy !== null &&
+    set.approvedRevision === set.revision
+  );
+}
+
+/**
+ * The review state a client sees. An approval stored for another revision
+ * reads as `submitted`: only edits change the revision, and they void it.
+ *
+ * @param set - Change set row.
+ * @returns The effective review status.
+ */
+export function reviewStatusOf(set: ChangeSetRow): ChangeSetReviewStatus {
+  if (set.reviewStatus === "approved" && !hasValidApproval(set)) return "submitted";
+  return set.reviewStatus;
+}
+
+/**
  * @param set - Change set row.
  * @param ops - Its staged changes.
  * @returns The `ChangeSetSummary` wire shape.
@@ -311,6 +353,14 @@ export function toApiChangeSetSummary(set: ChangeSetRow, ops: readonly StagedRow
     conflicted_count: live.filter((o) => o.status === "conflicted").length,
     created_by: set.createdBy,
     created_by_token: set.createdByToken,
+    review_status: reviewStatusOf(set),
+    submitted_by: set.submittedBy,
+    submitted_at: set.submittedAt ? +set.submittedAt : null,
+    approved_by: reviewStatusOf(set) === "approved" ? set.approvedBy : null,
+    approved_at: reviewStatusOf(set) === "approved" && set.approvedAt ? +set.approvedAt : null,
+    rejected_by: set.rejectedBy,
+    rejected_at: set.rejectedAt ? +set.rejectedAt : null,
+    review_note: set.reviewNote,
     applied_by: set.appliedBy,
     applied_at: set.appliedAt ? +set.appliedAt : null,
     error: set.error ? { code: set.error.code, message: set.error.message } : null,

@@ -9,6 +9,7 @@ import {
   Skeleton,
   toast,
 } from "@roundhouse/ui";
+import { Switch } from "@roundhouse/ui/controls";
 import { type FormEvent, useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
 import { ErrorState } from "../../components/error-state";
@@ -17,7 +18,11 @@ import { errorMessage } from "../../lib/api/client";
 import { usePermissions } from "../../lib/permissions";
 import { useMe } from "../../queries/me";
 import { useLeaveWorkspace } from "../../queries/members";
-import { useRenameWorkspace, useWorkspace } from "../../queries/workspaces";
+import {
+  useRenameWorkspace,
+  useStagedChangesSetting,
+  useWorkspace,
+} from "../../queries/workspaces";
 import { SettingsFrame } from "./settings-frame";
 
 function RenameForm({ workspaceId, currentName }: { workspaceId: string; currentName: string }) {
@@ -73,6 +78,49 @@ function RenameForm({ workspaceId, currentName }: { workspaceId: string; current
         />
       ) : null}
     </form>
+  );
+}
+
+function StagingSection({ workspaceId, on }: { workspaceId: string; on: boolean }) {
+  const { can } = usePermissions(workspaceId);
+  const allowed = can("workspace:update");
+  const setting = useStagedChangesSetting(workspaceId);
+  return (
+    <SettingsSection
+      title="Changes"
+      description="How edits made on a project's canvas reach what runs."
+    >
+      <SettingsRow
+        label="Stage canvas edits"
+        description="Edits on the canvas collect in a shared draft that someone reviews and applies as one. Off, each edit applies as it is saved. Protected environments that require approval still need one either way."
+      >
+        <div className="flex items-center gap-2 md:justify-end">
+          <Switch
+            id="staged-changes"
+            aria-label="Stage canvas edits"
+            checked={on}
+            disabled={!allowed || setting.isPending}
+            onCheckedChange={(next) =>
+              setting.mutate(next, {
+                onSuccess: () =>
+                  toast({
+                    title: next
+                      ? "Canvas edits now stage for review"
+                      : "Canvas edits now apply as saved",
+                    tone: "success",
+                  }),
+                onError: (cause) =>
+                  toast({
+                    title: "Could not change the setting",
+                    description: errorMessage(cause),
+                    tone: "error",
+                  }),
+              })
+            }
+          />
+        </div>
+      </SettingsRow>
+    </SettingsSection>
   );
 }
 
@@ -144,6 +192,7 @@ export function SettingsPage({ workspaceId }: { workspaceId: string }) {
       ) : (
         <SettingsStack>
           <RenameForm workspaceId={workspaceId} currentName={workspace.data.name} />
+          <StagingSection workspaceId={workspaceId} on={workspace.data.staged_changes ?? true} />
           <SettingsSection
             title="Identifiers"
             description="Use these when talking to the API or filing an issue."

@@ -103,6 +103,12 @@ export const environments = sqliteTable(
     protected: integer("protected", { mode: "boolean" }).notNull().default(false),
     /** `NULL` means `DEFAULT_PROTECTION_RULES`. */
     protectionRules: json<ProtectionRules>("protection_rules"),
+    /**
+     * While {@link environments.protected}, applying a change set also needs
+     * an approval by someone with `changes:approve` who neither staged it nor
+     * applies it (ADR 0006). Off by default; project admins opt in.
+     */
+    requireApproval: integer("require_approval", { mode: "boolean" }).notNull().default(false),
     ...timestamps,
   },
   (t) => [uniqueIndex("environments_project_slug_uq").on(t.projectId, t.slug)],
