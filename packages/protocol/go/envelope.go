@@ -184,6 +184,16 @@ func DecodeControlMessage(data []byte) (ControlMessage, error) {
 		msg = &JobCancel{}
 	case TypeCertSync:
 		msg = &CertSync{}
+	case TypeExecOpen:
+		msg = &ExecOpen{}
+	case TypeExecInput:
+		msg = &ExecInput{}
+	case TypeExecResize:
+		msg = &ExecResize{}
+	case TypeExecClose:
+		msg = &ExecClose{}
+	case TypeImagePush:
+		msg = &ImagePush{}
 	default:
 		return nil, fmt.Errorf("unknown control message type %q", probe.Type)
 	}
@@ -248,6 +258,14 @@ func DecodeAgentMessage(data []byte) (AgentMessage, error) {
 		msg = &CertRequest{}
 	case TypeCertStatus:
 		msg = &CertStatus{}
+	case TypeExecOpened:
+		msg = &ExecOpened{}
+	case TypeExecOutput:
+		msg = &ExecOutput{}
+	case TypeExecExit:
+		msg = &ExecExit{}
+	case TypeImagePushResult:
+		msg = &ImagePushResult{}
 	default:
 		return nil, fmt.Errorf("unknown agent message type %q", probe.Type)
 	}

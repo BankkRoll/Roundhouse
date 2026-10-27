@@ -16,6 +16,10 @@
  *   `-phase3.json` (managed TLS), `signed-welcome-next-keys.json`,
  *   `signed-key-announce.json`, and one signed fixture per new control
  *   frame, every secret in a real sealed box;
+ * - Phase 4 (ADRs 0011, 0012): `signed-exec-open.json`,
+ *   `signed-exec-input.json` (sealed keystrokes), `signed-exec-resize.json`,
+ *   `signed-exec-close.json` and `signed-image-push.json` (sealed registry
+ *   login);
  * - `formats.json`: expected results of the hand-written format helpers.
  *
  * The signing key comes from a fixed seed and Ed25519 signatures are
@@ -40,9 +44,12 @@ import {
   CREDENTIAL_FRAME_TTL_MS,
   certKeyAad,
   computeSpecHash,
+  DEFAULT_EXEC_COMMAND,
   dbCredentialAad,
   encryptionKeySignaturePayload,
   environmentNetworkName,
+  execInputAad,
+  imagePushAad,
   importSigningKey,
   ipv4InCidr,
   isCidr,
@@ -833,6 +840,82 @@ await writeSigned("signed-cert-sync.json", {
     },
   ],
   removes: ["cer_01JJJJJJJJJJJJJJJJJJJJJJJK"],
+});
+
+// Phase 4 (ADRs 0011, 0012): the web shell and image push.
+const SESSION_ID = "shl_01JLLLLLLLLLLLLLLLLLLLLLLL";
+const SHELL_WORKLOAD = "wl_01JAAAAAAAAAAAAAAAAAAAAAAA";
+await writeSigned("signed-exec-open.json", {
+  type: "exec_open",
+  id: "msg_fixture_exec_open",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  session_id: SESSION_ID,
+  workload_id: SHELL_WORKLOAD,
+  command: [...DEFAULT_EXEC_COMMAND],
+  tty: true,
+  cols: 120,
+  rows: 40,
+  env: { TERM: "xterm-256color", LANG: "C.UTF-8" },
+  idle_timeout_s: 900,
+  max_duration_s: 28_800,
+});
+
+await writeSigned("signed-exec-input.json", {
+  type: "exec_input",
+  id: "msg_fixture_exec_input",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  session_id: SESSION_ID,
+  seq: 3,
+  data_sealed: await seal(
+    JSON.stringify({ data: Buffer.from("echo $RH_TEST\r").toString("base64") }),
+    "exec-input",
+    execInputAad(NODE_ID, SESSION_ID, 3),
+  ),
+});
+
+await writeSigned("signed-exec-resize.json", {
+  type: "exec_resize",
+  id: "msg_fixture_exec_resize",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  session_id: SESSION_ID,
+  cols: 200,
+  rows: 50,
+});
+
+await writeSigned("signed-exec-close.json", {
+  type: "exec_close",
+  id: "msg_fixture_exec_close",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  session_id: SESSION_ID,
+  reason: "revoked",
+});
+
+const PUSH_ID = "psh_01JMMMMMMMMMMMMMMMMMMMMMMM";
+await writeSigned("signed-image-push.json", {
+  type: "image_push",
+  id: "msg_fixture_image_push",
+  node_id: NODE_ID,
+  iat: IAT,
+  exp: IAT + CREDENTIAL_FRAME_TTL_MS,
+  push_id: PUSH_ID,
+  source: `${localImageRepository(PROJECT, SERVICE)}@sha256:${"ab".repeat(32)}`,
+  target:
+    "registry.cloudflare.com/0123456789abcdef0123456789abcdef/rh-abcdefghijklmnopqrst:dep_01jmmmmmmmmmmmmmmmmmmmmmmm",
+  platform: "linux/amd64",
+  credential_sealed: await seal(
+    JSON.stringify({ username: "v1", password: "fixture-push-password" }),
+    "image-push",
+    imagePushAad(NODE_ID, PUSH_ID),
+  ),
+  timeout_s: 1800,
 });
 
 // A workload with every Phase 3 route field, for the spec-hash cases.

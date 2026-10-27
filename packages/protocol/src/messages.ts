@@ -5,16 +5,19 @@
  *   `build_result`; from protocol 5 `mesh_status`, `mesh_key`,
  *   `volume_status`, `backup_parts_request`, `backup_progress`,
  *   `backup_result`, `restore_result`, `db_query_result`; from protocol 6
- *   `job_status`, `metrics`, `cert_ack`, `cert_request`, `cert_status`.
- *   {@link AgentFrameSchema} is the complete union.
+ *   `job_status`, `metrics`, `cert_ack`, `cert_request`, `cert_status`; from
+ *   protocol 7 `exec_opened`, `exec_output`, `exec_exit`,
+ *   `image_push_result`. {@link AgentFrameSchema} is the complete union.
  * - Control → agent, always inside a signed envelope (./signing): `welcome`,
  *   `desired_state`, `build_job`, `build_cancel`; from protocol 5
  *   `key_announce`, `volume_delete`, `backup_job`, `backup_parts`,
  *   `restore_job`, `volume_copy_out`, `volume_copy_in`, `db_query`; from
- *   protocol 6 `job_run`, `job_cancel`, `cert_sync`.
+ *   protocol 6 `job_run`, `job_cancel`, `cert_sync`; from protocol 7
+ *   `exec_open`, `exec_input`, `exec_resize`, `exec_close`, `image_push`.
  *
  * Version constants live in ./versions; frames of one feature in ./data,
- * ./mesh, ./jobs, ./metrics, ./certs and ./signing-keys.
+ * ./mesh, ./jobs, ./metrics, ./certs, ./signing-keys, ./exec and
+ * ./image-push.
  *
  * @module
  */
@@ -45,6 +48,16 @@ import {
   VolumeDeleteSchema,
   VolumeStatusSchema,
 } from "./data";
+import {
+  ExecCloseSchema,
+  ExecExitSchema,
+  ExecInputSchema,
+  ExecOpenedSchema,
+  ExecOpenSchema,
+  ExecOutputSchema,
+  ExecResizeSchema,
+} from "./exec";
+import { ImagePushResultSchema, ImagePushSchema } from "./image-push";
 import { JobCancelSchema, JobRunSchema, JobStatusSchema } from "./jobs";
 import {
   boundedString,
@@ -466,6 +479,10 @@ export const AgentFrameSchema = z.discriminatedUnion("type", [
   CertAckSchema,
   CertRequestSchema,
   CertStatusSchema,
+  ExecOpenedSchema,
+  ExecOutputSchema,
+  ExecExitSchema,
+  ImagePushResultSchema,
 ]);
 
 /** Every frame an agent may send. */
@@ -719,12 +736,23 @@ export const ControlMessageSchema = z.discriminatedUnion("type", [
   JobRunSchema,
   JobCancelSchema,
   CertSyncSchema,
+  ExecOpenSchema,
+  ExecInputSchema,
+  ExecResizeSchema,
+  ExecCloseSchema,
+  ImagePushSchema,
 ]);
 
 /** Any payload the control plane may sign and send. */
 export type ControlMessage = z.infer<typeof ControlMessageSchema>;
 
-/** Control frames that always carry a credential (a sealed box or presigned URLs). */
+/**
+ * Control frames that always carry a credential (a sealed box or presigned
+ * URLs), and so live at most `CREDENTIAL_FRAME_TTL_MS`. Every `exec_*`
+ * frame is listed even where it carries no box: ADR 0014 §15 gives the whole
+ * shell protocol the short lifetime, so a captured frame can't be replayed
+ * into a later session.
+ */
 export const CREDENTIAL_FRAME_TYPES = [
   "backup_job",
   "backup_parts",
@@ -733,6 +761,11 @@ export const CREDENTIAL_FRAME_TYPES = [
   "volume_copy_in",
   "db_query",
   "job_run",
+  "exec_open",
+  "exec_input",
+  "exec_resize",
+  "exec_close",
+  "image_push",
 ] as const;
 
 /**

@@ -14,7 +14,7 @@
  * | 4       | ADR 0014   | sealed env and build secrets                             |
  * | 5       | 2          | mesh, volumes, backups, `db_query`, signing-key rollover |
  * | 6       | 3          | jobs, metrics, certificates                              |
- * | 7       | 4 (future) | exec, image push, edge gateway — not defined yet         |
+ * | 7       | 4          | exec (web shell), image push; edge gateway reserved      |
  *
  * @module
  */
@@ -39,12 +39,16 @@
  * - Version 6 (Phase 3, ADRs 0008, 0009, 0010): `job_*`, `metrics`,
  *   `cert_*`, wildcard routes, HSTS, `desired_state.ingress`, and the
  *   `managed` TLS mode.
+ * - Version 7 (Phase 4, ADRs 0011, 0012): `exec_*` (web shell) and
+ *   `image_push`/`image_push_result`. The edge gateway (ADR 0011) has no
+ *   frames yet: Workers VPC is in beta and needs a live account to design
+ *   against.
  *
  * Every field or frame added after version 4 is optional on the wire or a new
  * frame type, so agents from {@link MIN_PROTOCOL_VERSION} up keep working:
  * the control plane sends each only at or above its gate.
  */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /**
  * Oldest `hello.protocol_version` the control plane accepts. An older
@@ -130,3 +134,18 @@ export const METRICS_PROTOCOL_VERSION = 6;
  * wildcard route hostnames and route `hsts`.
  */
 export const CERTS_PROTOCOL_VERSION = 6;
+
+/**
+ * First protocol version whose agents run web shell sessions (ADR 0012):
+ * `exec_open`, `exec_input`, `exec_resize`, `exec_close`, `exec_opened`,
+ * `exec_output` and `exec_exit`. The dashboard tells users of older agents
+ * to upgrade instead of opening a shell.
+ */
+export const EXEC_PROTOCOL_VERSION = 7;
+
+/**
+ * First protocol version whose builders copy images to another registry
+ * (ADR 0011): `image_push` and `image_push_result`. A Cloudflare deploy of
+ * a git build with no such builder fails with `builder_outdated`.
+ */
+export const IMAGE_PUSH_PROTOCOL_VERSION = 7;

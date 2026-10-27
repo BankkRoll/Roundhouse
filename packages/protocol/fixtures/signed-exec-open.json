@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"exec_open\",\"id\":\"msg_fixture_exec_open\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":1700000060000,\"session_id\":\"shl_01JLLLLLLLLLLLLLLLLLLLLLLL\",\"workload_id\":\"wl_01JAAAAAAAAAAAAAAAAAAAAAAA\",\"command\":[\"/bin/sh\",\"-c\",\"command -v bash >/dev/null && exec bash -l || exec sh -l\"],\"tty\":true,\"cols\":120,\"rows\":40,\"env\":{\"TERM\":\"xterm-256color\",\"LANG\":\"C.UTF-8\"},\"idle_timeout_s\":900,\"max_duration_s\":28800}",
+    "sig": "bkJR9uf7GuX62Wqca0ZO4bDmWRC/LcprqpoP/rlXK6tvO4d4+I4a4QUOS/h/Ra6VFp2xgLj+wEE8oHKw7WRGDQ=="
+  }
+}

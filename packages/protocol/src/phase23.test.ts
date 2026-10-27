@@ -98,7 +98,7 @@ describe("version gates (ADR 0015)", () => {
       expect(gate).toBe(6);
     }
     expect(SEALED_ENV_PROTOCOL_VERSION).toBe(4);
-    expect(PROTOCOL_VERSION).toBe(CERTS_PROTOCOL_VERSION);
+    expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(CERTS_PROTOCOL_VERSION);
     expect(MIN_PROTOCOL_VERSION).toBeLessThan(MESH_PROTOCOL_VERSION);
   });
 });
