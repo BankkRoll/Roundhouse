@@ -78,6 +78,12 @@ export const ID_PREFIXES = {
   cronRun: "crn",
   /** One pull request's preview of one project (ADR 0007). */
   preview: "prv",
+  /** One web shell session (ADR 0012). */
+  shellSession: "shl",
+  /** One Cloudflare Containers deployment of a service (ADR 0011). */
+  cfDeployment: "cfd",
+  /** One registry-to-registry image copy on a builder (ADR 0011). */
+  imagePush: "psh",
 } as const;
 
 /** An entity kind that has an ID prefix. */

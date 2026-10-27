@@ -10,13 +10,13 @@ import (
 	"syscall"
 )
 
-// killHostProcess SIGKILLs pid if its cgroup names containerID.
+// signalHostProcess sends sig to pid if its cgroup names containerID.
 //
 // SECURITY: the check guards against PID reuse and against a PID from
 // another PID namespace (an agent that itself runs in a container sees other
 // processes under those numbers): only a process inside the container's
 // cgroup is ever signalled.
-func killHostProcess(pid int, containerID string) (bool, error) {
+func signalHostProcess(pid int, containerID string, sig syscall.Signal) (bool, error) {
 	if len(containerID) < 12 {
 		return false, nil
 	}
@@ -30,7 +30,7 @@ func killHostProcess(pid int, containerID string) (bool, error) {
 	if !strings.Contains(string(data), containerID) {
 		return false, nil
 	}
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+	if err := syscall.Kill(pid, sig); err != nil {
 		if errors.Is(err, syscall.ESRCH) {
 			return false, nil
 		}

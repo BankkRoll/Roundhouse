@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"flag"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,6 +31,10 @@ type harness struct {
 	transport http.RoundTripper
 	// tty makes stdout a terminal, with colour when ttyColor is set.
 	tty, ttyColor bool
+	// terminal, when set, is the console `shell` sees.
+	terminal Terminal
+	// stdin, when set, replaces the stdin string passed to a run.
+	stdin io.Reader
 
 	mu       sync.Mutex
 	opened   []string
@@ -59,6 +64,9 @@ func (h *harness) envFor(stdin string, stdout, stderr *bytes.Buffer, interactive
 	if h.tty {
 		io.ForceStdoutTTY(h.ttyColor)
 	}
+	if h.stdin != nil {
+		io.In = h.stdin
+	}
 	return Env{
 		IO:           io,
 		Getenv:       func(k string) string { return h.env[k] },
@@ -69,6 +77,7 @@ func (h *harness) envFor(stdin string, stdout, stderr *bytes.Buffer, interactive
 		Now:          func() time.Time { return time.UnixMilli(apitest.Now) },
 		PollInterval: time.Millisecond,
 		Transport:    h.transport,
+		Terminal:     h.terminal,
 		OpenURL: func(u string) error {
 			h.mu.Lock()
 			h.opened = append(h.opened, u)

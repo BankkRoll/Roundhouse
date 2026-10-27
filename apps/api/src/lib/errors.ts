@@ -70,6 +70,8 @@ export type ErrorCode =
   | "run_in_progress"
   | "build_node_selector_required"
   | "head_moved"
+  | "provider_ineligible"
+  | "cloudflare_account_invalid"
   | "internal";
 
 /**

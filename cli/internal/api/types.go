@@ -146,6 +146,7 @@ type UpdateServiceInput struct {
 	// version still is this one.
 	ExpectedVersion int              `json:"expected_version,omitempty"`
 	Cron            *CronConfigPatch `json:"cron,omitempty"`
+	Placement       *PlacementPatch  `json:"placement,omitempty"`
 }
 
 // UpdatedService is the response of PATCH /v1/services/{serviceId}.
@@ -550,7 +551,7 @@ var APITokenScopes = []string{
 	"variables:read", "variables:read_plain", "variables:manage",
 	"data:read", "data:write", "backups:manage", "backups:restore",
 	"changes:approve", "changes:auto_apply",
-	"environments:manage", "previews:manage",
+	"environments:manage", "previews:manage", "shell:open",
 }
 
 // APITokenPresets are the named scope sets of API_TOKEN_PRESETS.

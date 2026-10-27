@@ -113,6 +113,10 @@ export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
  * - `changes:auto_apply`: an API token may apply staged changes without a
  *   person approving them first. Sessions never need it; as a token scope it
  *   must be chosen explicitly, since no preset carries it (ADR 0012).
+ * - `shell:open`: open an interactive shell in a running replica (ADR 0012).
+ *   Project admins only: a shell exposes the container's whole environment,
+ *   secrets included. The API adds 2FA, a fresh session and the protected
+ *   environment rule on top (ADR 0014 §15, see `./shell`).
  *
  * Viewers get no data action: a database's rows can be as sensitive as its
  * secrets (ADR 0004).
@@ -135,6 +139,7 @@ export const PROJECT_ACTIONS = [
   "changes:auto_apply",
   "environments:manage",
   "previews:manage",
+  "shell:open",
 ] as const;
 
 /** A project-level action; see {@link PROJECT_ACTIONS}. */

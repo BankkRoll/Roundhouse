@@ -324,13 +324,13 @@ type tracingTransport struct {
 // RoundTrip logs the exchange, then returns the inner transport's result.
 func (t *tracingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
-	t.log.Debug("http request", "method", req.Method, "url", req.URL.Redacted(), "headers", redactHeaders(req.Header))
+	t.log.Debug("http request", "method", req.Method, "url", redactURL(req.URL), "headers", redactHeaders(req.Header))
 	res, err := t.next.RoundTrip(req)
 	if err != nil {
-		t.log.Debug("http error", "method", req.Method, "url", req.URL.Redacted(), "error", err, "duration", time.Since(start))
+		t.log.Debug("http error", "method", req.Method, "url", redactURL(req.URL), "error", err, "duration", time.Since(start))
 		return nil, err
 	}
-	t.log.Debug("http response", "method", req.Method, "url", req.URL.Redacted(), "status", res.StatusCode,
+	t.log.Debug("http response", "method", req.Method, "url", redactURL(req.URL), "status", res.StatusCode,
 		"duration", time.Since(start).Round(time.Millisecond), "headers", redactHeaders(res.Header))
 	return res, nil
 }
@@ -349,4 +349,30 @@ func redactHeaders(h http.Header) string {
 		}
 	}
 	return b.String()
+}
+
+// redactedQuery lists query parameters whose values never appear in traces.
+var redactedQuery = []string{"cmd"}
+
+// redactURL is u without its password or the values of [redactedQuery].
+//
+// SECURITY: a shell's command line travels in the query of its socket URL
+// and may carry credentials (`-- psql postgres://user:pass@…`).
+func redactURL(u *url.URL) string {
+	q := u.Query()
+	changed := false
+	for _, k := range redactedQuery {
+		if vs, ok := q[k]; ok {
+			for i := range vs {
+				vs[i] = "[REDACTED]"
+			}
+			changed = true
+		}
+	}
+	if !changed {
+		return u.Redacted()
+	}
+	c := *u
+	c.RawQuery = q.Encode()
+	return c.Redacted()
 }

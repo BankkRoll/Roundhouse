@@ -309,6 +309,59 @@ is approved and the command exits 6. Approving needs `previews:manage`,
 `destroy` needs `environments:manage` and `redeploy` needs
 `deployments:create`.
 
+## Shell
+
+```sh
+roundhouse shell                            # login shell in the lowest running replica
+roundhouse shell api --replica 1
+roundhouse shell --environment staging -- rails console
+roundhouse shell worker -- ls -la /app      # argv passed as is, never through a shell
+echo 'SELECT 1;' | roundhouse shell db -- psql -U postgres
+```
+
+`shell` opens a terminal in a running container through the control plane
+and the server's agent. On a terminal it switches to raw mode (keys,
+Ctrl-C included, go to the remote program), sends the window size and
+follows resizes, and prints one status line to stderr. Exit the shell to
+end the session, or press Ctrl-] then q to disconnect from a hung one;
+Ctrl-] twice sends one Ctrl-]. With stdin piped, it is sent as input and
+ends with Ctrl-D, so a shell or `cat` reading it stops as on a terminal.
+The exit code is the remote program's. On Git Bash (mintty) stdin is not a
+console, so run `winpty roundhouse shell` for an interactive session.
+
+A shell needs the `shell:open` permission (workspace owners and admins),
+two-factor authentication on the account, and a sign-in within the last 10
+minutes (run `roundhouse login` again otherwise). An API token needs the
+`shell:open` scope and works only outside protected environments.
+Refusals exit 3 (sign-in needed), 4 (forbidden, two-factor, protected
+environment), 5 (replica gone), 6 (the server's session limit), 10 (the
+server's agent is too old) or 11 (agent offline), each with a hint.
+What you type and see is never written to `--debug` output, and the
+command's arguments are redacted there.
+
+## Cloudflare Containers
+
+```sh
+roundhouse runtime                          # provider, eligibility, Worker, rollouts
+roundhouse runtime set cloudflare --instance-type basic --max-instances 4 --sleep-after 30m
+roundhouse runtime set cloudflare --region enam --region weur
+roundhouse runtime set nodes --yes
+```
+
+`runtime` shows whether the service runs on your servers or on Cloudflare
+Containers in the environment, every eligibility rule it fails, and on
+Cloudflare its Worker script, routes, instances and recent rollouts.
+`runtime set` saves the provider (and the Cloudflare settings) as a new
+config version, applied by the next `roundhouse deploy`. Flags are checked
+before any request: `--instance-type` is `lite`, `basic` or `standard-1` to
+`standard-4` (default: the smallest that fits the service's resources),
+`--max-instances` 1 to 100 (it replaces `deploy.replicas`), `--sleep-after`
+1m to 24h (default 10m). Settings left out keep their saved values.
+Switching provider asks first; `--yes` confirms. An ineligible service
+exits 7 with each failing rule listed. Connecting the Cloudflare account
+itself is done in the dashboard only, so its API token never passes through
+the CLI.
+
 ## Variables
 
 ```sh
@@ -421,8 +474,10 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `environments list\|create\|diff`                        | Environments: clone one, compare two (no values shown)    |
 | `environments promote\|delete`                           | Propose a promotion as a change set; delete (typed slug)  |
 | `tokens list\|create\|revoke`                            | Workspace API tokens for CI and scripts                   |
+| `shell [service] [--replica] [-- cmd]`                   | Interactive shell, or a command, in a running replica     |
+| `runtime [service]`, `runtime set nodes\|cloudflare`     | Where a service runs; move it to Cloudflare Containers    |
 | `version`, `completion`                                  | Build info, shell completion                              |
-| `up`, `shell`, `db connect`                              | Not available on the control plane yet (exit 10)          |
+| `up`, `db connect`                                       | Not available on the control plane yet (exit 10)          |
 
 Every command takes `--json`, `--profile`, `--no-input`, `--no-color` and
 `--debug` (HTTP traces with credentials redacted). Run
@@ -485,8 +540,8 @@ names the flag to pass. Errors with `--json` are JSON on stderr.
 - The API rejects cross-origin mutations by `Origin`
   (`apps/api/src/lib/guards.ts`). The CLI sends no `Origin` on `/v1`
   requests, which that guard allows. It sends the control plane's own
-  origin where it is required: the realtime WebSocket upgrade with a
-  session cookie, and Better Auth's sign-out.
+  origin where it is required: the realtime and shell WebSocket upgrades
+  with a session cookie, and Better Auth's sign-out.
 - Session cookies set by a response are only ever saved for the profile's
   own session; requests made with an API token ignore `Set-Cookie`.
 - `logs -f` follows over the realtime socket (as a CLI client, left out of

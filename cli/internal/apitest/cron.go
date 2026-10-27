@@ -537,8 +537,8 @@ func createCron(w http.ResponseWriter, kind string, config map[string]any) (*api
 	return c, c != nil
 }
 
-// updateService stores a new config version with a changed cron part, the
-// only part of PATCH /v1/services/{serviceId} the CLI sends.
+// updateService stores a new config version with a changed cron or
+// placement part, the parts of PATCH /v1/services/{serviceId} the CLI sends.
 func (f *Fake) updateService(w http.ResponseWriter, r *http.Request) {
 	p, s := f.service(w, r.PathValue("serviceId"))
 	if s == nil {
@@ -549,7 +549,7 @@ func (f *Fake) updateService(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON")
 		return
 	}
-	if in.Cron == nil {
+	if in.Cron == nil && in.Placement == nil {
 		apiError(w, http.StatusBadRequest, "invalid_request", "nothing to update")
 		return
 	}
@@ -571,14 +571,20 @@ func (f *Fake) updateService(w http.ResponseWriter, r *http.Request) {
 			"; the latest is "+strconv.Itoa(latest.Version))
 		return
 	}
-	cron := mergeCron(w, latest.Cron, in.Cron)
-	if cron == nil {
-		return
-	}
 	next := *latest
+	if in.Cron != nil {
+		if next.Cron = mergeCron(w, latest.Cron, in.Cron); next.Cron == nil {
+			return
+		}
+	}
+	if in.Placement != nil {
+		if next.Placement = f.mergePlacement(w, s.ID, in.EnvironmentID, latest.Placement, in.Placement); next.Placement == nil {
+			return
+		}
+	}
 	next.Version++
 	next.ID = "cfg_" + s.ID + "_" + in.EnvironmentID + "_v" + strconv.Itoa(next.Version)
-	next.CreatedAt, next.CreatedBy, next.Cron = Now, str(f.user.ID), cron
+	next.CreatedAt, next.CreatedBy = Now, str(f.user.ID)
 	f.configs[s.ID+"/"+in.EnvironmentID] = &next
 	s.UpdatedAt = Now
 	writeJSON(w, http.StatusOK, api.UpdatedService{Service: *s, Config: &next})

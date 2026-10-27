@@ -74,8 +74,10 @@ import {
   resolveVariables,
   type ServiceConfigSpec,
   type ServiceCreateOp,
+  type ServiceProvider,
   type ServiceSource,
   SHARED_NAMESPACE,
+  serviceProvider,
   type VariableDeleteOp,
   type VariableSetOp,
   type VolumeDeleteOp,
@@ -85,6 +87,8 @@ import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { type AppContext, clientIp, originOf, requireKeys } from "../../context";
 import type { Env } from "../../env";
 import { auditInsert, recordAudit } from "../audit";
+import { assertCloudflareEligible } from "../cloudflare/eligibility";
+import { pauseCloudflareRuntime } from "../cloudflare/runtime";
 import type { KeyEnv, Sealed } from "../crypto";
 import { databaseVariableRows, databaseVariables, resolveDatabaseVersion } from "../databases";
 import { createDeployment } from "../deployments";
@@ -374,6 +378,8 @@ interface PlannedPatch {
   service: ServiceRow;
   version: number;
   spec: ServiceConfigSpec;
+  /** The provider before the patch, to audit a switch (ADR 0011). */
+  fromProvider: ServiceProvider;
 }
 
 interface PlannedVariable {
@@ -603,6 +609,7 @@ async function buildPlan(
       service,
       version: latest.version + 1,
       spec: merged,
+      fromProvider: serviceProvider(specOf(latest).placement),
     });
   }
 
@@ -654,6 +661,28 @@ async function buildPlan(
   if (options.strict) {
     for (const [serviceId, n] of adding) {
       if (n > 0) await assertDomainCapacity(db, serviceId, environment.id, n);
+    }
+  }
+
+  // Cloudflare-provider services (ADR 0011): every rule against the state the apply leaves.
+  if (options.strict) {
+    const touched = new Map<string, ServiceRow>();
+    for (const p of plan.patches) touched.set(p.service.id, p.service);
+    for (const v of plan.volumes) touched.set(v.service.id, v.service);
+    for (const d of plan.domains) touched.set(d.service.id, d.service);
+    for (const service of touched.values()) {
+      const spec = await specAfter(service);
+      if (!spec || serviceProvider(spec.placement) !== "cloudflare") continue;
+      const volumeOps = plan.volumes.filter((v) => v.service.id === service.id);
+      const lastVolumeOp = volumeOps[volumeOps.length - 1]?.op;
+      const domainOps = plan.domains.filter((d) => d.service.id === service.id);
+      await assertCloudflareEligible(db, service, environment.id, spec, {
+        ...(lastVolumeOp ? { volume: lastVolumeOp.type === "volume.set" } : {}),
+        addedDomains: domainOps.flatMap((d) => (d.op.type === "domain.add" ? [d.op.hostname] : [])),
+        removedDomainIds: domainOps.flatMap((d) =>
+          d.op.type === "domain.remove" ? [d.op.domain_id] : [],
+        ),
+      });
     }
   }
 
@@ -1219,6 +1248,22 @@ export async function applySet(
           },
         }),
       );
+      const toProvider = serviceProvider(patch.spec.placement);
+      if (toProvider !== patch.fromProvider) {
+        statements.push(
+          audit({
+            action: "service.provider_changed",
+            targetType: "service",
+            targetId: patch.service.id,
+            metadata: {
+              environment_id: environment.id,
+              version: patch.version,
+              from: patch.fromProvider,
+              to: toProvider,
+            },
+          }),
+        );
+      }
     }
     for (const del of plan.deletes) {
       statements.push(
@@ -1481,6 +1526,15 @@ async function finish(
     );
   }
   if (plan.nodeIds.size) await refreshNodes(ctx.env, db, [...plan.nodeIds]);
+  for (const patch of plan.patches) {
+    // `deploy.replicas = 0` on Cloudflare stops serving without deleting anything (ADR 0011).
+    if (
+      serviceProvider(patch.spec.placement) === "cloudflare" &&
+      patch.spec.deploy.replicas === 0
+    ) {
+      await pauseCloudflareRuntime(ctx.env, db, patch.service.id, environment.id);
+    }
+  }
   if (plan.deletes.length) {
     await tearDownServices(
       lifecycle,

@@ -39,6 +39,11 @@ func CarriesCredentials(msg ControlMessage) bool {
 		return len(m.Upserts) > 0
 	case *BackupJob, *BackupParts, *RestoreJob, *VolumeCopyOut, *VolumeCopyIn, *DBQuery, *JobRun:
 		return true
+	// SECURITY: ADR 0014 §15 gives every shell frame the credential TTL, not
+	// only exec_input with its sealed keystrokes, so a captured frame can't
+	// be replayed into a later session.
+	case *ExecOpen, *ExecInput, *ExecResize, *ExecClose, *ImagePush:
+		return true
 	}
 	return false
 }

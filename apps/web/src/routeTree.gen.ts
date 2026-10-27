@@ -22,6 +22,7 @@ import { Route as AppWWorkspaceIdRouteRouteImport } from './routes/_app/w/$works
 import { Route as AppWWorkspaceIdIndexRouteImport } from './routes/_app/w/$workspaceId/index'
 import { Route as AppWWorkspaceIdAuditRouteImport } from './routes/_app/w/$workspaceId/audit'
 import { Route as AppWWorkspaceIdCanvasRouteImport } from './routes/_app/w/$workspaceId/canvas'
+import { Route as AppWWorkspaceIdCloudflareRouteImport } from './routes/_app/w/$workspaceId/cloudflare'
 import { Route as AppWWorkspaceIdDomainsTlsRouteImport } from './routes/_app/w/$workspaceId/domains-tls'
 import { Route as AppWWorkspaceIdInstanceAuditRouteImport } from './routes/_app/w/$workspaceId/instance-audit'
 import { Route as AppWWorkspaceIdLogsRouteImport } from './routes/_app/w/$workspaceId/logs'
@@ -30,6 +31,7 @@ import { Route as AppWWorkspaceIdMembersRouteImport } from './routes/_app/w/$wor
 import { Route as AppWWorkspaceIdPlatformRouteImport } from './routes/_app/w/$workspaceId/platform'
 import { Route as AppWWorkspaceIdSecurityRouteImport } from './routes/_app/w/$workspaceId/security'
 import { Route as AppWWorkspaceIdSettingsRouteImport } from './routes/_app/w/$workspaceId/settings'
+import { Route as AppWWorkspaceIdShellSessionsRouteImport } from './routes/_app/w/$workspaceId/shell-sessions'
 import { Route as AppWWorkspaceIdTokensRouteImport } from './routes/_app/w/$workspaceId/tokens'
 import { Route as AppWWorkspaceIdUsageRouteImport } from './routes/_app/w/$workspaceId/usage'
 import { Route as AppWWorkspaceIdPProjectIdRouteRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/route'
@@ -56,6 +58,7 @@ import { Route as AppWWorkspaceIdPProjectIdSServiceIdLogsRouteImport } from './r
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdMetricsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/metrics'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdRunsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/runs'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdSettingsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings'
+import { Route as AppWWorkspaceIdPProjectIdSServiceIdShellRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/shell'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdVariablesRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdDeploymentsIndexRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/index'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId'
@@ -125,6 +128,12 @@ const AppWWorkspaceIdCanvasRoute = AppWWorkspaceIdCanvasRouteImport.update({
   path: '/canvas',
   getParentRoute: () => AppWWorkspaceIdRouteRoute,
 } as any)
+const AppWWorkspaceIdCloudflareRoute =
+  AppWWorkspaceIdCloudflareRouteImport.update({
+    id: '/cloudflare',
+    path: '/cloudflare',
+    getParentRoute: () => AppWWorkspaceIdRouteRoute,
+  } as any)
 const AppWWorkspaceIdDomainsTlsRoute =
   AppWWorkspaceIdDomainsTlsRouteImport.update({
     id: '/domains-tls',
@@ -168,6 +177,12 @@ const AppWWorkspaceIdSettingsRoute = AppWWorkspaceIdSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppWWorkspaceIdRouteRoute,
 } as any)
+const AppWWorkspaceIdShellSessionsRoute =
+  AppWWorkspaceIdShellSessionsRouteImport.update({
+    id: '/shell-sessions',
+    path: '/shell-sessions',
+    getParentRoute: () => AppWWorkspaceIdRouteRoute,
+  } as any)
 const AppWWorkspaceIdTokensRoute = AppWWorkspaceIdTokensRouteImport.update({
   id: '/tokens',
   path: '/tokens',
@@ -322,6 +337,12 @@ const AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute =
     path: '/settings',
     getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
   } as any)
+const AppWWorkspaceIdPProjectIdSServiceIdShellRoute =
+  AppWWorkspaceIdPProjectIdSServiceIdShellRouteImport.update({
+    id: '/shell',
+    path: '/shell',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdSServiceIdRouteRoute,
+  } as any)
 const AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute =
   AppWWorkspaceIdPProjectIdSServiceIdVariablesRouteImport.update({
     id: '/variables',
@@ -353,6 +374,7 @@ export interface FileRoutesByFullPath {
   '/settings/github': typeof AppSettingsGithubRoute
   '/w/$workspaceId/audit': typeof AppWWorkspaceIdAuditRoute
   '/w/$workspaceId/canvas': typeof AppWWorkspaceIdCanvasRoute
+  '/w/$workspaceId/cloudflare': typeof AppWWorkspaceIdCloudflareRoute
   '/w/$workspaceId/domains-tls': typeof AppWWorkspaceIdDomainsTlsRoute
   '/w/$workspaceId/instance-audit': typeof AppWWorkspaceIdInstanceAuditRoute
   '/w/$workspaceId/logs': typeof AppWWorkspaceIdLogsRoute
@@ -361,6 +383,7 @@ export interface FileRoutesByFullPath {
   '/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
   '/w/$workspaceId/security': typeof AppWWorkspaceIdSecurityRoute
   '/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
+  '/w/$workspaceId/shell-sessions': typeof AppWWorkspaceIdShellSessionsRoute
   '/w/$workspaceId/tokens': typeof AppWWorkspaceIdTokensRoute
   '/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
   '/w/$workspaceId/': typeof AppWWorkspaceIdIndexRoute
@@ -387,6 +410,7 @@ export interface FileRoutesByFullPath {
   '/w/$workspaceId/p/$projectId/s/$serviceId/metrics': typeof AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/runs': typeof AppWWorkspaceIdPProjectIdSServiceIdRunsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/settings': typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/shell': typeof AppWWorkspaceIdPProjectIdSServiceIdShellRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/variables': typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/': typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId': typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute
@@ -403,6 +427,7 @@ export interface FileRoutesByTo {
   '/settings/github': typeof AppSettingsGithubRoute
   '/w/$workspaceId/audit': typeof AppWWorkspaceIdAuditRoute
   '/w/$workspaceId/canvas': typeof AppWWorkspaceIdCanvasRoute
+  '/w/$workspaceId/cloudflare': typeof AppWWorkspaceIdCloudflareRoute
   '/w/$workspaceId/domains-tls': typeof AppWWorkspaceIdDomainsTlsRoute
   '/w/$workspaceId/instance-audit': typeof AppWWorkspaceIdInstanceAuditRoute
   '/w/$workspaceId/logs': typeof AppWWorkspaceIdLogsRoute
@@ -411,6 +436,7 @@ export interface FileRoutesByTo {
   '/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
   '/w/$workspaceId/security': typeof AppWWorkspaceIdSecurityRoute
   '/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
+  '/w/$workspaceId/shell-sessions': typeof AppWWorkspaceIdShellSessionsRoute
   '/w/$workspaceId/tokens': typeof AppWWorkspaceIdTokensRoute
   '/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
   '/w/$workspaceId': typeof AppWWorkspaceIdIndexRoute
@@ -435,6 +461,7 @@ export interface FileRoutesByTo {
   '/w/$workspaceId/p/$projectId/s/$serviceId/metrics': typeof AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/runs': typeof AppWWorkspaceIdPProjectIdSServiceIdRunsRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/settings': typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
+  '/w/$workspaceId/p/$projectId/s/$serviceId/shell': typeof AppWWorkspaceIdPProjectIdSServiceIdShellRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/variables': typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId': typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId': typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute
@@ -454,6 +481,7 @@ export interface FileRoutesById {
   '/_app/settings/github': typeof AppSettingsGithubRoute
   '/_app/w/$workspaceId/audit': typeof AppWWorkspaceIdAuditRoute
   '/_app/w/$workspaceId/canvas': typeof AppWWorkspaceIdCanvasRoute
+  '/_app/w/$workspaceId/cloudflare': typeof AppWWorkspaceIdCloudflareRoute
   '/_app/w/$workspaceId/domains-tls': typeof AppWWorkspaceIdDomainsTlsRoute
   '/_app/w/$workspaceId/instance-audit': typeof AppWWorkspaceIdInstanceAuditRoute
   '/_app/w/$workspaceId/logs': typeof AppWWorkspaceIdLogsRoute
@@ -462,6 +490,7 @@ export interface FileRoutesById {
   '/_app/w/$workspaceId/platform': typeof AppWWorkspaceIdPlatformRoute
   '/_app/w/$workspaceId/security': typeof AppWWorkspaceIdSecurityRoute
   '/_app/w/$workspaceId/settings': typeof AppWWorkspaceIdSettingsRoute
+  '/_app/w/$workspaceId/shell-sessions': typeof AppWWorkspaceIdShellSessionsRoute
   '/_app/w/$workspaceId/tokens': typeof AppWWorkspaceIdTokensRoute
   '/_app/w/$workspaceId/usage': typeof AppWWorkspaceIdUsageRoute
   '/_app/w/$workspaceId/': typeof AppWWorkspaceIdIndexRoute
@@ -488,6 +517,7 @@ export interface FileRoutesById {
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/metrics': typeof AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/runs': typeof AppWWorkspaceIdPProjectIdSServiceIdRunsRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings': typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
+  '/_app/w/$workspaceId/p/$projectId/s/$serviceId/shell': typeof AppWWorkspaceIdPProjectIdSServiceIdShellRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables': typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/': typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId': typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute
@@ -507,6 +537,7 @@ export interface FileRouteTypes {
     | '/settings/github'
     | '/w/$workspaceId/audit'
     | '/w/$workspaceId/canvas'
+    | '/w/$workspaceId/cloudflare'
     | '/w/$workspaceId/domains-tls'
     | '/w/$workspaceId/instance-audit'
     | '/w/$workspaceId/logs'
@@ -515,6 +546,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/platform'
     | '/w/$workspaceId/security'
     | '/w/$workspaceId/settings'
+    | '/w/$workspaceId/shell-sessions'
     | '/w/$workspaceId/tokens'
     | '/w/$workspaceId/usage'
     | '/w/$workspaceId/'
@@ -541,6 +573,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/p/$projectId/s/$serviceId/metrics'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/runs'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/settings'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/shell'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/variables'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId'
@@ -557,6 +590,7 @@ export interface FileRouteTypes {
     | '/settings/github'
     | '/w/$workspaceId/audit'
     | '/w/$workspaceId/canvas'
+    | '/w/$workspaceId/cloudflare'
     | '/w/$workspaceId/domains-tls'
     | '/w/$workspaceId/instance-audit'
     | '/w/$workspaceId/logs'
@@ -565,6 +599,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/platform'
     | '/w/$workspaceId/security'
     | '/w/$workspaceId/settings'
+    | '/w/$workspaceId/shell-sessions'
     | '/w/$workspaceId/tokens'
     | '/w/$workspaceId/usage'
     | '/w/$workspaceId'
@@ -589,6 +624,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/p/$projectId/s/$serviceId/metrics'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/runs'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/settings'
+    | '/w/$workspaceId/p/$projectId/s/$serviceId/shell'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/variables'
     | '/w/$workspaceId/p/$projectId/s/$serviceId'
     | '/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId'
@@ -607,6 +643,7 @@ export interface FileRouteTypes {
     | '/_app/settings/github'
     | '/_app/w/$workspaceId/audit'
     | '/_app/w/$workspaceId/canvas'
+    | '/_app/w/$workspaceId/cloudflare'
     | '/_app/w/$workspaceId/domains-tls'
     | '/_app/w/$workspaceId/instance-audit'
     | '/_app/w/$workspaceId/logs'
@@ -615,6 +652,7 @@ export interface FileRouteTypes {
     | '/_app/w/$workspaceId/platform'
     | '/_app/w/$workspaceId/security'
     | '/_app/w/$workspaceId/settings'
+    | '/_app/w/$workspaceId/shell-sessions'
     | '/_app/w/$workspaceId/tokens'
     | '/_app/w/$workspaceId/usage'
     | '/_app/w/$workspaceId/'
@@ -641,6 +679,7 @@ export interface FileRouteTypes {
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/metrics'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/runs'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/settings'
+    | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/shell'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId/deployments/$deploymentId'
@@ -748,6 +787,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWWorkspaceIdCanvasRouteImport
       parentRoute: typeof AppWWorkspaceIdRouteRoute
     }
+    '/_app/w/$workspaceId/cloudflare': {
+      id: '/_app/w/$workspaceId/cloudflare'
+      path: '/cloudflare'
+      fullPath: '/w/$workspaceId/cloudflare'
+      preLoaderRoute: typeof AppWWorkspaceIdCloudflareRouteImport
+      parentRoute: typeof AppWWorkspaceIdRouteRoute
+    }
     '/_app/w/$workspaceId/domains-tls': {
       id: '/_app/w/$workspaceId/domains-tls'
       path: '/domains-tls'
@@ -802,6 +848,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/w/$workspaceId/settings'
       preLoaderRoute: typeof AppWWorkspaceIdSettingsRouteImport
+      parentRoute: typeof AppWWorkspaceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/shell-sessions': {
+      id: '/_app/w/$workspaceId/shell-sessions'
+      path: '/shell-sessions'
+      fullPath: '/w/$workspaceId/shell-sessions'
+      preLoaderRoute: typeof AppWWorkspaceIdShellSessionsRouteImport
       parentRoute: typeof AppWWorkspaceIdRouteRoute
     }
     '/_app/w/$workspaceId/tokens': {
@@ -986,6 +1039,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRouteImport
       parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
     }
+    '/_app/w/$workspaceId/p/$projectId/s/$serviceId/shell': {
+      id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/shell'
+      path: '/shell'
+      fullPath: '/w/$workspaceId/p/$projectId/s/$serviceId/shell'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdShellRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRoute
+    }
     '/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables': {
       id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId/variables'
       path: '/variables'
@@ -1018,6 +1078,7 @@ interface AppWWorkspaceIdPProjectIdSServiceIdRouteRouteChildren {
   AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdMetricsRoute
   AppWWorkspaceIdPProjectIdSServiceIdRunsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRunsRoute
   AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute
+  AppWWorkspaceIdPProjectIdSServiceIdShellRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdShellRoute
   AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute
   AppWWorkspaceIdPProjectIdSServiceIdIndexRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdIndexRoute
   AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdDeploymentsDeploymentIdRoute
@@ -1040,6 +1101,8 @@ const AppWWorkspaceIdPProjectIdSServiceIdRouteRouteChildren: AppWWorkspaceIdPPro
       AppWWorkspaceIdPProjectIdSServiceIdRunsRoute,
     AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute:
       AppWWorkspaceIdPProjectIdSServiceIdSettingsRoute,
+    AppWWorkspaceIdPProjectIdSServiceIdShellRoute:
+      AppWWorkspaceIdPProjectIdSServiceIdShellRoute,
     AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute:
       AppWWorkspaceIdPProjectIdSServiceIdVariablesRoute,
     AppWWorkspaceIdPProjectIdSServiceIdIndexRoute:
@@ -1087,6 +1150,7 @@ const AppWWorkspaceIdPProjectIdRouteRouteWithChildren =
 interface AppWWorkspaceIdRouteRouteChildren {
   AppWWorkspaceIdAuditRoute: typeof AppWWorkspaceIdAuditRoute
   AppWWorkspaceIdCanvasRoute: typeof AppWWorkspaceIdCanvasRoute
+  AppWWorkspaceIdCloudflareRoute: typeof AppWWorkspaceIdCloudflareRoute
   AppWWorkspaceIdDomainsTlsRoute: typeof AppWWorkspaceIdDomainsTlsRoute
   AppWWorkspaceIdInstanceAuditRoute: typeof AppWWorkspaceIdInstanceAuditRoute
   AppWWorkspaceIdLogsRoute: typeof AppWWorkspaceIdLogsRoute
@@ -1095,6 +1159,7 @@ interface AppWWorkspaceIdRouteRouteChildren {
   AppWWorkspaceIdPlatformRoute: typeof AppWWorkspaceIdPlatformRoute
   AppWWorkspaceIdSecurityRoute: typeof AppWWorkspaceIdSecurityRoute
   AppWWorkspaceIdSettingsRoute: typeof AppWWorkspaceIdSettingsRoute
+  AppWWorkspaceIdShellSessionsRoute: typeof AppWWorkspaceIdShellSessionsRoute
   AppWWorkspaceIdTokensRoute: typeof AppWWorkspaceIdTokensRoute
   AppWWorkspaceIdUsageRoute: typeof AppWWorkspaceIdUsageRoute
   AppWWorkspaceIdIndexRoute: typeof AppWWorkspaceIdIndexRoute
@@ -1113,6 +1178,7 @@ interface AppWWorkspaceIdRouteRouteChildren {
 const AppWWorkspaceIdRouteRouteChildren: AppWWorkspaceIdRouteRouteChildren = {
   AppWWorkspaceIdAuditRoute: AppWWorkspaceIdAuditRoute,
   AppWWorkspaceIdCanvasRoute: AppWWorkspaceIdCanvasRoute,
+  AppWWorkspaceIdCloudflareRoute: AppWWorkspaceIdCloudflareRoute,
   AppWWorkspaceIdDomainsTlsRoute: AppWWorkspaceIdDomainsTlsRoute,
   AppWWorkspaceIdInstanceAuditRoute: AppWWorkspaceIdInstanceAuditRoute,
   AppWWorkspaceIdLogsRoute: AppWWorkspaceIdLogsRoute,
@@ -1121,6 +1187,7 @@ const AppWWorkspaceIdRouteRouteChildren: AppWWorkspaceIdRouteRouteChildren = {
   AppWWorkspaceIdPlatformRoute: AppWWorkspaceIdPlatformRoute,
   AppWWorkspaceIdSecurityRoute: AppWWorkspaceIdSecurityRoute,
   AppWWorkspaceIdSettingsRoute: AppWWorkspaceIdSettingsRoute,
+  AppWWorkspaceIdShellSessionsRoute: AppWWorkspaceIdShellSessionsRoute,
   AppWWorkspaceIdTokensRoute: AppWWorkspaceIdTokensRoute,
   AppWWorkspaceIdUsageRoute: AppWWorkspaceIdUsageRoute,
   AppWWorkspaceIdIndexRoute: AppWWorkspaceIdIndexRoute,

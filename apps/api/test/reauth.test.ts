@@ -82,6 +82,7 @@ describe("routes that need a fresh session", () => {
         "PUT /v1/projects/{projectId}/access",
         "DELETE /v1/projects/{projectId}/access/{grantId}",
         "PUT /v1/environments/{environmentId}/protection",
+        "GET /v1/shell-sessions/{sessionId}/recording",
         "POST /v1/workspaces/{workspaceId}/invites",
         "POST /v1/workspaces/{workspaceId}/nodes/join-tokens",
       ]),
@@ -94,7 +95,7 @@ describe("routes that need a fresh session", () => {
     for (const { method, path } of freshRoutes()) {
       const res = await owner.json<ErrorResponse>(concrete(path), {
         method: method.toUpperCase(),
-        json: {},
+        ...(method === "get" ? {} : { json: {} }),
       });
       expect(res.status, `${method} ${path}`).toBe(403);
       expect(res.body.error.code, `${method} ${path}`).toBe("reauth_required");
@@ -111,7 +112,7 @@ describe("routes that need a fresh session", () => {
     for (const { method, path } of freshRoutes()) {
       const res = await call(concrete(path), {
         method: method.toUpperCase(),
-        json: {},
+        ...(method === "get" ? {} : { json: {} }),
         headers: { authorization: `Bearer ${secret}` },
       });
       expect(res.status, `${method} ${path}`).toBe(403);

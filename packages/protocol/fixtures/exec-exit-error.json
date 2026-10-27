@@ -1,0 +1,7 @@
+{
+  "type": "exec_exit",
+  "session_id": "shl_01JLLLLLLLLLLLLLLLLLLLLLLL",
+  "exit_code": null,
+  "reason": "error",
+  "message": "workload wl_01JAAAAAAAAAAAAAAAAAAAAAAA is not a service workload of this node"
+}

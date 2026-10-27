@@ -30,6 +30,7 @@ import { accessHandlers } from "./access-handlers";
 import { forgetMember } from "./access-resolve";
 import { accountSecurityHandlers } from "./account-security-handlers";
 import { changeHandlers } from "./changes-handlers";
+import { cloudflareHandlers } from "./cloudflare-handlers";
 import {
   apiError,
   currentUser,
@@ -50,6 +51,7 @@ import { metricsHandlers } from "./metrics-handlers";
 import { previewHandlers } from "./previews-handlers";
 import { providerHandlers } from "./providers-handlers";
 import { securityHandlers } from "./security-handlers";
+import { shellHandlers } from "./shell-handlers";
 import { signingKeyHandlers } from "./signing-keys-mock";
 import { templateHandlers } from "./templates-handlers";
 import { tlsHandlers } from "./tls-mock";
@@ -842,4 +844,6 @@ export const handlers = [
   ...securityHandlers,
   ...accountSecurityHandlers,
   ...accessHandlers,
+  ...shellHandlers,
+  ...cloudflareHandlers,
 ];

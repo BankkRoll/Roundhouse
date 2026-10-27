@@ -140,15 +140,29 @@ type Realtime struct {
 // own (apps/api/src/routes/realtime.ts). The CLI sends exactly that origin
 // alongside the credential; a bearer token does not need it.
 func (c *Client) DialRealtime(ctx context.Context, projectID string) (*Realtime, error) {
-	u := c.endpoint(RouteRealtime.expand(projectID))
+	conn, err := c.dialSocket(ctx, RouteRealtime.expand(projectID), url.Values{"client": {"cli"}}, true)
+	if err != nil {
+		return nil, err
+	}
+	conn.SetReadLimit(maxRealtimeFrame)
+	return &Realtime{conn: conn}, nil
+}
+
+// dialSocket opens a WebSocket to an API path with the client's credential.
+// alwaysOrigin sends the Origin header with any credential; otherwise only
+// with a session cookie, the one credential the API's Origin check guards.
+func (c *Client) dialSocket(ctx context.Context, escapedPath string, query url.Values, alwaysOrigin bool) (*websocket.Conn, error) {
+	u := c.endpoint(escapedPath)
 	if u.Scheme == "https" {
 		u.Scheme = "wss"
 	} else {
 		u.Scheme = "ws"
 	}
-	u.RawQuery = url.Values{"client": {"cli"}}.Encode()
+	u.RawQuery = query.Encode()
 	h := http.Header{}
-	h.Set("Origin", c.Origin())
+	if _, cookie := c.cred.(SessionCookie); alwaysOrigin || cookie {
+		h.Set("Origin", c.Origin())
+	}
 	if c.userAgent != "" {
 		h.Set("User-Agent", c.userAgent)
 	}
@@ -167,8 +181,7 @@ func (c *Client) DialRealtime(ctx context.Context, projectID string) (*Realtime,
 		}
 		return nil, &NetworkError{URL: c.Origin(), Err: err}
 	}
-	conn.SetReadLimit(maxRealtimeFrame)
-	return &Realtime{conn: conn}, nil
+	return conn, nil
 }
 
 // Subscribe starts receiving log lines for a topic.

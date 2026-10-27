@@ -182,6 +182,91 @@ GitHub Apps created before previews must subscribe to the **Pull request**
 event in the App's settings; the Previews page says so until a
 `pull_request` delivery arrives.
 
+### Cloudflare Containers provider
+
+Settings → Cloudflare holds the `cloudflare_account` instance setting (ADR
+0011), set by an instance admin from a fresh browser session with
+`PUT /v1/instance/cloudflare`:
+- **Account ID and API token.** The token is checked first (it must list
+  Workers scripts and container applications and read the account's
+  `workers.dev` subdomain), then sealed and write-only; only its last 4
+  characters are shown. It needs Workers Scripts Edit, Workers Routes Edit
+  on the apps domain's zone, Containers Edit and Account Analytics Read.
+  Key rotation re-wraps it like the other instance secrets.
+- **`apps_domain_proxied`.** You confirm that `*.<apps_domain>` is proxied
+  (orange cloud) in Cloudflare: Worker routes only run on proxied hostnames.
+  The control plane doesn't create that record; services can't switch to
+  Cloudflare until this is on.
+- **Apps zone.** Found when the token is saved: the apps domain or its
+  nearest parent that is a zone of the account. Save the settings again
+  after changing the apps domain.
+
+`POST /v1/instance/cloudflare/verify` re-runs every check;
+`DELETE /v1/instance/cloudflare` disconnects (409 while any service still
+runs on Cloudflare). There are no environment variables or bindings for
+the provider: the runtime scripts reach the control plane through a service
+binding to its `RuntimeEnv` entrypoint and send their logs to its `tail()`
+handler, both by the Worker name `roundhouse` from `wrangler.jsonc`. See
+[cloudflare-containers.md](cloudflare-containers.md).
+
+### Web shell
+
+The web shell (ADR 0012) has two instance settings, under Settings →
+Platform → Web shell or `PATCH /v1/instance/settings` (instance admins,
+fresh sign-in, audited as `instance.settings_updated`):
+
+| Setting                          | Default | Purpose                                                           |
+| -------------------------------- | ------- | ----------------------------------------------------------------- |
+| `shell_recording`                | `full`  | `full` records each session; `metadata` keeps only who/where/when |
+| `shell_recording_retention_days` | `30`    | Days a recording is kept after its session ended (1 to 365)       |
+
+Everything else is fixed:
+- **Who.** Project admins (`shell:open`) with two-factor authentication on,
+  from a browser session that signed in or re-authenticated in the last 10
+  minutes. An API token with the `shell:open` scope works for a creator who
+  meets the same bar, but never in a protected environment. OAuth (MCP)
+  tokens never do, and MCP has no shell tool.
+- **Limits.** 4 sessions per server, 15 minutes without input, 8 hours in
+  total. The session ends when the terminal disconnects; there is no resume.
+- **Revocation.** Removing a member, changing their role, team or grants,
+  revoking their token or session, signing out, turning off 2FA or
+  protecting the environment ends their open shells at once; every session
+  is also re-checked each minute.
+- **Records.** Each session is in the audit log (`shell.opened`,
+  `shell.closed`, `shell.terminated`) and under
+  `GET /v1/workspaces/{id}/shell-sessions` (Settings → Shell sessions): who,
+  which replica, when, how it ended, byte counts and its recording state.
+  Only the program's name is kept, never its arguments. Terminal input and
+  output are never logged or audited.
+- **Recording.** In `full` mode, decided when a session opens, the terminal
+  says "This session is recorded." (the CLI prints it to stderr). The
+  server's Durable Object writes an asciicast v2 stream (output, input and
+  resizes, with times) to its own storage in small chunks as the session
+  runs, so an eviction loses at most a couple of seconds. Each 16 MiB of it,
+  and the rest when the session ends, is gzipped, encrypted with age to the
+  project's backup recipient (the keypair backups use, created on first
+  use) and stored in the `LOGS` bucket at
+  `shell/<project>/<yyyy>/<mm>/<session>.<part>.cast.gz.age` (parts from 1);
+  the plaintext chunks are deleted right after. A part that fails to store
+  marks the recording `failed` and its chunks are deleted, without ending
+  the session. A project whose key can't be had opens shells unrecorded.
+- **Playback.** `GET /v1/shell-sessions/{id}/recording` returns the
+  decrypted asciicast (`application/x-asciicast`, never cached), or 404
+  while nothing is stored. It needs `audit:read` in the workspace,
+  `shell:open` on the session's environment and a browser session that
+  signed in or re-authenticated in the last 10 minutes (API tokens never
+  can), and is audited as `shell.recording_viewed` with ids only. The
+  dashboard plays it under Settings → Shell sessions, output only. Anyone
+  with the project's backup identity can also read a part offline:
+  `age -d -i key.txt part.cast.gz.age | gunzip`.
+- **Retention.** The hourly retention job deletes the recordings of
+  sessions that ended more than `shell_recording_retention_days` ago; the
+  session rows stay, as audit metadata. Turning recording off doesn't
+  delete existing recordings; they age out.
+- **Compression.** ADR 0012 specifies zstd; Workers have no zstd encoder,
+  so recordings are gzip (`CompressionStream`) instead, which `age` and
+  `gunzip` read with standard tools.
+
 ### Rotating the master key
 
 Rotation keeps the install readable throughout (ADR 0014 "Rotation"):

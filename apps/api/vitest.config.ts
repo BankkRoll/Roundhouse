@@ -33,8 +33,8 @@ export default defineConfig(async () => {
       // loaded machine (the whole suite runs files in parallel) a full
       // rollout takes longer than vitest's 5 s default.
       testTimeout: 30_000,
-      // test-node/ needs Node APIs (Docker, node:https) and has its own config.
-      exclude: [...configDefaults.exclude, "test-node/**"],
+      // test-node/ and test-runtime/ run under Node with their own configs.
+      exclude: [...configDefaults.exclude, "test-node/**", "test-runtime/**"],
     },
   };
 });

@@ -1,0 +1,10 @@
+{
+  "public_key": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "node_id": "node_fixture",
+  "envelope": {
+    "v": 1,
+    "kid": "fixture",
+    "payload": "{\"type\":\"exec_resize\",\"id\":\"msg_fixture_exec_resize\",\"node_id\":\"node_fixture\",\"iat\":1700000000000,\"exp\":1700000060000,\"session_id\":\"shl_01JLLLLLLLLLLLLLLLLLLLLLLL\",\"cols\":200,\"rows\":50}",
+    "sig": "tgLuAJ6xkOPiJTyhyxQkQq7LDIgUmFyeo+YCQcqtIXplwkhdrwzz2EJm+LwXAqxnej8kik/RGBuHwv94gnbFAw=="
+  }
+}

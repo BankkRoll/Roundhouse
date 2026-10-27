@@ -22,7 +22,9 @@ import {
   defaultServiceConfig,
   newId,
   RESERVED_SERVICE_SLUGS,
+  type ServiceProvider,
   type ServiceSource,
+  serviceProvider,
 } from "@roundhouse/shared";
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { type AppContext, clientIp, createRouter, requireMasterKey } from "../context";
@@ -37,6 +39,8 @@ import {
   updateService,
 } from "../contracts";
 import { recordAudit } from "../lib/audit";
+import { assertCloudflareEligible } from "../lib/cloudflare/eligibility";
+import { pauseCloudflareRuntime } from "../lib/cloudflare/runtime";
 import { presentDomains, serviceDomains } from "../lib/domains/present";
 import { conflict, isUniqueViolation, notFound } from "../lib/errors";
 import { assertSourceInstallation } from "../lib/github";
@@ -190,6 +194,7 @@ export const serviceRoutes = createRouter()
     }
     const changesConfig = Object.keys(patch).length > 0;
     let config: typeof serviceConfigs.$inferSelect | null = null;
+    let providerChange: { from: ServiceProvider; to: ServiceProvider } | null = null;
     if (changesConfig) {
       const env = await environmentOf(c, project.id, body.environment_id!);
       const latest = await latestConfig(db, serviceId, env.id);
@@ -201,6 +206,10 @@ export const serviceRoutes = createRouter()
       }
       const spec = mergeConfig(specOf(latest), patch);
       if (patch.deploy) await assertSingleReplica(db, service, spec.deploy.replicas);
+      const from = serviceProvider(latest.placement);
+      const to = serviceProvider(spec.placement);
+      if (to === "cloudflare") await assertCloudflareEligible(db, service, env.id, spec);
+      if (from !== to) providerChange = { from, to };
       if (patch.source) await checkSource(c, project.workspaceId, spec.source);
       if (patch.build) {
         await assertPlainBuildArgs(db, c.env, {
@@ -271,6 +280,29 @@ export const serviceRoutes = createRouter()
       },
       ip: clientIp(c),
     });
+    // `deploy.replicas = 0` on Cloudflare stops serving without deleting anything (ADR 0011).
+    if (
+      config &&
+      serviceProvider(config.placement) === "cloudflare" &&
+      config.deploy.replicas === 0
+    ) {
+      await pauseCloudflareRuntime(c.env, db, serviceId, config.environmentId);
+    }
+    if (providerChange && config) {
+      await recordAudit(db, {
+        workspaceId: project.workspaceId,
+        ...caller.actor,
+        action: "service.provider_changed",
+        targetType: "service",
+        targetId: serviceId,
+        metadata: {
+          environment_id: config.environmentId,
+          version: config.version,
+          ...providerChange,
+        },
+        ip: clientIp(c),
+      });
+    }
     await publish(c.env, project.id, { type: "service.updated", service: toApiService(updated) });
     return c.json(
       { service: toApiService(updated), config: config ? toApiConfig(config) : null },

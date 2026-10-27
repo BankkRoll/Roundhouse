@@ -9,8 +9,9 @@ import "slices"
 // (ADR 0014); version 5 is Phase 2 (mesh, volumes, backups, queries,
 // signing-key rollover) and version 6 Phase 3 (jobs, metrics,
 // certificates); version 7 adds [BuildJob].Isolation (ADR 0007, ADR 0014
-// section 14). ADR 0015 records why phases sit one above ADR 0013's plan.
-// See PROTOCOL_VERSION in versions.ts.
+// section 14) and Phase 4 (web shell exec frames, image push). ADR 0015
+// records why phases sit one above ADR 0013's plan. See PROTOCOL_VERSION in
+// versions.ts.
 const ProtocolVersion = 7
 
 // MinProtocolVersion is the oldest version the control plane accepts. ADR

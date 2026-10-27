@@ -1,0 +1,7 @@
+{
+  "type": "image_push_result",
+  "push_id": "psh_01JMMMMMMMMMMMMMMMMMMMMMMM",
+  "ok": true,
+  "digest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "bytes": 52428800
+}

@@ -11,9 +11,11 @@ type SettingsPath =
   | "/w/$workspaceId/members"
   | "/w/$workspaceId/teams"
   | "/w/$workspaceId/audit"
+  | "/w/$workspaceId/shell-sessions"
   | "/w/$workspaceId/tokens"
   | "/w/$workspaceId/platform"
   | "/w/$workspaceId/domains-tls"
+  | "/w/$workspaceId/cloudflare"
   | "/w/$workspaceId/instance-audit"
   | "/w/$workspaceId/mcp-clients"
   | "/w/$workspaceId/security"
@@ -67,6 +69,13 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
         {can("audit:read") ? (
           <Item workspaceId={workspaceId} to="/w/$workspaceId/audit" label="Audit log" />
         ) : null}
+        {can("audit:read") ? (
+          <Item
+            workspaceId={workspaceId}
+            to="/w/$workspaceId/shell-sessions"
+            label="Shell sessions"
+          />
+        ) : null}
         {can("tokens:manage") ? (
           <Item workspaceId={workspaceId} to="/w/$workspaceId/tokens" label="API tokens" />
         ) : null}
@@ -80,6 +89,9 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
               to="/w/$workspaceId/domains-tls"
               label="Domains & TLS"
             />
+          ) : null}
+          {canManageInstance(me) ? (
+            <Item workspaceId={workspaceId} to="/w/$workspaceId/cloudflare" label="Cloudflare" />
           ) : null}
           {canManageInstance(me) ? (
             <Item

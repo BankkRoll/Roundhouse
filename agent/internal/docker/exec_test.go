@@ -115,3 +115,52 @@ func TestRunExecCancelled(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestStartExecTTYReadsRawOutput(t *testing.T) {
+	f, c := newFakeEngine(t)
+	var startBody string
+	f.handle("POST /exec/tty1/start", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		startBody = f.bodies[len(f.bodies)-1]
+		f.mu.Unlock()
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		_, _ = buf.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+		_ = buf.Flush()
+		line, _ := bufio.NewReader(io.MultiReader(buf.Reader, conn)).ReadString('\r')
+		_, _ = conn.Write([]byte("got " + line))
+	})
+	f.handle("POST /exec/tty1/resize", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("h") != "24" || r.URL.Query().Get("w") != "80" {
+			t.Errorf("resize query %s", r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusCreated)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s, err := c.StartExecTTY(ctx, "tty1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := c.ResizeExec(ctx, "tty1", 24, 80); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write([]byte("hi\r")); err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "got hi\r" {
+		t.Fatalf("output %q", out)
+	}
+	if !strings.Contains(startBody, `"Tty":true`) {
+		t.Fatalf("start body %s", startBody)
+	}
+}

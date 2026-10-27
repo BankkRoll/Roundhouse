@@ -177,7 +177,8 @@
           "changes:approve",
           "changes:auto_apply",
           "environments:manage",
-          "previews:manage"
+          "previews:manage",
+          "shell:open"
         ],
         "type": "string"
       },
@@ -432,7 +433,12 @@
               "environment.created",
               "environment.cloned",
               "environment.deleted",
-              "environment.promote_proposed"
+              "environment.promote_proposed",
+              "shell.opened",
+              "shell.closed",
+              "shell.terminated",
+              "shell.recording_viewed",
+              "service.provider_changed"
             ],
             "type": "string"
           },
@@ -1607,7 +1613,12 @@
               "environment.created",
               "environment.cloned",
               "environment.deleted",
-              "environment.promote_proposed"
+              "environment.promote_proposed",
+              "shell.opened",
+              "shell.closed",
+              "shell.terminated",
+              "shell.recording_viewed",
+              "service.provider_changed"
             ],
             "type": "string"
           },
@@ -2026,6 +2037,205 @@
         ],
         "type": "object"
       },
+      "CloudflareCheck": {
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      },
+      "CloudflareDeployment": {
+        "properties": {
+          "created_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "image_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image_ref": {
+            "type": "string"
+          },
+          "instance_type": {
+            "type": "string"
+          },
+          "max_instances": {
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "pushing",
+              "uploading",
+              "rolling_out",
+              "warming",
+              "routing",
+              "active",
+              "removed",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "deployment_id",
+          "status",
+          "image_ref",
+          "image_digest",
+          "instance_type",
+          "max_instances",
+          "error",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "CloudflarePlacement": {
+        "properties": {
+          "instance_type": {
+            "description": "Derived from `resources` when omitted.",
+            "enum": [
+              "lite",
+              "basic",
+              "standard-1",
+              "standard-2",
+              "standard-3",
+              "standard-4"
+            ],
+            "type": "string"
+          },
+          "max_instances": {
+            "description": "Pool size; replaces `deploy.replicas` on Cloudflare.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "regions": {
+            "description": "Placement constraints passed as `constraints.regions`.",
+            "items": {
+              "maxLength": 16,
+              "minLength": 2,
+              "pattern": "^[A-Za-z0-9-]+$",
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "sleep_after": {
+            "maxLength": 8,
+            "type": "string"
+          }
+        },
+        "required": [
+          "max_instances",
+          "sleep_after"
+        ],
+        "type": "object"
+      },
+      "CloudflareSettings": {
+        "properties": {
+          "account_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "apps_domain_proxied": {
+            "type": "boolean"
+          },
+          "apps_zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "image_storage_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "token_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "validated_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "workers_subdomain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "configured",
+          "account_id",
+          "workers_subdomain",
+          "apps_domain_proxied",
+          "apps_zone",
+          "token_hint",
+          "validated_at",
+          "image_storage_bytes"
+        ],
+        "type": "object"
+      },
+      "CloudflareVerification": {
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/CloudflareCheck"
+            },
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "checks"
+        ],
+        "type": "object"
+      },
       "CompleteSigningKeyRollover": {
         "properties": {
           "force": {
@@ -2108,7 +2318,8 @@
                 "changes:approve",
                 "changes:auto_apply",
                 "environments:manage",
-                "previews:manage"
+                "previews:manage",
+                "shell:open"
               ],
               "type": "string"
             },
@@ -2180,7 +2391,7 @@
             "items": {
               "$ref": "#/components/schemas/ApiTokenScope"
             },
-            "maxItems": 28,
+            "maxItems": 29,
             "minItems": 1,
             "type": "array"
           }
@@ -2586,12 +2797,18 @@
               },
               "placement": {
                 "properties": {
+                  "cloudflare": {
+                    "$ref": "#/components/schemas/CloudflarePlacement"
+                  },
                   "node_selector": {
                     "additionalProperties": {
                       "maxLength": 256,
                       "type": "string"
                     },
                     "type": "object"
+                  },
+                  "provider": {
+                    "$ref": "#/components/schemas/ServiceProvider"
                   }
                 },
                 "type": "object"
@@ -3786,6 +4003,10 @@
               "rollout_finished",
               "pre_deploy_started",
               "pre_deploy_finished",
+              "image_pushed",
+              "cf_rollout_started",
+              "cf_rollout_finished",
+              "routes_switched",
               "error"
             ],
             "type": "string"
@@ -4291,6 +4512,7 @@
                 "changes:auto_apply",
                 "environments:manage",
                 "previews:manage",
+                "shell:open",
                 "instance:manage",
                 "workspaces:create"
               ],
@@ -4335,6 +4557,7 @@
                       "changes:auto_apply",
                       "environments:manage",
                       "previews:manage",
+                      "shell:open",
                       "instance:manage",
                       "workspaces:create"
                     ],
@@ -4378,6 +4601,7 @@
                                 "changes:auto_apply",
                                 "environments:manage",
                                 "previews:manage",
+                                "shell:open",
                                 "instance:manage",
                                 "workspaces:create"
                               ],
@@ -5090,6 +5314,18 @@
           "mcp_enabled": {
             "type": "boolean"
           },
+          "shell_recording": {
+            "enum": [
+              "metadata",
+              "full"
+            ],
+            "type": "string"
+          },
+          "shell_recording_retention_days": {
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
+          },
           "tls_mode": {
             "$ref": "#/components/schemas/TlsMode"
           }
@@ -5099,6 +5335,8 @@
           "tls_mode",
           "log_retention_days",
           "mcp_enabled",
+          "shell_recording",
+          "shell_recording_retention_days",
           "ingress_nodes"
         ],
         "type": "object"
@@ -5121,6 +5359,18 @@
           },
           "mcp_enabled": {
             "type": "boolean"
+          },
+          "shell_recording": {
+            "enum": [
+              "metadata",
+              "full"
+            ],
+            "type": "string"
+          },
+          "shell_recording_retention_days": {
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
           },
           "tls_mode": {
             "$ref": "#/components/schemas/TlsMode"
@@ -6052,7 +6302,8 @@
                 "changes:approve",
                 "changes:auto_apply",
                 "environments:manage",
-                "previews:manage"
+                "previews:manage",
+                "shell:open"
               ],
               "type": "string"
             },
@@ -6091,7 +6342,8 @@
                       "changes:approve",
                       "changes:auto_apply",
                       "environments:manage",
-                      "previews:manage"
+                      "previews:manage",
+                      "shell:open"
                     ],
                     "type": "string"
                   },
@@ -6180,11 +6432,12 @@
                 "changes:approve",
                 "changes:auto_apply",
                 "environments:manage",
-                "previews:manage"
+                "previews:manage",
+                "shell:open"
               ],
               "type": "string"
             },
-            "maxItems": 28,
+            "maxItems": 29,
             "type": "array"
           },
           "workspace_id": {
@@ -6278,12 +6531,18 @@
       },
       "PlacementConfig": {
         "properties": {
+          "cloudflare": {
+            "$ref": "#/components/schemas/CloudflarePlacement"
+          },
           "node_selector": {
             "additionalProperties": {
               "maxLength": 256,
               "type": "string"
             },
             "type": "object"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ServiceProvider"
           }
         },
         "required": [
@@ -7080,6 +7339,31 @@
         ],
         "type": "object"
       },
+      "ProviderEligibility": {
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "rule": {
+            "enum": [
+              "kind",
+              "port",
+              "volume",
+              "tcp_proxy",
+              "domains",
+              "resources",
+              "image_arch",
+              "not_configured"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule",
+          "message"
+        ],
+        "type": "object"
+      },
       "ProviderId": {
         "enum": [
           "hetzner",
@@ -7398,6 +7682,27 @@
           "endpoint",
           "bucket",
           "access_key_id"
+        ],
+        "type": "object"
+      },
+      "PutCloudflareSettings": {
+        "properties": {
+          "account_id": {
+            "pattern": "^[a-f0-9]{32}$",
+            "type": "string"
+          },
+          "api_token": {
+            "maxLength": 256,
+            "minLength": 20,
+            "type": "string"
+          },
+          "apps_domain_proxied": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "account_id",
+          "api_token"
         ],
         "type": "object"
       },
@@ -8044,6 +8349,122 @@
         ],
         "type": "object"
       },
+      "ServiceCloudflareStatus": {
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/CloudflareDeployment"
+            },
+            "type": "array"
+          },
+          "eligibility": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderEligibility"
+            },
+            "type": "array"
+          },
+          "provider": {
+            "enum": [
+              "nodes",
+              "cloudflare"
+            ],
+            "type": "string"
+          },
+          "runtime": {
+            "properties": {
+              "application_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "delete_after": {
+                "description": "Unix time in milliseconds",
+                "example": 1767225600000,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "generation": {
+                "type": "integer"
+              },
+              "instances": {
+                "properties": {
+                  "running": {
+                    "type": "integer"
+                  },
+                  "total": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "total",
+                  "running"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "routes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "script_name": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "disabled"
+                ],
+                "type": "string"
+              },
+              "workers_dev_url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "script_name",
+              "status",
+              "generation",
+              "application_id",
+              "routes",
+              "workers_dev_url",
+              "instances",
+              "delete_after"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "provider",
+          "configured",
+          "eligibility",
+          "warnings",
+          "runtime",
+          "deployments"
+        ],
+        "type": "object"
+      },
       "ServiceComparison": {
         "properties": {
           "config": {
@@ -8340,12 +8761,18 @@
           },
           "placement": {
             "properties": {
+              "cloudflare": {
+                "$ref": "#/components/schemas/CloudflarePlacement"
+              },
               "node_selector": {
                 "additionalProperties": {
                   "maxLength": 256,
                   "type": "string"
                 },
                 "type": "object"
+              },
+              "provider": {
+                "$ref": "#/components/schemas/ServiceProvider"
               }
             },
             "type": "object"
@@ -8542,6 +8969,13 @@
         ],
         "type": "object"
       },
+      "ServiceProvider": {
+        "enum": [
+          "nodes",
+          "cloudflare"
+        ],
+        "type": "string"
+      },
       "ServiceSource": {
         "oneOf": [
           {
@@ -8697,6 +9131,236 @@
         },
         "required": [
           "revoked"
+        ],
+        "type": "object"
+      },
+      "ShellDenial": {
+        "enum": [
+          "oauth_token",
+          "forbidden",
+          "two_factor_required",
+          "reauth_required",
+          "protected_environment",
+          null
+        ],
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "ShellSession": {
+        "properties": {
+          "bytes_in": {
+            "type": "integer"
+          },
+          "bytes_out": {
+            "type": "integer"
+          },
+          "command": {
+            "type": "string"
+          },
+          "container_user": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deployment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "opened_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "recording": {
+            "enum": [
+              "none",
+              "recording",
+              "stored",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "recording_parts": {
+            "type": "integer"
+          },
+          "replica": {
+            "type": "integer"
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          },
+          "token_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workload_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "environment_id",
+          "service_id",
+          "workload_id",
+          "deployment_id",
+          "replica",
+          "node_id",
+          "user_id",
+          "token_id",
+          "command",
+          "container_user",
+          "started_at",
+          "opened_at",
+          "ended_at",
+          "end_reason",
+          "exit_code",
+          "bytes_in",
+          "bytes_out",
+          "recording",
+          "recording_parts"
+        ],
+        "type": "object"
+      },
+      "ShellSessionPage": {
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/ShellSession"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "ShellTarget": {
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "node_name": {
+            "type": "string"
+          },
+          "replica": {
+            "type": "integer"
+          },
+          "shell_supported": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          },
+          "workload_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workload_id",
+          "deployment_id",
+          "replica",
+          "node_id",
+          "node_name",
+          "state",
+          "shell_supported"
+        ],
+        "type": "object"
+      },
+      "ShellTargets": {
+        "properties": {
+          "gate": {
+            "properties": {
+              "allowed": {
+                "type": "boolean"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/ShellDenial"
+              }
+            },
+            "required": [
+              "allowed",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/ShellTarget"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "targets",
+          "gate"
         ],
         "type": "object"
       },
@@ -9104,12 +9768,18 @@
                   },
                   "placement": {
                     "properties": {
+                      "cloudflare": {
+                        "$ref": "#/components/schemas/CloudflarePlacement"
+                      },
                       "node_selector": {
                         "additionalProperties": {
                           "maxLength": 256,
                           "type": "string"
                         },
                         "type": "object"
+                      },
+                      "provider": {
+                        "$ref": "#/components/schemas/ServiceProvider"
                       }
                     },
                     "type": "object"
@@ -9667,12 +10337,18 @@
                   },
                   "placement": {
                     "properties": {
+                      "cloudflare": {
+                        "$ref": "#/components/schemas/CloudflarePlacement"
+                      },
                       "node_selector": {
                         "additionalProperties": {
                           "maxLength": 256,
                           "type": "string"
                         },
                         "type": "object"
+                      },
+                      "provider": {
+                        "$ref": "#/components/schemas/ServiceProvider"
                       }
                     },
                     "type": "object"
@@ -12477,6 +13153,7 @@
             "change_set.applied",
             "service.created",
             "service.updated",
+            "service.provider_changed",
             "service.deleted",
             "variables.updated",
             "deployment.created"
@@ -16026,7 +16703,12 @@
                 "environment.created",
                 "environment.cloned",
                 "environment.deleted",
-                "environment.promote_proposed"
+                "environment.promote_proposed",
+                "shell.opened",
+                "shell.closed",
+                "shell.terminated",
+                "shell.recording_viewed",
+                "service.provider_changed"
               ],
               "type": "string"
             }
@@ -16362,6 +17044,258 @@
           }
         ],
         "summary": "List certificates",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [],
+          "auth": "session_only"
+        }
+      }
+    },
+    "/v1/instance/cloudflare": {
+      "delete": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudflareSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Disconnect the Cloudflare account",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "instance.settings_updated"
+          ],
+          "auth": "session_only",
+          "reauth": true
+        }
+      },
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudflareSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Get Cloudflare provider settings",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [],
+          "auth": "session_only"
+        }
+      },
+      "put": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutCloudflareSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudflareSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Connect a Cloudflare account",
+        "tags": [
+          "instance"
+        ],
+        "x-roundhouse-policy": {
+          "action": "instance:manage",
+          "audit": [
+            "instance.settings_updated"
+          ],
+          "auth": "session_only",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/instance/cloudflare/verify": {
+      "post": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudflareVerification"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Verify the Cloudflare account",
         "tags": [
           "instance"
         ],
@@ -21200,6 +22134,16 @@
             },
             "description": "Error"
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
           "502": {
             "content": {
               "application/json": {
@@ -21226,7 +22170,8 @@
         "x-roundhouse-policy": {
           "action": "services:manage",
           "audit": [
-            "service.updated"
+            "service.updated",
+            "service.provider_changed"
           ],
           "auth": "session"
         }
@@ -21647,6 +22592,97 @@
           "audit": [
             "backup.requested"
           ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/services/{serviceId}/cloudflare": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceCloudflareStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a service's Cloudflare provider status",
+        "tags": [
+          "services"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
           "auth": "session"
         }
       }
@@ -23370,6 +24406,97 @@
         }
       }
     },
+    "/v1/services/{serviceId}/shell-targets": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellTargets"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List shell targets",
+        "tags": [
+          "shell"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/services/{serviceId}/tcp-proxies": {
       "delete": {
         "parameters": [
@@ -24174,6 +25301,164 @@
         "tags": [
           "setup"
         ]
+      }
+    },
+    "/v1/shell-sessions/{sessionId}/recording": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-asciicast": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The recording (asciicast v2), never cached"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Play back a shell recording",
+        "tags": [
+          "shell"
+        ],
+        "x-roundhouse-policy": {
+          "action": "audit:read",
+          "audit": [
+            "shell.recording_viewed"
+          ],
+          "auth": "session_only",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/shell-sessions/{sessionId}/terminate": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellSession"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Terminate a shell session",
+        "tags": [
+          "shell"
+        ],
+        "x-roundhouse-policy": {
+          "action": "shell:open",
+          "audit": [
+            "shell.terminated"
+          ],
+          "auth": "session"
+        }
       }
     },
     "/v1/teams/{teamId}": {
@@ -25199,6 +26484,129 @@
             "deployment.created"
           ],
           "auth": "github_signature"
+        }
+      }
+    },
+    "/v1/workloads/{workloadId}/shell": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workloadId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cols",
+            "required": false,
+            "schema": {
+              "default": 80,
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rows",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cmd",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 32,
+                  "type": "array"
+                }
+              ],
+              "example": [
+                "/bin/sh"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "term",
+            "required": false,
+            "schema": {
+              "default": "xterm-256color",
+              "pattern": "^[A-Za-z0-9._+-]{1,64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching Protocols"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "426": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Shell socket",
+        "tags": [
+          "shell"
+        ],
+        "x-roundhouse-policy": {
+          "action": "shell:open",
+          "audit": [
+            "shell.opened",
+            "shell.closed"
+          ],
+          "auth": "session"
         }
       }
     },
@@ -28334,6 +29742,118 @@
         ],
         "x-roundhouse-policy": {
           "action": "nodes:manage",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/shell-sessions": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellSessionPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List shell sessions",
+        "tags": [
+          "shell"
+        ],
+        "x-roundhouse-policy": {
+          "action": "audit:read",
           "audit": [],
           "auth": "session"
         }

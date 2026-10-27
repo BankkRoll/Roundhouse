@@ -17,11 +17,13 @@ import type { Env } from "../env";
 import { startPreviewAction } from "../workflows/preview";
 import { claimDueBackups } from "./backups/schedule";
 import { claimDueCertificates, syncCertificates } from "./certificates/schedule";
+import { claimCloudflareDeletions } from "./cloudflare/runtime";
 import { claimDueCronRuns } from "./cron/schedule";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
 import { reapRetiredEnvironments } from "./environments";
 import { configuredOrigin } from "./origin";
 import { runPreviewTick } from "./previews/engine";
+import { expireLostShellSessions } from "./shell";
 import { claimMigrationCleanups } from "./volume-migrations";
 import { claimVolumeDeletions } from "./volumes";
 
@@ -85,6 +87,8 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
     name: "retired_environments",
     run: (env) => reapRetiredEnvironments(env, createDb(env.DB)),
   },
+  { name: "lost_shell_sessions", run: expireLostShellSessions },
+  { name: "cloudflare_deletions", run: claimCloudflareDeletions },
 ];
 
 /**

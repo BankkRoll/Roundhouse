@@ -150,6 +150,11 @@ export const AUDIT_ACTIONS = [
   "environment.cloned",
   "environment.deleted",
   "environment.promote_proposed",
+  "shell.opened",
+  "shell.closed",
+  "shell.terminated",
+  "shell.recording_viewed",
+  "service.provider_changed",
 ] as const;
 
 /** An audited action name. */

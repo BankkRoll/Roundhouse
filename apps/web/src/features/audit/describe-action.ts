@@ -160,6 +160,11 @@ const VERBS: Record<AuditAction, string> = {
   "environment.cloned": "cloned into the environment",
   "environment.deleted": "deleted the environment",
   "environment.promote_proposed": "proposed a promotion into",
+  "shell.opened": "opened a shell",
+  "shell.closed": "closed a shell",
+  "shell.terminated": "terminated a shell session",
+  "shell.recording_viewed": "played back a shell recording",
+  "service.provider_changed": "moved a service to another runtime",
 };
 
 /**

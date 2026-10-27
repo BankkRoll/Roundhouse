@@ -128,6 +128,10 @@ type Fake struct {
 
 	// previews holds pull request previews; see [Fake.previewState].
 	previews *previewState
+	// shell holds shell targets and sessions; cf the Cloudflare statuses set
+	// with [Fake.SetCloudflare].
+	shell *shellState
+	cf    map[string]*api.CloudflareStatus
 
 	// templateDeployErrors maps a template service ref to the message its
 	// first deployment fails to start with; see [Fake.FailTemplateDeploy].
@@ -728,10 +732,12 @@ func (f *Fake) routes(mux *http.ServeMux) {
 	f.cronRoutes(handlers)
 	f.previewRoutes(handlers)
 	f.environmentRoutes(handlers)
+	f.shellRoutes(handlers)
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
 	}
 	mux.HandleFunc(api.RouteRealtime.Method+" "+api.RouteRealtime.Path, f.realtime)
+	mux.HandleFunc(api.RouteShell.Method+" "+api.RouteShell.Path, f.shellSocket)
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		apiError(w, http.StatusNotFound, "not_found", "No such endpoint")
 	})

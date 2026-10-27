@@ -215,13 +215,14 @@ export async function retireDeployments(
  *
  * @param env - Bindings.
  * @param deployment - The deployment; ignored when it has no workflow.
- * @param type - `build`, `health` or `pre_deploy` (its pre-deploy run ended).
+ * @param type - `build`, `health`, `pre_deploy` (its pre-deploy run ended) or
+ *   `image_push` (a builder answered a Cloudflare image push).
  * @param payload - Small diagnostic payload.
  */
 export async function wakeWorkflow(
   env: Pick<Env, "DEPLOY_WORKFLOW">,
   deployment: Pick<DeploymentRow, "workflowInstanceId">,
-  type: "build" | "health" | "pre_deploy",
+  type: "build" | "health" | "pre_deploy" | "image_push",
   payload: Record<string, unknown> = {},
 ): Promise<void> {
   if (!deployment.workflowInstanceId) return;
@@ -297,6 +298,7 @@ export async function cancelDeployment(
     wakeWorkflow(ctx.env, current, "build", { cancelled: true }),
     wakeWorkflow(ctx.env, current, "health", { cancelled: true }),
     wakeWorkflow(ctx.env, current, "pre_deploy", { cancelled: true }),
+    wakeWorkflow(ctx.env, current, "image_push", { cancelled: true }),
   ]);
   return current;
 }

@@ -11,6 +11,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -64,6 +65,9 @@ type Env struct {
 	Exec func(ctx context.Context, argv []string, env []string, io *ui.IO) (int, error)
 	// Transport overrides the HTTP transport, for tests.
 	Transport http.RoundTripper
+	// Terminal is the console `shell` runs on; nil means stdin is never
+	// treated as a terminal.
+	Terminal Terminal
 }
 
 // SystemEnv returns the real process environment.
@@ -80,6 +84,7 @@ func SystemEnv(version, commit string) Env {
 		Now:          time.Now,
 		PollInterval: 2 * time.Second,
 		Exec:         execChild,
+		Terminal:     systemTerminal{},
 	}
 }
 
@@ -227,7 +232,7 @@ func (a *App) rootCommand() *cobra.Command {
 	add("auth", a.loginCmd(), a.logoutCmd(), a.whoamiCmd())
 	add("project", a.initCmd(), a.linkCmd(), a.unlinkCmd(), a.statusCmd(), a.openCmd())
 	add("deploy", a.deployCmd(), a.logsCmd(), a.metricsCmd(), a.rollbackCmd(), a.cancelCmd(), a.upCmd(), a.changesCmd())
-	add("manage", a.varsCmd(), a.runCmd(), a.projectsCmd(), a.templatesCmd(), a.servicesCmd(), a.domainCmd(), a.serversCmd(), a.tokensCmd(), a.shellCmd(), a.dbCmd(), a.cronCmd(), a.previewsCmd(), a.envCmd())
+	add("manage", a.varsCmd(), a.runCmd(), a.projectsCmd(), a.templatesCmd(), a.servicesCmd(), a.domainCmd(), a.serversCmd(), a.tokensCmd(), a.shellCmd(), a.runtimeCmd(), a.dbCmd(), a.cronCmd(), a.previewsCmd(), a.envCmd())
 	root.AddCommand(a.versionCmd())
 	return root
 }
@@ -453,7 +458,12 @@ func (a *App) printError(err error) {
 		msg = "invalid variable reference"
 	}
 	fmt.Fprintf(a.IO.Err, "%s %s\n", c.Red("error:"), msg)
-	if isAPI {
+	switch {
+	case isAPI && apiErr.Code == "provider_ineligible":
+		for _, d := range apiErr.Details {
+			fmt.Fprintf(a.IO.Err, "  %s %s: %s\n", c.Red("✗"), cmp.Or(d.Code, d.Field), d.Message)
+		}
+	case isAPI:
 		for _, d := range apiErr.Details {
 			a.printDetail(d)
 		}
@@ -471,6 +481,7 @@ func (a *App) errorHint(err error) string {
 	}
 	var apiErr *api.Error
 	var closed *api.RealtimeClosedError
+	var shellClosed *api.ShellClosedError
 	status := 0
 	switch {
 	case errors.As(err, &apiErr):
@@ -486,6 +497,8 @@ func (a *App) errorHint(err error) string {
 			return "public-prefix variables are bundled into client code; pass --acknowledge-public to store them anyway, or drop the prefix and store a secret"
 		case apiErr.Code == "provider_not_connected":
 			return "provider tokens are accepted only in the dashboard: Servers → Add server → Cloud provider"
+		case apiErr.Code == "provider_ineligible":
+			return "fix these, then retry; `roundhouse runtime` lists every rule the service fails"
 		case apiErr.Code == "provider_read_only":
 			return "the stored provider token cannot create servers; connect a read-write one in the dashboard: Servers → Add server → Cloud provider"
 		case apiErr.Code == "reauth_required" && a.apiToken:
@@ -497,6 +510,8 @@ func (a *App) errorHint(err error) string {
 		status = http.StatusUnauthorized
 	case errors.As(err, &closed) && closed.Code == api.CloseForbidden:
 		status = http.StatusForbidden
+	case errors.As(err, &shellClosed) && shellClosed.Code == api.CloseUnauthorized:
+		status = http.StatusUnauthorized
 	}
 	switch {
 	case status == http.StatusUnauthorized && a.apiToken:

@@ -8,7 +8,8 @@
  * - `workload` — the workload spec, ingress, registry and volume settings
  *   carried by `desired_state`.
  * - `data`, `mesh`, `jobs`, `metrics`, `certs`, `signing-keys` — the frames
- *   of each Phase 2–3 feature (ADR 0015).
+ *   of each Phase 2–3 feature (ADR 0015); `exec` and `image-push` — Phase 4's
+ *   web shell and image copy (ADRs 0011, 0012).
  * - `spec-hash` — canonical JSON and the spec hash the agent diffs on.
  * - `limits` — size limits and string formats, mirrored in Go.
  * - `signing` — Ed25519 envelopes that authenticate control → agent frames.
@@ -24,6 +25,8 @@ export * from "./box";
 export * from "./certs";
 export * from "./control";
 export * from "./data";
+export * from "./exec";
+export * from "./image-push";
 export * from "./jobs";
 export * from "./join";
 export * from "./limits";

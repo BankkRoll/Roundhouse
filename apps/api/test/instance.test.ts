@@ -1,7 +1,8 @@
 /**
  * Instance settings: owner-only access, hostname validation, desired state
- * pushed to every node when ingress changes, log retention, and the audit
- * record written to every workspace the caller owns.
+ * pushed to every node when ingress changes, log retention, shell
+ * recording, and the audit record written to every workspace the caller
+ * owns.
  */
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
@@ -20,6 +21,8 @@ describe("instance settings", () => {
         tls_mode: "acme",
         log_retention_days: 7,
         mcp_enabled: false,
+        shell_recording: "full",
+        shell_recording_retention_days: 30,
         ingress_nodes: 0,
       },
     });
@@ -51,6 +54,11 @@ describe("instance settings", () => {
     [{ log_retention_days: 366 }, 400],
     [{ log_retention_days: 1.5 }, 400],
     [{ log_retention_days: 30 }, 200],
+    [{ shell_recording: "keystrokes" }, 400],
+    [{ shell_recording: "metadata" }, 200],
+    [{ shell_recording_retention_days: 0 }, 400],
+    [{ shell_recording_retention_days: 366 }, 400],
+    [{ shell_recording_retention_days: 90 }, 200],
   ])("validates %j", async (body, status) => {
     const { owner } = await install();
     const res = await owner.json("/v1/instance/settings", { method: "PATCH", json: body });
@@ -71,6 +79,8 @@ describe("instance settings", () => {
       tls_mode: "internal",
       log_retention_days: 7,
       mcp_enabled: false,
+      shell_recording: "full",
+      shell_recording_retention_days: 30,
       ingress_nodes: 2,
     });
     for (const agent of [a, b]) {
@@ -98,8 +108,40 @@ describe("instance settings", () => {
       tls_mode: "internal",
       log_retention_days: 7,
       mcp_enabled: false,
+      shell_recording: "full",
+      shell_recording_retention_days: 30,
       ingress_nodes: 2,
     });
+  });
+});
+
+describe("shell recording settings", () => {
+  it("are changed by instance admins with a fresh session and audited", async () => {
+    const { owner } = await install();
+    const res = await owner.json("/v1/instance/settings", {
+      method: "PATCH",
+      json: { shell_recording: "metadata", shell_recording_retention_days: 90 },
+    });
+    expect(res).toMatchObject({
+      status: 200,
+      body: { shell_recording: "metadata", shell_recording_retention_days: 90 },
+    });
+    const audit = await env.DB.prepare(
+      "SELECT metadata FROM audit_logs WHERE action = 'instance.settings_updated' ORDER BY seq DESC",
+    ).first<{ metadata: string }>();
+    expect(JSON.parse(audit!.metadata)).toEqual({
+      changed: ["shell_recording", "shell_recording_retention_days"],
+      before: { shell_recording: "full", shell_recording_retention_days: 30 },
+      after: { shell_recording: "metadata", shell_recording_retention_days: 90 },
+    });
+    await env.DB.prepare("UPDATE sessions SET created_at = ?, reauthenticated_at = NULL")
+      .bind(Date.now() - 11 * 60 * 1000)
+      .run();
+    const stale = await owner.json("/v1/instance/settings", {
+      method: "PATCH",
+      json: { shell_recording: "full" },
+    });
+    expect(stale).toMatchObject({ status: 403, body: { error: { code: "reauth_required" } } });
   });
 });
 

@@ -255,6 +255,58 @@ export const MAX_INGRESS_SOURCES = 256;
 export const MAX_HSTS_MAX_AGE_S = 63_072_000;
 
 // -----------------------------------------------------------------------------
+// Phase 4 (ADR 0012 web shell, ADR 0011 image push)
+// -----------------------------------------------------------------------------
+
+/** Most argv entries an `exec_open.command` carries (ADR 0014 §15). */
+export const MAX_EXEC_ARGS = 32;
+
+/** Most UTF-8 bytes of all `exec_open.command` entries together (ADR 0014 §15). */
+export const MAX_EXEC_COMMAND_BYTES = 4096;
+
+/** Most environment variables an `exec_open` sets. */
+export const MAX_EXEC_ENV_VARS = 8;
+
+/** Longest value of an `exec_open` environment variable, in bytes. */
+export const MAX_EXEC_ENV_VALUE_BYTES = 256;
+
+/** Most raw bytes one `exec_input` carries (before base64 and sealing). */
+export const MAX_EXEC_INPUT_BYTES = 16 * 1024;
+
+/** Most raw bytes one `exec_output` carries (before base64). */
+export const MAX_EXEC_OUTPUT_BYTES = 32 * 1024;
+
+/** Widest terminal, in columns. */
+export const MAX_EXEC_COLS = 1000;
+
+/** Tallest terminal, in rows. */
+export const MAX_EXEC_ROWS = 500;
+
+/** Shortest idle timeout a session may ask for, in seconds. */
+export const MIN_EXEC_IDLE_TIMEOUT_S = 10;
+
+/** Longest idle timeout a session may ask for, in seconds. */
+export const MAX_EXEC_IDLE_TIMEOUT_S = 28_800;
+
+/** Shortest total duration a session may ask for, in seconds. */
+export const MIN_EXEC_MAX_DURATION_S = 60;
+
+/** Longest total duration a session may ask for, in seconds (8 hours). */
+export const MAX_EXEC_MAX_DURATION_S = 28_800;
+
+/** Most shell sessions one node runs at once (ADR 0012). */
+export const MAX_EXEC_SESSIONS_PER_NODE = 4;
+
+/** Most `exec_output` frames one session sends per second (ADR 0012). */
+export const MAX_EXEC_OUTPUT_FRAMES_PER_SECOND = 64;
+
+/** Longest `image_push.timeout_s`. */
+export const MAX_IMAGE_PUSH_TIMEOUT_S = 3600;
+
+/** Shortest `image_push.timeout_s`. */
+export const MIN_IMAGE_PUSH_TIMEOUT_S = 60;
+
+// -----------------------------------------------------------------------------
 // Formats
 // -----------------------------------------------------------------------------
 
@@ -695,3 +747,28 @@ export const UnixSeconds = z.number().int().nonnegative();
 
 /** Non-negative integer counter or byte count. */
 export const Count = z.number().int().nonnegative();
+
+/** Standard padded base64. */
+const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/**
+ * Standard padded base64 of 1 to `maxBytes` raw bytes. Mirrors Go's
+ * `validBase64`, which decodes; the byte count here comes from the length
+ * and padding, so no decode is needed.
+ *
+ * @param maxBytes - Most raw bytes.
+ * @returns A zod string schema.
+ */
+export function base64Bytes(maxBytes: number) {
+  return z
+    .string()
+    .min(4)
+    .max(Math.ceil(maxBytes / 3) * 4)
+    .regex(BASE64_RE, "expected base64")
+    .refine(
+      (s) => (s.length / 4) * 3 - (s.endsWith("==") ? 2 : s.endsWith("=") ? 1 : 0) <= maxBytes,
+      {
+        message: `must encode at most ${maxBytes} bytes`,
+      },
+    );
+}

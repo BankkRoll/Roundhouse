@@ -597,6 +597,9 @@ func TestProtocolVersions(t *testing.T) {
 	if PreviewBuildsProtocolVersion != 7 {
 		t.Errorf("preview builds gate %d, want 7", PreviewBuildsProtocolVersion)
 	}
+	if ExecProtocolVersion != 7 || ImagePushProtocolVersion != 7 {
+		t.Errorf("gates exec=%d image_push=%d, want 7", ExecProtocolVersion, ImagePushProtocolVersion)
+	}
 	for name, v := range map[string]int{
 		"mesh": MeshProtocolVersion, "volumes": VolumesProtocolVersion, "backups": BackupsProtocolVersion,
 		"db_query": DBQueryProtocolVersion, "key_rollover": KeyRolloverProtocolVersion,

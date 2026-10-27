@@ -204,6 +204,13 @@ func TestWireTypesMatchSchemas(t *testing.T) {
 		"Preview":                   Preview{},
 		"PreviewService":            PreviewService{},
 		"ApprovePreview":            ApprovePreviewInput{},
+		"ShellTargets":              ShellTargets{},
+		"ShellTarget":               ShellTarget{},
+		"ServiceCloudflareStatus":   CloudflareStatus{},
+		"CloudflareDeployment":      CloudflareDeployment{},
+		"ProviderEligibility":       EligibilityFailure{},
+		"CloudflarePlacement":       CloudflarePlacement{},
+		"PlacementConfig":           PlacementConfig{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
