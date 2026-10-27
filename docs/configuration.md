@@ -137,10 +137,25 @@ Settings → Domains & TLS holds the TLS settings (ADR 0009):
   you as A/AAAA records of the ingress servers. Without it they CNAME to the
   service's generated hostname.
 
-Every ingress server runs Caddy, but until the WireGuard mesh exists a
-server routes a hostname only to replicas running on it. DNS for a custom
-domain must point at servers that run the service; the dashboard and
-`roundhouse domain` list exactly those when some servers don't.
+Settings → Platform → Network holds the private network between servers
+(ADR 0005):
+- **Mesh** (`mesh_enabled`, off on new installs). Servers join a WireGuard
+  mesh: an environment may then span servers, its services reach each other
+  at `<service>.<environment>.<project>.internal` wherever they run, and
+  every ingress server routes every hostname of its workspace. Each server
+  needs UDP `51820` open in its host and cloud firewalls; see "Node agent"
+  below for its side. Staging can never reach production over the mesh: both
+  ends enforce each environment's boundary.
+- **Supernet** (`mesh_supernet`, default `10.200.0.0/16`). A private
+  `10.x.0.0/16`; each server gets a `/24` of it. It cannot change once a
+  server has joined.
+
+Every ingress server runs Caddy. Without the mesh a server routes a hostname
+only to replicas running on it, so DNS for a custom domain must point at
+servers that run the service; the dashboard and `roundhouse domain` list
+exactly those when some servers don't. With the mesh on and ready, any
+ingress server answers for any hostname, so DNS may point at any or all of
+them.
 
 ### Rotating the master key
 
@@ -209,9 +224,14 @@ Unknown keys are rejected. An annotated example is
 | `builder`             | no       | `true` on build nodes (`join --builder`)                                                         |
 | `insecure`            | no       | `true` allows plaintext to a non-loopback control plane (`join --insecure`). Testing only        |
 | `ingress.certs_dir`   | no       | Where managed-TLS certificates are written for Caddy. Default `/var/lib/roundhouse-certs`        |
+| `mesh.mode`           | no       | `auto` (default: kernel WireGuard, else userspace), `kernel`, `userspace` or `off`              |
+| `mesh.listen_port`    | no       | UDP port of `wg0`. Default `51820`                                                                |
+| `mesh.endpoint`       | no       | `host:port` peers reach this server at, when only a port forward makes it reachable              |
 
 The secret files live in `/var/lib/roundhouse` (`--data-dir` to change it).
-The config file itself holds no secrets.
+The config file itself holds no secrets. With the mesh on, the agent also
+keeps its WireGuard private key there (`wireguard.key`, 0600); it never
+leaves the server.
 
 ### Commands and flags
 

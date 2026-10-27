@@ -2,33 +2,49 @@
 
 Status: not implemented. This spec turns ADR 0009 ("Custom domains:
 Cloudflare for SaaS mode") into a buildable plan, and records why it was
-not built together with the direct mode and `managed` TLS.
+not built together with the direct mode and `managed` TLS, and what the
+WireGuard mesh (ADR 0005, built 2026-10-27) changed.
 
-## Why it waits
+## What the mesh solved, and what still waits
 
-ADR 0009 describes the SaaS mode's API calls and limits, but several
-things it relies on don't exist yet or contradict how the system works
-today:
-1. **Routing.** The fallback origin is a proxied record with A/AAAA records
-   of _every_ ingress server, so Cloudflare may connect to any of them. Until
-   the WireGuard mesh (ADR 0005) lets a server's Caddy reach replicas on
-   other servers, a server routes a hostname only to its own replicas, and
-   every other server answers `no route`. Direct mode works around this by
-   asking for DNS records of exactly the servers that run the service; the
-   SaaS mode can't, because all customers share one fallback origin. The
-   only safe option before the mesh is a per-hostname
-   `custom_origin_server`, which the ADR doesn't specify.
-2. **Origin firewall.** `ingress_firewall: "cloudflare_only"` is specified
-   as a final drop in an `inet roundhouse` nftables table. The agent
-   manages iptables rules in `DOCKER-USER` today and has no nftables table.
-   The enforcement point, how it coexists with Docker's rules, and how a
-   server stays reachable for its own control-plane connection need a
-   design.
-3. **Test doubles.** The ADR's tests use `e2e/lib/fake-cloudflare.mjs`
-   and recorded fixtures shared with ADR 0011. Neither exists yet.
-4. **Open questions.** Whether apex hostnames work through CNAME flattening
-   (Cloudflare calls A records "not a supported setup") and whether origins
-   should require Authenticated Origin Pulls are both still open in the ADR.
+1. **Routing: solved, with a precondition.** The fallback origin is a
+   proxied record with A/AAAA records of _every_ ingress server, so
+   Cloudflare may connect to any of them. With the mesh on, every meshed,
+   ready ingress server of a workspace routes every hostname of it: a
+   service without a local replica arrives as a route-only workload whose
+   upstreams are its replicas' mesh IPs (`lib/desired-state.ts`,
+   `routeWorkloads`). A server that isn't on the mesh, or isn't ready,
+   still routes only its own replicas. So the SaaS mode must stay refused
+   with 409 `saas_requires_mesh` unless `mesh_enabled` is on and every
+   ingress server named in `origin.<zone>` is meshed and ready; the
+   record should name only such servers (`servingNodes` in
+   `lib/domains/serving.ts` already computes them), and be rewritten when
+   readiness changes (the `mesh_status` handler refreshes on readiness
+   transitions, which is the hook to use).
+2. **Origin firewall: the table exists, the chain doesn't.** The agent
+   now owns an `inet roundhouse` nftables table (`agent/internal/netpol`,
+   replaced atomically on every change, verified every 30 s). The
+   `cloudflare_only` rule belongs there as an `input`-hook chain at
+   priority `filter - 1`: accept `tcp dport { 80, 443 }` from a
+   `cloudflare` set (IPv4 and IPv6, from `desired_state.ingress.allowed_sources`),
+   from loopback and from `@nodes` over `wg0`, and drop the rest of 80/443.
+   A drop in our table is final, so Docker's rules can't undo it; the
+   control-plane connection is outbound and unaffected. Still to design:
+   the protocol field (an `IngressSettings` addition gated on a protocol
+   version), how a server without the table (agent below
+   `MESH_PROTOCOL_VERSION`) is refused, and the daily refresh of
+   Cloudflare's ranges.
+3. **Test doubles: still missing.** The ADR's tests use
+   `e2e/lib/fake-cloudflare.mjs` and recorded fixtures shared with ADR
+   0011. Neither exists. The custom hostname, fallback origin and DNS
+   record endpoints need a fake with the documented status sequences before
+   any of the API below is written.
+4. **Open questions: still open.** Whether apex hostnames work through
+   CNAME flattening (Cloudflare calls A records "not a supported setup")
+   and whether origins should require Authenticated Origin Pulls.
+
+Items 2 to 4, plus the setup workflow and the dashboard below, are the
+remaining work; none of them depends on anything else unbuilt.
 
 ## What it builds on
 
@@ -45,7 +61,7 @@ Everything below already exists and is reused unchanged:
   `apps/api/src/lib/certificates/cloudflare-dns.ts` (injectable transport,
   error messages that are safe to show).
 
-## Data model (migration after 0017)
+## Data model (the next migration after 0021)
 
 ```sql
 -- domains.mode already exists ('direct' | 'cloudflare_saas').
@@ -76,8 +92,8 @@ it.
   3. `PUT /zones/{id}/custom_hostnames/fallback_origin`, then polls
      `GET` on it until `status: "active"`, from a workflow
      (`SAAS_SETUP_WORKFLOW`), since activation takes minutes.
-  4. Refused with 409 `saas_requires_mesh` until cross-node routing exists
-     (see "Why it waits", item 1).
+  4. Refused with 409 `saas_requires_mesh` unless the mesh is on and
+     every ingress server is meshed and ready (see item 1 above).
 - Adding a domain in SaaS mode:
   1. `POST /zones/{id}/custom_hostnames` with
      `{ hostname, ssl: { method: "http", type: "dv", settings: { min_tls_version: "1.2" } } }`,
@@ -132,8 +148,9 @@ minutes per token), and maps:
   (`pending → active`, DCV records appearing only on `GET`).
 - Unit tests for the state table above, the rate budget and the quota
   meter.
-- An e2e run against the fake API once the mesh exists: a custom hostname
-  goes `pending → active`, the fallback origin is set, and the dashboard
-  shows the DCV records.
+- An e2e run against the fake API on the two-node mesh stack
+  (`e2e/phase3`): a custom hostname goes `pending → active`, the
+  fallback origin is set, the dashboard shows the DCV records, and a
+  request reaching the server without the replica is served over the mesh.
 - Live verification on a maintainer account before release
   (`scripts/verify-domains-live.mjs`), as the ADR requires.

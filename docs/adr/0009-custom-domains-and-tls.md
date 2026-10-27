@@ -468,11 +468,15 @@ New RBAC action: `domains:manage` (owner, admin, member). New ID prefix:
 Built (2026-10-27): direct mode, `managed` TLS with the control-plane ACME
 client, HSTS, wildcards through DNS-01, `cert_status` reporting, and the
 agent's certificate store. Where the build differs from the decision above:
-- **Routing before the mesh.** Every ingress server runs Caddy, but a server
-  routes a hostname only to replicas running on it until the WireGuard mesh
-  (0005) exists. DNS guidance therefore names the servers that run the
-  service (A/AAAA records of exactly those when others don't), and
-  `tls.nodes` counts only those servers.
+- **Routing and the mesh.** Every ingress server runs Caddy. Without the
+  WireGuard mesh (0005) a server routes a hostname only to replicas running
+  on it, so DNS guidance names the servers that run the service (A/AAAA
+  records of exactly those when others don't), and `tls.nodes` counts
+  only those servers. With the mesh on (built 2026-10-27), every meshed,
+  ready ingress server routes every hostname of its workspace through
+  route-only workloads to the replicas' mesh IPs, so the guidance names all
+  of them and DNS may point at any or all ingress servers
+  (`lib/domains/serving.ts`).
 - **Certificate files.** Caddy runs as its own user, so certificates are
   written to `/var/lib/roundhouse-certs/<id>.pem` (`ingress.certs_dir`),
   mode 0640 in a `root:caddy` setgid directory that `install.sh` creates,
@@ -498,13 +502,14 @@ agent's certificate store. Where the build differs from the decision above:
 - **HTTPS probe.** Kept only as the fallback for servers older than
   `CERTS_PROTOCOL_VERSION`, which send no `cert_status`.
 - **Cloudflare for SaaS** is not built; see
-  [the implementation spec](../cloudflare-for-saas.md) for why (shared
-  fallback origin versus local-replica routing, the origin firewall, test
-  doubles) and the plan.
+  [the implementation spec](../cloudflare-for-saas.md). The mesh removed
+  the routing blocker (any meshed, ready ingress server can be the
+  fallback origin); the origin firewall chain, the fake Cloudflare API and
+  the open questions remain.
 - **Tests.** The order pipeline runs against Pebble
   (`apps/api/test-node`) and against an in-process CA in the Workers
-  suite; the multi-node e2e run (`e2e/phase3/domains.test.mjs`) waits for
-  the mesh.
+  suite. Cross-node routing is covered by the mesh tests (API unit tests
+  for route-only workloads and the agent's two-node integration test).
 
 ## Open questions
 
