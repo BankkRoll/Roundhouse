@@ -13,7 +13,14 @@
  *
  * @module
  */
-import { builds, type Db, deploymentEvents, deployments, serviceConfigs } from "@roundhouse/db";
+import {
+  builds,
+  type Db,
+  deploymentEvents,
+  deployments,
+  serviceConfigs,
+  services,
+} from "@roundhouse/db";
 import {
   CANCELLABLE_DEPLOYMENT_STATUSES,
   canTransition,
@@ -26,7 +33,7 @@ import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import type { Env } from "../env";
 import type { DeployParams } from "../workflows/deploy";
 import { nodesOfDeployments, refreshNodes } from "./desired-state";
-import { conflict } from "./errors";
+import { ApiError, conflict } from "./errors";
 import { publish } from "./realtime";
 import { toApiDeployment, toApiDeploymentEvent } from "./serialize";
 
@@ -208,13 +215,13 @@ export async function retireDeployments(
  *
  * @param env - Bindings.
  * @param deployment - The deployment; ignored when it has no workflow.
- * @param type - `build` or `health`.
+ * @param type - `build`, `health` or `pre_deploy` (its pre-deploy run ended).
  * @param payload - Small diagnostic payload.
  */
 export async function wakeWorkflow(
-  env: Env,
+  env: Pick<Env, "DEPLOY_WORKFLOW">,
   deployment: Pick<DeploymentRow, "workflowInstanceId">,
-  type: "build" | "health",
+  type: "build" | "health" | "pre_deploy",
   payload: Record<string, unknown> = {},
 ): Promise<void> {
   if (!deployment.workflowInstanceId) return;
@@ -259,7 +266,7 @@ export async function cancelBuildsOnNodes(
 /**
  * Cancels a deployment: marks it (and its build) cancelled, stops the build
  * on its builder, drops its replicas from nodes, and wakes its workflow so it
- * exits.
+ * exits (cancelling its pre-deploy run, if one is in progress).
  *
  * @param ctx - Database and bindings.
  * @param projectId - Owning project.
@@ -289,6 +296,7 @@ export async function cancelDeployment(
   await Promise.all([
     wakeWorkflow(ctx.env, current, "build", { cancelled: true }),
     wakeWorkflow(ctx.env, current, "health", { cancelled: true }),
+    wakeWorkflow(ctx.env, current, "pre_deploy", { cancelled: true }),
   ]);
   return current;
 }
@@ -316,7 +324,8 @@ export interface CreateDeploymentInput {
  * @param ctx - Database and bindings.
  * @param input - Service, environment and trigger.
  * @returns The new deployment row.
- * @throws {ApiError} 409 when there is no config or it has 0 replicas.
+ * @throws {ApiError} 409 when there is no config or it has 0 replicas; 422
+ *   `cron_schedule_required` for a cron service without a schedule.
  */
 export async function createDeployment(
   ctx: LifecycleContext,
@@ -337,7 +346,21 @@ export async function createDeployment(
     .orderBy(desc(serviceConfigs.version))
     .limit(1);
   if (!config) throw conflict("The service has no config in this environment");
-  if (config.deploy.replicas === 0) {
+  const [service] = await db
+    .select({ kind: services.kind })
+    .from(services)
+    .where(eq(services.id, input.serviceId))
+    .limit(1);
+  // A cron service runs no replicas; its deployment only arms the schedule (ADR 0010).
+  if (service?.kind === "cron") {
+    if (!config.cron) {
+      throw new ApiError(
+        422,
+        "cron_schedule_required",
+        "A cron service needs a schedule: set cron.schedule in its config before deploying",
+      );
+    }
+  } else if (config.deploy.replicas === 0) {
     throw conflict("The service has 0 replicas; scale it up before deploying");
   }
 

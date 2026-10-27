@@ -170,6 +170,27 @@ export function formatRelativeTime(timestamp: number | null | undefined, now = D
 }
 
 /**
+ * How far an instant is from now, in whole units, for deadlines such as certificate
+ * expiry and renewal.
+ *
+ * @param timestamp - Unix ms.
+ * @param now - Current unix ms. Defaults to `Date.now()`.
+ * @returns `"in 54 days"`, `"in 5 hours"`, `"in 3 minutes"`, or `"2 days ago"` once past.
+ */
+export function formatUntil(timestamp: number, now = Date.now()): string {
+  const left = timestamp - now;
+  const span = Math.abs(left);
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+  const words =
+    span >= 2 * DAY
+      ? plural(Math.floor(span / DAY), "day")
+      : span >= HOUR
+        ? plural(Math.floor(span / HOUR), "hour")
+        : plural(Math.max(1, Math.floor(span / MINUTE)), "minute");
+  return left >= 0 ? `in ${words}` : `${words} ago`;
+}
+
+/**
  * Formats a timestamp as an unambiguous UTC string for tooltips and audit rows.
  *
  * @param timestamp - Unix ms.

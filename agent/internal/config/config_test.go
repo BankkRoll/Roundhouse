@@ -71,11 +71,12 @@ func TestValidate(t *testing.T) {
 	c.NodeID = ""
 	c.ConnectURL = "https://cp.example.com/connect"
 	c.ControlPublicKey = "short"
+	c.Ingress.CertsDir = "relative/certs"
 	err := c.Validate()
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	for _, want := range []string{"node_id", "connect_url", "control_public_key"} {
+	for _, want := range []string{"node_id", "connect_url", "control_public_key", "ingress.certs_dir"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %s", err, want)
 		}
@@ -117,5 +118,34 @@ func TestControlKeysPath(t *testing.T) {
 	legacy := Config{StateFile: filepath.Join(dir, "state-r1.json")}
 	if got, want := legacy.ControlKeysPath(), filepath.Join(dir, "state-r1.control-keys.json"); got != want {
 		t.Fatalf("config from before rollover: %q, want %q", got, want)
+	}
+}
+
+func TestJobsMaxConcurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.yaml")
+	c := validConfig(t.TempDir())
+	if got := c.JobsMaxConcurrent(); got != DefaultJobsMaxConcurrent {
+		t.Fatalf("default: %d", got)
+	}
+	c.Jobs.MaxConcurrent = 3
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(data), "jobs:\n    max_concurrent: 3\n") {
+		t.Fatalf("saved %q, %v", data, err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JobsMaxConcurrent() != 3 || got.Validate() != nil {
+		t.Fatalf("loaded %d, %v", got.JobsMaxConcurrent(), got.Validate())
+	}
+	for _, bad := range []int{-1, MaxJobsMaxConcurrent + 1} {
+		c.Jobs.MaxConcurrent = bad
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "jobs.max_concurrent") {
+			t.Errorf("max_concurrent %d: %v", bad, err)
+		}
 	}
 }

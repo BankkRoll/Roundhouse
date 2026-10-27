@@ -93,6 +93,7 @@ import {
   addCustomDomain,
   assertDomainCapacity,
   assertHostnameFree,
+  assertServesTraffic,
   checkCustomHostname,
   type DomainRow,
   domainPort,
@@ -627,6 +628,7 @@ async function buildPlan(
     }
     adding.set(service.id, (adding.get(service.id) ?? 0) + 1);
     if (options.strict) {
+      assertServesTraffic(service);
       await checkCustomHostname(ctx.c, db, op.hostname);
       await assertHostnameFree(db, op.hostname, Date.now());
       domainPort((await specAfter(service))?.networking.port, {

@@ -5,7 +5,7 @@ import { external } from "../../lib/external";
 import { db, PASSWORD, SIGNING_KID, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
 import { apiError } from "../../mocks/handlers";
 import { server } from "../../mocks/server";
-import { findPageHeading, renderApp } from "../../test/render";
+import { renderApp } from "../../test/render";
 import { githubPostUrl, submitGithubManifest } from "./github-manifest";
 import { MCP_DOCS_URL } from "./platform-page";
 
@@ -41,30 +41,6 @@ describe("GitHub manifest submission", () => {
 });
 
 describe("platform settings", () => {
-  it("lets owners set the apps domain and TLS mode", async () => {
-    const { user } = renderApp(PLATFORM);
-    await findPageHeading("Platform");
-    const form = await screen.findByRole("form", { name: "Ingress" });
-    const domain = within(form).getByLabelText("Apps domain");
-    expect(domain).toHaveValue("apps.example.com");
-    await user.clear(domain);
-    await user.type(domain, "Not A Host");
-    await user.click(within(form).getByRole("button", { name: "Save" }));
-    expect(within(form).getByText(/Enter a hostname/)).toBeInTheDocument();
-    await user.clear(domain);
-    await user.type(domain, "127.0.0.1.nip.io");
-    await user.selectOptions(within(form).getByLabelText("TLS mode"), "internal");
-    expect(within(form).getByText(/local CA/)).toBeInTheDocument();
-    await user.click(within(form).getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("Platform settings saved")).toBeInTheDocument();
-    expect(db.deploy.instance).toEqual({
-      apps_domain: "127.0.0.1.nip.io",
-      tls_mode: "internal",
-      log_retention_days: 7,
-      mcp_enabled: false,
-    });
-  });
-
   it("lets instance admins turn MCP on and off, off by default, with a link to the docs", async () => {
     const { user } = renderApp(PLATFORM);
     const toggle = await screen.findByRole("switch", { name: "Allow coding agents" });

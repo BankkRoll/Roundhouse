@@ -79,6 +79,7 @@ import {
   startDeployment,
 } from "./deploy-handlers";
 import { checkCustomHostname, hostnameTaken, newCustomDomain } from "./domains-mock";
+import { syncCertificates } from "./tls-mock";
 
 // -----------------------------------------------------------------------------
 // Approval knob
@@ -1126,6 +1127,7 @@ function applySet(
       const port = latestConfig(op.service, environment.id)?.networking.port ?? 8080;
       const domain = newCustomDomain(op.service, environment.id, op.hostname, port);
       db.deploy.domains.push(domain);
+      syncCertificates(now);
       recordAudit({
         workspaceId: scope.workspaceId,
         actorType: "user",
@@ -1137,6 +1139,7 @@ function applySet(
       });
     } else if (op.type === "domain.remove") {
       db.deploy.domains = db.deploy.domains.filter((d) => d.id !== op.domain_id);
+      syncCertificates(now);
       recordAudit({
         workspaceId: scope.workspaceId,
         actorType: "user",

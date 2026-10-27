@@ -17,7 +17,7 @@
  *
  * @module
  */
-import { type Db, domains, environments, serviceConfigs, services } from "@roundhouse/db";
+import { type Db, environments, serviceConfigs, services } from "@roundhouse/db";
 import {
   defaultServiceConfig,
   newId,
@@ -37,7 +37,7 @@ import {
   updateService,
 } from "../contracts";
 import { recordAudit } from "../lib/audit";
-import { presentDomains } from "../lib/domains/present";
+import { presentDomains, serviceDomains } from "../lib/domains/present";
 import { conflict, isUniqueViolation, notFound } from "../lib/errors";
 import { assertSourceInstallation } from "../lib/github";
 import {
@@ -332,15 +332,6 @@ export const serviceRoutes = createRouter()
     const { project } = await serviceScope(c, serviceId, policyOf(listDomains).action!);
     if (query.environment_id) await environmentOf(c, project.id, query.environment_id);
     const db = c.get("db");
-    const rows = await db
-      .select()
-      .from(domains)
-      .where(
-        and(
-          eq(domains.serviceId, serviceId),
-          ...(query.environment_id ? [eq(domains.environmentId, query.environment_id)] : []),
-        ),
-      )
-      .orderBy(asc(domains.hostname));
+    const rows = await serviceDomains(db, serviceId, query.environment_id);
     return c.json({ domains: await presentDomains(db, project.workspaceId, rows) }, 200);
   });

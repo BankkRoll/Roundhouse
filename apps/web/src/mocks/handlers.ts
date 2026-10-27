@@ -39,6 +39,7 @@ import {
   requireWorkspace,
   unauthorized,
 } from "./common";
+import { cronHandlers } from "./cron-handlers";
 import { dataHandlers } from "./data-handlers";
 import { type DbAuditEntry, type DbInvite, type DbMembership, db, nextId } from "./db";
 import { deployHandlers } from "./deploy-handlers";
@@ -48,6 +49,7 @@ import { providerHandlers } from "./providers-handlers";
 import { securityHandlers } from "./security-handlers";
 import { signingKeyHandlers } from "./signing-keys-mock";
 import { templateHandlers } from "./templates-handlers";
+import { tlsHandlers } from "./tls-mock";
 
 export { apiError } from "./common";
 
@@ -790,7 +792,9 @@ export const handlers = [
   ...changeHandlers,
   ...metricsHandlers,
   ...dataHandlers,
+  ...cronHandlers,
   ...signingKeyHandlers,
+  ...tlsHandlers,
   ...securityHandlers,
   ...accountSecurityHandlers,
   ...accessHandlers,

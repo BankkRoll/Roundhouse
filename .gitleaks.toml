@@ -34,3 +34,11 @@ regexes = ['''^logChunks.r2Key$''']
 # paths match it, whatever the condition, which would hide real leaks there.
 description = "Ed25519 public keys (SPKI DER, base64)"
 regexes = ['''^MCowBQYDK2VwAyEA[A-Za-z0-9+/]{43}=$''']
+
+[[allowlists]]
+# apps/api/src/lib/acme/csr.ts documents its PEM output in doc comments, and
+# the private-key rule spans from one comment's header to a later "KEY-----".
+# Only text containing that backtick-quoted doc phrase is allowed, which no
+# real PEM block contains.
+description = "PEM armour named in ACME doc comments"
+regexes = ['''-----BEGIN PRIVATE KEY-----` armour''']

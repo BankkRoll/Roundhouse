@@ -100,15 +100,18 @@ type Fake struct {
 	logs        map[string][]api.LogEntry
 	domains     []api.Domain
 	dns         map[string]DNSState
-	nodes       []api.Node
-	providers   map[string]bool
-	offers      []api.ProviderOffer
-	provisions  []*api.NodeProvision
-	requests    []Request
-	seq         int
-	tokens      []*apiToken
-	tokenSeq    int
-	changeSets  []*changeSet
+	// routingNodes are what new domains report as their routing_nodes; see
+	// [Fake.SetRoutingNodes].
+	routingNodes []api.DomainRoutingNode
+	nodes        []api.Node
+	providers    map[string]bool
+	offers       []api.ProviderOffer
+	provisions   []*api.NodeProvision
+	requests     []Request
+	seq          int
+	tokens       []*apiToken
+	tokenSeq     int
+	changeSets   []*changeSet
 
 	serviceMetrics map[string]ServiceMetricsData
 	nodeMetrics    map[string]NodeMetricsData
@@ -117,6 +120,9 @@ type Fake struct {
 
 	// data holds databases, volumes and backups; see [Fake.dataState].
 	data *dataState
+
+	// cron holds cron schedule states and runs; see [Fake.cronState].
+	cron *cronState
 
 	// templateDeployErrors maps a template service ref to the message its
 	// first deployment fails to start with; see [Fake.FailTemplateDeploy].
@@ -263,6 +269,14 @@ func (f *Fake) seed() {
 		{ID: "dom_0002", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "shop.example.com", URL: "https://shop.example.com", Type: "custom", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 1000), CreatedAt: Now - 1000},
 		{ID: "dom_0001", ServiceID: APIServiceID, EnvironmentID: ProductionID, Hostname: "api-production-x7k2.apps.example.com", URL: "https://api-production-x7k2.apps.example.com", Type: "generated", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 86400000), CreatedAt: Now - 86400000},
 		{ID: "dom_0003", ServiceID: APIServiceID, EnvironmentID: StagingID, Hostname: "api-staging-q9p1.apps.example.com", URL: "https://api-staging-q9p1.apps.example.com", Type: "generated", TargetPort: 8080, VerificationStatus: "verified", TLSStatus: "active", Status: "active", Records: []api.DNSRecord{}, VerifiedAt: i64(Now - 86400000), CreatedAt: Now - 86400000},
+	}
+	f.routingNodes = []api.DomainRoutingNode{{ID: NodeID, Name: "edge-1", PublicIP: str("203.0.113.10"), Serves: true}}
+	for i := range f.domains {
+		d := &f.domains[i]
+		d.TLSStatus = "issued"
+		d.HSTS = DefaultHSTS
+		d.TLS = issuedTLS(*d.VerifiedAt)
+		d.RoutingNodes = slices.Clone(f.routingNodes)
 	}
 	f.nodes = []api.Node{{ID: NodeID, Name: "edge-1", Hostname: str("edge-1"), Status: "online", Provider: "manual", PublicIP: str("203.0.113.10"),
 		OS: str("linux"), Arch: str("amd64"), AgentVersion: str("0.4.0"), Capabilities: json.RawMessage(`{"docker":true,"builder":true}`),
@@ -559,6 +573,9 @@ func (f *Fake) workspaceOf(r *http.Request) string {
 	if id := f.dataServiceOf(r); id != "" {
 		serviceID = id
 	}
+	if id := f.cronServiceOf(r); id != "" {
+		serviceID = id
+	}
 	for _, d := range f.deployments {
 		if d.ID == r.PathValue("deploymentId") || d.BuildID != nil && *d.BuildID == r.PathValue("buildId") {
 			serviceID = d.ServiceID
@@ -664,6 +681,7 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteListDomains:     {"services:read", f.listDomains},
 		api.RouteAddDomain:       {"services:manage", f.addDomain},
 		api.RouteGetDomain:       {"services:read", f.getDomain},
+		api.RouteUpdateDomain:    {"services:manage", f.updateDomain},
 		api.RouteCheckDomain:     {"services:manage", f.recheckDomain},
 		api.RouteRemoveDomain:    {"services:manage", f.removeDomain},
 		api.RouteListNodes:       {"nodes:read", f.listNodes},
@@ -698,6 +716,7 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteNodeMetrics:    {"nodes:read", f.nodeMetricsHandler},
 	}
 	f.dataRoutes(mux, handlers)
+	f.cronRoutes(handlers)
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
 	}
@@ -972,6 +991,10 @@ func (f *Fake) createService(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = "app"
 	}
+	cron, ok := createCron(w, kind, in.Config)
+	if !ok {
+		return
+	}
 	svc := api.Service{ID: f.nextID("svc"), ProjectID: p.ID, Name: in.Name, Slug: slug, Kind: kind, CreatedAt: Now, UpdatedAt: Now}
 	p.Services = append(p.Services, svc)
 	port := 8080
@@ -983,6 +1006,10 @@ func (f *Fake) createService(w http.ResponseWriter, r *http.Request) {
 	out := api.CreatedService{Service: svc}
 	for _, e := range p.Environments {
 		c := config(svc.ID, e.ID, in.Source, &port)
+		if cron != nil {
+			cc := *cron
+			c.Cron = &cc
+		}
 		f.configs[svc.ID+"/"+e.ID] = c
 		out.Configs = append(out.Configs, *c)
 	}
@@ -1523,12 +1550,16 @@ func (f *Fake) cancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d.Deployment)
 }
 
-// getLogs pages backwards: no cursor is the newest page; the cursor is the
-// index of the oldest line already returned.
+// getLogs serves deployment, build and cron run logs. It pages backwards:
+// no cursor is the newest page; the cursor is the index of the oldest line
+// already returned.
 func (f *Fake) getLogs(w http.ResponseWriter, r *http.Request) {
 	source := "dep:" + r.PathValue("deploymentId")
 	if id := r.PathValue("buildId"); id != "" {
 		source = "bld:" + id
+	}
+	if id := r.PathValue("runId"); id != "" {
+		source = "crn:" + id
 	}
 	lines := f.logs[source]
 	end := len(lines)

@@ -1,6 +1,7 @@
 import {
   CUSTOM_HOSTNAME_PROBLEM_MESSAGES,
   customHostnameProblem,
+  isWildcardHostname,
   normalizeHostname,
 } from "@roundhouse/shared";
 import {
@@ -25,7 +26,14 @@ import {
   TableRow,
   toast,
 } from "@roundhouse/ui";
-import { CopyIcon, ExternalLinkIcon, GlobeIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  GlobeIcon,
+  PlusIcon,
+  RefreshCwIcon,
+} from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { ConfirmDialog } from "../../../components/confirm-dialog";
 import { ErrorState } from "../../../components/error-state";
@@ -44,6 +52,14 @@ import { useServiceConfig } from "../../../queries/services";
 import { useEnvironmentGate } from "../../access/environment-gate";
 import { useProjectEnvironment } from "../../projects/use-project-environment";
 import type { ServicePageProps } from "../service-layout";
+import {
+  CertificateDetails,
+  certificateConcern,
+  certificateSummary,
+  HstsPanel,
+  RoutingGuidance,
+} from "./domain-details";
+import { DomainStepper } from "./domain-steps";
 
 type Tone = "success" | "warning" | "danger" | "neutral" | "info";
 
@@ -62,6 +78,17 @@ const RECORD_STATE: Record<DnsRecord["state"], { label: string; tone: Tone }> = 
   wrong: { label: "Wrong value", tone: "danger" },
   unknown: { label: "Not checked", tone: "neutral" },
 };
+
+const PURPOSE: Record<DnsRecord["purpose"], string> = {
+  routing: "Routing",
+  ownership: "Ownership",
+  acme_delegation: "Certificate delegation",
+};
+
+/** Copy-button label of a record, distinct when a domain needs two CNAMEs. */
+function recordLabel(record: DnsRecord): string {
+  return record.purpose === "acme_delegation" ? `${record.type} delegation` : record.type;
+}
 
 function copy(value: string, what: string) {
   void copyText(value).then((ok) =>
@@ -106,15 +133,18 @@ export function DnsRecordsTable({ records }: { records: DnsRecord[] }) {
         <TableBody>
           {records.map((record) => (
             <TableRow key={`${record.type}:${record.name}:${record.value}`}>
-              <TableCell cell="primary" className="font-mono text-xs">
-                {record.type}
+              <TableCell cell="primary">
+                <span className="block font-mono text-xs">{record.type}</span>
+                <span className="block text-[11px] text-muted-foreground">
+                  {PURPOSE[record.purpose]}
+                </span>
               </TableCell>
               <TableCell className="max-w-56">
                 <span className="flex items-center gap-1">
                   <span className="truncate font-mono text-xs" title={record.name}>
                     {record.name}
                   </span>
-                  <CopyButton value={record.name} label={`${record.type} name`} />
+                  <CopyButton value={record.name} label={`${recordLabel(record)} name`} />
                 </span>
               </TableCell>
               <TableCell className="max-w-72">
@@ -122,7 +152,7 @@ export function DnsRecordsTable({ records }: { records: DnsRecord[] }) {
                   <span className="truncate font-mono text-xs" title={record.value}>
                     {record.value}
                   </span>
-                  <CopyButton value={record.value} label={`${record.type} value`} />
+                  <CopyButton value={record.value} label={`${recordLabel(record)} value`} />
                 </span>
               </TableCell>
               <TableCell cell="action">
@@ -153,9 +183,12 @@ function DomainRow({
   onRemove: (domain: Domain) => void;
 }) {
   const check = useCheckDomain();
+  const [open, setOpen] = useState(false);
+  const detailsId = useId();
   const meta = DOMAIN_STATUS_META[domain.status];
   const custom = domain.type === "custom";
   const showRecords = custom && domain.status !== "active";
+  const concern = certificateConcern(domain.tls);
   return (
     <li aria-label={domain.hostname} className="grid gap-3 py-4">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -171,12 +204,20 @@ function DomainRow({
             <span className="sr-only"> (opens in a new tab)</span>
           </a>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {custom ? "Custom" : "Generated"} · TLS {domain.tls_status}
+            {custom ? "Custom" : "Generated"} ·{" "}
+            <span
+              className={
+                concern === "danger" ? "text-danger" : concern === "warning" ? "text-warning" : ""
+              }
+            >
+              {certificateSummary(domain.tls)}
+            </span>
             {domain.last_checked_at
               ? ` · checked ${formatRelativeTime(domain.last_checked_at)}`
               : ""}
           </p>
         </div>
+        {domain.wildcard ? <Badge tone="info">Wildcard</Badge> : null}
         <Badge tone={meta.tone}>{meta.label}</Badge>
         <div className="flex items-center gap-1">
           <CopyButton value={domain.url} label="URL" />
@@ -214,6 +255,18 @@ function DomainRow({
               Remove
             </Button>
           ) : null}
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={open}
+            aria-controls={detailsId}
+            onClick={() => setOpen((value) => !value)}
+          >
+            Details
+            <ChevronDownIcon
+              className={open ? "rotate-180 transition-transform" : "transition-transform"}
+            />
+          </Button>
           {domain.status === "active" ? (
             <Button asChild variant="ghost" size="icon-sm">
               <a
@@ -238,7 +291,29 @@ function DomainRow({
           {domain.error}
         </p>
       ) : null}
-      {showRecords ? <DnsRecordsTable records={domain.records} /> : null}
+      {custom && domain.status !== "active" ? <DomainStepper domain={domain} /> : null}
+      {/* A custom domain's stepper shows the certificate error at its Certificate step. */}
+      {!custom && domain.tls.status === "failed" && domain.tls.error ? (
+        <p className="text-sm text-danger">{domain.tls.error}</p>
+      ) : null}
+      {showRecords ? (
+        <>
+          <RoutingGuidance domain={domain} />
+          <DnsRecordsTable records={domain.records} />
+        </>
+      ) : null}
+      {open ? (
+        <section
+          id={detailsId}
+          aria-label={`Details of ${domain.hostname}`}
+          className="grid gap-5 border-l-2 border-border/70 pl-4 md:ml-7"
+        >
+          {custom && domain.status === "active" ? <DomainStepper domain={domain} /> : null}
+          <CertificateDetails domain={domain} />
+          {showRecords ? null : <RoutingGuidance domain={domain} />}
+          <HstsPanel domain={domain} canManage={canManage && custom} />
+        </section>
+      ) : null}
     </li>
   );
 }
@@ -266,9 +341,12 @@ function AddDomainDialog({
   const [added, setAdded] = useState<Domain | null>(null);
   const inputId = useId();
   const normalised = normalizeHostname(hostname);
+  // NOTE: Wildcards pass here because only the API knows whether this install can issue
+  // them (managed TLS with a Cloudflare zone); its 422 says why when it can't.
   const problem = normalised
-    ? customHostnameProblem(normalised, { appsDomain: null })
+    ? customHostnameProblem(normalised, { appsDomain: null }, { allowWildcard: true })
     : ("invalid" as const);
+  const wildcard = normalised !== null && isWildcardHostname(normalised);
   const localError = touched && problem ? CUSTOM_HOSTNAME_PROBLEM_MESSAGES[problem] : null;
   const current = added ? (listed?.find((d) => d.id === added.id) ?? added) : null;
 
@@ -300,8 +378,11 @@ function AddDomainDialog({
               <DialogDescription>
                 Add them at your DNS provider for{" "}
                 <span className="font-mono text-foreground">{current.hostname}</span>. The TXT
-                record proves you own it; nothing is routed until both are found. We check
-                automatically for 72 hours.
+                record proves you own it; nothing is routed until both are found.
+                {current.wildcard
+                  ? " The _acme-challenge CNAME lets this install answer the wildcard certificate's DNS-01 challenges."
+                  : ""}{" "}
+                We check automatically for 72 hours.
               </DialogDescription>
             </DialogHeader>
             <div className="flex items-center gap-2" aria-live="polite">
@@ -312,6 +393,7 @@ function AddDomainDialog({
                 <span className="text-xs text-muted-foreground">{current.error}</span>
               ) : null}
             </div>
+            <RoutingGuidance domain={current} />
             <DnsRecordsTable records={current.records} />
             {check.isError ? (
               <p role="alert" className="text-sm text-danger">
@@ -356,13 +438,19 @@ function AddDomainDialog({
                 autoFocus
                 className="font-mono"
                 aria-invalid={localError ? true : undefined}
-                aria-describedby={localError ? `${inputId}-error` : undefined}
+                aria-describedby={localError ? `${inputId}-error` : `${inputId}-hint`}
               />
               {localError ? (
                 <p id={`${inputId}-error`} className="text-sm text-danger">
                   {localError}
                 </p>
-              ) : null}
+              ) : (
+                <p id={`${inputId}-hint`} className="text-xs text-muted-foreground">
+                  {wildcard
+                    ? "A wildcard covers one level of subdomains. It needs a third record delegating _acme-challenge, and works only when this install issues certificates itself over DNS-01 (managed TLS with a Cloudflare zone)."
+                    : "One hostname, or a wildcard such as *.example.com where this install supports them."}
+                </p>
+              )}
             </div>
             {add.isError ? (
               <p role="alert" className="text-sm text-danger">

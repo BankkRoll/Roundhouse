@@ -126,6 +126,8 @@ export const DEPLOYMENT_EVENT_TYPES = [
   "replica_status",
   "route_switched",
   "rollout_finished",
+  "pre_deploy_started",
+  "pre_deploy_finished",
   "error",
 ] as const;
 

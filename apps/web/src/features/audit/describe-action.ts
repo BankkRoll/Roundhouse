@@ -103,6 +103,10 @@ const VERBS: Record<AuditAction, string> = {
   "domain.verified": "verified domain",
   "domain.failed": "could not verify domain",
   "domain.removed": "removed domain",
+  "domain.updated": "changed HSTS of domain",
+  "certificate.issued": "issued certificate",
+  "certificate.renewed": "renewed certificate",
+  "certificate.failed": "could not issue certificate",
   "mcp_client.authorized": "connected MCP client",
   "mcp_client.revoked": "disconnected MCP client",
   "template.deployed": "deployed template",
@@ -140,6 +144,10 @@ const VERBS: Record<AuditAction, string> = {
   "key.rollover_scheduled": "scheduled a signing key rollover",
   "key.rollover_completed": "completed a signing key rollover",
   "key.rollover_cancelled": "cancelled a signing key rollover",
+  "cron.run_triggered": "ran a cron job now",
+  "cron.run_cancelled": "cancelled a cron run",
+  "cron.paused": "paused a cron job",
+  "cron.resumed": "resumed a cron job",
 };
 
 /**
@@ -161,6 +169,10 @@ const TARGETS: Partial<Record<AuditAction, (metadata: Metadata) => string | null
   "domain.verified": hostnameOf,
   "domain.failed": hostnameOf,
   "domain.removed": hostnameOf,
+  "domain.updated": hostnameOf,
+  "certificate.issued": hostnameOf,
+  "certificate.renewed": hostnameOf,
+  "certificate.failed": hostnameOf,
   "invite.rejected_token": (metadata) => {
     const reason = stringField(metadata, "reason");
     return reason ? `(${reason.replace(/_/g, " ")})` : null;

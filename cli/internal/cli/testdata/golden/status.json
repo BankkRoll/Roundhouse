@@ -86,11 +86,42 @@
       "type": "generated",
       "target_port": 8080,
       "verification_status": "verified",
-      "tls_status": "active",
+      "tls_status": "issued",
       "status": "active",
       "apex": false,
       "records": [],
       "error": null,
+      "wildcard": false,
+      "hsts": {
+        "enabled": true,
+        "max_age": 31536000,
+        "include_subdomains": false,
+        "preload": false
+      },
+      "tls": {
+        "status": "issued",
+        "issuer": "R11",
+        "not_before": 1792584000000,
+        "not_after": 1800360000000,
+        "error": null,
+        "updated_at": 1792584000000,
+        "nodes": [
+          {
+            "node_id": "node_0001",
+            "name": "edge-1",
+            "state": "issued",
+            "error": null
+          }
+        ]
+      },
+      "routing_nodes": [
+        {
+          "id": "node_0001",
+          "name": "edge-1",
+          "public_ip": "203.0.113.10",
+          "serves": true
+        }
+      ],
       "last_checked_at": null,
       "next_check_at": null,
       "verified_at": 1792584000000,
@@ -105,11 +136,42 @@
       "type": "custom",
       "target_port": 8080,
       "verification_status": "verified",
-      "tls_status": "active",
+      "tls_status": "issued",
       "status": "active",
       "apex": false,
       "records": [],
       "error": null,
+      "wildcard": false,
+      "hsts": {
+        "enabled": true,
+        "max_age": 31536000,
+        "include_subdomains": false,
+        "preload": false
+      },
+      "tls": {
+        "status": "issued",
+        "issuer": "R11",
+        "not_before": 1792670399000,
+        "not_after": 1800446399000,
+        "error": null,
+        "updated_at": 1792670399000,
+        "nodes": [
+          {
+            "node_id": "node_0001",
+            "name": "edge-1",
+            "state": "issued",
+            "error": null
+          }
+        ]
+      },
+      "routing_nodes": [
+        {
+          "id": "node_0001",
+          "name": "edge-1",
+          "public_ip": "203.0.113.10",
+          "serves": true
+        }
+      ],
       "last_checked_at": null,
       "next_check_at": null,
       "verified_at": 1792670399000,

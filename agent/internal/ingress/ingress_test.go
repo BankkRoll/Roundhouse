@@ -26,7 +26,7 @@ import (
 var update = flag.Bool("update", false, "rewrite golden files")
 
 var sampleRoutes = []Route{
-	{Host: "api.example.com", PathPrefix: "/v1", Upstreams: []string{"172.18.0.3:3000"}},
+	{Host: "api.example.com", PathPrefix: "/v1", Upstreams: []string{"172.18.0.3:3000"}, HSTS: &protocol.RouteHSTS{MaxAge: 31536000}},
 	{Host: "api.example.com", Upstreams: []string{"172.18.0.2:3000"}},
 	{Host: "API.example.com", PathPrefix: "/v1/", Upstreams: []string{"172.18.0.4:3000", "172.18.0.3:3000"}},
 	{Host: "web-production-x7k2.127.0.0.1.nip.io", PathPrefix: "/", Upstreams: []string{"172.19.0.2:8080"}},

@@ -55,3 +55,10 @@ builder: false
 # Allow plaintext http:// and ws:// to a non-loopback control plane. Set by
 # `join --insecure`, for testing only: never in production.
 insecure: false
+
+# Where the agent writes the certificates the control plane issues in managed
+# TLS mode, as 0640 files Caddy reads. Optional; the default is shown. A
+# custom directory must be root:caddy mode 2750 (install.sh sets up the
+# default one) and writable under the unit's ReadWritePaths.
+# ingress:
+#   certs_dir: /var/lib/roundhouse-certs

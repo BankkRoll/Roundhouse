@@ -13,6 +13,7 @@ import type {
   DeploymentTrigger,
   DnsRecordState,
   DomainDnsObservation,
+  DomainHsts,
   DomainMode,
   DomainStatus,
   DomainTlsStatus,
@@ -30,6 +31,7 @@ import {
 import { users } from "./auth";
 import { changeSets } from "./changes";
 import { id, json, timestamp, timestamps } from "./columns";
+import { cronRuns } from "./cron";
 import { nodes } from "./nodes";
 import { environments, projects, type SealedValue, services } from "./projects";
 
@@ -216,6 +218,15 @@ export const domains = sqliteTable(
     /** When the cron checks it next; `null` stops scheduled checks (failed domains). */
     nextCheckAt: timestamp("next_check_at"),
     verifiedAt: timestamp("verified_at"),
+    /** HSTS policy of a custom domain; `null` takes `DEFAULT_HSTS` (ADR 0009). */
+    hsts: json<DomainHsts>("hsts"),
+    /** Issuer, validity and last error of the certificate serving the hostname. */
+    tlsIssuer: text("tls_issuer"),
+    tlsNotBefore: timestamp("tls_not_before"),
+    tlsNotAfter: timestamp("tls_not_after"),
+    tlsError: text("tls_error"),
+    /** When the `tls_*` columns last changed: a node's report or an issuance. */
+    tlsUpdatedAt: timestamp("tls_updated_at"),
     ...timestamps,
   },
   (t) => [
@@ -227,7 +238,8 @@ export const domains = sqliteTable(
 /**
  * Index of one NDJSON log chunk in R2 at
  * `logs/<project>/<service>/<yyyy>/<mm>/<dd>/<hh>/<chunk>.ndjson`.
- * Exactly one of `deployment_id` (runtime logs) and `build_id` is set.
+ * Exactly one of `deployment_id` (runtime logs), `build_id` and `cron_run_id`
+ * is set.
  */
 export const logChunks = sqliteTable(
   "log_chunks",
@@ -239,6 +251,10 @@ export const logChunks = sqliteTable(
     serviceId: text("service_id").references(() => services.id, { onDelete: "cascade" }),
     deploymentId: text("deployment_id").references(() => deployments.id, { onDelete: "cascade" }),
     buildId: text("build_id").references(() => builds.id, { onDelete: "cascade" }),
+    /** Set for the output of a cron run (ADR 0010); `deployment_id` is then null. */
+    cronRunId: text("cron_run_id").references((): AnySQLiteColumn => cronRuns.id, {
+      onDelete: "cascade",
+    }),
     r2Key: text("r2_key").notNull().unique(),
     /** Timestamp of the chunk's first and last line. */
     firstTs: timestamp("first_ts").notNull(),
@@ -252,6 +268,7 @@ export const logChunks = sqliteTable(
     index("log_chunks_service_ts_idx").on(t.serviceId, t.firstTs),
     index("log_chunks_deployment_ts_idx").on(t.deploymentId, t.firstTs),
     index("log_chunks_build_ts_idx").on(t.buildId, t.firstTs),
+    index("log_chunks_cron_run_ts_idx").on(t.cronRunId, t.firstTs),
     // Retention deletes chunks whose newest line is older than the cutoff.
     index("log_chunks_last_ts_idx").on(t.lastTs),
   ],

@@ -58,9 +58,13 @@ export type GithubAccountType = (typeof GITHUB_ACCOUNT_TYPES)[number];
 
 /**
  * Ingress TLS modes, as stored in the `tls_mode` instance setting. Same values
- * as `TLS_MODES` in `@roundhouse/protocol`.
+ * as `INGRESS_TLS_MODES` in `@roundhouse/protocol`:
+ * - `acme`: each node's Caddy issues on demand; fit for one ingress node;
+ * - `managed`: the control plane issues every certificate and ships it to
+ *   the nodes (ADR 0009), so DNS may point at any number of them;
+ * - `internal`, `off`: development and tests.
  */
-export const TLS_MODES = ["acme", "internal", "off"] as const;
+export const TLS_MODES = ["acme", "managed", "internal", "off"] as const;
 
 /** Ingress TLS mode; see {@link TLS_MODES}. */
 export type TlsMode = (typeof TLS_MODES)[number];

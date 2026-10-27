@@ -29,17 +29,17 @@ func admit(w *protocol.WorkloadSpec) string {
 		return fmt.Sprintf("refusing network %q: service workloads may only join %s",
 			w.Network, protocol.EnvironmentNetworkName(*w.ProjectID, *w.EnvironmentID))
 	}
-	if strings.HasPrefix(w.Image, protocol.RegistryListen+"/") && !isOwnLocalImage(w.Image, *w.ProjectID, *w.ServiceID) {
+	if strings.HasPrefix(w.Image, protocol.RegistryListen+"/") && !IsOwnLocalImage(w.Image, *w.ProjectID, *w.ServiceID) {
 		return fmt.Sprintf("refusing image %q: local registry images must be %s@sha256:<digest>",
 			w.Image, protocol.LocalImageRepository(*w.ProjectID, *w.ServiceID))
 	}
 	return ""
 }
 
-// isOwnLocalImage reports whether image is exactly the service's local
+// IsOwnLocalImage reports whether image is exactly the service's local
 // repository pinned by digest, so one project can't run another's build
 // from the shared registry.
-func isOwnLocalImage(image, projectID, serviceID string) bool {
+func IsOwnLocalImage(image, projectID, serviceID string) bool {
 	digest, ok := strings.CutPrefix(image, protocol.LocalImageRepository(projectID, serviceID)+"@sha256:")
 	if !ok || len(digest) != 64 {
 		return false
@@ -52,10 +52,10 @@ func isOwnLocalImage(image, projectID, serviceID string) bool {
 	return true
 }
 
-// envFailure is the status message of a workload whose sealed environment
+// EnvFailure is the status message of a workload whose sealed environment
 // can't be opened. A box for another key gets its own message: it means the
 // node's key changed after it registered, which only a re-join fixes.
-func envFailure(err error) string {
+func EnvFailure(err error) string {
 	if errors.Is(err, protocol.ErrBoxWrongKey) {
 		return "cannot open the environment: it is sealed to an encryption key this node does not hold " +
 			"(the node's key changed after it registered); re-join the node with `roundhouse-agent join --force`"

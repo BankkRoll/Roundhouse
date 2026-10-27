@@ -40,6 +40,11 @@ export type ErrorCode =
   | "provider_read_only"
   | "domain_taken"
   | "hostname_not_allowed"
+  | "invalid_hsts"
+  | "preload_confirmation_required"
+  | "cloudflare_dns_invalid"
+  | "acme_mode_single_ingress_only"
+  | "managed_tls_unavailable"
   | "mcp_disabled"
   | "change_set_changed"
   | "change_set_conflict"
@@ -59,6 +64,10 @@ export type ErrorCode =
   | "credential_rotation_failed"
   | "node_offline"
   | "query_timeout"
+  | "invalid_schedule"
+  | "cron_schedule_required"
+  | "cron_has_no_endpoint"
+  | "run_in_progress"
   | "internal";
 
 /**

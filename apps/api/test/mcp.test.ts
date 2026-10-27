@@ -19,6 +19,7 @@ import {
   createProject,
   createService,
   GIT_SERVICE,
+  IMAGE_SERVICE,
   stage,
   waitForStatus,
 } from "./pipeline-helpers";
@@ -332,10 +333,12 @@ describe("tools/list", () => {
       "list_changes",
       "submit_changes",
       "apply_changes",
+      "list_domains",
       "list_nodes",
       "list_databases",
       "list_backups",
       "get_metrics",
+      "list_cron_runs",
       "list_templates",
       "deploy_template",
     ]);
@@ -353,6 +356,7 @@ describe("tools/list", () => {
       "read_logs",
       "list_variables",
       "list_changes",
+      "list_domains",
     ]) {
       expect(byName.get(name)!.annotations?.readOnlyHint).toBe(true);
     }
@@ -877,6 +881,87 @@ describe("tool registry", () => {
   });
 });
 
+describe("cron tools", () => {
+  it("lists a cron service's runs read-only, newest first, with paging and access checks", async () => {
+    const { owner, workspaceId } = await install();
+    const project = await createProject(owner, workspaceId);
+    const envId = project.environments[0]!.id;
+    const created = await owner.json<{ service: { id: string } }>(
+      `/v1/projects/${project.id}/services`,
+      {
+        method: "POST",
+        json: {
+          name: "nightly",
+          kind: "cron",
+          source: { type: "image", image: "busybox:1.37" },
+          config: { cron: { schedule: "@daily" } },
+        },
+      },
+    );
+    const serviceId = created.body.service.id;
+    for (const [id, status] of [
+      ["crn_01", "succeeded"],
+      ["crn_02", "failed"],
+      ["crn_03", "missed"],
+    ] as const) {
+      await env.DB.prepare(
+        `INSERT INTO cron_runs (id, service_id, environment_id, trigger, scheduled_for, attempt,
+           status, created_at, updated_at) VALUES (?1, ?2, ?3, 'schedule', ?5, 1, ?4, 1, 1)`,
+      )
+        .bind(id, serviceId, envId, status, Number(id.slice(-1)) * 60_000)
+        .run();
+    }
+    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.read));
+    const page = await tool<{
+      environment_id: string;
+      runs: { id: string; status: string }[];
+      next_cursor: string | null;
+    }>(client, "list_cron_runs", { service_id: serviceId, limit: 2 });
+    expect(page.isError).toBe(false);
+    expect(page.body.environment_id).toBe(envId);
+    expect(page.body.runs.map((r) => r.id)).toEqual(["crn_03", "crn_02"]);
+    const rest = await tool<{ runs: { id: string }[]; next_cursor: string | null }>(
+      client,
+      "list_cron_runs",
+      { service_id: serviceId, cursor: page.body.next_cursor },
+    );
+    expect(rest.body).toEqual({
+      environment_id: envId,
+      runs: [expect.objectContaining({ id: "crn_01" })],
+      next_cursor: null,
+    });
+    const failed = await tool<{ runs: { id: string }[] }>(client, "list_cron_runs", {
+      service_id: serviceId,
+      status: "failed",
+    });
+    expect(failed.body.runs.map((r) => r.id)).toEqual(["crn_02"]);
+    expect(MCP_TOOLS.find((t) => t.name === "list_cron_runs")!.annotations.readOnlyHint).toBe(true);
+
+    const elsewhere = await owner.json<{ id: string }>("/v1/workspaces", {
+      method: "POST",
+      json: { name: "Elsewhere" },
+    });
+    const foreign = await createProject(owner, elsewhere.body.id);
+    const foreignService = await owner.json<{ service: { id: string } }>(
+      `/v1/projects/${foreign.id}/services`,
+      {
+        method: "POST",
+        json: {
+          name: "other",
+          kind: "cron",
+          source: { type: "image", image: "busybox:1.37" },
+          config: { cron: { schedule: "@daily" } },
+        },
+      },
+    );
+    const hidden = await tool<{ error: { status: number } }>(client, "list_cron_runs", {
+      service_id: foreignService.body.service.id,
+    });
+    expect(hidden.body.error.status).toBe(404);
+    await client.close();
+  });
+});
+
 describe("data tools", () => {
   it("lists databases, backups and metrics read-only, with no credential or key in sight", async () => {
     const { owner, workspaceId } = await install();
@@ -945,6 +1030,87 @@ describe("data tools", () => {
     });
     expect(res.body.error.status).toBe(404);
     expect(MCP_TOOLS.some((t) => /query|sql/.test(t.name))).toBe(false);
+    await client.close();
+  });
+});
+
+describe("list_domains", () => {
+  it("returns what REST lists, filtered by environment, read-only", async () => {
+    const { owner, workspaceId } = await install();
+    const ingress = await owner.json("/v1/instance/settings", {
+      method: "PATCH",
+      json: { apps_domain: "apps.example.com", tls_mode: "off" },
+    });
+    expect(ingress.status).toBe(200);
+    const project = await createProject(owner, workspaceId);
+    const svc = await createService(owner, project.id, {
+      ...IMAGE_SERVICE,
+      config: { networking: { generated_domain: true } },
+    });
+    const [production, other] = project.environments;
+    const rest = await owner.json<{ domains: { hostname: string }[] }>(
+      `/v1/services/${svc.service.id}/domains`,
+    );
+    expect(rest.body.domains.length).toBeGreaterThan(0);
+
+    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.read));
+    const all = await tool<{ domains: unknown[] }>(client, "list_domains", {
+      service_id: svc.service.id,
+    });
+    expect(all.isError).toBe(false);
+    expect(all.body).toEqual(rest.body);
+    expect(all.body.domains[0]).toEqual(
+      expect.objectContaining({
+        type: "generated",
+        hsts: expect.objectContaining({ enabled: true }),
+        tls: expect.objectContaining({ status: expect.any(String), nodes: expect.any(Array) }),
+        routing_nodes: expect.any(Array),
+      }),
+    );
+
+    const inProduction = await tool<{ domains: unknown[] }>(client, "list_domains", {
+      service_id: svc.service.id,
+      environment_id: production!.id,
+    });
+    expect(inProduction.body.domains).toEqual(all.body.domains);
+    if (other) {
+      const elsewhere = await tool<{ domains: unknown[] }>(client, "list_domains", {
+        service_id: svc.service.id,
+        environment_id: other.id,
+      });
+      expect(elsewhere.body.domains).toEqual([]);
+    }
+    const missing = await tool<{ error: { status: number } }>(client, "list_domains", {
+      service_id: svc.service.id,
+      environment_id: "env_missing",
+    });
+    expect(missing.body.error.status).toBe(404);
+    expect(MCP_TOOLS.filter((t) => t.name.includes("domain")).map((t) => t.name)).toEqual([
+      "list_domains",
+    ]);
+    await client.close();
+  });
+
+  it("checks the same scope and access as REST", async () => {
+    const { owner, workspaceId } = await install();
+    const project = await createProject(owner, workspaceId);
+    const svc = await createService(owner, project.id);
+    const res = await rpc(callBody("list_domains", { service_id: svc.service.id }), {
+      authorization: `Bearer ${await mint(owner, workspaceId, ["workspace:read"])}`,
+    });
+    expect(res.status).toBe(403);
+    expect(res.headers.get("www-authenticate")).toContain('scope="services:read"');
+
+    const other = await owner.json<{ id: string }>("/v1/workspaces", {
+      method: "POST",
+      json: { name: "Elsewhere" },
+    });
+    const foreign = await createService(owner, (await createProject(owner, other.body.id)).id);
+    const client = await connect(await mint(owner, workspaceId, API_TOKEN_PRESETS.read));
+    const out = await tool<{ error: { status: number } }>(client, "list_domains", {
+      service_id: foreign.service.id,
+    });
+    expect(out.body.error.status).toBe(404);
     await client.close();
   });
 });

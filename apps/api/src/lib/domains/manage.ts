@@ -3,6 +3,7 @@
  * domain routes and change set apply so both enforce the same rules:
  *
  * - {@link checkCustomHostname}: normalisation and the names the install owns.
+ * - {@link assertServesTraffic}: cron services (ADR 0010) take no domains.
  * - {@link domainPort} / {@link assertDomainCapacity}: a service needs a port,
  *   and at most `MAX_CUSTOM_DOMAINS_PER_SERVICE` domains per environment.
  * - {@link hostnameHolder}: instance-wide uniqueness, with takeover of a
@@ -24,6 +25,7 @@ import {
 import { and, count, eq } from "drizzle-orm";
 import { type AppContext, type AuditActor, clientIp } from "../../context";
 import { recordAudit } from "../audit";
+import { dns01Available, getCloudflareDnsView } from "../certificates/settings";
 import { ApiError, conflict, isUniqueViolation, notFound } from "../errors";
 import { publicOrigin } from "../origin";
 import { latestConfig } from "../projects";
@@ -36,8 +38,21 @@ import { INGRESS_HOSTNAME_SETTING } from "./records";
 export type DomainRow = typeof domains.$inferSelect;
 
 /**
+ * Refuses a domain for a service that serves no traffic.
+ *
+ * @param service - The service the domain would route to.
+ * @throws {ApiError} 422 `cron_has_no_endpoint` for a cron service.
+ */
+export function assertServesTraffic(service: { kind: string }): void {
+  if (service.kind === "cron") {
+    throw new ApiError(422, "cron_has_no_endpoint", "A cron service serves no traffic");
+  }
+}
+
+/**
  * Normalises a hostname and refuses names that can't be a custom domain:
- * wildcards, IPs, non-public names, and the install's own names.
+ * IPs, non-public names, the install's own names, and wildcards unless
+ * managed TLS can issue them over DNS-01.
  *
  * @param c - Request context (for the public origin).
  * @param db - Database client.
@@ -51,14 +66,23 @@ export async function checkCustomHostname(c: AppContext, db: Db, input: string):
     throw new ApiError(400, "invalid_request", CUSTOM_HOSTNAME_PROBLEM_MESSAGES.invalid);
   }
   const ingress = await getIngressSettings(db);
-  const ingressHostname = await getSetting<unknown>(db, INGRESS_HOSTNAME_SETTING);
-  const problem = customHostnameProblem(hostname, {
-    appsDomain: ingress.appsDomain,
-    exact: [
-      new URL(publicOrigin(c)).hostname,
-      typeof ingressHostname === "string" ? ingressHostname : null,
-    ],
-  });
+  const [ingressHostname, dns] = await Promise.all([
+    getSetting<unknown>(db, INGRESS_HOSTNAME_SETTING),
+    getCloudflareDnsView(db),
+  ]);
+  const problem = customHostnameProblem(
+    hostname,
+    {
+      appsDomain: ingress.appsDomain,
+      exact: [
+        new URL(publicOrigin(c)).hostname,
+        typeof ingressHostname === "string" ? ingressHostname : null,
+      ],
+    },
+    // Wildcards need DNS-01 through the _acme-challenge delegation, which
+    // only managed TLS with the Cloudflare DNS zone can answer.
+    { allowWildcard: ingress.tlsMode === "managed" && dns01Available(ingress.appsDomain, dns) },
+  );
   if (problem === "invalid") {
     throw new ApiError(400, "invalid_request", CUSTOM_HOSTNAME_PROBLEM_MESSAGES.invalid);
   }

@@ -94,15 +94,19 @@ the first deploy; there are no IDs to copy.
 | `BACKUP_WORKFLOW`           | Workflow         | One database or volume backup per instance                              |
 | `RESTORE_WORKFLOW`          | Workflow         | One restore per instance                                                |
 | `VOLUME_MIGRATION_WORKFLOW` | Workflow         | One move of a volume between nodes per instance                         |
+| `CERT_WORKFLOW`             | Workflow         | One certificate order per attempt (managed TLS, ADR 0009)               |
+| `CRON_RUN_WORKFLOW`         | Workflow         | One cron run per instance (ADR 0010)                                    |
 | `AUTH_LIMITER`              | Rate limit       | 10 a minute per IP on secret-accepting endpoints and agent connects     |
 | `WEBHOOK_LIMITER`           | Rate limit       | 300 a minute per IP on the GitHub webhook receiver                      |
 | `MCP_LIMITER`               | Rate limit       | 60 a minute per token on MCP tool calls                                 |
+| `ACME_LIMITER`              | Rate limit       | 60 a minute per IP on the public ACME HTTP-01 responder                 |
 | `METRICS`                   | Analytics Engine | Metrics dataset (`roundhouse_metrics`); optional, absent in development |
 
 Two cron triggers run in the same Worker: hourly retention (`17 * * * *`),
 which also applies backup retention, and a minute tick that seals the audit
-chain, checks custom domains, starts scheduled backups and sends volume
-deletions past their grace period.
+chain, checks custom domains, starts certificate orders and renewals (managed
+TLS), starts scheduled backups and sends volume deletions past their grace
+period.
 
 ### Stored in the database, not in the environment
 
@@ -112,6 +116,32 @@ dashboard), cloud provider tokens (Hetzner, DigitalOcean, Vultr, Linode),
 instance settings such as MCP on/off and backup storage (an S3-compatible
 bucket; its secret access key is sealed and write-only), and every
 project's variables.
+
+Settings → Domains & TLS holds the TLS settings (ADR 0009):
+- **TLS mode.** `acme` (each server's Caddy orders its own certificates;
+  one ingress server only), `managed` (the control plane orders every
+  certificate and hands it to the servers; any number of ingress servers),
+  `internal` or `off`. `managed` needs `PUBLIC_ORIGIN` to be the
+  control plane's `https://` origin: servers forward ACME HTTP-01
+  challenges to `GET /v1/acme/http-01/{token}` there.
+- **ACME CA.** Let's Encrypt production by default; any RFC 8555 directory
+  URL works, and an optional contact address. The account key is created on
+  the first order and sealed.
+- **Cloudflare DNS.** A zone ID and an API token with Zone → DNS → Edit and
+  Zone → Zone → Read on the apps domain's zone, sealed and write-only. It
+  lets the control plane answer DNS-01: one `*.<apps_domain>` certificate
+  covers every generated hostname, and wildcard custom domains become
+  possible. Without it each generated hostname gets its own certificate,
+  under Let's Encrypt's limit of 50 new certificates per registered domain a
+  week.
+- **Ingress hostname.** The name customers CNAME their domains to, kept by
+  you as A/AAAA records of the ingress servers. Without it they CNAME to the
+  service's generated hostname.
+
+Every ingress server runs Caddy, but until the WireGuard mesh exists a
+server routes a hostname only to replicas running on it. DNS for a custom
+domain must point at servers that run the service; the dashboard and
+`roundhouse domain` list exactly those when some servers don't.
 
 ### Rotating the master key
 
@@ -179,6 +209,7 @@ Unknown keys are rejected. An annotated example is
 | `data_dir`            | no       | Log buffer, registry storage, build checkouts. Default: the directory of `state_file`            |
 | `builder`             | no       | `true` on build nodes (`join --builder`)                                                         |
 | `insecure`            | no       | `true` allows plaintext to a non-loopback control plane (`join --insecure`). Testing only        |
+| `ingress.certs_dir`   | no       | Where managed-TLS certificates are written for Caddy. Default `/var/lib/roundhouse-certs`        |
 
 The secret files live in `/var/lib/roundhouse` (`--data-dir` to change it).
 The config file itself holds no secrets.

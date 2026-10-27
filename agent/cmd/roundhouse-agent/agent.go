@@ -15,6 +15,7 @@ import (
 	"github.com/BankkRoll/Roundhouse/agent/internal/backup"
 	"github.com/BankkRoll/Roundhouse/agent/internal/builder"
 	"github.com/BankkRoll/Roundhouse/agent/internal/builds"
+	"github.com/BankkRoll/Roundhouse/agent/internal/certs"
 	"github.com/BankkRoll/Roundhouse/agent/internal/config"
 	"github.com/BankkRoll/Roundhouse/agent/internal/conn"
 	"github.com/BankkRoll/Roundhouse/agent/internal/dataplane"
@@ -22,6 +23,7 @@ import (
 	"github.com/BankkRoll/Roundhouse/agent/internal/docker"
 	"github.com/BankkRoll/Roundhouse/agent/internal/firewall"
 	"github.com/BankkRoll/Roundhouse/agent/internal/ingress"
+	"github.com/BankkRoll/Roundhouse/agent/internal/jobs"
 	"github.com/BankkRoll/Roundhouse/agent/internal/logship"
 	"github.com/BankkRoll/Roundhouse/agent/internal/metrics"
 	agentruntime "github.com/BankkRoll/Roundhouse/agent/internal/runtime"
@@ -48,9 +50,11 @@ type agent struct {
 	volumes *volumes.Manager
 	// data routes volume, backup, restore, copy and query frames.
 	data *dataplane.Handler
+	// jobs runs cron and pre-deploy job runs (ADR 0010).
+	jobs *jobs.Runner
 	// backups runs backup, restore and copy tasks.
 	backups *backup.Runner
-	// refusal is why workloads and builds are refused on this connection
+	// refusal is why workloads, builds and jobs are refused on this connection
 	// ([conn.PlaintextRefusal]), "" when they run.
 	refusal string
 	// builder records whether this node runs builds.
@@ -60,6 +64,10 @@ type agent struct {
 	// tcpProxy records whether this node enforces the TCP proxy's source
 	// allowlist, and so publishes ports (hello's capabilities.tcp_proxy).
 	tcpProxy bool
+	// certs holds the control plane's certificates (managed TLS mode).
+	certs *certs.Store
+	// tlsStatus reports Caddy's on-demand certificates.
+	tlsStatus *certs.Tracker
 }
 
 // newAgent wires the agent's components. encryption is the node's X25519
@@ -76,10 +84,34 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	}
 	a := &agent{log: log, client: client, docker: dc, refusal: refusal, builder: cfg.Builder,
 		firewall: firewall.New(nil, log.With("component", "firewall"))}
+	certsEnabled := func() bool { return client.PeerProtocolVersion() >= protocol.CertsProtocolVersion }
+	a.tlsStatus = certs.NewTracker(certs.TrackerOptions{
+		Send:    client.Send,
+		Enabled: certsEnabled,
+		Logger:  log.With("component", "tls-status"),
+	})
 	a.ingress = ingress.New(ingress.Options{
 		Logger:        log.With("component", "ingress"),
 		UpstreamsPath: filepath.Join(dataDir, "ingress-upstreams.json"),
+		OnLoaded: func(l ingress.Loaded) {
+			a.certs.Loaded(l)
+			a.tlsStatus.Loaded(l)
+		},
 	})
+	a.certs, err = certs.NewStore(certs.StoreOptions{
+		Dir:       certsDir(cfg, dataDir),
+		IndexPath: filepath.Join(dataDir, "certs.json"),
+		NodeID:    cfg.NodeID,
+		Key:       encryption,
+		Ingress:   a.ingress,
+		Send:      client.Send,
+		Enabled:   certsEnabled,
+		Logger:    log.With("component", "certs"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	client.Certs = a.certs
 	a.logs, err = logship.New(logship.Options{
 		Docker: dc,
 		Send:   func(ctx context.Context, l *protocol.Logs) error { return client.Send(ctx, l) },
@@ -172,10 +204,31 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 		},
 		Logger: log.With("component", "builds"),
 	})
+	a.jobs = jobs.New(jobs.Options{
+		Docker: dc,
+		Send:   func(ctx context.Context, m *protocol.JobStatus) error { return client.Send(ctx, m) },
+		Logs:   a.logs.Submit,
+		OpenEnv: func(runID string, w *protocol.WorkloadSpec) error {
+			return protocol.OpenJobEnv(encryption, cfg.NodeID, runID, w)
+		},
+		Network: a.runtime.EnsureNetwork,
+		// SECURITY: two nodes can share one Docker engine; each removes
+		// only its own orphaned job containers.
+		Namespace:     cfg.NodeID,
+		StatePath:     filepath.Join(dataDir, "jobs.json"),
+		SecretsDir:    jobSecretsDir(dataDir),
+		MaxConcurrent: cfg.JobsMaxConcurrent(),
+		Refusal:       refusal,
+		Logger:        log.With("component", "jobs"),
+	})
+	client.Jobs = jobHandler{a.jobs}
 	client.Handler = handler{a}
 	client.OnConnect = func() {
 		a.logs.Connected()
 		a.builds.Connected()
+		a.certs.Connected()
+		a.tlsStatus.Connected()
+		a.jobs.Connected()
 	}
 	a.metrics = metrics.New(metrics.Options{
 		Send: func(ctx context.Context, m *protocol.Metrics) error {
@@ -191,6 +244,10 @@ func newAgent(cfg config.Config, client *conn.Client, encryption *ecdh.PrivateKe
 	client.OnPeerProtocol = func(v int) {
 		if v >= protocol.VolumesProtocolVersion {
 			a.volumes.Connected()
+		}
+		if v >= protocol.CertsProtocolVersion {
+			a.certs.Connected()
+			a.tlsStatus.Connected()
 		}
 	}
 	a.backups = backup.New(backup.Options{
@@ -233,6 +290,19 @@ func tcpProxyFirewall(log *slog.Logger) agentruntime.PublishFirewall {
 		return nil
 	}
 	return p
+}
+
+// certsDir is the configured certificates directory, or the default: one
+// Caddy can read on Linux, a directory in the data directory elsewhere
+// (local development only).
+func certsDir(cfg config.Config, dataDir string) string {
+	if cfg.Ingress.CertsDir != "" {
+		return cfg.Ingress.CertsDir
+	}
+	if goruntime.GOOS == "linux" {
+		return certs.DefaultDir
+	}
+	return filepath.Join(dataDir, "certs")
 }
 
 // volumesRoot is the configured volumes root, or the default: the node
@@ -336,7 +406,17 @@ func (a *agent) run(ctx context.Context) error {
 	goRun("ingress", a.ingress.Run)
 	goRun("logs", a.logs.Run)
 	goRun("builds", a.builds.Run)
+	goRun("jobs", a.jobs.Run)
 	goRun("metrics", a.metrics.Run)
+	goRun("certs", a.certs.Run)
+	goRun("tls-status", a.tlsStatus.Run)
+	if ln, err := certs.ListenLog(ingress.DefaultTLSLogListen); err != nil {
+		// NOTE: only cert_status error details depend on Caddy's tls log;
+		// handshakes still report issued certificates.
+		a.log.Error("cannot receive Caddy's tls log; certificate errors will be less detailed", "addr", ingress.DefaultTLSLogListen, "err", err)
+	} else {
+		goRun("tls-log", func(ctx context.Context) error { return certs.ServeLogOn(ctx, ln, a.tlsStatus.HandleEvent) })
+	}
 	if ln, err := ingress.ListenAsk(ingress.DefaultAskListen); err != nil {
 		// NOTE: only on-demand ACME certificates depend on this endpoint;
 		// everything else keeps working without it.
@@ -398,7 +478,11 @@ func (h handler) ApplyDesiredState(m *protocol.DesiredState) bool {
 	// Volumes first, so the runtime's first pass over this state finds them.
 	// Both ignore a generation they have seen.
 	h.a.volumes.Apply(m.Generation, m.Volumes)
-	return h.a.runtime.Apply(m)
+	if !h.a.runtime.Apply(m) {
+		return false
+	}
+	h.a.certs.SetManifest(m.Certificates)
+	return true
 }
 
 // reportRefused reports each workload of a refused desired state as pending
@@ -422,6 +506,26 @@ func secretsDir(dataDir string) string {
 	}
 	return filepath.Join(dataDir, "secrets")
 }
+
+// jobSecretsDir is where job runs' mount_as_file values go: beside the
+// runtime's directory on the host tmpfs, never inside it, since the runtime
+// removes subdirectories of workloads it doesn't run.
+func jobSecretsDir(dataDir string) string {
+	if goruntime.GOOS == "linux" {
+		return jobs.DefaultSecretsDir
+	}
+	return filepath.Join(dataDir, "job-secrets")
+}
+
+// jobHandler routes job_run and job_cancel to the job runner. On a
+// plaintext connection the runner answers every run with the refusal.
+type jobHandler struct{ r *jobs.Runner }
+
+// RunJob starts a job run.
+func (h jobHandler) RunJob(m *protocol.JobRun) { h.r.Start(m) }
+
+// CancelJob stops a job run.
+func (h jobHandler) CancelJob(m *protocol.JobCancel) { h.r.Cancel(m) }
 
 func (h handler) StartBuild(m *protocol.BuildJob) { h.a.builds.Start(m) }
 

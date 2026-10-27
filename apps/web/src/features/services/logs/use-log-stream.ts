@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorMessage } from "../../../lib/api/client";
+import { cronApi } from "../../../lib/api/cron-client";
 import { deployApi } from "../../../lib/api/deploy-client";
 import type { LogPage, RealtimeTopic } from "../../../lib/api/deploy-types";
 import { useLogSubscription } from "../../../lib/realtime/provider";
@@ -17,7 +18,8 @@ export const LOG_PAGE_SIZE = 500;
 /** Which log to stream. */
 export type LogSource =
   | { kind: "runtime"; deploymentId: string }
-  | { kind: "build"; buildId: string };
+  | { kind: "build"; buildId: string }
+  | { kind: "job"; runId: string };
 
 /** State and controls returned by {@link useLogStream}. */
 export interface LogStream {
@@ -36,13 +38,18 @@ function fetchPage(
   signal?: AbortSignal,
 ): Promise<LogPage> {
   const page = { cursor, limit: LOG_PAGE_SIZE };
-  return source.kind === "runtime"
-    ? deployApi.getDeploymentLogs(source.deploymentId, page, signal)
-    : deployApi.getBuildLogs(source.buildId, page, signal);
+  switch (source.kind) {
+    case "runtime":
+      return deployApi.getDeploymentLogs(source.deploymentId, page, signal);
+    case "build":
+      return deployApi.getBuildLogs(source.buildId, page, signal);
+    case "job":
+      return cronApi.getRunLogs(source.runId, page, signal);
+  }
 }
 
 /**
- * Streams a deployment's runtime logs or a build's logs: the newest page over HTTP, then
+ * Streams a deployment's runtime logs, a build's logs or a cron run's output: the newest page over HTTP, then
  * live lines over the project's realtime socket (subscribed for exactly this topic),
  * with older pages on demand.
  *
@@ -57,6 +64,7 @@ export function useLogStream(source: LogSource | null): LogStream {
   const [attempt, setAttempt] = useState(0);
   const deploymentId = source?.kind === "runtime" ? source.deploymentId : undefined;
   const buildId = source?.kind === "build" ? source.buildId : undefined;
+  const runId = source?.kind === "job" ? source.runId : undefined;
   const sourceRef = useRef(source);
   sourceRef.current = source;
   const bufferRef = useRef(buffer);
@@ -65,8 +73,9 @@ export function useLogStream(source: LogSource | null): LogStream {
   const topic = useMemo<RealtimeTopic | null>(() => {
     if (deploymentId) return { kind: "deployment_logs", deployment_id: deploymentId };
     if (buildId) return { kind: "build_logs", build_id: buildId };
+    if (runId) return { kind: "cron_run_logs", run_id: runId };
     return null;
-  }, [deploymentId, buildId]);
+  }, [deploymentId, buildId, runId]);
 
   useLogSubscription(topic, (message) =>
     setBuffer((current) => withLiveLines(current, message.lines)),
@@ -80,7 +89,9 @@ export function useLogStream(source: LogSource | null): LogStream {
       ? { kind: "runtime", deploymentId }
       : buildId
         ? { kind: "build", buildId }
-        : null;
+        : runId
+          ? { kind: "job", runId }
+          : null;
     if (!current) return;
     setStatus("loading");
     const controller = new AbortController();
@@ -96,7 +107,7 @@ export function useLogStream(source: LogSource | null): LogStream {
       },
     );
     return () => controller.abort();
-  }, [deploymentId, buildId, attempt]);
+  }, [deploymentId, buildId, runId, attempt]);
 
   const loadOlder = useCallback(async () => {
     const current = sourceRef.current;

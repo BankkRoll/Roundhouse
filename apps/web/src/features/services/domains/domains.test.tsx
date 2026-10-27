@@ -19,7 +19,7 @@ describe("domains", () => {
     expect(
       within(row).getByRole("link", { name: /^web-production-x7k2\.apps\.example\.com\s*\(opens/ }),
     ).toHaveAttribute("href", "https://web-production-x7k2.apps.example.com");
-    expect(row).toHaveTextContent("Generated · TLS issued");
+    expect(row).toHaveTextContent(/Generated · Certificate expires in \d+ days/);
     expect(within(row).getByText("Active")).toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
     await user.click(within(row).getByRole("button", { name: "Copy URL" }));
@@ -63,14 +63,44 @@ describe("domains", () => {
     );
   });
 
+  it("shows where a pending domain stands in its row, DNS → Ownership → Certificate → Active", async () => {
+    const { user } = await openDomains();
+    await user.click(screen.getByRole("button", { name: "Add domain" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a custom domain" });
+    await user.type(within(dialog).getByLabelText("Hostname"), "steps.example.com");
+    await user.click(within(dialog).getByRole("button", { name: "Add domain" }));
+    const records = await screen.findByRole("dialog", { name: "Create these DNS records" });
+    await user.click(within(records).getByRole("button", { name: "Done" }));
+
+    const list = screen.getByRole("list", { name: "Domain list" });
+    const row = within(list).getByRole("listitem", { name: "steps.example.com" });
+    const stepper = within(row).getByRole("list", { name: "Progress of steps.example.com" });
+    const steps = within(stepper).getAllByRole("listitem");
+    expect(steps.map((s) => s.textContent)).toEqual([
+      "DNS (in progress)",
+      "Ownership (not started)",
+      "Certificate (not started)",
+      "Active (not started)",
+    ]);
+    expect(steps[0]).toHaveAttribute("aria-current", "step");
+    expect(row).toHaveTextContent(/DNS: CNAME steps.example.com/);
+
+    await user.click(within(row).getByRole("button", { name: "Check now" }));
+    await waitFor(() =>
+      expect(within(row).getAllByRole("listitem")[1]).toHaveAttribute("aria-current", "step"),
+    );
+    expect(row).toHaveTextContent(/Ownership: TXT _roundhouse.steps.example.com/);
+  });
+
   it("validates the hostname before sending it and shows the API's refusals", async () => {
     const { user } = await openDomains();
     await user.click(screen.getByRole("button", { name: "Add domain" }));
     const dialog = await screen.findByRole("dialog", { name: "Add a custom domain" });
     const input = within(dialog).getByLabelText("Hostname");
     await user.type(input, "*.example.com");
+    expect(within(dialog).getByText(/delegating _acme-challenge/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Add domain" }));
-    expect(within(dialog).getByText(/Wildcard domains aren't supported yet/)).toBeInTheDocument();
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(/Wildcard domains need/);
     expect(db.deploy.domains.some((d) => d.hostname === "*.example.com")).toBe(false);
 
     await user.clear(input);
@@ -79,6 +109,92 @@ describe("domains", () => {
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "That hostname belongs to this install.",
     );
+  });
+
+  it("adds a wildcard once managed TLS can issue it, with the delegation record", async () => {
+    db.deploy.instance.tls_mode = "managed";
+    db.deploy.tls.cloudflare_dns = {
+      zone_id: "0123456789abcdef0123456789abcdef",
+      zone_name: "example.com",
+      api_token: "cf-token-0123456789abcdef",
+      updated_at: Date.now(),
+    };
+    const { user } = await openDomains();
+    await user.click(screen.getByRole("button", { name: "Add domain" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a custom domain" });
+    await user.type(within(dialog).getByLabelText("Hostname"), "*.shop.test");
+    await user.click(within(dialog).getByRole("button", { name: "Add domain" }));
+    const records = await screen.findByRole("dialog", { name: "Create these DNS records" });
+    expect(
+      within(records).getByText(/_acme-challenge CNAME lets this install/),
+    ).toBeInTheDocument();
+    const table = within(records).getByRole("table", { name: "DNS records" });
+    expect(table).toHaveTextContent("Certificate delegation");
+    expect(table).toHaveTextContent("_acme-challenge.shop.test");
+    expect(table).toHaveTextContent("_roundhouse.shop.test");
+  });
+
+  it("shows the certificate, the servers that answer, and changes HSTS with a typed preload confirmation", async () => {
+    const { user } = await openDomains();
+    await user.click(screen.getByRole("button", { name: "Add domain" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a custom domain" });
+    await user.type(within(dialog).getByLabelText("Hostname"), "ready.example.com");
+    await user.click(within(dialog).getByRole("button", { name: "Add domain" }));
+    await user.click(await screen.findByRole("button", { name: "Done" }));
+
+    const row = within(screen.getByRole("list", { name: "Domain list" })).getByRole("listitem", {
+      name: "ready.example.com",
+    });
+    expect(row).toHaveTextContent(/Certificate expires in \d+ days/);
+    await user.click(within(row).getByRole("button", { name: "Details" }));
+    const details = within(row).getByRole("region", { name: "Details of ready.example.com" });
+    expect(within(details).getByText("Let's Encrypt R11")).toBeInTheDocument();
+    expect(within(details).getByText("Last updated")).toBeInTheDocument();
+    expect(
+      within(details).getByRole("list", { name: "Certificate on each server" }),
+    ).toHaveTextContent("hel-1");
+    expect(within(details).getByText(/the WireGuard mesh, not built yet/)).toBeInTheDocument();
+
+    const hsts = within(details).getByRole("form", { name: "HSTS for ready.example.com" });
+    await user.click(within(hsts).getByLabelText(/includeSubDomains/));
+    await user.click(within(hsts).getByLabelText(/preload/));
+    expect(within(hsts).getByRole("list", { name: "HSTS problems" })).toHaveTextContent(
+      "Only a registered domain's apex",
+    );
+    await user.click(within(hsts).getByLabelText(/preload/));
+    expect(within(hsts).getByRole("list", { name: "HSTS warnings" })).toHaveTextContent(
+      "includeSubDomains makes browsers refuse",
+    );
+    await user.click(within(hsts).getByRole("button", { name: "Save HSTS" }));
+    expect(await screen.findByText("HSTS saved for ready.example.com")).toBeInTheDocument();
+    expect(db.deploy.domains.find((d) => d.hostname === "ready.example.com")!.hsts).toMatchObject({
+      include_subdomains: true,
+      preload: false,
+    });
+  });
+
+  it("turns preload on for an apex only after the hostname is typed", async () => {
+    const { user } = await openDomains();
+    await user.click(screen.getByRole("button", { name: "Add domain" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a custom domain" });
+    await user.type(within(dialog).getByLabelText("Hostname"), "example.org");
+    await user.click(within(dialog).getByRole("button", { name: "Add domain" }));
+    await user.click(await screen.findByRole("button", { name: "Done" }));
+    const row = within(screen.getByRole("list", { name: "Domain list" })).getByRole("listitem", {
+      name: "example.org",
+    });
+    await user.click(within(row).getByRole("button", { name: "Details" }));
+    const hsts = within(row).getByRole("form", { name: "HSTS for example.org" });
+    await user.click(within(hsts).getByLabelText(/includeSubDomains/));
+    await user.click(within(hsts).getByLabelText(/preload/));
+    await user.click(within(hsts).getByRole("button", { name: "Save HSTS" }));
+    const confirm = await screen.findByRole("dialog", { name: "Allow preloading example.org?" });
+    const button = within(confirm).getByRole("button", { name: "Turn on preload" });
+    expect(button).toBeDisabled();
+    await user.type(within(confirm).getByRole("textbox"), "example.org");
+    await user.click(button);
+    expect(await screen.findByText("HSTS saved for example.org")).toBeInTheDocument();
+    expect(db.deploy.domains.find((d) => d.hostname === "example.org")!.hsts.preload).toBe(true);
   });
 
   it("lists pending domains with their records and error, and removes after confirming", async () => {

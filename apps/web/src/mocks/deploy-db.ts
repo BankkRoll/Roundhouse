@@ -35,7 +35,7 @@ import type {
   Service,
   ServiceConfig,
 } from "../lib/api/deploy-types";
-import { generatedDomainState } from "./domains-db";
+import { type DbTls, generatedDomainState, seedTls } from "./domains-db";
 
 /** A stored variable of a service or of a project environment (`shared`). */
 export interface DbVariable {
@@ -89,6 +89,8 @@ export interface DeployDb {
   logs: Record<string, LogEntry[]>;
   domains: Domain[];
   instance: InstanceSettings;
+  /** Settings → Domains & TLS. */
+  tls: DbTls;
   github: {
     app: GithubStatus["app"];
     installations: GithubInstallation[];
@@ -150,6 +152,7 @@ function config(
     created_by: "usr_ada",
     created_at: createdAt,
     ...defaultServiceConfig(source),
+    cron: null,
     source,
     ...overrides,
   };
@@ -677,8 +680,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         type: "generated",
         target_port: 3000,
         verification_status: "verified",
-        tls_status: "issued",
-        ...generatedDomainState(),
+        ...generatedDomainState("issued", now - 4 * DAY),
         created_at: now - 4 * DAY,
       },
       {
@@ -690,8 +692,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         type: "generated",
         target_port: 8080,
         verification_status: "verified",
-        tls_status: "issued",
-        ...generatedDomainState(),
+        ...generatedDomainState("issued", now - 5 * DAY),
         created_at: now - 5 * DAY,
       },
       {
@@ -703,8 +704,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         type: "generated",
         target_port: 3000,
         verification_status: "verified",
-        tls_status: "issued",
-        ...generatedDomainState(),
+        ...generatedDomainState("issued", now - 14 * DAY),
         created_at: now - 14 * DAY,
       },
     ],
@@ -713,7 +713,9 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
       tls_mode: "acme",
       log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
       mcp_enabled: false,
+      ingress_nodes: 0,
     },
+    tls: seedTls(),
     github: {
       app: {
         id: 912_345,
@@ -850,7 +852,9 @@ export function emptyDeploy(): DeployDb {
       tls_mode: "acme",
       log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
       mcp_enabled: false,
+      ingress_nodes: 0,
     },
+    tls: seedTls(),
     github: {
       app: null,
       installations: [],

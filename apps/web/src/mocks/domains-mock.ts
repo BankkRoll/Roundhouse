@@ -6,20 +6,33 @@
  * There is no DNS here, so hostnames steer the checker: each `POST …/check` moves a
  * domain one step, `pending_dns → pending_verification → active`; names starting
  * `ready.` are found at once (active on add), and names starting `fail-` fail on their
- * first check.
+ * first check. Responses carry the workspace's servers as `routing_nodes`, each serving
+ * when it holds a placement of a live deployment of the service, and an issued
+ * certificate's per-node states on those servers.
  *
  * @module
  */
 import {
+  acmeDelegationName,
+  acmeDelegationTarget,
   CUSTOM_HOSTNAME_PROBLEM_MESSAGES,
   customHostnameProblem,
+  DEFAULT_HSTS,
+  type DeploymentStatus,
+  hstsProblems,
+  isWildcardHostname,
   MAX_CUSTOM_DOMAINS_PER_SERVICE,
   normalizeHostname,
   ownershipRecordName,
   ownershipRecordValue,
 } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
-import { AddDomainBody, DOMAIN_ROUTES, policyOf } from "../../../api/src/contracts";
+import {
+  AddDomainBody,
+  DOMAIN_ROUTES,
+  policyOf,
+  UpdateDomainBody,
+} from "../../../api/src/contracts";
 import type { Domain } from "../lib/api/deploy-types";
 import type { DnsRecord } from "../lib/api/domains-client";
 import {
@@ -32,6 +45,8 @@ import {
   unauthorized,
 } from "./common";
 import { db, nextId } from "./db";
+import { mockTls } from "./domains-db";
+import { syncCertificates, wildcardDomainsAllowed } from "./tls-mock";
 
 type RouteName = keyof typeof DOMAIN_ROUTES;
 
@@ -72,6 +87,57 @@ function authorizeDomain(domainId: string, name: RouteName) {
   return found.ok ? { ...found, domain } : found;
 }
 
+const LIVE: ReadonlySet<DeploymentStatus> = new Set(["deploying", "active"]);
+
+function routingNodes(domain: Domain): Domain["routing_nodes"] {
+  const workspaceId = workspaceOfService(domain.service_id)?.workspaceId;
+  const live = new Set(
+    db.deploy.deployments
+      .filter(
+        (row) =>
+          row.service_id === domain.service_id &&
+          row.environment_id === domain.environment_id &&
+          LIVE.has(row.status),
+      )
+      .map((row) => row.id),
+  );
+  const serving = new Set(
+    db.deploy.placements.filter((row) => live.has(row.deployment_id)).map((row) => row.node_id),
+  );
+  return db.nodes
+    .filter((node) => node.workspace_id === workspaceId)
+    .map((node) => ({
+      id: node.id,
+      name: node.name,
+      public_ip: node.public_ip,
+      serves: serving.has(node.id),
+    }));
+}
+
+/**
+ * A stored domain as the API presents it: its workspace's servers, and its
+ * certificate's state on each one serving it.
+ *
+ * @param domain - A row of `db.deploy.domains`.
+ * @returns The wire shape.
+ */
+export function presentDomain(domain: Domain): Domain {
+  const routing = routingNodes(domain);
+  const state = domain.tls.status;
+  const nodes =
+    state === "disabled"
+      ? []
+      : routing
+          .filter((node) => node.serves)
+          .map((node) => ({
+            node_id: node.id,
+            name: node.name,
+            state,
+            error: state === "failed" ? domain.tls.error : null,
+          }));
+  return { ...domain, routing_nodes: routing, tls: { ...domain.tls, nodes } };
+}
+
 function token(): string {
   let out = "";
   for (let i = 0; i < 64; i++) out += "0123456789abcdef"[Math.floor(Math.random() * 16)];
@@ -81,7 +147,7 @@ function token(): string {
 function withStates(domain: Domain, routing: DnsRecord["state"], ownership: DnsRecord["state"]) {
   domain.records = domain.records.map((r) => ({
     ...r,
-    state: r.purpose === "routing" ? routing : ownership,
+    state: r.purpose === "ownership" ? ownership : routing,
   }));
 }
 
@@ -115,11 +181,13 @@ function advance(domain: Domain) {
       status: "active",
       verification_status: "verified",
       tls_status: off ? "disabled" : "issued",
+      tls: mockTls(off ? "disabled" : "issued", now),
       verified_at: now,
       next_check_at: now + 24 * 3600_000,
       error: null,
     });
     withStates(domain, "ok", "ok");
+    syncCertificates(now);
   }
 }
 
@@ -132,10 +200,14 @@ function advance(domain: Domain) {
 export function checkCustomHostname(input: string): { hostname: string } | Response {
   const hostname = normalizeHostname(input);
   const problem = hostname
-    ? customHostnameProblem(hostname, {
-        appsDomain: db.deploy.instance.apps_domain,
-        exact: [location.hostname],
-      })
+    ? customHostnameProblem(
+        hostname,
+        {
+          appsDomain: db.deploy.instance.apps_domain,
+          exact: [location.hostname, db.deploy.tls.ingress_hostname],
+        },
+        { allowWildcard: wildcardDomainsAllowed() },
+      )
     : "invalid";
   if (!hostname || problem === "invalid") return invalid(CUSTOM_HOSTNAME_PROBLEM_MESSAGES.invalid);
   if (problem) {
@@ -175,9 +247,28 @@ export function newCustomDomain(
       row.type === "generated",
   );
   const now = Date.now();
-  const target = generated?.hostname ?? (appsDomain ? `ingress.${appsDomain}` : "203.0.113.10");
+  const ingressHostname = db.deploy.tls.ingress_hostname;
+  const target =
+    ingressHostname ??
+    generated?.hostname ??
+    (appsDomain ? `ingress.${appsDomain}` : "203.0.113.10");
+  const id = nextId("dom");
+  const wildcard = isWildcardHostname(hostname);
+  const delegation: DnsRecord[] =
+    wildcard && appsDomain
+      ? [
+          {
+            type: "CNAME",
+            name: acmeDelegationName(hostname),
+            value: acmeDelegationTarget(id, appsDomain),
+            purpose: "acme_delegation",
+            state: "missing",
+            note: "Lets this install answer the DNS-01 challenges of the wildcard certificate.",
+          },
+        ]
+      : [];
   const domain: Domain = {
-    id: nextId("dom"),
+    id,
     service_id: serviceId,
     environment_id: environmentId,
     hostname,
@@ -187,10 +278,14 @@ export function newCustomDomain(
     verification_status: "pending",
     tls_status: db.deploy.instance.tls_mode === "off" ? "disabled" : "pending",
     status: "pending_dns",
-    apex: false,
+    apex: !wildcard && hostname.split(".").length === 2,
+    wildcard,
+    hsts: { ...DEFAULT_HSTS },
+    tls: mockTls(db.deploy.instance.tls_mode === "off" ? "disabled" : "pending", now),
+    routing_nodes: [],
     records: [
       {
-        type: generated || appsDomain ? "CNAME" : "A",
+        type: ingressHostname || generated || appsDomain ? "CNAME" : "A",
         name: hostname,
         value: target,
         purpose: "routing",
@@ -205,6 +300,7 @@ export function newCustomDomain(
         state: "missing",
         note: null,
       },
+      ...delegation,
     ],
     error: `No CNAME or A/AAAA record found for ${hostname}. TXT ${ownershipRecordName(hostname)} not found.`,
     last_checked_at: now,
@@ -260,6 +356,7 @@ export const domainHandlers = [
     if (taken) return taken;
     const domain = newCustomDomain(access.service.id, environment.id, hostname, port);
     db.deploy.domains.push(domain);
+    syncCertificates(Date.now());
     recordAudit({
       workspaceId: access.workspaceId,
       actorType: "user",
@@ -269,13 +366,53 @@ export const domainHandlers = [
       targetId: domain.id,
       metadata: { hostname, service_id: domain.service_id, environment_id: domain.environment_id },
     });
-    return HttpResponse.json(domain, { status: 201 });
+    return HttpResponse.json(presentDomain(domain), { status: 201 });
   }),
 
   http.get(mswPath("getDomain"), ({ params }) => {
     const access = authorizeDomain(String(params.domainId), "getDomain");
     if (!access.ok) return access.response;
-    return HttpResponse.json(access.domain);
+    return HttpResponse.json(presentDomain(access.domain));
+  }),
+
+  http.patch(mswPath("updateDomain"), async ({ request, params }) => {
+    const parsed = UpdateDomainBody.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) return invalid("hsts: Invalid input");
+    const access = authorizeDomain(String(params.domainId), "updateDomain");
+    if (!access.ok) return access.response;
+    const { domain } = access;
+    if (domain.type !== "custom") {
+      return apiError(409, "conflict", "Generated domains use the default HSTS policy");
+    }
+    const { hsts, confirm_preload } = parsed.data;
+    const problems = hstsProblems(hsts, domain.hostname, domain.apex);
+    if (problems.length) {
+      return apiError(
+        422,
+        "invalid_hsts",
+        problems.join(" "),
+        problems.map((message) => ({ field: "hsts", code: "invalid_hsts", message })),
+      );
+    }
+    if (hsts.preload && !domain.hsts.preload && confirm_preload !== domain.hostname) {
+      return apiError(
+        422,
+        "preload_confirmation_required",
+        `Preloading is effectively irreversible. Type ${domain.hostname} to confirm.`,
+      );
+    }
+    const before = domain.hsts;
+    domain.hsts = { ...hsts };
+    recordAudit({
+      workspaceId: access.workspaceId,
+      actorType: "user",
+      actorId: access.guard.user.id,
+      action: "domain.updated",
+      targetType: "domain",
+      targetId: domain.id,
+      metadata: { hostname: domain.hostname, before: { hsts: before }, after: { hsts } },
+    });
+    return HttpResponse.json(presentDomain(domain));
   }),
 
   http.post(mswPath("recheckDomain"), ({ params }) => {
@@ -297,7 +434,7 @@ export const domainHandlers = [
         metadata: { hostname: access.domain.hostname },
       });
     }
-    return HttpResponse.json(access.domain);
+    return HttpResponse.json(presentDomain(access.domain));
   }),
 
   http.delete(mswPath("removeDomain"), ({ params }) => {
@@ -307,6 +444,7 @@ export const domainHandlers = [
       return apiError(409, "conflict", "Turn off the generated domain under Networking instead");
     }
     db.deploy.domains = db.deploy.domains.filter((row) => row.id !== access.domain.id);
+    syncCertificates();
     recordAudit({
       workspaceId: access.workspaceId,
       actorType: "user",

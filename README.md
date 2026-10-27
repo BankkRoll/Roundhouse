@@ -17,7 +17,7 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | Zero-downtime deploys           | Traffic moves only after the new container is healthy          | Available                                                    |
 | Rollbacks                       | Redeploy an earlier image, no rebuild                          | Available                                                    |
 | PR previews                     | An environment and URL per pull request                        | In progress                                                  |
-| Cron jobs                       | Run a service on a schedule                                    | In progress                                                  |
+| Cron jobs                       | Run a service on a schedule                                    | Available                                                    |
 | Cloud servers                   | Create servers on Hetzner, DigitalOcean, Vultr or Linode       | Available                                                    |
 | **Data**                        |                                                                |                                                              |
 | Databases                       | Postgres, MySQL, Valkey/Redis and MongoDB as services          | Available                                                    |

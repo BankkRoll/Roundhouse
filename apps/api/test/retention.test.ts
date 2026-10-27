@@ -182,6 +182,7 @@ describe("expired records", () => {
       stuckBackups: 0,
       loginAttempts: 1,
       githubClaims: 1,
+      acmeChallenges: 0,
     });
     const ids = async (table: string) =>
       (

@@ -31,8 +31,8 @@ describe("projects in the shell and on Home", () => {
       renderApp(BASE);
       await findPageHeading("Home");
       const card = (await screen.findByRole("link", { name: "storefront" })).closest("li")!;
-      await waitFor(() => expect(card).toHaveTextContent("4 services · production"));
-      await screen.findByText(/4 live · 1 deploying · 2 projects/);
+      await waitFor(() => expect(card).toHaveTextContent("5 services · production"));
+      await screen.findByText(/5 live · 1 deploying · 2 projects/);
     });
     expect(paths.filter(perServiceOrProject)).toEqual([]);
     expect(paths.filter((path) => path.endsWith("/projects/summary"))).toHaveLength(1);
@@ -46,7 +46,7 @@ describe("projects in the shell and on Home", () => {
         within(nav)
           .getAllByRole("link")
           .map((link) => link.textContent),
-      ).toEqual(["internal-tools1", "storefront4"]),
+      ).toEqual(["internal-tools1", "storefront5"]),
     );
     const links = within(nav).getAllByRole("link");
     await waitFor(() =>
@@ -59,7 +59,7 @@ describe("projects in the shell and on Home", () => {
     renderApp(BASE);
     await findPageHeading("Home");
     const card = (await screen.findByRole("link", { name: "storefront" })).closest("li")!;
-    await waitFor(() => expect(card).toHaveTextContent("4 services · production"));
+    await waitFor(() => expect(card).toHaveTextContent("5 services · production"));
     await waitFor(() => expect(card).toHaveTextContent(/worker deployed (just now|\d+s ago)/));
     expect(card).toHaveTextContent("Customer-facing shop");
     expect(card.textContent).not.toMatch(/\$/);

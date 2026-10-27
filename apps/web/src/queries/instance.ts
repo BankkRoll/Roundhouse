@@ -8,6 +8,11 @@ import type {
 } from "../lib/api/deploy-types";
 import { securityApi } from "../lib/api/security-client";
 import type { InstanceAuditQuery } from "../lib/api/security-types";
+import {
+  type InstanceDomainSettings,
+  type PutInstanceDomainsBody,
+  tlsApi,
+} from "../lib/api/tls-client";
 import { queryKeys } from "./keys";
 
 /**
@@ -33,7 +38,76 @@ export function useUpdateInstanceSettings() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: InstanceSettingsPatch) => deployApi.updateInstanceSettings(body),
-    onSuccess: (settings) => queryClient.setQueryData(queryKeys.instanceSettings, settings),
+    onSuccess: (settings) => {
+      queryClient.setQueryData(queryKeys.instanceSettings, settings);
+      // NOTE: Domains & TLS reads the same fields, and its form compares against them;
+      // patching first keeps it from looking unsaved until the refetch lands.
+      queryClient.setQueryData<InstanceDomainSettings>(queryKeys.instanceDomains, (previous) =>
+        previous
+          ? {
+              ...previous,
+              apps_domain: settings.apps_domain,
+              tls_mode: settings.tls_mode,
+              ingress_nodes: settings.ingress_nodes,
+            }
+          : previous,
+      );
+      // A mode or apps domain change starts or drops certificates and moves what
+      // managed mode can issue.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.instanceDomains });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.certificates });
+    },
+  });
+}
+
+/**
+ * Reads the Domains & TLS settings: ingress hostname, ACME CA, Cloudflare zone, and
+ * whether `managed` mode may be selected. Instance admins only.
+ *
+ * @param enabled - Skip for callers without `instance:manage`.
+ * @returns The settings query.
+ */
+export function useInstanceDomains(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.instanceDomains,
+    queryFn: ({ signal }) => tlsApi.getSettings(signal),
+    enabled,
+  });
+}
+
+/**
+ * Changes the Domains & TLS settings and caches the result.
+ *
+ * @returns A mutation taking the fields to change.
+ */
+export function useSaveInstanceDomains() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PutInstanceDomainsBody) => tlsApi.putSettings(body),
+    onSuccess: (settings) => {
+      queryClient.setQueryData(queryKeys.instanceDomains, settings);
+      // A new zone or CA starts certificate orders at once.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.certificates });
+    },
+  });
+}
+
+/** How often the certificate list refreshes while open; orders finish in the background. */
+export const CERTIFICATES_POLL_MS = 15_000;
+
+/**
+ * Lists the control plane's certificates. Instance admins only.
+ *
+ * @param enabled - Skip for callers without `instance:manage`.
+ * @returns The certificates query.
+ */
+export function useCertificates(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.certificates,
+    queryFn: ({ signal }) => tlsApi.listCertificates(signal),
+    select: (data) => data.certificates,
+    enabled,
+    refetchInterval: CERTIFICATES_POLL_MS,
   });
 }
 

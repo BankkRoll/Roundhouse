@@ -54,6 +54,13 @@ configuration and changes it only through the admin API, which listens on
 - `ExecReload` is cleared, because `systemctl reload caddy` would replace
   the agent's config with the Caddyfile.
 
+In managed TLS mode the agent writes the certificates the control plane
+issues, with their private keys, to `/var/lib/roundhouse-certs` (`ingress.certs_dir`)
+as 0640 files, and Caddy loads them from there. The installer creates the
+directory `root:caddy`, mode 2750: the setgid bit makes every file group
+`caddy`, which the agent's sandbox (`RestrictSUIDSGID`, no `CAP_CHOWN`)
+could not arrange itself. `uninstall.sh` removes it.
+
 The apt package was chosen over a pinned binary so Caddy receives security
 updates with the rest of the system. Re-running the installer restarts Caddy
 only if the drop-in changed.

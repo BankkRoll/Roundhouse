@@ -174,7 +174,7 @@ func TestLegacyContainerIsAdoptedAndMigrated(t *testing.T) {
 		t.Error("removed the environment network in use")
 	}
 	ops := strings.Join(d.opLog(), "\n")
-	if !strings.Contains(ops, "routes [{app.example.com  ["+next.ip+":80] [80]}]") {
+	if !strings.Contains(ops, "routes [{app.example.com  ["+next.ip+":80] [80] <nil>}]") {
 		t.Fatalf("routes never switched to the replacement:\n%s", ops)
 	}
 }

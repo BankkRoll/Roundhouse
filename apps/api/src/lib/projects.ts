@@ -8,11 +8,14 @@
 import { type Db, deployments, domains, serviceConfigs } from "@roundhouse/db";
 import {
   CANCELLABLE_DEPLOYMENT_STATUSES,
+  type CronConfig,
+  DEFAULT_CRON_CONFIG,
   type DomainTlsStatus,
   freeSlug as freeSharedSlug,
   generatedHostname,
   newId,
   type ServiceConfigSpec,
+  scheduleError,
   slugify,
   type TlsMode,
 } from "@roundhouse/shared";
@@ -20,6 +23,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   BuildConfigSchema,
+  CronConfigSchema,
   DeployConfigSchema,
   HealthcheckConfigSchema,
   NetworkingConfigSchema,
@@ -114,6 +118,8 @@ export interface ConfigPatch {
   healthcheck?: ServiceConfigSpec["healthcheck"];
   networking?: Partial<ServiceConfigSpec["networking"]>;
   placement?: Partial<ServiceConfigSpec["placement"]>;
+  /** Merged into the current part or the defaults; `null` removes it. */
+  cron?: Partial<CronConfig> | null;
 }
 
 const FullConfigSchema = z.object({
@@ -124,6 +130,7 @@ const FullConfigSchema = z.object({
   healthcheck: HealthcheckConfigSchema.nullable(),
   networking: NetworkingConfigSchema,
   placement: PlacementConfigSchema,
+  cron: CronConfigSchema.nullable(),
 });
 
 /**
@@ -144,6 +151,12 @@ export function mergeConfig(base: ServiceConfigSpec, patch: ConfigPatch): Servic
     healthcheck: patch.healthcheck === undefined ? base.healthcheck : patch.healthcheck,
     networking: { ...base.networking, ...stripUndefined(patch.networking) },
     placement: { ...base.placement, ...stripUndefined(patch.placement) },
+    cron:
+      patch.cron === null
+        ? null
+        : patch.cron === undefined
+          ? (base.cron ?? null)
+          : { ...DEFAULT_CRON_CONFIG, ...base.cron, ...stripUndefined(patch.cron) },
   };
   if (merged.build.builder !== "dockerfile") delete merged.build.dockerfile_path;
   const parsed = FullConfigSchema.safeParse(merged);
@@ -158,6 +171,24 @@ export function mergeConfig(base: ServiceConfigSpec, patch: ConfigPatch): Servic
       "invalid_request",
       `${details[0]!.field}: ${details[0]!.message}`,
       details,
+    );
+  }
+  const cron = parsed.data.cron;
+  const problem = cron ? scheduleError(cron.schedule, cron.timezone) : null;
+  if (problem) {
+    throw new ApiError(
+      422,
+      "invalid_schedule",
+      `cron.${problem.code === "invalid_timezone" ? "timezone" : "schedule"}: ${problem.message}`,
+      [
+        {
+          field: problem.code === "invalid_timezone" ? "cron.timezone" : "cron.schedule",
+          code: problem.code,
+          message: problem.message,
+          start: problem.start,
+          end: problem.end,
+        },
+      ],
     );
   }
   return parsed.data as ServiceConfigSpec;
@@ -203,6 +234,7 @@ export function specOf(row: typeof serviceConfigs.$inferSelect): ServiceConfigSp
     healthcheck: row.healthcheck ?? null,
     networking: row.networking,
     placement: row.placement,
+    cron: row.cron ?? null,
   };
 }
 
@@ -283,7 +315,14 @@ export async function syncGeneratedDomain(
   if (port && existing.some((d) => d.targetPort !== port)) {
     await db.update(domains).set({ targetPort: port, updatedAt: new Date() }).where(where);
   }
-  if (existing.length || !port || !input.spec.networking.generated_domain || !ingress.appsDomain) {
+  // A cron config means a cron service, which serves no traffic (ADR 0010).
+  if (
+    existing.length ||
+    !port ||
+    !input.spec.networking.generated_domain ||
+    input.spec.cron ||
+    !ingress.appsDomain
+  ) {
     return false;
   }
   for (let attempt = 0; ; attempt++) {

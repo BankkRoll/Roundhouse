@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig(async () => {
   // wrangler.jsonc points assets at the web build; tests don't need it to exist.
@@ -33,6 +33,8 @@ export default defineConfig(async () => {
       // loaded machine (the whole suite runs files in parallel) a full
       // rollout takes longer than vitest's 5 s default.
       testTimeout: 30_000,
+      // test-node/ needs Node APIs (Docker, node:https) and has its own config.
+      exclude: [...configDefaults.exclude, "test-node/**"],
     },
   };
 });

@@ -147,6 +147,11 @@ func TestWireTypesMatchSchemas(t *testing.T) {
 		"NodeProvision":             NodeProvision{},
 		"DnsRecord":                 DNSRecord{},
 		"AddDomain":                 AddDomainInput{},
+		"UpdateDomain":              UpdateDomainInput{},
+		"DomainHsts":                DomainHSTS{},
+		"DomainTls":                 DomainTLS{},
+		"DomainTlsNode":             DomainTLSNode{},
+		"DomainRoutingNode":         DomainRoutingNode{},
 		"CostEstimate":              CostEstimate{},
 		"TemplateSummary":           TemplateSummary{},
 		"TemplateDetail":            TemplateDetail{},
@@ -185,6 +190,16 @@ func TestWireTypesMatchSchemas(t *testing.T) {
 		"RotateCredentials":         RotateCredentialsInput{},
 		"CredentialRotation":        CredentialRotation{},
 		"CredentialRotationList":    CredentialRotationList{},
+		"CronConfig":                CronConfig{},
+		"CronState":                 CronState{},
+		"CronRun":                   CronRun{},
+		"CronRunPage":               CronRunPage{},
+		"CronPreview":               CronPreview{},
+		"ScheduleError":             ScheduleError{},
+		"TriggerCronRun":            TriggerCronRunInput{},
+		"CronEnvironment":           CronEnvironmentInput{},
+		"UpdateService":             UpdateServiceInput{},
+		"UpdatedService":            UpdatedService{},
 	} {
 		s, ok := doc.Components.Schemas[name]
 		if !ok {
@@ -281,7 +296,10 @@ func TestQueryParamsExist(t *testing.T) {
 		{RouteBackupPolicy, "environment_id"}, {RouteListBackups, "environment_id"},
 		{RouteListBackups, "cursor"}, {RouteListBackups, "limit"},
 		{RouteGetTCPProxy, "environment_id"}, {RouteDeleteTCPProxy, "environment_id"},
-		{RouteCredentialRotations, "environment_id"}} {
+		{RouteCredentialRotations, "environment_id"},
+		{RouteCronState, "environment_id"}, {RouteListCronRuns, "environment_id"}, {RouteListCronRuns, "cursor"},
+		{RouteListCronRuns, "limit"}, {RouteListCronRuns, "status"}, {RouteCronRunLogs, "cursor"}, {RouteCronRunLogs, "limit"},
+		{RouteCronPreview, "schedule"}, {RouteCronPreview, "timezone"}, {RouteCronPreview, "count"}} {
 		op := doc.Paths[c.route.Path][strings.ToLower(c.route.Method)]
 		if !slices.Contains(op.Parameters, param{In: "query", Name: c.param}) {
 			t.Errorf("%s: no query parameter %q", c.route, c.param)
@@ -420,6 +438,8 @@ func TestDataEnumsMatchAPI(t *testing.T) {
 		{"VolumeMigration", "status", MigrationStatuses},
 		{"TcpProxy", "status", TCPProxyStatuses},
 		{"CredentialRotation", "status", RotationStatuses},
+		{"CronRun", "status", CronRunStatuses},
+		{"CronRun", "trigger", CronRunTriggers},
 	} {
 		s := doc.Components.Schemas[c.schema]
 		if s == nil || s.Properties[c.prop] == nil {

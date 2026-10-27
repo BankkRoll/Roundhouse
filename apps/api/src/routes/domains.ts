@@ -6,17 +6,37 @@
  *   owns, enforces instance-wide uniqueness (a hostname `failed` for over
  *   7 days, or left behind by a deleted service, may be taken over), mints
  *   the ownership token and checks DNS once.
+ * - Wildcards (`*.example.com`) are accepted only in `managed` mode with
+ *   DNS-01 available (the apps domain in the Cloudflare zone): their
+ *   certificate needs the `_acme-challenge` delegation, which on-demand
+ *   issuance can't do (ADR 0009).
+ * - Updating changes the HSTS policy, with typed consent for `preload`, and
+ *   pushes it to the nodes serving the domain.
  * - Checking now is throttled per domain and resumes a `failed` domain.
  * - Removing pulls the route from the service's nodes.
  *
  * @module
  */
 import { domains } from "@roundhouse/db";
+import { hstsProblems } from "@roundhouse/shared";
 import { eq } from "drizzle-orm";
-import { type AppContext, createRouter } from "../context";
-import { addDomain, getDomain, policyOf, recheckDomain, removeDomain } from "../contracts";
-import { checkDomain } from "../lib/domains/check";
-import { addCustomDomain, checkCustomHostname, removeCustomDomain } from "../lib/domains/manage";
+import { type AppContext, clientIp, createRouter } from "../context";
+import {
+  addDomain,
+  getDomain,
+  policyOf,
+  recheckDomain,
+  removeDomain,
+  updateDomain,
+} from "../contracts";
+import { recordAudit } from "../lib/audit";
+import { checkDomain, refreshServiceNodes } from "../lib/domains/check";
+import {
+  addCustomDomain,
+  assertServesTraffic,
+  checkCustomHostname,
+  removeCustomDomain,
+} from "../lib/domains/manage";
 import { presentDomains } from "../lib/domains/present";
 import { ApiError, conflict, notFound } from "../lib/errors";
 import { environmentOf, serviceScope } from "../lib/scope";
@@ -66,6 +86,7 @@ export const domainRoutes = createRouter()
     );
     const env = await environmentOf(c, project.id, body.environment_id);
     const db = c.get("db");
+    assertServesTraffic(service);
     const hostname = await checkCustomHostname(c, db, body.hostname);
     const checked = await addCustomDomain(c, {
       workspaceId: project.workspaceId,
@@ -81,6 +102,56 @@ export const domainRoutes = createRouter()
     const { domainId } = c.req.valid("param");
     const { domain, project } = await domainScope(c, domainId, policyOf(getDomain).action!, false);
     const [out] = await presentDomains(c.get("db"), project.workspaceId, [domain]);
+    return c.json(out!, 200);
+  })
+  .openapi(updateDomain, async (c) => {
+    const { domainId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const { domain, project, caller } = await domainScope(
+      c,
+      domainId,
+      policyOf(updateDomain).action!,
+      true,
+    );
+    if (domain.type !== "custom") {
+      throw conflict("Generated domains use the default HSTS policy");
+    }
+    const problems = hstsProblems(body.hsts, domain.hostname, domain.apex);
+    if (problems.length) {
+      throw new ApiError(
+        422,
+        "invalid_hsts",
+        problems.join(" "),
+        problems.map((message) => ({ field: "hsts", code: "invalid_hsts", message })),
+      );
+    }
+    const before = domain.hsts;
+    if (body.hsts.preload && !before?.preload && body.confirm_preload !== domain.hostname) {
+      throw new ApiError(
+        422,
+        "preload_confirmation_required",
+        `Preloading is effectively irreversible. Type ${domain.hostname} to confirm.`,
+      );
+    }
+    const db = c.get("db");
+    const [row] = (await db
+      .update(domains)
+      .set({ hsts: body.hsts, updatedAt: new Date() })
+      .where(eq(domains.id, domain.id))
+      .returning()) as [DomainRow];
+    await recordAudit(db, {
+      workspaceId: project.workspaceId,
+      ...caller.actor,
+      action: "domain.updated",
+      targetType: "domain",
+      targetId: domain.id,
+      metadata: { hostname: domain.hostname, before: { hsts: before }, after: { hsts: body.hsts } },
+      ip: clientIp(c),
+    });
+    if (domain.verificationStatus === "verified") {
+      await refreshServiceNodes(c.env, db, domain.serviceId, domain.environmentId);
+    }
+    const [out] = await presentDomains(db, project.workspaceId, [row]);
     return c.json(out!, 200);
   })
   .openapi(recheckDomain, async (c) => {

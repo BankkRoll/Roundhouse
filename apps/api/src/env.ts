@@ -7,8 +7,10 @@
 import type { AuditChain } from "./durable/audit-chain";
 import type { NodeConnection } from "./durable/node-connection";
 import type { ProjectRoom } from "./durable/project-room";
+import type { CronRunParams } from "./lib/cron/runs";
 import type { VolumeMigrationParams } from "./lib/volume-migrations";
 import type { BackupParams } from "./workflows/backup";
+import type { CertificateParams } from "./workflows/certificate";
 import type { DeployParams } from "./workflows/deploy";
 import type { KeyRotationParams } from "./workflows/key-rotation";
 import type { ProvisionParams } from "./workflows/provision";
@@ -34,6 +36,8 @@ export interface Env {
   WEBHOOK_LIMITER?: RateLimit;
   /** Per-token limiter for MCP tool calls (60 a minute, ADR 0012). Optional like `AUTH_LIMITER`. */
   MCP_LIMITER?: RateLimit;
+  /** Per-IP limiter for the public ACME HTTP-01 responder (60 a minute, ADR 0009). Optional like `AUTH_LIMITER`. */
+  ACME_LIMITER?: RateLimit;
   /**
    * The `roundhouse_metrics` dataset (ADR 0008). Optional: `wrangler dev`
    * stubs it and tests run without it.
@@ -84,6 +88,13 @@ export interface Env {
   RESTORE_WORKFLOW: Workflow<RestoreParams>;
   /** Runs one volume migration per instance (instance ID = the `mig_…` ID), ADR 0004. */
   VOLUME_MIGRATION_WORKFLOW: Workflow<VolumeMigrationParams>;
+  /** Runs one cron run per instance (instance ID = the `crn_…` run ID), ADR 0010. */
+  CRON_RUN_WORKFLOW: Workflow<CronRunParams>;
+  /**
+   * Runs one certificate issuance attempt (ADR 0009, `managed` TLS mode);
+   * instance ID `<cer_… id>-<attempt>`.
+   */
+  CERT_WORKFLOW: Workflow<CertificateParams>;
   /**
    * Seconds a provisioned server gets to join, overriding `JOIN_TIMEOUT_MS`;
    * and seconds between join checks. For development and tests; unset in production.

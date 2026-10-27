@@ -1,0 +1,56 @@
+{
+  "service": {
+    "id": "svc_cron",
+    "project_id": "prj_shop",
+    "name": "Nightly report",
+    "slug": "nightly",
+    "kind": "cron",
+    "icon": null,
+    "created_at": 1792584000000,
+    "updated_at": 1792670400000
+  },
+  "config": {
+    "id": "cfg_svc_cron_env_staging_v2",
+    "service_id": "svc_cron",
+    "environment_id": "env_staging",
+    "version": 2,
+    "created_by": "usr_ada",
+    "created_at": 1792670400000,
+    "source": {
+      "type": "image",
+      "image": "ghcr.io/acme/report:1"
+    },
+    "build": {
+      "builder": "railpack",
+      "build_args": {}
+    },
+    "deploy": {
+      "replicas": 1,
+      "restart_policy": "on_failure",
+      "max_retries": 10,
+      "drain_s": 10
+    },
+    "resources": {
+      "cpu_millis": 1000,
+      "memory_mb": 512
+    },
+    "healthcheck": null,
+    "networking": {
+      "port": null,
+      "generated_domain": true
+    },
+    "placement": {
+      "node_selector": {}
+    },
+    "cron": {
+      "schedule": "0 3 * * *",
+      "timezone": "UTC",
+      "concurrency": "replace",
+      "timeout_s": 3600,
+      "starting_deadline_s": 300,
+      "retries": 0,
+      "retry_backoff_s": 60,
+      "history_limit": 500
+    }
+  }
+}

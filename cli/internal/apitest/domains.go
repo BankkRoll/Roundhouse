@@ -29,6 +29,45 @@ func (f *Fake) SetDNS(hostname string, s DNSState) {
 	f.dns[hostname] = s
 }
 
+// DefaultHSTS is the policy every HTTPS route gets unless its domain says
+// otherwise, as DEFAULT_HSTS in packages/shared.
+var DefaultHSTS = api.DomainHSTS{Enabled: true, MaxAge: 31_536_000}
+
+// CertLifetime is how long the fake's certificates last: Let's Encrypt's
+// 90 days.
+const CertLifetime = 90 * 86_400_000
+
+// issuedTLS is a certificate issued at ms, loaded by edge-1.
+func issuedTLS(ms int64) api.DomainTLS {
+	return api.DomainTLS{
+		Status: "issued", Issuer: str("R11"), NotBefore: i64(ms), NotAfter: i64(ms + CertLifetime), UpdatedAt: i64(ms),
+		Nodes: []api.DomainTLSNode{{NodeID: NodeID, Name: "edge-1", State: "issued"}},
+	}
+}
+
+// SetRoutingNodes sets the servers domains report DNS may point at, for
+// existing domains and ones added later.
+func (f *Fake) SetRoutingNodes(nodes []api.DomainRoutingNode) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.routingNodes = nodes
+	for i := range f.domains {
+		f.domains[i].RoutingNodes = slices.Clone(nodes)
+	}
+}
+
+// SetDomainTLS replaces the certificate state of the domain named hostname.
+func (f *Fake) SetDomainTLS(hostname string, tls api.DomainTLS) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.domains {
+		if f.domains[i].Hostname == hostname {
+			f.domains[i].TLS = tls
+			f.domains[i].TLSStatus = tls.Status
+		}
+	}
+}
+
 // Domains returns copies of every domain.
 func (f *Fake) Domains() []api.Domain {
 	f.mu.Lock()
@@ -57,7 +96,10 @@ func (f *Fake) checkDomain(d *api.Domain) {
 	d.LastCheckedAt = i64(Now)
 	switch {
 	case s.Routing && s.Ownership:
-		d.Status, d.VerificationStatus, d.TLSStatus, d.Error = "active", "verified", "issued", nil
+		if d.VerificationStatus != "verified" {
+			d.TLS = issuedTLS(Now)
+		}
+		d.Status, d.VerificationStatus, d.TLSStatus, d.Error = "active", "verified", d.TLS.Status, nil
 		d.VerifiedAt = i64(Now)
 	case s.Routing:
 		d.Status = "pending_verification"
@@ -123,6 +165,10 @@ func (f *Fake) addDomain(w http.ResponseWriter, r *http.Request) {
 			{Type: "TXT", Name: "_roundhouse." + host, Value: fmt.Sprintf("rh-verify=%064d", f.seq), Purpose: "ownership", State: "unknown"},
 		},
 		NextCheckAt: i64(Now + 60000), CreatedAt: Now,
+		Apex:         strings.Count(host, ".") == 1,
+		HSTS:         DefaultHSTS,
+		TLS:          api.DomainTLS{Status: "pending", Nodes: []api.DomainTLSNode{}},
+		RoutingNodes: slices.Clone(f.routingNodes),
 	}
 	f.checkDomain(&d)
 	f.domains = append(f.domains, d)
@@ -133,6 +179,40 @@ func (f *Fake) getDomain(w http.ResponseWriter, r *http.Request) {
 	if d := f.findDomain(w, r.PathValue("domainId")); d != nil {
 		writeJSON(w, http.StatusOK, d)
 	}
+}
+
+func (f *Fake) updateDomain(w http.ResponseWriter, r *http.Request) {
+	d := f.findDomain(w, r.PathValue("domainId"))
+	if d == nil {
+		return
+	}
+	var in api.UpdateDomainInput
+	if decode(r, &in) != nil {
+		apiError(w, http.StatusBadRequest, "invalid_request", "hsts: Required")
+		return
+	}
+	if d.Type != "custom" {
+		apiError(w, http.StatusConflict, "conflict", "Generated domains keep the default HSTS policy")
+		return
+	}
+	h := in.HSTS
+	var problems []string
+	if h.MaxAge < 0 || h.MaxAge > 63_072_000 {
+		problems = append(problems, "max-age must be a whole number of seconds from 0 to 63072000.")
+	}
+	if h.Preload && (!h.Enabled || !h.IncludeSubdomains || h.MaxAge < 31_536_000 || !d.Apex) {
+		problems = append(problems, "Preload needs HSTS enabled, includeSubDomains, a year's max-age and an apex hostname.")
+	}
+	if len(problems) > 0 {
+		apiError(w, http.StatusUnprocessableEntity, "invalid_hsts", strings.Join(problems, " "))
+		return
+	}
+	if h.Preload && !d.HSTS.Preload && in.ConfirmPreload != d.Hostname {
+		apiError(w, http.StatusUnprocessableEntity, "preload_confirmation_required", "Type the hostname to confirm preloading")
+		return
+	}
+	d.HSTS = h
+	writeJSON(w, http.StatusOK, d)
 }
 
 func (f *Fake) recheckDomain(w http.ResponseWriter, r *http.Request) {

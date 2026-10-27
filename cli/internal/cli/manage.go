@@ -84,14 +84,15 @@ func (a *App) domainCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "domain",
 		Aliases: []string{"domains"},
-		Short:   "List, add, verify and remove the service's domains",
+		Short:   "List and manage the service's domains",
 		Long: `List the domains routed to the linked service in its environment, or in
 every environment with --all. The subcommands add your own hostnames, check
-their DNS and remove them.`,
+their DNS, set their HSTS policy and remove them.`,
 		Example: `  roundhouse domain
   roundhouse domain --all --json
   roundhouse domain add shop.example.com
-  roundhouse domain verify shop.example.com --wait`,
+  roundhouse domain verify shop.example.com --wait
+  roundhouse domain hsts shop.example.com --max-age 2y`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return a.runDomainList(cmd.Context(), f, all)
@@ -99,7 +100,7 @@ their DNS and remove them.`,
 	}
 	f.register(cmd, true)
 	cmd.Flags().BoolVar(&all, "all", false, "list domains in every environment")
-	cmd.AddCommand(a.domainListCmd(), a.domainAddCmd(), a.domainVerifyCmd(), a.domainRemoveCmd())
+	cmd.AddCommand(a.domainListCmd(), a.domainAddCmd(), a.domainVerifyCmd(), a.domainHSTSCmd(), a.domainRemoveCmd())
 	return cmd
 }
 
@@ -660,16 +661,18 @@ func (a *App) servicesCmd() *cobra.Command {
 	lf.register(list, false)
 
 	var cf targetFlags
-	var image, repo, branch, rootDir, kind, slug string
+	var image, repo, branch, rootDir, kind, slug, schedule, timezone string
 	var port int
 	create := &cobra.Command{
 		Use:   "create NAME (--image IMAGE | --repo URL)",
 		Short: "Create a service from an image or a git repository",
 		Long: `Create a service in the linked project, in every environment. It is not
-deployed until you run "roundhouse deploy".`,
+deployed until you run "roundhouse deploy". A cron service (--kind cron) needs
+--schedule; it runs its image to completion on that schedule once deployed.`,
 		Example: `  roundhouse services create web --image nginx:1.27 --port 80
   roundhouse services create api --repo https://github.com/acme/api --branch main
-  roundhouse services create worker --repo https://github.com/acme/mono --root-dir apps/worker`,
+  roundhouse services create worker --repo https://github.com/acme/mono --root-dir apps/worker
+  roundhouse services create nightly --kind cron --image ghcr.io/acme/report:1 --schedule "0 3 * * *" --timezone Europe/Berlin`,
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var src api.ServiceSource
@@ -683,23 +686,48 @@ deployed until you run "roundhouse deploy".`,
 			default:
 				return exitcode.New(exitcode.Usage, "pass --image or --repo")
 			}
+			isCron := kind == api.ServiceKindCron
+			switch {
+			case isCron && schedule == "":
+				return exitcode.New(exitcode.Usage, "a cron service needs --schedule, e.g. --schedule \"0 3 * * *\"")
+			case !isCron && (cmd.Flags().Changed("schedule") || cmd.Flags().Changed("timezone")):
+				return exitcode.New(exitcode.Usage, "--schedule and --timezone are only for --kind cron")
+			}
 			ctx := cmd.Context()
 			t, err := a.resolve(ctx, cf, serviceOptional)
 			if err != nil {
 				return err
 			}
 			in := api.CreateServiceInput{Name: args[0], Slug: slug, Kind: kind, Source: src}
+			setConfig := func(part string, v any) {
+				if in.Config == nil {
+					in.Config = map[string]any{}
+				}
+				in.Config[part] = v
+			}
 			if port > 0 {
-				in.Config = map[string]any{"networking": map[string]any{"port": port}}
+				setConfig("networking", map[string]any{"port": port})
+			}
+			var cronPatch api.CronConfigPatch
+			if isCron {
+				cronPatch.Schedule = &schedule
+				if timezone != "" {
+					cronPatch.Timezone = &timezone
+				}
+				setConfig("cron", cronPatch)
 			}
 			created, err := t.sess.client.CreateService(ctx, t.project.ID, in)
 			if err != nil {
-				return err
+				return a.cronConfigErr(err, cronPatch.Schedule, cronPatch.Timezone)
 			}
 			if a.jsonOut {
 				return a.printJSON(created)
 			}
 			fmt.Fprintf(a.IO.Out, "%s Created service %s (%s) in %s\n", a.IO.OutColor().Green("✓"), created.Service.Name, created.Service.Slug, t.project.Name)
+			if len(created.Configs) > 0 && created.Configs[0].Cron != nil {
+				c := created.Configs[0].Cron
+				fmt.Fprintf(a.IO.Out, "  Runs on %s (%s) once deployed; change it with `roundhouse cron set`\n", c.Schedule, c.Timezone)
+			}
 			fmt.Fprintf(a.IO.Out, "  Deploy it with: roundhouse deploy --service %s\n", created.Service.Slug)
 			return nil
 		},
@@ -712,6 +740,8 @@ deployed until you run "roundhouse deploy".`,
 	create.Flags().StringVar(&kind, "kind", "app", "service kind: app, database or cron")
 	create.Flags().StringVar(&slug, "slug", "", "slug, also its ${{slug.VAR}} reference namespace (default: derived from the name; -2, -3… is added when taken or reserved)")
 	create.Flags().IntVar(&port, "port", 0, "port the service listens on (default 8080)")
+	create.Flags().StringVar(&schedule, "schedule", "", "with --kind cron, the five-field cron expression or macro (@daily) it runs on")
+	create.Flags().StringVar(&timezone, "timezone", "", "with --kind cron, the IANA time zone the schedule is read in (default UTC)")
 
 	var df targetFlags
 	var confirm string

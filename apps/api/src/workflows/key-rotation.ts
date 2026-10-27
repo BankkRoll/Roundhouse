@@ -29,6 +29,7 @@
  */
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import {
+  certificates,
   createDb,
   type Db,
   deployments,
@@ -40,11 +41,13 @@ import {
   twoFactors,
   variables,
 } from "@roundhouse/db";
-import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { Env } from "../env";
 import { auditInsert } from "../lib/audit";
 import { authSecretVersion } from "../lib/auth-secrets";
+import { CERTIFICATE_KEY_SETTING } from "../lib/certificates/config";
+import { ACME_ACCOUNT_KEY_FIELD, CLOUDFLARE_TOKEN_FIELD } from "../lib/certificates/settings";
 import { type Sealed, sealDataKey, unsealDataKey } from "../lib/crypto";
 import {
   openDeploymentBuild,
@@ -108,6 +111,8 @@ export const INSTANCE_SECRET_FIELDS: readonly InstanceSecretField[] = [
     property: "secret_access_key",
     field: "secret_access_key",
   },
+  { setting: SettingKey.cloudflareDns, property: "api_token", field: CLOUDFLARE_TOKEN_FIELD },
+  { setting: SettingKey.acmeAccount, property: "key", field: ACME_ACCOUNT_KEY_FIELD },
 ];
 
 // Mirrors `lib/cloud-providers.ts`, which seals every provider token through
@@ -168,7 +173,9 @@ export async function rewrapDekBatch(db: Db, keys: KeyEnv): Promise<number> {
 
 /**
  * Re-wraps the instance secrets of `instance_settings` (all of them, they
- * are few) and up to {@link ROTATION_BATCH} provider tokens.
+ * are few), up to {@link ROTATION_BATCH} provider tokens and up to as many
+ * certificate private keys (ADR 0009; sealed under the `certificate`
+ * setting key with the certificate ID as field).
  *
  * @param db - Database client.
  * @param keys - The keyring bindings.
@@ -237,8 +244,49 @@ export async function rewrapInstanceBatch(db: Db, keys: KeyEnv): Promise<number>
         ),
       );
   }
-  return touched + creds.length;
+  const certs = await db
+    .select({
+      id: certificates.id,
+      keySealed: certificates.keySealed,
+      pendingKeySealed: certificates.pendingKeySealed,
+      raw: sql<string>`COALESCE(${rawText(certificates.keySealed)}, '') || '|' || COALESCE(${rawText(certificates.pendingKeySealed)}, '')`,
+    })
+    .from(certificates)
+    .where(staleCertificateKeys(current))
+    .limit(ROTATION_BATCH);
+  for (const c of certs) {
+    const reseal = async (sealed: unknown) =>
+      sealed
+        ? sealInstanceSecret(
+            keys,
+            await unsealInstanceSecret(keys, sealed as Sealed, CERTIFICATE_KEY_SETTING, c.id),
+            CERTIFICATE_KEY_SETTING,
+            c.id,
+          )
+        : null;
+    await db
+      .update(certificates)
+      .set({
+        keySealed: await reseal(c.keySealed),
+        pendingKeySealed: await reseal(c.pendingKeySealed),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(certificates.id, c.id),
+          sql`COALESCE(${rawText(certificates.keySealed)}, '') || '|' || COALESCE(${rawText(certificates.pendingKeySealed)}, '') = ${c.raw}`,
+        ),
+      );
+  }
+  return touched + creds.length + certs.length;
 }
+
+/** Certificates holding a key not sealed under the current KEK. */
+const staleCertificateKeys = (current: string) =>
+  or(
+    and(isNotNull(certificates.keySealed), notUnder(certificates.keySealed, current)),
+    and(isNotNull(certificates.pendingKeySealed), notUnder(certificates.pendingKeySealed, current)),
+  );
 
 /**
  * Re-seals up to {@link ROTATION_BATCH} variables that are in format 1, or
@@ -377,8 +425,8 @@ const count = sql<number>`count(*)`;
 export async function keyStatus(db: Db, keys: KeyEnv): Promise<KeyStatus> {
   const ring = await keyringOf(keys);
   const current = ring.current.kid;
-  const [[dek], [v1Vars], [noFp], [v1Deps], [creds], [tfa], settings, rotation] = await Promise.all(
-    [
+  const [[dek], [v1Vars], [noFp], [v1Deps], [creds], [tfa], [certKeys], settings, rotation] =
+    await Promise.all([
       db
         .select({ n: count })
         .from(projectKeys)
@@ -405,6 +453,7 @@ export async function keyStatus(db: Db, keys: KeyEnv): Promise<KeyStatus> {
         .select({ n: count })
         .from(twoFactors)
         .where(staleTwoFactorCondition(authSecretVersion(current))),
+      db.select({ n: count }).from(certificates).where(staleCertificateKeys(current)),
       db
         .select({ key: instanceSettings.key, value: instanceSettings.value })
         .from(instanceSettings)
@@ -412,8 +461,7 @@ export async function keyStatus(db: Db, keys: KeyEnv): Promise<KeyStatus> {
           inArray(instanceSettings.key, [...new Set(INSTANCE_SECRET_FIELDS.map((f) => f.setting))]),
         ),
       getSetting<KeyRotationState>(db, KEY_ROTATION_SETTING),
-    ],
-  );
+    ]);
   let staleSettings = 0;
   for (const row of settings) {
     const value = row.value as Record<string, Sealed | undefined>;
@@ -424,7 +472,8 @@ export async function keyStatus(db: Db, keys: KeyEnv): Promise<KeyStatus> {
   }
   const remaining = {
     project_keys: Number(dek?.n ?? 0),
-    instance_secrets: staleSettings + Number(creds?.n ?? 0) + Number(tfa?.n ?? 0),
+    instance_secrets:
+      staleSettings + Number(creds?.n ?? 0) + Number(tfa?.n ?? 0) + Number(certKeys?.n ?? 0),
     v1_variables: Number(v1Vars?.n ?? 0),
     v1_deployments: Number(v1Deps?.n ?? 0),
     missing_fingerprints: Number(noFp?.n ?? 0),
