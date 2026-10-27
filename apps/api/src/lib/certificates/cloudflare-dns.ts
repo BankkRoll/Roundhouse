@@ -21,6 +21,34 @@ const CHALLENGE_TTL_S = 60;
 
 let transport: typeof fetch | null = null;
 
+/** Base URL every Cloudflare API call goes to; see {@link configureCloudflareApi}. */
+let apiBase = CLOUDFLARE_API;
+
+/** The settings {@link configureCloudflareApi} reads. */
+export interface CloudflareApiEnv {
+  ROUNDHOUSE_DEV?: string;
+  /** Development only: another Cloudflare API base, e.g. `e2e/lib/fake-cloudflare.mjs`. */
+  CLOUDFLARE_API_URL?: string;
+}
+
+/**
+ * Points Cloudflare API calls at `CLOUDFLARE_API_URL`, so the end-to-end
+ * suites can run against a fake. Called at every entry point (requests,
+ * the cron, certificate workflows).
+ *
+ * SECURITY: honoured only with `ROUNDHOUSE_DEV=1`; in production the API
+ * token never goes anywhere but Cloudflare.
+ *
+ * @param env - The Worker's bindings.
+ */
+export function configureCloudflareApi(env: CloudflareApiEnv): void {
+  const url = env.CLOUDFLARE_API_URL?.trim();
+  apiBase =
+    env.ROUNDHOUSE_DEV === "1" && url && /^https?:\/\/[^\s]+$/.test(url)
+      ? url.replace(/\/+$/, "")
+      : CLOUDFLARE_API;
+}
+
 /**
  * Replaces the `fetch` Cloudflare API calls use, for tests.
  *
@@ -72,7 +100,7 @@ export async function cloudflareCall<T>(
 ): Promise<T> {
   let res: Response;
   try {
-    res = await (transport ?? fetch)(`${CLOUDFLARE_API}${path}`, {
+    res = await (transport ?? fetch)(`${apiBase}${path}`, {
       method,
       headers: {
         ...(zone.apiToken ? { authorization: `Bearer ${zone.apiToken}` } : {}),

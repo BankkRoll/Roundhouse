@@ -31,6 +31,7 @@
  *
  * @module
  */
+
 import { createDb } from "@roundhouse/db";
 import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
@@ -38,6 +39,7 @@ import { authFor, createRouter, withDb } from "./context";
 import type { Env } from "./env";
 import { AUDIT_CHAIN_NAME } from "./lib/audit-chain";
 import { noStore } from "./lib/cache-control";
+import { configureCloudflareApi } from "./lib/certificates/cloudflare-dns";
 import { MINUTE_CRON, runMinuteTick } from "./lib/dispatch";
 import { ApiError, errorBody, errorCodeForStatus } from "./lib/errors";
 import { rateLimitSecrets, sameOriginMutations } from "./lib/guards";
@@ -112,6 +114,10 @@ app.use("*", (c, next) =>
     ? next()
     : headers(c, next),
 );
+app.use("*", (c, next) => {
+  configureCloudflareApi(c.env);
+  return next();
+});
 app.use("/v1/*", noStore);
 app.use("/api/auth/*", noStore);
 app.use("/mcp", noStore);
@@ -201,6 +207,7 @@ export { app };
 export default {
   fetch: app.fetch,
   async scheduled(controller, env) {
+    configureCloudflareApi(env);
     if (controller.cron === MINUTE_CRON) {
       try {
         await env.AUDIT_CHAIN.get(env.AUDIT_CHAIN.idFromName(AUDIT_CHAIN_NAME)).seal();

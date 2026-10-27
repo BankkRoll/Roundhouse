@@ -65,3 +65,7 @@ ROUNDHOUSE_DEV=1
 
 # Agent metrics sampling interval in ms (default 15000).
 # METRICS_INTERVAL_MS=5000
+
+# Development only, honoured with ROUNDHOUSE_DEV=1: send Cloudflare API calls
+# (DNS-01, Cloudflare for SaaS) to a fake, e.g. e2e/lib/fake-cloudflare.mjs.
+# CLOUDFLARE_API_URL=http://127.0.0.1:8787/client/v4

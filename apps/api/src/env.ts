@@ -77,6 +77,8 @@ export interface Env {
   PUBLIC_ORIGIN?: string;
   /** `"1"` in local development: relaxes `PUBLIC_ORIGIN` and lets agents use `ws://`. */
   ROUNDHOUSE_DEV?: string;
+  /** Development only, with `ROUNDHOUSE_DEV=1`: Cloudflare API base for a fake (e2e). */
+  CLOUDFLARE_API_URL?: string;
   /** The single `AuditChain` Durable Object (`idFromName("global")`). */
   AUDIT_CHAIN: DurableObjectNamespace<AuditChain>;
   /** Runs one master key rotation per instance (instance ID = rotation ID). */

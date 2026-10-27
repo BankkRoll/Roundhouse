@@ -10,10 +10,12 @@
  *
  * @module
  */
+
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 import { createDb } from "@roundhouse/db";
 import type { Env } from "../env";
+import { configureCloudflareApi } from "../lib/certificates/cloudflare-dns";
 import type { Steps } from "../lib/certificates/order";
 import {
   type CertificateAttempt,
@@ -61,6 +63,7 @@ export class CertificateWorkflow extends WorkflowEntrypoint<Env, CertificatePara
     event: Readonly<WorkflowEvent<CertificateParams>>,
     step: WorkflowStep,
   ): Promise<{ outcome: string }> {
+    configureCloudflareApi(this.env);
     const outcome = await runCertificateAttempt(
       this.env,
       createDb(this.env.DB),
