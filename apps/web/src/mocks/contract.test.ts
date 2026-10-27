@@ -3404,6 +3404,56 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
+  it("recovery: in place onto another node once the volume's node is lost", async () => {
+    await fresh(async () => {
+      db.nodes.push({
+        ...makeNode({ id: "node_nbg1", name: "nbg-1", hostname: "nbg-1.example.com" }),
+        workspace_id: WORKSPACE_ID,
+      });
+      const recover = (body: Record<string, unknown> = {}) =>
+        call("POST", `/v1/backups/${DATA_SEED.scheduledBackup}/restore`, {
+          mode: "in_place",
+          confirm: DATA_SEED.databaseSlug,
+          target_node_id: "node_nbg1",
+          ...body,
+        });
+      expect(await recover()).toMatchObject({
+        status: 409,
+        body: { error: { message: expect.stringMatching(/Move the volume instead/) } },
+      });
+      expect((await recover({ mode: "new_service" })).status).toBe(400);
+      const home = db.nodes.find((n) => n.id === "node_hel1")!;
+      home.status = "offline";
+      expect((await recover({ target_node_id: "node_nope" })).status).toBe(404);
+      expect(await recover({ target_node_id: "node_fsn1" })).toMatchObject({
+        status: 422,
+        body: { error: { code: "migration_target_ineligible" } },
+      });
+      as("member");
+      expect((await recover()).status).toBe(403);
+      as("owner");
+      db.data.knobs.reauthRequired = true;
+      expect((await recover()).status).toBe(403);
+      db.data.knobs.reauthRequired = false;
+
+      const started = await recover();
+      expect(started).toMatchObject({
+        status: 202,
+        body: { mode: "in_place", target_node_id: "node_nbg1", safety_backup_id: null },
+      });
+      expect(db.data.volumes.find((v) => v.id === DATA_SEED.volume)?.status).toBe("abandoned");
+      const volume = await call(
+        "GET",
+        `/v1/services/${DATA_SEED.database}/volume?environment_id=${SEED.production}`,
+      );
+      expect(volume.body).toMatchObject({ node_id: "node_nbg1", status: "pending" });
+      expect(db.audit.at(-1)).toMatchObject({
+        action: "restore.started",
+        metadata: { recovery: { lost_node_id: "node_hel1", target_node_id: "node_nbg1" } },
+      });
+    });
+  });
+
   it("volume moves: targets, typed slug, fresh session, phases to done or rolled back", async () => {
     await fresh(async () => {
       db.nodes.push({

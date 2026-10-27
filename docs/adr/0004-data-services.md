@@ -503,6 +503,45 @@ uploads after 1 day.
   node is gone (0005, offline handling). It creates a new volume on the
   target node, marks the old one `abandoned`, repoints the service,
   deploys, and restores.
+  As built (amendment, 2026-10-27; `lib/backups/recovery.ts`, migration
+  `0020`):
+  - Allowed only while the volume's node is **lost**: removed, or
+    `offline` by heartbeat. An online or degraded node is refused (409):
+    the data is still there, and a move (below) keeps every write a
+    recovery would throw away. A volume that is moving, deleted or not yet
+    placed is refused too.
+  - Needs, besides `backups:restore` and a fresh session,
+    `services:manage` and `deployments:create` (it replaces the volume and
+    redeploys), and `confirm` equal to the service slug. The target is
+    checked with the migration eligibility rules (`targetIneligibility`;
+    422 `migration_target_ineligible`), and the service must have an
+    `active` or `crashed` deployment to redeploy (409 otherwise).
+  - One batch marks the old volume `abandoned`, inserts an empty `pending`
+    volume pinned to the target (the partial unique index on live volumes
+    stops two recoveries racing), records the restore with
+    `restores.target_node_id`, and audits `restore.started` with
+    `recovery: { lost_node_id, target_node_id, abandoned_volume_id,
+    volume_id }`. The service's last deployment is then redeployed
+    (trigger `recovery`, same image and config) onto the target.
+  - `RestoreWorkflow` waits for that deployment to be active and the new
+    volume ready, as for `new_service`, and fails if the volume moved off
+    the target meanwhile. No safety backup is possible.
+  - The dashboard offers "Recover on another server…" on the volume's
+    Server row when its node is lost, restoring the latest succeeded
+    backup; the CLI has `roundhouse db volume recover --to SERVER
+    [--backup ID]`.
+  - **Not built yet:**
+    - The abandoned copy is never deleted. If the lost node comes back,
+      its desired state no longer lists the volume or the replica, so
+      nothing runs on it, but the agent keeps the data and reports the
+      volume orphaned (it deletes data only for a signed `volume_delete`).
+      Deleting it
+      needs a `volume_delete` for an `abandoned` volume once its node
+      reconnects, like a migration's cleanup.
+    - Recovery is manual. Nothing notices a lost node and recovers its
+      volumes; 0005's offline handling only reports the node.
+    - Only the latest backup's data comes back: there is no point-in-time
+      recovery (no WAL or binlog shipping).
 
 ```sql
 CREATE TABLE restores (

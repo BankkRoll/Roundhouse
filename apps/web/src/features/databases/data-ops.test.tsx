@@ -1,5 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { DATA_SEED } from "../../mocks/data-db";
 import { db, makeNode, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
 import { servicePath } from "../../test/phase1";
@@ -83,6 +83,12 @@ describe("restoring into a new service", () => {
 });
 
 describe("moving a volume", () => {
+  // NOTE: The seeded heartbeat ages with the run, and a silent server reads as offline,
+  // where the volume section offers recovery instead of a move.
+  beforeEach(() => {
+    db.nodes.find((node) => node.id === "node_hel1")!.last_heartbeat_at = Date.now();
+  });
+
   it("lists targets with reasons, warns about downtime, and follows the move phase by phase", async () => {
     db.nodes.push({
       ...makeNode({ id: "node_nbg1", name: "nbg-1", hostname: "nbg-1.example.com" }),

@@ -177,6 +177,14 @@ export const RestoreBackupBody = z
     confirm: z.string().min(1).max(100),
     /** `in_place` only: skip the `pre_restore` safety backup. */
     skip_safety_backup: z.boolean().optional(),
+    /**
+     * `in_place` only: recover onto this node because the volume's node is
+     * lost (offline or removed). A new volume is created there, the old one
+     * is marked `abandoned`, the service is redeployed onto it, and the
+     * backup is restored. No safety backup is possible. Needs
+     * `services:manage` and `deployments:create` as well.
+     */
+    target_node_id: z.string().min(1).max(64).optional(),
   })
   .openapi("RestoreBackup");
 
@@ -189,6 +197,8 @@ export const RestoreSchema = z
     target_service_id: z.string().nullable(),
     target_environment_id: z.string().nullable(),
     safety_backup_id: z.string().nullable(),
+    /** The node a recovery restored onto; `null` for every other restore. */
+    target_node_id: z.string().nullable(),
     status: z.enum(RESTORE_STATUSES),
     error: z.string().nullable(),
     requested_by: z.string().nullable(),
@@ -348,6 +358,9 @@ export const getBackupDecryptionKey = defineRoute(
  * credentials, waits for it to be healthy, and restores into it; the
  * original is not touched. Needs a fresh session; `new_service` also needs
  * `services:manage`, `variables:manage` and `deployments:create`.
+ * `in_place` with `target_node_id` recovers a volume whose node is lost
+ * onto that node (409 while the node is online: move the volume instead;
+ * 422 `migration_target_ineligible` when the target can't take it).
  */
 export const restoreBackup = defineRoute(
   session("backups:restore", ["restore.started"], { reauth: true }),

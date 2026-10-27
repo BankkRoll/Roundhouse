@@ -9,6 +9,7 @@ import {
   Skeleton,
   toast,
 } from "@roundhouse/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { TriangleAlertIcon } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
@@ -17,6 +18,7 @@ import type { Volume } from "../../lib/api/data-client";
 import type { Environment, Service } from "../../lib/api/deploy-types";
 import { formatBytes, formatDuration, formatTimestamp } from "../../lib/format";
 import {
+  dataKeys,
   migrationInFlight,
   useDeleteVolume,
   useResizeVolume,
@@ -27,6 +29,7 @@ import {
 import { useNodes } from "../../queries/nodes";
 import { useEnvironmentGate } from "../access/environment-gate";
 import { MigrationHistory, MigrationProgress, MoveVolumeDialog } from "./volume-migration";
+import { RECOVERABLE, RecoverVolumeDialog, RecoveryStatus } from "./volume-recovery";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "info";
 
@@ -157,8 +160,12 @@ export function VolumeSection({ workspaceId, service, environment }: VolumeSecti
   const [confirming, setConfirming] = useState(false);
   const [moving, setMoving] = useState(false);
   const [startedId, setStartedId] = useState<string | null>(null);
+  const [recovering, setRecovering] = useState(false);
+  const [recovery, setRecovery] = useState<{ restoreId: string; nodeId: string } | null>(null);
+  const queryClient = useQueryClient();
   const canManage = can("services:manage");
   const canMove = canManage && can("deployments:create");
+  const canRecover = canMove && can("backups:restore");
   const data = volume.data;
   const migrations = useVolumeMigrations(data?.id);
   const nodes = useNodes(workspaceId, false);
@@ -171,6 +178,12 @@ export function VolumeSection({ workspaceId, service, environment }: VolumeSecti
       : (nodes.data?.find((node) => node.id === nodeId)?.name ??
         (nodeId === data?.node_id ? data.node_name : null) ??
         nodeId);
+  // A server that was removed is no longer listed; one that stopped reporting is offline.
+  const holder = data?.node_id ? nodes.data?.find((node) => node.id === data.node_id) : undefined;
+  const lost =
+    Boolean(data?.node_id) &&
+    nodes.isSuccess &&
+    (holder === undefined || holder.status === "offline");
 
   return (
     <SettingsSection
@@ -280,22 +293,36 @@ export function VolumeSection({ workspaceId, service, environment }: VolumeSecti
             description={
               data.status === "migrating"
                 ? "Moving to another server; the service is down until it starts there."
-                : canMove && data.node_id
-                  ? "Moving it stops the service for the whole copy."
-                  : undefined
+                : lost
+                  ? `${holder ? `${holder.name} is offline` : "The server was removed"}; the data can't be read from it. Recover the volume from its latest backup onto another server, or wait for the server to come back.`
+                  : canMove && data.node_id
+                    ? "Moving it stops the service for the whole copy."
+                    : undefined
             }
           >
             <div className="flex items-center gap-3 md:justify-end">
               <p className="text-sm text-foreground">
                 {data.node_name ?? "Placed on the first deploy"}
               </p>
-              {canMove && data.node_id && MOVABLE.includes(data.status) && !runningId ? (
+              {canRecover && lost && RECOVERABLE.includes(data.status) && !runningId ? (
+                <Button variant="secondary" size="sm" onClick={() => setRecovering(true)}>
+                  Recover on another server…
+                </Button>
+              ) : canMove && data.node_id && MOVABLE.includes(data.status) && !runningId ? (
                 <Button variant="secondary" size="sm" onClick={() => setMoving(true)}>
                   Move to server…
                 </Button>
               ) : null}
             </div>
           </SettingsRow>
+          {recovery ? (
+            <RecoveryStatus
+              key={recovery.restoreId}
+              restoreId={recovery.restoreId}
+              serviceName={service.name}
+              serverName={nodeName(recovery.nodeId)}
+            />
+          ) : null}
           {progressId ? (
             <MigrationProgress
               key={progressId}
@@ -320,6 +347,19 @@ export function VolumeSection({ workspaceId, service, environment }: VolumeSecti
               </div>
             </SettingsRow>
           ) : null}
+          <RecoverVolumeDialog
+            service={service}
+            volume={data}
+            lostServer={holder?.name ?? data.node_name ?? "The server"}
+            open={recovering}
+            onOpenChange={setRecovering}
+            onStarted={(restore) => {
+              setRecovery({ restoreId: restore.id, nodeId: restore.target_node_id ?? "" });
+              void queryClient.invalidateQueries({
+                queryKey: dataKeys.volume(service.id, data.environment_id),
+              });
+            }}
+          />
           <MoveVolumeDialog
             service={service}
             volume={data}

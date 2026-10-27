@@ -3599,7 +3599,8 @@
               "api",
               "template",
               "change_set",
-              "migration"
+              "migration",
+              "recovery"
             ],
             "type": "string"
           },
@@ -7103,6 +7104,12 @@
               "null"
             ]
           },
+          "target_node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "target_service_id": {
             "type": [
               "string",
@@ -7117,6 +7124,7 @@
           "target_service_id",
           "target_environment_id",
           "safety_backup_id",
+          "target_node_id",
           "status",
           "error",
           "requested_by",
@@ -7151,6 +7159,11 @@
             "type": "string"
           },
           "target_environment_id": {
+            "type": "string"
+          },
+          "target_node_id": {
+            "maxLength": 64,
+            "minLength": 1,
             "type": "string"
           }
         },

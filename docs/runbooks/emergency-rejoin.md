@@ -79,7 +79,6 @@ dump), skip this step.
 There is no single "replace now" action. The emergency replacement is a
 rollover with the shortest delay, completed with force, which deletes the old
 private key.
-
 1. Schedule a successor with the minimum delay of one hour: **Roll over to a
    new key** with **Switch after: 1 hour**, or
 
@@ -117,7 +116,6 @@ still active is handed the old key to pin.
 ## 4. Re-join every node
 
 For each node, one at a time:
-
 1. **Mint a join token** in the node's workspace: **Servers → Add server**,
    or
 
@@ -201,8 +199,11 @@ checks the audit chain has not been altered.
   started containers or changed state on a node. Re-joining does not inspect
   or clean the host; rebuild a node you do not trust.
 - **Volumes.** A volume is recorded against the node that holds it, and the
-  re-joined host has a new node ID. This runbook does not move volume
-  records; plan a backup and restore for services with volumes.
+  re-joined host has a new node ID. Once the old node is removed, rebuild
+  each of its volumes on a live node from the latest backup: **Recover on
+  another server…** on the service's volume, or
+  `roundhouse db volume recover --to <server>`. Writes after that backup are
+  lost, so take a backup first where the old node is still reachable.
 - **Release signing keys** for the agent and CLI binaries: see "Compromise"
   in [`infra/release-signing.md`](../../infra/release-signing.md).
 - **Routine rollovers.** With no suspected compromise, schedule a rollover

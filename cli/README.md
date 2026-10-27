@@ -218,6 +218,7 @@ replaced only with `--force`.
 roundhouse db volume move --list-targets    # servers, why not, estimated downtime
 roundhouse db volume move --to edge-2 --wait
 roundhouse db volume migrations
+roundhouse db volume recover --to edge-2 --wait   # the volume's server is lost
 roundhouse db tcp-proxy                     # endpoint, status, allowlist
 roundhouse db tcp-proxy enable --allow 203.0.113.7 --allow 198.51.100.0/24
 roundhouse db tcp-proxy disable --yes
@@ -230,6 +231,12 @@ bucket and redeploys the service there; the service is down for the whole
 copy. A server that cannot take the volume is listed with its reason, and
 `--wait` prints each phase as the move goes. It asks for the service's slug
 (`--confirm` or `--yes` in scripts).
+
+`volume recover` is for a server that is gone (offline or removed): it
+abandons the volume there, creates an empty one on `--to`, redeploys the
+service onto it and restores the latest succeeded backup (or `--backup`).
+Writes after that backup are lost, so it refuses while the server is
+online; move the volume instead.
 
 `tcp-proxy enable` publishes the service's port on its server behind a
 source allowlist (`--allow`, repeatable; every other source is dropped).
