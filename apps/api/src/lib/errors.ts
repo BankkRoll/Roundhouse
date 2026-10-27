@@ -63,6 +63,8 @@ export type ErrorCode =
   | "cron_schedule_required"
   | "cron_has_no_endpoint"
   | "run_in_progress"
+  | "build_node_selector_required"
+  | "head_moved"
   | "internal";
 
 /**

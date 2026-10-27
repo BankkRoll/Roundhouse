@@ -87,7 +87,12 @@ export const variableRoutes = createRouter()
       action: "variables.updated",
       targetType: "service",
       targetId: serviceId,
-      metadata: { environment_id, set: changed.set, deleted: changed.deleted },
+      metadata: {
+        environment_id,
+        set: changed.set,
+        deleted: changed.deleted,
+        ...(changed.unwithheld.length ? { replaced_withheld: changed.unwithheld } : {}),
+      },
       ip: clientIp(c),
     });
     const plain = caller.allows("variables:read_plain");
@@ -173,7 +178,13 @@ export const variableRoutes = createRouter()
       action: "variables.updated",
       targetType: "project",
       targetId: projectId,
-      metadata: { environment_id, scope: "shared", set: changed.set, deleted: changed.deleted },
+      metadata: {
+        environment_id,
+        scope: "shared",
+        set: changed.set,
+        deleted: changed.deleted,
+        ...(changed.unwithheld.length ? { replaced_withheld: changed.unwithheld } : {}),
+      },
       ip: clientIp(c),
     });
     const plain = caller.allows("variables:read_plain");

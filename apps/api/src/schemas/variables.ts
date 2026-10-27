@@ -68,6 +68,11 @@ export const VariableSchema = z
       .nullable(),
     available_at_build: z.boolean(),
     mount_as_file: z.boolean(),
+    /**
+     * A preview placeholder (ADR 0007): the base environment's value was a
+     * secret or derived from one, so this preview got an empty value.
+     */
+    withheld: z.boolean(),
     version: z.number().int().positive(),
     updated_at: Millis,
     /** User who last wrote it; `null` for system writes and older rows. */

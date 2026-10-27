@@ -81,7 +81,7 @@ import {
   type VolumeDeleteOp,
   type VolumeSetOp,
 } from "@roundhouse/shared";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { type AppContext, clientIp, originOf, requireKeys } from "../../context";
 import type { Env } from "../../env";
 import { auditInsert, recordAudit } from "../audit";
@@ -1408,7 +1408,10 @@ async function finish(
   const { c, db, project, environment } = ctx;
   const lifecycle = { db, env: ctx.env };
   const ingress = await getIngressSettings(db);
-  const envs = await db.select().from(environments).where(eq(environments.projectId, project.id));
+  const envs = await db
+    .select()
+    .from(environments)
+    .where(and(eq(environments.projectId, project.id), isNull(environments.retiredAt)));
   for (const create of plan.creates) {
     for (const e of envs) {
       await syncGeneratedDomain(

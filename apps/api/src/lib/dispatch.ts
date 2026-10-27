@@ -14,10 +14,14 @@
  */
 import { createDb } from "@roundhouse/db";
 import type { Env } from "../env";
+import { startPreviewAction } from "../workflows/preview";
 import { claimDueBackups } from "./backups/schedule";
 import { claimDueCertificates, syncCertificates } from "./certificates/schedule";
 import { claimDueCronRuns } from "./cron/schedule";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
+import { configuredOrigin } from "./origin";
+import { runPreviewTick } from "./previews/engine";
+import { reapRetiredEnvironments } from "./previews/environment";
 import { claimVolumeDeletions } from "./volumes";
 
 /** The Cron Trigger expression of the minute tick; it must match `wrangler.jsonc`. */
@@ -61,6 +65,24 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
   { name: "volume_deletions", run: claimVolumeDeletions },
   { name: "backup_policies", run: claimDueBackups },
   { name: "cron", run: claimDueCronRuns },
+  {
+    // ADR 0007: expire idle previews and admit queued ones as slots free up.
+    name: "previews",
+    run: (env, now) =>
+      runPreviewTick(env, createDb(env.DB), now, (previewId, action) =>
+        startPreviewAction(env, {
+          kind: "action",
+          preview_id: previewId,
+          origin: configuredOrigin(env) ?? "",
+          action,
+        }),
+      ),
+  },
+  {
+    // After volume deletions, which free torn-down preview environments to go.
+    name: "retired_environments",
+    run: (env) => reapRetiredEnvironments(env, createDb(env.DB)),
+  },
 ];
 
 /**

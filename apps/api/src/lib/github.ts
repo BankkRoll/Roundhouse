@@ -12,6 +12,7 @@
  *
  * @module
  */
+import { env as workerEnv } from "cloudflare:workers";
 import { type Db, githubInstallations, instanceSettings } from "@roundhouse/db";
 import { fromBase64, toBase64 } from "@roundhouse/protocol";
 import type { ServiceSource } from "@roundhouse/shared";
@@ -27,8 +28,43 @@ import {
 } from "./instance-secrets";
 import { SettingKey } from "./settings";
 
-/** GitHub REST API origin. */
+/** GitHub REST API origin, unless `GITHUB_API_URL` names another. */
 export const GITHUB_API = "https://api.github.com";
+
+/**
+ * The REST API origin every GitHub call targets: `GITHUB_API_URL` when set
+ * (ADR 0007: a fake GitHub for end-to-end tests, or GitHub Enterprise), else
+ * {@link GITHUB_API}.
+ *
+ * SECURITY: installation tokens and App JWTs go to this origin, so it must
+ * be https; plain http is accepted only with `ROUNDHOUSE_DEV=1`. A
+ * malformed value fails every call instead of falling back silently.
+ *
+ * @param bindings - Worker bindings; the module's own by default.
+ * @returns The origin, without a trailing slash.
+ * @throws When `GITHUB_API_URL` is set but not an acceptable URL.
+ */
+export function githubApiBase(
+  bindings: { GITHUB_API_URL?: string; ROUNDHOUSE_DEV?: string } = workerEnv as {
+    GITHUB_API_URL?: string;
+    ROUNDHOUSE_DEV?: string;
+  },
+): string {
+  const raw = bindings.GITHUB_API_URL?.trim();
+  if (!raw) return GITHUB_API;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("GITHUB_API_URL is not a URL");
+  }
+  const allowed =
+    url.protocol === "https:" || (url.protocol === "http:" && bindings.ROUNDHOUSE_DEV === "1");
+  if (!allowed || url.username || url.password || url.search || url.hash) {
+    throw new Error("GITHUB_API_URL must be an https URL without credentials, query or fragment");
+  }
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
+}
 
 /** GitHub web origin. */
 export const GITHUB_WEB = "https://github.com";
@@ -47,10 +83,11 @@ export const GITHUB_APP_PERMISSIONS = {
 } as const;
 
 /**
- * Events the App subscribes to. `installation` and `installation_repositories`
- * are delivered to every App without subscribing.
+ * Events the App subscribes to: `push` deploys, `pull_request` drives
+ * previews (ADR 0007). `installation` and `installation_repositories` are
+ * delivered to every App without subscribing.
  */
-export const GITHUB_APP_EVENTS = ["push"] as const;
+export const GITHUB_APP_EVENTS = ["push", "pull_request"] as const;
 
 /** How long a manifest-flow state token is valid. */
 export const MANIFEST_STATE_TTL_MS = 10 * 60 * 1000;
@@ -296,7 +333,7 @@ export class GithubApiError extends Error {
 /**
  * Calls the GitHub REST API.
  *
- * @param path - Path under {@link GITHUB_API}, e.g. `/app/installations/1`.
+ * @param path - Path under {@link githubApiBase}, e.g. `/app/installations/1`.
  * @param init - Method, bearer credential and JSON body.
  * @returns The parsed JSON response.
  * @throws {GithubApiError} On a non-2xx answer.
@@ -308,7 +345,7 @@ export async function githubRequest<T>(
   // SECURITY: A path not starting with "/" could move the request, and its
   // bearer credential, to another host (`@evil.example/…`).
   if (!path.startsWith("/")) throw new Error(`GitHub API path must start with "/": ${path}`);
-  const res = await fetch(`${GITHUB_API}${path}`, {
+  const res = await fetch(`${githubApiBase()}${path}`, {
     method: init.method ?? "GET",
     // SECURITY: A redirect is never followed with the credential attached;
     // the 3xx surfaces as a GithubApiError below.
@@ -526,7 +563,7 @@ export async function userAdministersAccount(
 export async function revokeUserToken(app: GithubApp, userToken: string): Promise<void> {
   try {
     const res = await fetch(
-      `${GITHUB_API}/applications/${encodeURIComponent(app.clientId)}/token`,
+      `${githubApiBase()}/applications/${encodeURIComponent(app.clientId)}/token`,
       {
         method: "DELETE",
         redirect: "manual",

@@ -191,7 +191,14 @@ export async function environmentOf(
     .get("db")
     .select()
     .from(environments)
-    .where(and(eq(environments.id, environmentId), eq(environments.projectId, projectId)))
+    .where(
+      and(
+        eq(environments.id, environmentId),
+        eq(environments.projectId, projectId),
+        // A torn-down preview environment only waits for its volumes to go.
+        isNull(environments.retiredAt),
+      ),
+    )
     .limit(1);
   if (!row) throw notFound("Environment");
   return row;

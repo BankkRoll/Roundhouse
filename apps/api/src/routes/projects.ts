@@ -179,7 +179,7 @@ export const projectRoutes = createRouter()
       db
         .select()
         .from(environments)
-        .where(eq(environments.projectId, projectId))
+        .where(and(eq(environments.projectId, projectId), isNull(environments.retiredAt)))
         .orderBy(productionFirst, asc(environments.id)),
       liveServices(db, projectId),
     ]);
@@ -267,7 +267,7 @@ export const projectRoutes = createRouter()
       .get("db")
       .select()
       .from(environments)
-      .where(eq(environments.projectId, projectId))
+      .where(and(eq(environments.projectId, projectId), isNull(environments.retiredAt)))
       .orderBy(productionFirst, asc(environments.id));
     return c.json({ environments: rows.map(toApiEnvironment) }, 200);
   })

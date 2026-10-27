@@ -64,6 +64,7 @@ import { inviteRoutes } from "./routes/invites";
 import { keyRoutes } from "./routes/keys";
 import { metricsRoutes } from "./routes/metrics";
 import { nodeRoutes } from "./routes/nodes";
+import { previewRoutes } from "./routes/previews";
 import { projectRoutes } from "./routes/projects";
 import { providerRoutes } from "./routes/providers";
 import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
@@ -85,6 +86,7 @@ export { CertificateWorkflow } from "./workflows/certificate";
 export { CronRunWorkflow } from "./workflows/cron-run";
 export { DeployWorkflow } from "./workflows/deploy";
 export { KeyRotationWorkflow } from "./workflows/key-rotation";
+export { PreviewWorkflow } from "./workflows/preview";
 export { ProvisionWorkflow } from "./workflows/provision";
 export { RestoreWorkflow } from "./workflows/restore";
 
@@ -147,6 +149,7 @@ app
   .route("/", templateRoutes)
   .route("/", backupRoutes)
   .route("/", cronRoutes)
+  .route("/", previewRoutes)
   .route("/", mcpRoutes)
   .route("/", oauthRoutes)
   .route("/", oauthConsentRoutes);

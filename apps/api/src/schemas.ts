@@ -348,6 +348,8 @@ export const EnvironmentSchema = z
     source_branch: z.string().nullable(),
     /** Whether protection rules narrow deploys, config and variable changes here (ADR 0014). */
     protected: z.boolean(),
+    /** The pull request preview this environment belongs to (ADR 0007). */
+    preview_id: z.string().nullable(),
     created_at: Millis,
   })
   .openapi("Environment");

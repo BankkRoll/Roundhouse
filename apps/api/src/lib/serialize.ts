@@ -53,6 +53,7 @@ export function toApiEnvironment(e: Row<typeof environments>) {
     pr_number: e.prNumber,
     source_branch: e.sourceBranch,
     protected: e.protected,
+    preview_id: e.previewId,
     created_at: +e.createdAt,
   };
 }

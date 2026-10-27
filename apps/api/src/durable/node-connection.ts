@@ -84,6 +84,7 @@ import {
   METRICS_PROTOCOL_VERSION,
   MIN_PROTOCOL_VERSION,
   type NodeEncryptionKey,
+  PREVIEW_BUILDS_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   SEALED_ENV_PROTOCOL_VERSION,
   SECRET_BUILD_ARGS_PROTOCOL_VERSION,
@@ -289,7 +290,8 @@ export type BuildJobBody = Omit<BuildJob, "id" | "node_id" | "iat" | "exp" | "ty
 export type BuildJobRejection =
   | "not_connected"
   | "protocol_too_old"
-  | "secret_build_args_unsupported";
+  | "secret_build_args_unsupported"
+  | "preview_builds_unsupported";
 
 /** Why {@link NodeConnection.sendBuildCancel} could not deliver. */
 export type BuildCancelRejection = "not_connected" | "protocol_too_old";
@@ -623,6 +625,11 @@ export class NodeConnection extends DurableObject<Env> {
       // SECURITY: an older agent ignores the field and would pass the
       // values as plain build args, recorded in the image's history.
       return { sent: false, reason: "secret_build_args_unsupported" };
+    }
+    if (job.isolation && attachment.protocolVersion < PREVIEW_BUILDS_PROTOCOL_VERSION) {
+      // SECURITY: an older agent ignores the field and would build pull
+      // request code in the project's regular BuildKit daemon and cache.
+      return { sent: false, reason: "preview_builds_unsupported" };
     }
     const now = Date.now();
     await this.send(ws, {

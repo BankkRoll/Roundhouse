@@ -71,6 +71,11 @@
       "name": "roundhouse-cron-run",
       "binding": "CRON_RUN_WORKFLOW",
       "class_name": "CronRunWorkflow"
+    },
+    {
+      "name": "roundhouse-preview",
+      "binding": "PREVIEW_WORKFLOW",
+      "class_name": "PreviewWorkflow"
     }
   ],
   // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
