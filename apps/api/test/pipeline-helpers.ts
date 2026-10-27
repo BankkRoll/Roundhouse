@@ -10,9 +10,11 @@ import {
   type ControlMessage,
   type DesiredState,
   type JoinResponse,
+  meshPsksAad,
   openBox,
   SEALED_ENV_PROTOCOL_VERSION,
   SealedBuildSecretsSchema,
+  SealedMeshPsksSchema,
   SealedWorkloadEnvSchema,
   verifyEnvelope,
   workloadEnvAad,
@@ -107,6 +109,8 @@ export interface FakeWorkloadAgent extends FakeAgent {
   files(workloadId: string): Record<string, string> | undefined;
   /** Opened `build_secrets_sealed` of a build job; `undefined` when it carried none. */
   buildSecrets(buildId: string): Record<string, string> | undefined;
+  /** Opened `mesh.psks_sealed` of the desired state at `generation`, by peer node ID. */
+  psks(generation: number): Record<string, string> | undefined;
   /** Resolves with the first control payload matching `predicate`, waiting if needed. */
   waitFor<T extends ControlMessage>(
     predicate: (m: ControlMessage) => m is T,
@@ -155,6 +159,7 @@ export async function connectWorkloadAgent(
   const envs = new Map<string, Record<string, string>>();
   const files = new Map<string, Record<string, string>>();
   const buildSecrets = new Map<string, Record<string, string>>();
+  const psks = new Map<number, Record<string, string>>();
   const send = (frame: unknown) =>
     ws.send(typeof frame === "string" ? frame : JSON.stringify(frame));
 
@@ -178,6 +183,7 @@ export async function connectWorkloadAgent(
     env: (workloadId) => envs.get(workloadId),
     files: (workloadId) => files.get(workloadId),
     buildSecrets: (buildId) => buildSecrets.get(buildId),
+    psks: (generation) => psks.get(generation),
     waitFor<T extends ControlMessage>(predicate: (m: ControlMessage) => m is T, timeoutMs = 8000) {
       return new Promise<T>((resolve, reject) => {
         const check = () => {
@@ -228,7 +234,7 @@ export async function connectWorkloadAgent(
     if (m.type === "desired_state") {
       const health = agent.behaviour.health ?? "healthy";
       for (const w of m.workloads) {
-        if (known.has(w.id)) continue;
+        if (w.kind === "route" || known.has(w.id)) continue;
         known.add(w.id);
         if (health === "silent") continue;
         send({
@@ -261,7 +267,25 @@ export async function connectWorkloadAgent(
     }
     const m = verified.message;
     if (m.type === "desired_state") {
+      if (m.mesh?.psks_sealed) {
+        try {
+          const pt = await openBox(
+            NODE_ENCRYPTION_PRIVATE_KEY,
+            m.mesh.psks_sealed,
+            "mesh-psks",
+            meshPsksAad(joined.node_id, m.generation),
+          );
+          psks.set(
+            m.generation,
+            SealedMeshPsksSchema.parse(JSON.parse(new TextDecoder().decode(pt))).psks,
+          );
+        } catch {
+          rejected.push(`psks_sealed:${m.generation}`);
+        }
+      }
       for (const w of m.workloads) {
+        // Route-only workloads (ADR 0005) have no environment.
+        if (w.kind === "route") continue;
         try {
           const pt = await openBox(
             NODE_ENCRYPTION_PRIVATE_KEY,

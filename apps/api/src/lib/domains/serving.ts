@@ -1,11 +1,15 @@
 /**
  * Which nodes answer for a service's hostnames.
  *
- * Until the mesh lets one node's Caddy reach another node's replicas (ADR
- * 0005, "Cross-node ingress"), a node routes a hostname only while it runs a
- * live replica of the service; DNS pointed at any other node gets
- * `no route`. These helpers say which nodes those are, so DNS guidance and
- * TLS state only ever name nodes that really serve the domain.
+ * - Without the mesh, a node routes a hostname only while it runs a live
+ *   replica of the service; DNS pointed at any other node gets `no route`.
+ * - With the mesh (ADR 0005, "Cross-node ingress"), every meshed, ready
+ *   ingress node of the workspace also routes services whose replicas run
+ *   on meshed nodes, through the replicas' mesh IPs, so DNS may point at
+ *   any or all of them.
+ *
+ * These helpers say which nodes those are, so DNS guidance and TLS state
+ * only ever name nodes that really serve the domain.
  *
  * @module
  */
@@ -13,6 +17,8 @@ import { type Db, deployments, nodes, placements } from "@roundhouse/db";
 import { CERTS_PROTOCOL_VERSION } from "@roundhouse/protocol";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { LIVE_DEPLOYMENT_STATUSES } from "../desired-state";
+import { meshedNodes, meshServing } from "../mesh";
+import { getMeshSettings } from "../settings";
 
 /** A node as the domain code sees it. */
 export interface ServingNode {
@@ -83,6 +89,8 @@ export async function servingNodes(
       publicIp: nodes.publicIp,
       protocolVersion: nodes.protocolVersion,
       capabilities: nodes.capabilities,
+      workspaceId: nodes.workspaceId,
+      meshIp: placements.meshIp,
     })
     .from(placements)
     .innerJoin(deployments, eq(deployments.id, placements.deploymentId))
@@ -101,11 +109,34 @@ export async function servingNodes(
         ),
       ),
     );
+  const add = (key: string, n: ServingNode) => {
+    const list = out.get(key);
+    if (!list || list.some((m) => m.id === n.id)) return;
+    list.push({ id: n.id, name: n.name, publicIp: n.publicIp, protocolVersion: n.protocolVersion });
+  };
   for (const r of rows) {
     if (!isIngressNode(r.capabilities) || !routes(r, options)) continue;
-    const list = out.get(pairKey(r));
-    if (!list || list.some((n) => n.id === r.id)) continue;
-    list.push({ id: r.id, name: r.name, publicIp: r.publicIp, protocolVersion: r.protocolVersion });
+    add(pairKey(r), r);
+  }
+  const mesh = await getMeshSettings(db);
+  const meshedPairs = rows.filter((r) => r.meshIp !== null);
+  if (mesh.enabled && meshedPairs.length) {
+    const now = Date.now();
+    const ingressOf = new Map<string, ServingNode[]>();
+    const ready = new Set<string>();
+    for (const ws of new Set(meshedPairs.map((r) => r.workspaceId))) {
+      const meshed = (await meshedNodes(db, ws, mesh)).filter((n) => meshServing(n, mesh, now));
+      for (const n of meshed) ready.add(n.id);
+      ingressOf.set(
+        ws,
+        meshed.filter((n) => isIngressNode(n.capabilities) && routes(n, options)),
+      );
+    }
+    for (const r of meshedPairs) {
+      // A replica is reachable over the mesh only while its own node is ready.
+      if (!ready.has(r.id)) continue;
+      for (const n of ingressOf.get(r.workspaceId) ?? []) add(pairKey(r), n);
+    }
   }
   for (const list of out.values()) list.sort((a, b) => a.name.localeCompare(b.name));
   return out;

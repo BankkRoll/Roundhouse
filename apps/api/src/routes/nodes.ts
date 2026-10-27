@@ -9,10 +9,13 @@ import { nodes } from "@roundhouse/db";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { clientIp, createRouter, originOf, requireWorkspace } from "../context";
 import { recordAudit } from "../lib/audit";
+import { refreshNodes } from "../lib/desired-state";
 import { notFound } from "../lib/errors";
 import { mintJoinToken } from "../lib/join-tokens";
+import { dropPairPsks, meshedNodes } from "../lib/mesh";
 import { installCommand, toApiNode } from "../lib/nodes";
 import { deprovisionNodeServer, nodeCostEstimates, withCostEstimates } from "../lib/provisioning";
+import { getMeshSettings } from "../lib/settings";
 import {
   errors,
   json,
@@ -127,6 +130,13 @@ export const nodeRoutes = createRouter()
     // The connect route rejects deleted nodes, but an already-open socket
     // must be cut explicitly.
     await c.env.NODE_CONNECTION.get(c.env.NODE_CONNECTION.idFromName(nodeId)).disconnect("removed");
+    // Its peers drop it from their WireGuard config at the next generation.
+    await dropPairPsks(c.get("db"), nodeId);
+    const mesh = await getMeshSettings(c.get("db"));
+    if (mesh.enabled && live.meshIndex !== null) {
+      const peers = (await meshedNodes(c.get("db"), workspaceId, mesh)).map((n) => n.id);
+      if (peers.length) await refreshNodes(c.env, c.get("db"), peers);
+    }
     await recordAudit(c.get("db"), {
       workspaceId,
       ...m.actor,

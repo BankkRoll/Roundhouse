@@ -20,6 +20,9 @@ describe("instance settings", () => {
         tls_mode: "acme",
         log_retention_days: 7,
         mcp_enabled: false,
+        mesh_enabled: false,
+        mesh_supernet: "10.200.0.0/16",
+        mesh_supernet_locked: false,
         ingress_nodes: 0,
       },
     });
@@ -71,6 +74,9 @@ describe("instance settings", () => {
       tls_mode: "internal",
       log_retention_days: 7,
       mcp_enabled: false,
+      mesh_enabled: false,
+      mesh_supernet: "10.200.0.0/16",
+      mesh_supernet_locked: false,
       ingress_nodes: 2,
     });
     for (const agent of [a, b]) {
@@ -98,6 +104,9 @@ describe("instance settings", () => {
       tls_mode: "internal",
       log_retention_days: 7,
       mcp_enabled: false,
+      mesh_enabled: false,
+      mesh_supernet: "10.200.0.0/16",
+      mesh_supernet_locked: false,
       ingress_nodes: 2,
     });
   });

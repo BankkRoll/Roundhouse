@@ -135,7 +135,7 @@ import {
 } from "../lib/github";
 import { effectiveStatus } from "../lib/nodes";
 import { resolveServiceEnvironment } from "../lib/resolve-env";
-import { schedulerSnapshot } from "../lib/scheduling";
+import { environmentNodeIds, schedulerSnapshot } from "../lib/scheduling";
 import { loadEnvironmentVariables, projectKey } from "../lib/variables";
 import { ensureVolume, type VolumeRow } from "../lib/volumes";
 
@@ -1138,6 +1138,8 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         memoryMb: config.resources.memory_mb,
         nodeSelector: config.placement.node_selector,
         requiresRegistry: image.startsWith(`${REGISTRY_LISTEN}/`),
+        // An environment spans nodes only over a ready mesh (ADR 0005).
+        environmentNodeIds: await environmentNodeIds(db, plan.environmentId, plan.serviceId),
         ...(volume
           ? {
               minProtocolVersion: VOLUMES_PROTOCOL_VERSION,
@@ -1160,6 +1162,10 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         const holder = await db.query.nodes.findFirst({ where: eq(nodes.id, volume.nodeId) });
         const state = holder ? (holder.deletedAt ? "removed" : effectiveStatus(holder)) : "removed";
         reason = `Could not place replica ${result.replica}: volume lives on node ${holder?.name ?? volume.nodeId} (${state})`;
+      } else if (result.reason === "mesh_unready") {
+        reason =
+          `Could not place replica ${result.replica}: this environment already runs on other servers, ` +
+          "and an environment spans servers only when the private network is on and ready on all of them";
       }
       await addDeploymentEvent(ctx, plan.projectId, plan.deploymentId, "schedule_failed", reason, {
         reason: result.reason,

@@ -4,10 +4,12 @@
  *
  * - **Routing**: a CNAME to the install's ingress hostname (or, without one,
  *   to the service's generated hostname), or A/AAAA records: at a zone apex,
- *   and whenever some of the workspace's ingress servers don't run the
- *   service, since until the mesh (ADR 0005) only servers with a replica
- *   answer for it, so the records name exactly those. Correct when the CNAME
- *   chain reaches a name the install serves, or every address is one of the
+ *   and whenever some of the workspace's ingress servers can't serve the
+ *   service, so the records name exactly those that can. With the mesh
+ *   (ADR 0005) every meshed, ready ingress server serves every service with
+ *   replicas on meshed servers, so any or all of them may be named; without
+ *   it only servers running a replica answer. Correct when the CNAME chain
+ *   reaches a name the install serves, or every address is one of the
  *   workspace's servers.
  * - **Ownership**: `TXT _roundhouse.<host> = "rh-verify=<token>"`, always
  *   required, so a dangling CNAME left by someone else can't be claimed. A
@@ -49,9 +51,13 @@ export interface RoutingTargets {
   ingressHostname: string | null;
   /** Public IPs of the workspace's ingress servers; addresses outside them are `wrong`. */
   addresses: string[];
-  /** Public IPs of the servers running a live replica of the service. */
+  /**
+   * Public IPs of the servers that serve the service: those running a live
+   * replica, plus every meshed, ready ingress server when it runs on meshed
+   * servers (`servingNodes`).
+   */
   servingAddresses: string[];
-  /** The workspace's ingress servers, and whether each runs the service. */
+  /** The workspace's ingress servers, and whether each serves the service. */
   nodes: { id: string; name: string; publicIp: string | null; serves: boolean }[];
 }
 
@@ -139,9 +145,10 @@ export function expectedRecords(d: DomainRow, targets: RoutingTargets): DnsRecor
   if (partial) {
     const names = targets.nodes.filter((n) => n.serves).map((n) => n.name);
     const note =
-      `This service runs on ${names.length} of ${targets.nodes.length} servers (${names.join(", ")}); ` +
-      "until servers route to each other's replicas only those answer for it. Point DNS at these " +
-      "addresses and update the records if the service moves to other servers.";
+      `This service is served by ${names.length} of ${targets.nodes.length} servers (${names.join(", ")}): ` +
+      "those running it, and those joined to its servers over the private network. Point DNS at " +
+      "these addresses and update the records if the service moves. Once every server is on the " +
+      "private network (Settings, Network), any of them answers for it.";
     for (const ip of serving) {
       routing.push({
         type: isV6(ip) ? "AAAA" : "A",

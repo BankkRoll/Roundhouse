@@ -11,7 +11,8 @@
  *    KEK id: unsealed with whichever key sealed them, re-sealed under the
  *    current KEK with the v2 AAD; `kek_kid` and `dek_id` set.
  * 2. `rewrap-instance-<n>`: the instance secrets in `instance_settings`
- *    ({@link INSTANCE_SECRET_FIELDS}), then `provider_credentials` tokens.
+ *    ({@link INSTANCE_SECRET_FIELDS}), then `provider_credentials` tokens,
+ *    certificate keys and the mesh's preshared keys (`mesh_psks`).
  *    `rewrap-two-factor-<n>`: TOTP secrets and backup codes, which Better
  *    Auth encrypts with the auth secret of the key current at enrollment.
  * 3. `reseal-variables-<n>`: variables in format 1 or without a fingerprint:
@@ -57,6 +58,7 @@ import {
 } from "../lib/desired-state";
 import { sealInstanceSecret, unsealInstanceSecret } from "../lib/instance-secrets";
 import { type KeyEnv, keyringOf } from "../lib/keyring";
+import { resealPairPsks } from "../lib/mesh";
 import { getSetting, putSetting, SettingKey } from "../lib/settings";
 import { rewrapTwoFactorBatch, staleTwoFactorCondition } from "../lib/two-factor";
 import { openVariable, projectKey, sealVariable } from "../lib/variables";
@@ -278,7 +280,8 @@ export async function rewrapInstanceBatch(db: Db, keys: KeyEnv): Promise<number>
         ),
       );
   }
-  return touched + creds.length + certs.length;
+  const psks = await resealPairPsks(db, keys, current, ROTATION_BATCH);
+  return touched + creds.length + certs.length + psks;
 }
 
 /** Certificates holding a key not sealed under the current KEK. */

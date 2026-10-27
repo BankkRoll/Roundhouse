@@ -27,6 +27,10 @@
  *   `./node/handlers/data.ts`), create each database's read-only principal
  *   once it runs healthy, and send `volume_delete` (ADR 0004); backup and
  *   restore frames are dispatched to `./node/handlers/backups.ts`;
+ * - record `hello.mesh` (the node's WireGuard key, `wg0` mode and
+ *   reachability, with the address the connection came from), let the node
+ *   join the mesh, and apply `mesh_status` and `mesh_key` (ADR 0005,
+ *   `../lib/mesh.ts`), moving key rotations along on heartbeats;
  * - answer `cert_request` with `cert_sync` (keys sealed to the node),
  *   record `cert_ack` and `cert_status` (ADR 0009,
  *   `./node/handlers/certs.ts`);
@@ -81,6 +85,7 @@ import {
   type LogLine,
   MAX_AGENT_FRAME_BYTES,
   MAX_CONTROL_FRAME_BYTES,
+  MESH_PROTOCOL_VERSION,
   METRICS_PROTOCOL_VERSION,
   MIN_PROTOCOL_VERSION,
   type NodeEncryptionKey,
@@ -116,12 +121,23 @@ import {
   transitionDeployment,
   wakeWorkflow,
 } from "../lib/deployments";
-import { buildDesiredState } from "../lib/desired-state";
+import { buildDesiredState, refreshNodes } from "../lib/desired-state";
 import { deploymentRedaction, logChunkKey, type StoredLogLine, toNdjson } from "../lib/logs";
+import {
+  dropPairPsks,
+  isMeshed,
+  joinMesh,
+  meshEndpoint,
+  meshRefreshTargets,
+  onMeshKey,
+  onMeshStatus,
+  progressRotations,
+} from "../lib/mesh";
 import { metricsIntervalMs } from "../lib/metrics/backend";
 import { nodeRow, writeMetricRows } from "../lib/metrics/write";
 import { NODE_ID_HEADER } from "../lib/nodes";
 import { projectRoom } from "../lib/realtime";
+import { getMeshSettings } from "../lib/settings";
 import {
   announcementsFor,
   invalidateSigningKeys,
@@ -176,6 +192,10 @@ export const FRAME_RATE_LIMITS = {
   metrics: 2,
   /** Every 60 s and on change; a burst of changes coalesces on the agent. */
   volume_status: 4,
+  /** Every 30 s and on change, at most 4 a second by contract (ADR 0005). */
+  mesh_status: 4,
+  /** Once per rotation; a few resends after reconnects. */
+  mesh_key: 2,
   /** At most 4 queries run per node at once (ADR 0004). */
   db_query_result: 8,
   backup_parts_request: 8,
@@ -257,6 +277,8 @@ interface Attachment {
   windowStart: number;
   counts: Partial<Record<RateBucket, number>>;
   dropped: number;
+  /** `CF-Connecting-IP` of the agent's connection: its public address, when it has one. */
+  observedIp?: string | null;
 }
 
 /** Where a log source's lines belong. */
@@ -349,6 +371,7 @@ export class NodeConnection extends DurableObject<Env> {
       windowStart: 0,
       counts: {},
       dropped: 0,
+      observedIp: request.headers.get("cf-connecting-ip"),
     } satisfies Attachment);
     // Stored now (not on hello) so the alarm can also evict a socket that
     // authenticates but never says hello.
@@ -437,6 +460,24 @@ export class NodeConnection extends DurableObject<Env> {
       case "job_status":
         if (attachment.protocolVersion < JOBS_PROTOCOL_VERSION) return;
         await onJobStatus({ db: this.db, env: this.env, nodeId: attachment.nodeId }, message);
+        return;
+      case "mesh_status":
+      case "mesh_key":
+        if (attachment.protocolVersion < MESH_PROTOCOL_VERSION) return;
+        try {
+          if (message.type === "mesh_status") {
+            await onMeshStatus(this.db, attachment.nodeId, message, (ids) => this.refresh(ids));
+          } else {
+            await onMeshKey(this.db, attachment.nodeId, message, (ids) => this.refresh(ids));
+          }
+        } catch (err) {
+          // The next report retries; the connection stays up.
+          console.error(
+            "mesh frame failed",
+            message.type,
+            err instanceof Error ? err.message : "error",
+          );
+        }
         return;
       case "metrics":
         // A frame the control plane never asked for (an older protocol) is dropped.
@@ -877,6 +918,15 @@ export class NodeConnection extends DurableObject<Env> {
       await this.registerEncryptionKey(node, hello.encryption_key);
     }
 
+    if (hello.protocol_version >= MESH_PROTOCOL_VERSION) {
+      try {
+        await this.onHelloMesh(node, hello, attachment.observedIp ?? null);
+      } catch (err) {
+        // The node still runs its local workloads; the mesh waits for the next hello.
+        console.error("mesh registration failed", err instanceof Error ? err.message : "error");
+      }
+    }
+
     await this.ctx.storage.put({ node_id: attachment.nodeId, last_seen: now });
     await this.ctx.storage.setAlarm(now + OFFLINE_AFTER_MS);
 
@@ -936,6 +986,131 @@ export class NodeConnection extends DurableObject<Env> {
     });
   }
 
+  /**
+   * Records `hello.mesh` and lets the node join the mesh.
+   *
+   * A key that differs from the stored one without a rotation (a reinstalled
+   * agent that lost its key file) replaces it, and the node's preshared keys
+   * are drawn again.
+   *
+   * SECURITY: `hello` isn't signed, so a stolen node credential could
+   * announce its own WireGuard key. It would still never complete a
+   * handshake: every pair's preshared key reaches the node only sealed to
+   * its registered X25519 key, which only a re-join can replace.
+   */
+  private async onHelloMesh(
+    node: { id: string; workspaceId: string },
+    hello: Hello,
+    observedIp: string | null,
+  ): Promise<void> {
+    const [before] = await this.db.select().from(nodes).where(eq(nodes.id, node.id)).limit(1);
+    if (!before) return;
+    const m = hello.mesh;
+    const settings = await getMeshSettings(this.db);
+    const wasMeshed = isMeshed(before, settings);
+    if (!m) {
+      if (before.meshMode === null) return;
+      await this.db
+        .update(nodes)
+        .set({ meshMode: null, meshReady: false, meshEndpoint: null })
+        .where(eq(nodes.id, node.id));
+      if (wasMeshed) await this.refreshPeers(node.id);
+      return;
+    }
+    const endpoint = meshEndpoint(m, observedIp);
+    const keyChanged =
+      before.wgPubkey !== null &&
+      m.public_key !== before.wgPubkey &&
+      m.public_key !== before.wgPubkeyNext;
+    const [after] = await this.db
+      .update(nodes)
+      .set({
+        ...(before.wgPubkey === null || keyChanged
+          ? {
+              wgPubkey: m.public_key,
+              wgKeyEpoch: 0,
+              wgPubkeyNext: null,
+              wgKeyNextEpoch: null,
+              wgKeyRotatedAt: new Date(),
+              meshRotateRequestedAt: null,
+              meshRotateGeneration: null,
+              meshRotateAnnouncedAt: null,
+              meshActivateEpoch: null,
+            }
+          : {}),
+        meshMode: m.mode,
+        meshNat: m.nat,
+        meshEndpoint: endpoint,
+        meshEndpointOverride: m.endpoint_override,
+        meshListenPort: m.listen_port,
+        meshDockerFirewall: m.docker_firewall,
+        meshAcceptFwmark: m.accept_fwmark,
+      })
+      .where(eq(nodes.id, node.id))
+      .returning();
+    if (!after) return;
+    if (keyChanged) {
+      await dropPairPsks(this.db, node.id);
+      await recordAudit(this.db, {
+        workspaceId: node.workspaceId,
+        actorType: "node",
+        actorId: node.id,
+        action: "node.mesh_key_rotated",
+        targetType: "node",
+        targetId: node.id,
+        metadata: { reason: "agent_key_changed" },
+      });
+    }
+    const index = await joinMesh(this.db, node.id, settings);
+    if (index !== null) {
+      await recordAudit(this.db, {
+        workspaceId: node.workspaceId,
+        actorType: "node",
+        actorId: node.id,
+        action: "node.mesh_joined",
+        targetType: "node",
+        targetId: node.id,
+        metadata: { mesh_index: index, mode: m.mode, nat: m.nat },
+      });
+    }
+    const changed =
+      keyChanged ||
+      index !== null ||
+      before.meshEndpoint !== endpoint ||
+      before.meshMode !== m.mode ||
+      before.meshListenPort !== m.listen_port;
+    const nowMeshed = isMeshed({ ...after, meshIndex: after.meshIndex ?? index }, settings);
+    if (changed && (wasMeshed || nowMeshed)) await this.refreshPeers(node.id);
+  }
+
+  /**
+   * Pushes desired state to the other meshed nodes of this node's workspace;
+   * this node's own frame follows the hello it is answering.
+   */
+  private async refreshPeers(nodeId: string): Promise<void> {
+    const targets = await meshRefreshTargets(this.db, [nodeId], await getMeshSettings(this.db));
+    const others = targets.filter((id) => id !== nodeId);
+    if (others.length) await refreshNodes(this.env, this.db, others);
+  }
+
+  /**
+   * Pushes desired state to nodes. This node's own frame is sent from here,
+   * not through its own stub.
+   */
+  private async refresh(nodeIds: readonly string[]): Promise<void> {
+    const ws = this.greetedSocket();
+    const self = ws ? (ws.deserializeAttachment() as Attachment).nodeId : null;
+    const others = nodeIds.filter((id) => id !== self);
+    if (others.length) await refreshNodes(this.env, this.db, others);
+    if (self && ws && nodeIds.includes(self)) {
+      await this.db
+        .update(nodes)
+        .set({ desiredGeneration: sql`${nodes.desiredGeneration} + 1` })
+        .where(and(eq(nodes.id, self), isNull(nodes.deletedAt)));
+      await this.sendDesiredState(ws, self);
+    }
+  }
+
   private async onHeartbeat(nodeId: string, hb: Heartbeat): Promise<void> {
     const now = Date.now();
     const [node] = await this.db
@@ -952,11 +1127,21 @@ export class NodeConnection extends DurableObject<Env> {
         lastHeartbeatAt: new Date(now),
       })
       .where(and(eq(nodes.id, nodeId), isNull(nodes.deletedAt)))
-      .returning({ workspaceId: nodes.workspaceId });
+      .returning({
+        workspaceId: nodes.workspaceId,
+        rotating: nodes.meshRotateRequestedAt,
+      });
     await this.ctx.storage.put("last_seen", now);
     await this.ctx.storage.setAlarm(now + OFFLINE_AFTER_MS);
 
     if (!node) return;
+    if (node.rotating) {
+      try {
+        await progressRotations(this.db, (ids) => this.refresh(ids), { now, nodeId });
+      } catch (err) {
+        console.error("mesh rotation step failed", err instanceof Error ? err.message : "error");
+      }
+    }
     try {
       // Stamped with the receive time: the agent's clock may be skewed.
       await writeMetricRows(this.env, [
@@ -973,6 +1158,8 @@ export class NodeConnection extends DurableObject<Env> {
    */
   private async applyStatuses(nodeId: string, reports: readonly WorkloadStatusReport[]) {
     const touched = new Set<string>();
+    // Other nodes' private DNS and ingress answer healthy replicas first.
+    let meshHealth = false;
     for (const r of reports) {
       // System workloads have no placement.
       if (!r.deployment_id) continue;
@@ -995,12 +1182,26 @@ export class NodeConnection extends DurableObject<Env> {
             or(isNull(placements.lastStatusAt), lte(placements.lastStatusAt, new Date(r.ts))),
           ),
         )
-        .returning({ deploymentId: placements.deploymentId, replica: placements.replica });
+        .returning({
+          deploymentId: placements.deploymentId,
+          replica: placements.replica,
+          meshIp: placements.meshIp,
+        });
       if (!row) continue;
       touched.add(row.deploymentId);
+      if (row.meshIp && (r.state === "healthy" || BAD_STATES.includes(r.state))) {
+        meshHealth = true;
+      }
       await this.onReplicaStatus(row.deploymentId, row.replica, r);
     }
     for (const deploymentId of touched) await this.evaluateDeployment(deploymentId);
+    if (meshHealth) {
+      try {
+        await this.refreshPeers(nodeId);
+      } catch (err) {
+        console.error("mesh refresh failed", err instanceof Error ? err.message : "error");
+      }
+    }
     if (touched.size && reports.some((r) => r.state === "healthy")) {
       this.provisionReadonlySoon(nodeId);
     }

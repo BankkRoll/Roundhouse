@@ -942,7 +942,7 @@ describe("TLS and HSTS", () => {
       expect.objectContaining({
         type: "A",
         value: "203.0.113.10",
-        note: expect.stringMatching(/runs on 1 of 2 servers/),
+        note: expect.stringMatching(/served by 1 of 2 servers/),
       }),
     ]);
   }, 30_000);

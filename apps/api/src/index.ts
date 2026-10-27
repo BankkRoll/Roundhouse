@@ -62,6 +62,7 @@ import { instanceRoutes } from "./routes/instance";
 import { instanceAdminRoutes } from "./routes/instance-admin";
 import { inviteRoutes } from "./routes/invites";
 import { keyRoutes } from "./routes/keys";
+import { meshRoutes } from "./routes/mesh";
 import { metricsRoutes } from "./routes/metrics";
 import { nodeRoutes } from "./routes/nodes";
 import { projectRoutes } from "./routes/projects";
@@ -121,6 +122,7 @@ app
   .route("/", workspaceRoutes)
   .route("/", inviteRoutes)
   .route("/", nodeRoutes)
+  .route("/", meshRoutes)
   .route("/", auditRoutes)
   .route("/", agentRoutes)
   .route("/", projectRoutes)

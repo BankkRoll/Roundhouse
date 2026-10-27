@@ -11,9 +11,15 @@
  *   stops before it is replaced, and a database gets its `exec` probe.
  *   From `CERTS_PROTOCOL_VERSION` routes carry HSTS and the frame carries
  *   the node's TLS settings and certificate manifest (ADR 0009,
- *   `lib/certificates/manifest.ts`). A node routes a hostname only while it
- *   runs a replica of its service: cross-node routing waits for the mesh
- *   (ADR 0005), so DNS guidance names the serving nodes (`lib/domains`).
+ *   `lib/certificates/manifest.ts`).
+ * - From `MESH_PROTOCOL_VERSION`, `mesh` (ADR 0005, `lib/mesh.ts`):
+ *   `null` tears the mesh down; on a meshed node every replica carries its
+ *   mesh IP and uses the private DNS, the frame lists peers, sealed
+ *   preshared keys and the mesh IPs of every environment the node runs, and
+ *   an ingress node gets a route-only workload for every routed service
+ *   that has replicas only on other nodes, so any ingress node serves any
+ *   hostname. Without the mesh a node routes a hostname only while it runs
+ *   a replica of its service, and DNS guidance says so (`lib/domains`).
  * - {@link refreshNodes}: bumps nodes' `desired_generation` and asks their
  *   Durable Objects to push the new state.
  * - {@link sealDeploymentEnv}/{@link openDeploymentEnv} and the build
@@ -39,8 +45,10 @@ import {
   type DesiredState,
   environmentNetworkName,
   type Healthcheck,
+  MAX_UPSTREAMS,
   MAX_VOLUMES_PER_NODE,
   MAX_WORKLOADS_PER_NODE,
+  MESH_PROTOCOL_VERSION,
   REGISTRY_LISTEN,
   type RegistryConfig,
   type RouteHsts,
@@ -69,9 +77,20 @@ import { and, asc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm"
 import type { NodeConnection } from "../durable/node-connection";
 import { nodeTls, type RoutedDomain, routeHsts } from "./certificates/manifest";
 import { type KeyEnv, type Sealed, sealWith, unsealWith } from "./crypto";
+import { isIngressNode } from "./domains/serving";
 import { deploymentBuildAadV2, deploymentEnvAadV2 } from "./keyring";
+import {
+  assignMeshIps,
+  assignNetTags,
+  buildMeshConfig,
+  type ClusterReplica,
+  isMeshed,
+  meshedNodes,
+  meshRefreshTargets,
+  meshReplicas,
+} from "./mesh";
 import type { OriginEnv } from "./origin";
-import { getIngressSettings } from "./settings";
+import { getIngressSettings, getMeshSettings } from "./settings";
 import { deploymentEnvAad, projectKey } from "./variables";
 
 /** Which deployment a sealed input belongs to; every part is in its AAD. */
@@ -292,6 +311,10 @@ export interface WorkloadInput {
   volume?: { id: string; mountPath: string };
   /** A database service: its engine's `exec` probe replaces the configured one. */
   database?: { engine: ServiceDatabaseEngine; version: string | null };
+  /** The replica's mesh IP, on a meshed node (ADR 0005). */
+  meshIp?: string;
+  /** Resolve through the node's private DNS: every replica on a meshed node. */
+  privateDns?: boolean;
 }
 
 /** Probe timings of a database's `exec` health check (ADR 0004, "Service and config"). */
@@ -376,6 +399,8 @@ export async function workloadSpec(w: WorkloadInput): Promise<WorkloadSpec> {
           ...(w.database ? { stop_grace_s: DATABASE_STOP_GRACE_S } : {}),
         }
       : {}),
+    ...(w.meshIp ? { mesh_ip: w.meshIp } : {}),
+    ...(w.privateDns ? { private_dns: true } : {}),
   };
   return { ...spec, spec_hash: await computeSpecHash(spec) };
 }
@@ -448,18 +473,17 @@ export async function buildDesiredState(
   // Generation first: content read afterwards is at least as new as the
   // write that bumped it, so a frame never carries a newer generation than
   // its workloads.
-  const [node] = await db
-    .select({
-      generation: nodes.desiredGeneration,
-      protocolVersion: nodes.protocolVersion,
-      capabilities: nodes.capabilities,
-      encryptionPublicKey: nodes.encryptionPublicKey,
-    })
+  const [row] = await db
+    .select()
     .from(nodes)
     .where(and(eq(nodes.id, nodeId), isNull(nodes.deletedAt)))
     .limit(1);
-  if (!node) return null;
+  if (!row) return null;
+  const node = { ...row, generation: row.desiredGeneration };
   const ingress = await getIngressSettings(db);
+  const meshSettings =
+    node.protocolVersion >= MESH_PROTOCOL_VERSION ? await getMeshSettings(db) : null;
+  const meshed = meshSettings !== null && isMeshed(row, meshSettings);
   const nodeKey = node.encryptionPublicKey;
   const runsWorkloads = runsSealedWorkloads(node);
   const body: DesiredStateBody = {
@@ -469,6 +493,9 @@ export async function buildDesiredState(
     tls_mode: ingress.tlsMode,
     apps_domain: ingress.appsDomain,
     registry: runsWorkloads && node.capabilities?.builder ? BUILDER_REGISTRY : null,
+    // A mesh-capable agent is told explicitly when it has no mesh, so it
+    // tears down one it ran before.
+    ...(meshSettings ? { mesh: null } : {}),
   };
   const certsCapable = node.protocolVersion >= CERTS_PROTOCOL_VERSION;
   const routesAllowed = certsCapable || ingress.tlsMode !== "managed";
@@ -495,6 +522,16 @@ export async function buildDesiredState(
       }),
     );
   }
+  // The cluster as the mesh sees it: peers, and every replica with a mesh IP.
+  const meshNodes = meshed ? await meshedNodes(db, row.workspaceId, meshSettings) : [];
+  // Every node's replicas, not only this one's: a peer's replica placed
+  // since its last refresh must still be listed here.
+  for (const n of meshNodes) {
+    await assignMeshIps(db, { id: n.id, meshIndex: n.meshIndex! }, meshSettings!.supernet);
+  }
+  const cluster = meshed
+    ? await meshReplicas(db, row.workspaceId, new Set(meshNodes.map((n) => n.id)))
+    : [];
   if (!runsWorkloads || nodeKey === null) {
     if (certsCapable) {
       const tls = await nodeTls(db, keys, [], ingress.tlsMode);
@@ -548,8 +585,27 @@ export async function buildDesiredState(
       ]),
     ).values(),
   ];
+  // A meshed ingress node also routes services whose replicas all run on
+  // other nodes, through route-only workloads.
+  const routePairs =
+    meshed && isIngressNode(node.capabilities)
+      ? [
+          ...new Map(
+            cluster
+              .filter((c) => c.nodeId !== nodeId)
+              .map((c) => [
+                `${c.serviceId}:${c.environmentId}`,
+                { serviceId: c.serviceId, environmentId: c.environmentId },
+              ]),
+          ).values(),
+        ].filter(
+          (p) =>
+            !pairs.some((l) => l.serviceId === p.serviceId && l.environmentId === p.environmentId),
+        )
+      : [];
+  const domainPairs = [...pairs, ...routePairs];
   const hostnames = new Map<string, (RoutedDomain & { serviceId: string })[]>();
-  if (pairs.length && routesAllowed) {
+  if (domainPairs.length && routesAllowed) {
     const domainRows = await db
       .select({
         id: domains.id,
@@ -564,7 +620,7 @@ export async function buildDesiredState(
         and(
           eq(domains.verificationStatus, "verified"),
           or(
-            ...pairs.map((p) =>
+            ...domainPairs.map((p) =>
               and(eq(domains.serviceId, p.serviceId), eq(domains.environmentId, p.environmentId)),
             ),
           ),
@@ -646,8 +702,49 @@ export async function buildDesiredState(
         ...(r.databaseEngine
           ? { database: { engine: r.databaseEngine, version: r.databaseVersion } }
           : {}),
+        ...(meshed
+          ? {
+              privateDns: true,
+              ...(r.placement.meshIp ? { meshIp: r.placement.meshIp } : {}),
+            }
+          : {}),
       }),
     );
+  }
+  if (meshed && isIngressNode(node.capabilities)) {
+    body.workloads.push(
+      ...(await routeWorkloads({
+        nodeId,
+        localPairs: new Set(pairs.map((p) => `${p.serviceId}:${p.environmentId}`)),
+        cluster,
+        hostnames,
+        hsts: certsCapable ? hsts : undefined,
+        routable: tls ? tls.routable : null,
+      })),
+    );
+  }
+  if (meshed) {
+    const localEnvironments = new Set(rows.map((r) => r.deployment.environmentId));
+    const addresses = cluster.filter((c) => localEnvironments.has(c.environmentId));
+    const routedPairs = new Set(
+      await routedServicePairs(
+        db,
+        row.workspaceId,
+        addresses.map((a) => a.environmentId),
+      ),
+    );
+    body.mesh = await buildMeshConfig(db, keys, {
+      self: row,
+      all: meshNodes,
+      settings: meshSettings,
+      generation: node.generation,
+      addresses: addresses.map((a) => ({
+        ...a,
+        routedPorts:
+          a.port !== null && routedPairs.has(`${a.serviceId}:${a.environmentId}`) ? [a.port] : [],
+      })),
+      netTags: await assignNetTags(db, [...localEnvironments]),
+    });
   }
   if (tls) {
     // Only what this node really routes: a service's generated hostname is
@@ -672,6 +769,8 @@ export interface RefreshEnv {
 /**
  * Bumps each node's `desired_generation` and asks its Durable Object to push
  * the recomputed state. A node that isn't connected gets it on its next hello.
+ * With the mesh on, every meshed node of the same workspaces is refreshed
+ * too, after the nodes' replicas got their mesh IPs.
  *
  * @param env - Bindings with the node namespace.
  * @param db - Database client.
@@ -682,8 +781,15 @@ export async function refreshNodes(
   db: Db,
   nodeIds: Iterable<string>,
 ): Promise<void> {
-  const ids = [...new Set(nodeIds)];
+  let ids = [...new Set(nodeIds)];
   if (!ids.length) return;
+  const mesh = await getMeshSettings(db);
+  if (mesh.enabled) {
+    // A replica's mesh IP and health appear in every meshed peer's frame,
+    // so a change on one meshed node reaches all of its workspace's.
+    ids = await meshRefreshTargets(db, ids, mesh);
+    await assignMeshIpsOf(db, ids, mesh.supernet);
+  }
   await db
     .update(nodes)
     .set({ desiredGeneration: sql`${nodes.desiredGeneration} + 1` })
@@ -732,4 +838,137 @@ export async function refreshAllNodes(env: RefreshEnv, db: Db): Promise<void> {
     db,
     rows.map((r) => r.id),
   );
+}
+
+/**
+ * Gives the live replicas of the meshed nodes among `nodeIds` their mesh IPs.
+ *
+ * @param db - Database client.
+ * @param nodeIds - Nodes about to be refreshed.
+ * @param supernet - The mesh supernet.
+ */
+async function assignMeshIpsOf(db: Db, nodeIds: readonly string[], supernet: string) {
+  for (let i = 0; i < nodeIds.length; i += 50) {
+    const rows = await db
+      .select({ id: nodes.id, meshIndex: nodes.meshIndex })
+      .from(nodes)
+      .where(and(inArray(nodes.id, nodeIds.slice(i, i + 50)), isNull(nodes.deletedAt)));
+    for (const r of rows) {
+      if (r.meshIndex !== null)
+        await assignMeshIps(db, { id: r.id, meshIndex: r.meshIndex }, supernet);
+    }
+  }
+}
+
+/**
+ * Services with at least one verified, routed hostname, in the given
+ * environments: their replicas' ports are admitted from other nodes'
+ * ingress (ADR 0005, `routed_ports`).
+ *
+ * @param db - Database client.
+ * @param workspaceId - The workspace.
+ * @param environmentIds - Environments to look in.
+ * @returns `<serviceId>:<environmentId>` keys.
+ */
+async function routedServicePairs(
+  db: Db,
+  workspaceId: string,
+  environmentIds: readonly string[],
+): Promise<string[]> {
+  const wanted = new Set(environmentIds);
+  if (!wanted.size) return [];
+  const rows = await db
+    .select({ serviceId: domains.serviceId, environmentId: domains.environmentId })
+    .from(domains)
+    .innerJoin(services, eq(services.id, domains.serviceId))
+    .innerJoin(projects, eq(projects.id, services.projectId))
+    .where(and(eq(projects.workspaceId, workspaceId), eq(domains.verificationStatus, "verified")));
+  return rows
+    .filter((r) => wanted.has(r.environmentId))
+    .map((r) => `${r.serviceId}:${r.environmentId}`);
+}
+
+/** What {@link routeWorkloads} needs. */
+interface RouteWorkloadsInput {
+  nodeId: string;
+  /** `<serviceId>:<environmentId>` pairs with a replica on the node, which route locally. */
+  localPairs: ReadonlySet<string>;
+  /** Every replica with a mesh IP in the workspace. */
+  cluster: readonly ClusterReplica[];
+  /** Verified hostnames per pair. */
+  hostnames: ReadonlyMap<string, (RoutedDomain & { serviceId: string })[]>;
+  hsts?: ReadonlyMap<string, RouteHsts | null>;
+  /** Hostnames TLS allows the node to route (`null`: every one). */
+  routable: ReadonlySet<string> | null;
+}
+
+/**
+ * Route-only workloads (ADR 0005, "Cross-node ingress"): for each routed
+ * service with no replica on this node, its hostnames proxied to the mesh
+ * IPs of its replicas elsewhere, healthy ones only unless none is, so
+ * Caddy reports connection refused rather than a missing route.
+ *
+ * @param input - The node, its local pairs and the cluster.
+ * @returns The workloads, sorted by ID.
+ */
+async function routeWorkloads(input: RouteWorkloadsInput): Promise<WorkloadSpec[]> {
+  const byPair = new Map<string, ClusterReplica[]>();
+  for (const c of input.cluster) {
+    if (c.nodeId === input.nodeId) continue;
+    const key = `${c.serviceId}:${c.environmentId}`;
+    if (input.localPairs.has(key)) continue;
+    byPair.set(key, [...(byPair.get(key) ?? []), c]);
+  }
+  const out: WorkloadSpec[] = [];
+  for (const [key, replicas] of byPair) {
+    const newest = replicas.reduce((a, b) => (b.deploymentId > a.deploymentId ? b : a));
+    const port = newest.port;
+    if (!port) continue;
+    const hosts = (input.hostnames.get(key) ?? [])
+      .filter((h) => h.type !== "generated" || newest.generatedDomain)
+      .filter((h) => !input.routable || input.routable.has(h.hostname))
+      .map((h) => h.hostname);
+    if (!hosts.length) continue;
+    const healthy = replicas.filter((r) => r.healthy);
+    const upstreams = (healthy.length ? healthy : replicas).map((r) => ({ ip: r.ip, port }));
+    const spec: Omit<WorkloadSpec, "spec_hash"> = {
+      id: routeWorkloadId(newest.serviceId, newest.environmentId),
+      kind: "route",
+      project_id: newest.projectId,
+      environment_id: newest.environmentId,
+      service_id: newest.serviceId,
+      deployment_id: newest.deploymentId,
+      replica: 0,
+      image: newest.image,
+      registry_auth: null,
+      env_sealed: null,
+      ports: [{ container_port: port, protocol: "http" }],
+      routes: hosts.map((hostname) => {
+        const h = input.hsts?.get(hostname);
+        return { hostname, container_port: port, ...(h ? { hsts: h } : {}) };
+      }),
+      healthcheck: null,
+      resources: { cpu_millis: 10, memory_mb: 16, pids: 16 },
+      restart: { policy: "always", max_retries: 0 },
+      network: await environmentNetworkName(newest.projectId, newest.environmentId),
+      labels: {},
+      drain_s: 0,
+      upstreams: upstreams.slice(0, MAX_UPSTREAMS),
+    };
+    out.push({ ...spec, spec_hash: await computeSpecHash(spec) });
+  }
+  return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/**
+ * The stable ID of a node's route-only workload for a service in an
+ * environment; the same on every node, unique within one.
+ *
+ * @param serviceId - The service.
+ * @param environmentId - The environment.
+ * @returns E.g. `wl_rt_01J…_01J…`.
+ */
+export function routeWorkloadId(serviceId: string, environmentId: string): string {
+  const tail = (id: string) => id.slice(id.indexOf("_") + 1);
+  return `wl_rt_${tail(serviceId)}_${tail(environmentId)}`.slice(0, 67);
 }

@@ -88,6 +88,7 @@ export * from "./contracts/databases";
 export * from "./contracts/domains";
 export * from "./contracts/instance";
 export * from "./contracts/keys";
+export * from "./contracts/mesh";
 export * from "./contracts/metrics";
 export * from "./contracts/oauth";
 export * from "./contracts/params";

@@ -3,7 +3,7 @@
  * setting keys of the control-plane signing keys (handled by
  * `./signing-keys`), the fingerprint secret, the ingress settings
  * (`apps_domain`, `tls_mode`), log retention, and whether the MCP endpoint
- * is enabled.
+ * is enabled, and the mesh settings (`mesh_enabled`, `mesh_supernet`).
  *
  * @module
  */
@@ -69,6 +69,13 @@ export const SettingKey = {
    * apps wildcard and delegated custom wildcards can be issued.
    */
   cloudflareDns: "cloudflare_dns",
+  /** Whether servers join the WireGuard mesh (a boolean); off when unset (ADR 0005). */
+  meshEnabled: "mesh_enabled",
+  /**
+   * The mesh supernet (an IPv4 `/16`); `DEFAULT_MESH_SUPERNET` when unset.
+   * Fixed once the first server joined the mesh.
+   */
+  meshSupernet: "mesh_supernet",
 } as const;
 
 /**
@@ -257,4 +264,35 @@ export async function getLogRetentionDays(db: Db): Promise<number> {
  */
 export async function getMcpEnabled(db: Db): Promise<boolean> {
   return (await getSetting<unknown>(db, SettingKey.mcpEnabled)) === true;
+}
+
+/** Supernet of the WireGuard mesh until an instance admin picks another (ADR 0005). */
+export const DEFAULT_MESH_SUPERNET = "10.200.0.0/16";
+
+/** The mesh's instance settings. */
+export interface MeshSettings {
+  /** Servers join the WireGuard mesh; off on new installs. */
+  enabled: boolean;
+  /** IPv4 `/16` the servers' `/24`s are carved from. */
+  supernet: string;
+}
+
+/**
+ * Reads the mesh settings.
+ *
+ * @param db - Database client.
+ * @returns `mesh_enabled` (off when unset) and `mesh_supernet`
+ *   ({@link DEFAULT_MESH_SUPERNET} when unset).
+ */
+export async function getMeshSettings(db: Db): Promise<MeshSettings> {
+  const rows = await db
+    .select()
+    .from(instanceSettings)
+    .where(inArray(instanceSettings.key, [SettingKey.meshEnabled, SettingKey.meshSupernet]));
+  const byKey = new Map(rows.map((r) => [r.key, r.value]));
+  const supernet = byKey.get(SettingKey.meshSupernet);
+  return {
+    enabled: byKey.get(SettingKey.meshEnabled) === true,
+    supernet: typeof supernet === "string" ? supernet : DEFAULT_MESH_SUPERNET,
+  };
 }

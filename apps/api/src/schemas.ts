@@ -740,8 +740,9 @@ export const DomainRoutingNodeSchema = z
     name: z.string(),
     public_ip: z.string().nullable(),
     /**
-     * Whether it runs a replica of the service. Until nodes route to each
-     * other's replicas (ADR 0005 mesh), only these answer for the domain.
+     * Whether it answers for the domain: it runs a replica of the service,
+     * or it is a meshed, ready ingress server and the service runs on meshed
+     * servers (ADR 0005, "Cross-node ingress").
      */
     serves: z.boolean(),
   })
@@ -818,8 +819,30 @@ export const InstanceSettingsSchema = z
     mcp_enabled: z.boolean(),
     /** Servers that run ingress, across workspaces; `acme` mode is for one. */
     ingress_nodes: z.number().int(),
+    /**
+     * Servers join the WireGuard mesh (ADR 0005), so an environment may span
+     * servers and every ingress server routes to every replica. Off on new
+     * installs.
+     */
+    mesh_enabled: z.boolean(),
+    /** IPv4 `/16` the servers' `/24`s come from; fixed once a server joined the mesh. */
+    mesh_supernet: z.string(),
+    /** The supernet can no longer change: a server has joined the mesh. */
+    mesh_supernet_locked: z.boolean(),
   })
   .openapi("InstanceSettings");
+
+/**
+ * A mesh supernet: an RFC 1918 IPv4 `/16` that is not inside Docker's
+ * default address pools (`172.17.0.0/16` to `172.31.0.0/16`,
+ * `192.168.0.0/16`), so mesh IPs never collide with container bridges.
+ */
+export const MeshSupernetField = z
+  .string()
+  .regex(
+    /^10\.(25[0-5]|2[0-4]\d|1?\d?\d)\.0\.0\/16$/,
+    "expected a private /16 under 10.0.0.0/8, e.g. 10.200.0.0/16",
+  );
 
 /** Partial update of instance settings. */
 export const InstanceSettingsPatchSchema = z
@@ -828,6 +851,12 @@ export const InstanceSettingsPatchSchema = z
     tls_mode: TlsModeSchema.optional(),
     log_retention_days: z.number().int().min(1).max(MAX_LOG_RETENTION_DAYS).optional(),
     mcp_enabled: z.boolean().optional(),
+    mesh_enabled: z.boolean().optional(),
+    /**
+     * A private IPv4 `/16` outside Docker's default pools; 409
+     * `mesh_supernet_locked` once a server has joined the mesh.
+     */
+    mesh_supernet: MeshSupernetField.optional(),
   })
   .refine((b) => Object.values(b).some((v) => v !== undefined), {
     message: "nothing to update",

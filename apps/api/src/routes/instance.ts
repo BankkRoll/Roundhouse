@@ -13,6 +13,11 @@
  *   `acme_mode_single_ingress_only`): each node's Caddy would order its own
  *   certificates, and a validation reaching another node fails.
  *
+ * Turning the mesh on (`mesh_enabled`, ADR 0005) lets every node that
+ * reported a WireGuard key join it and re-sends desired state everywhere;
+ * `mesh_supernet` is refused with 409 `mesh_supernet_locked` once a node
+ * holds a mesh address.
+ *
  * A change is recorded as an instance-level audit entry (no workspace; see
  * `INSTANCE_AUDIT_ACTIONS`), visible to instance admins only.
  *
@@ -20,7 +25,7 @@
  */
 import { type Db, domains, nodes } from "@roundhouse/db";
 import type { InstanceAction } from "@roundhouse/shared";
-import { and, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import { clientIp, createRouter, requireInstanceAction } from "../context";
 import { getInstanceSettings, policyOf, updateInstanceSettings } from "../contracts";
 import { recordAudit } from "../lib/audit";
@@ -29,10 +34,12 @@ import { managedTlsProblems } from "../lib/certificates/settings";
 import { refreshAllNodes } from "../lib/desired-state";
 import { isIngressNode } from "../lib/domains/serving";
 import { ApiError } from "../lib/errors";
+import { joinWaitingNodes } from "../lib/mesh";
 import {
   getIngressSettings,
   getLogRetentionDays,
   getMcpEnabled,
+  getMeshSettings,
   putSetting,
   SettingKey,
 } from "../lib/settings";
@@ -51,12 +58,30 @@ export async function countIngressNodes(db: Db): Promise<number> {
   return rows.filter((r) => isIngressNode(r.capabilities)).length;
 }
 
+/**
+ * Whether a node holds a mesh index: the supernet is fixed from then on,
+ * since every meshed node's addresses come from it.
+ *
+ * @param db - Database client.
+ * @returns `true` once any live node joined the mesh.
+ */
+async function meshJoined(db: Db): Promise<boolean> {
+  const [row] = await db
+    .select({ id: nodes.id })
+    .from(nodes)
+    .where(and(isNull(nodes.deletedAt), isNotNull(nodes.meshIndex)))
+    .limit(1);
+  return !!row;
+}
+
 async function readSettings(db: Db) {
-  const [ingress, logRetentionDays, mcpEnabled, ingressNodes] = await Promise.all([
+  const [ingress, logRetentionDays, mcpEnabled, ingressNodes, mesh, locked] = await Promise.all([
     getIngressSettings(db),
     getLogRetentionDays(db),
     getMcpEnabled(db),
     countIngressNodes(db),
+    getMeshSettings(db),
+    meshJoined(db),
   ]);
   return {
     apps_domain: ingress.appsDomain,
@@ -64,6 +89,9 @@ async function readSettings(db: Db) {
     log_retention_days: logRetentionDays,
     mcp_enabled: mcpEnabled,
     ingress_nodes: ingressNodes,
+    mesh_enabled: mesh.enabled,
+    mesh_supernet: mesh.supernet,
+    mesh_supernet_locked: locked,
   };
 }
 
@@ -95,6 +123,23 @@ export const instanceRoutes = createRouter()
         `This install has ${before.ingress_nodes} ingress servers. With acme each one orders its own ` +
           "certificates and a validation reaching another server fails; use managed instead.",
       );
+    }
+    if (
+      body.mesh_supernet !== undefined &&
+      body.mesh_supernet !== before.mesh_supernet &&
+      before.mesh_supernet_locked
+    ) {
+      throw new ApiError(
+        409,
+        "mesh_supernet_locked",
+        "Servers have joined the mesh with addresses from the current supernet; it can no longer change.",
+      );
+    }
+    if (body.mesh_enabled !== undefined) {
+      statements.push(putSetting(db, SettingKey.meshEnabled, body.mesh_enabled));
+    }
+    if (body.mesh_supernet !== undefined) {
+      statements.push(putSetting(db, SettingKey.meshSupernet, body.mesh_supernet));
     }
     if (body.apps_domain !== undefined) {
       statements.push(putSetting(db, SettingKey.appsDomain, body.apps_domain));
@@ -137,8 +182,17 @@ export const instanceRoutes = createRouter()
       }
     }
     await db.batch(statements as [(typeof statements)[number], ...typeof statements]);
+    if (body.mesh_enabled && !before.mesh_enabled) {
+      // Nodes already connected reported their keys in hello; they join now
+      // rather than at their next reconnect.
+      await joinWaitingNodes(db);
+    }
     const after = await readSettings(db);
-    if (after.apps_domain !== before.apps_domain || after.tls_mode !== before.tls_mode) {
+    if (
+      after.apps_domain !== before.apps_domain ||
+      after.tls_mode !== before.tls_mode ||
+      after.mesh_enabled !== before.mesh_enabled
+    ) {
       if (after.tls_mode === "managed") {
         await syncCertificates(db);
         await claimDueCertificates(c.env, db);
@@ -146,7 +200,7 @@ export const instanceRoutes = createRouter()
       await refreshAllNodes(c.env, db);
     }
     const changed = (Object.keys(after) as (keyof typeof after)[]).filter(
-      (k) => k !== "ingress_nodes" && after[k] !== before[k],
+      (k) => k !== "ingress_nodes" && k !== "mesh_supernet_locked" && after[k] !== before[k],
     );
     if (changed.length) {
       await recordAudit(db, {

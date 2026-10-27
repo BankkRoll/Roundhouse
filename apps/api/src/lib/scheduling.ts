@@ -25,7 +25,9 @@ import {
 } from "@roundhouse/shared";
 import { and, eq, inArray, isNotNull, isNull, ne, sum } from "drizzle-orm";
 import { LIVE_DEPLOYMENT_STATUSES, runsSealedWorkloads } from "./desired-state";
+import { isMeshed } from "./mesh";
 import { effectiveStatus } from "./nodes";
+import { getMeshSettings } from "./settings";
 
 /** Memory kept back on every node for the OS, Docker, the agent and Caddy. */
 export const SYSTEM_RESERVED_MB = 256;
@@ -39,6 +41,34 @@ export interface SchedulerSnapshot {
   nodes: SchedulerNode[];
   /** The same nodes' rows, by ID. */
   rows: Map<string, SnapshotNode>;
+}
+
+/**
+ * Nodes running live replicas of an environment's other services: where
+ * the environment already lives, for `ScheduleRequest.environmentNodeIds`.
+ *
+ * @param db - Database client.
+ * @param environmentId - The environment.
+ * @param serviceId - The service being placed; its own replicas don't count.
+ * @returns Distinct node IDs.
+ */
+export async function environmentNodeIds(
+  db: Db,
+  environmentId: string,
+  serviceId: string,
+): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ nodeId: placements.nodeId })
+    .from(placements)
+    .innerJoin(deployments, eq(deployments.id, placements.deploymentId))
+    .where(
+      and(
+        eq(deployments.environmentId, environmentId),
+        ne(deployments.serviceId, serviceId),
+        inArray(deployments.status, [...LIVE_DEPLOYMENT_STATUSES]),
+      ),
+    );
+  return rows.map((r) => r.nodeId);
 }
 
 /**
@@ -69,6 +99,7 @@ export async function schedulerSnapshot(
       .from(nodes)
       .where(and(eq(nodes.workspaceId, options.workspaceId), isNull(nodes.deletedAt)))
   ).filter(runsSealedWorkloads);
+  const mesh = await getMeshSettings(db);
   const configOfDeployment = and(
     eq(serviceConfigs.serviceId, deployments.serviceId),
     eq(serviceConfigs.environmentId, deployments.environmentId),
@@ -135,6 +166,7 @@ export async function schedulerSnapshot(
       protocolVersion: n.protocolVersion,
       ...(n.diskTotal ? { diskMb: Math.floor(n.diskTotal / 2 ** 20) } : {}),
       allocatedDiskMb: quotaOf.get(n.id) ?? 0,
+      meshReady: isMeshed(n, mesh) && n.meshReady,
     };
   });
   return { nodes: schedulerNodes, rows: new Map(workspaceNodes.map((n) => [n.id, n])) };

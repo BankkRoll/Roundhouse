@@ -133,6 +133,8 @@ export const AUDIT_ACTIONS = [
   "cron.run_cancelled",
   "cron.paused",
   "cron.resumed",
+  "node.mesh_joined",
+  "node.mesh_key_rotated",
 ] as const;
 
 /** An audited action name. */
