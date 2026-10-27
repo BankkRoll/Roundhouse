@@ -2,7 +2,9 @@
  * Restores end to end (ADR 0004, "Restore"): in place with and without the
  * `pre_restore` safety backup, the sealed download URL and age identity
  * (bound to node and restore), agent failure, the confirmation and fresh
- * session requirements, `new_service` (not served yet), and audit entries.
+ * session requirements, `new_service` refused for a snapshot of a service
+ * that isn't a database (`restore-new-service.test.ts` covers the rest),
+ * and audit entries.
  */
 import { env, introspectWorkflow } from "cloudflare:test";
 import { openBox, restoreSecretsAad } from "@roundhouse/protocol";
@@ -161,7 +163,7 @@ describe("restore guards", () => {
     expect(wrong.status).toBe(400);
 
     const unsupported = await restore(s, backupId, { mode: "new_service", confirm: s.serviceSlug });
-    expect(unsupported.status).toBe(501);
+    expect(unsupported.status).toBe(422);
     expect(unsupported.body).toMatchObject({ error: { code: "restore_mode_unsupported" } });
 
     await env.DB.prepare("UPDATE sessions SET created_at = ?, reauthenticated_at = NULL")

@@ -29,6 +29,54 @@ export const READONLY_DB_USER = "roundhouse_ro";
 /** Variable holding the read-only principal's password, on every engine. */
 export const READONLY_PASSWORD_VARIABLE = "ROUNDHOUSE_RO_PASSWORD";
 
+/**
+ * Principals of a database whose password a rotation changes: the engine's
+ * admin, the application user (MySQL's `MYSQL_USER`) and the data
+ * browser's read-only user.
+ */
+export const DATABASE_PRINCIPALS = ["admin", "app", "readonly"] as const;
+
+/** A database principal; see {@link DATABASE_PRINCIPALS}. */
+export type DatabasePrincipal = (typeof DATABASE_PRINCIPALS)[number];
+
+/** Where a principal's name and password live among the service's variables. */
+export interface DatabasePrincipalVariables {
+  principal: DatabasePrincipal;
+  /** A fixed user name, or the variable holding it. */
+  username: { literal: string } | { variable: string };
+  /** The secret variable holding the password. */
+  passwordVariable: string;
+}
+
+/**
+ * The principals an engine's template creates, in the order a rotation
+ * changes them: the admin last, because it is the credential every other
+ * change connects with.
+ *
+ * @param engine - The engine.
+ * @returns One entry per principal.
+ * @example
+ * databasePrincipals("mysql").map((p) => p.principal); // ["readonly", "app", "admin"]
+ */
+export function databasePrincipals(engine: ServiceDatabaseEngine): DatabasePrincipalVariables[] {
+  const readonly: DatabasePrincipalVariables = {
+    principal: "readonly",
+    username: { literal: READONLY_DB_USER },
+    passwordVariable: READONLY_PASSWORD_VARIABLE,
+  };
+  const admin = databaseCredentialVariables(engine, "write");
+  const out: DatabasePrincipalVariables[] = [readonly];
+  if (engine === "mysql") {
+    out.push({
+      principal: "app",
+      username: { variable: "MYSQL_USER" },
+      passwordVariable: "MYSQL_PASSWORD",
+    });
+  }
+  out.push({ principal: "admin", ...admin });
+  return out;
+}
+
 /** Volume size a database starts with, in MiB. */
 export const DEFAULT_DATABASE_VOLUME_MB = 5120;
 
@@ -315,6 +363,35 @@ function engineVariables(
         hidden("DATABASE_URL", url),
       ];
     }
+  }
+}
+
+/** The connection URL variable a database gets while it publishes its port. */
+export const DATABASE_PUBLIC_URL_VARIABLE = "DATABASE_PUBLIC_URL";
+
+/**
+ * The reference-valued `DATABASE_PUBLIC_URL` of a database with a TCP proxy
+ * (ADR 0004, "TCP proxy"): its admin URL (MySQL's application user) at the
+ * proxy's public host and port. Stored as a `secret` variable while the
+ * proxy is on, since it resolves to a password.
+ *
+ * @param engine - The engine.
+ * @returns The value, with `${{…}}` references.
+ * @example
+ * databasePublicUrl("redis");
+ * // "redis://default:${{REDIS_PASSWORD}}@${{ROUNDHOUSE_TCP_PROXY_DOMAIN}}:${{ROUNDHOUSE_TCP_PROXY_PORT}}"
+ */
+export function databasePublicUrl(engine: ServiceDatabaseEngine): string {
+  const at = `${ref("ROUNDHOUSE_TCP_PROXY_DOMAIN")}:${ref("ROUNDHOUSE_TCP_PROXY_PORT")}`;
+  switch (engine) {
+    case "postgres":
+      return `postgresql://${ref("POSTGRES_USER")}:${ref("POSTGRES_PASSWORD")}@${at}/${ref("POSTGRES_DB")}`;
+    case "mysql":
+      return `mysql://${ref("MYSQL_USER")}:${ref("MYSQL_PASSWORD")}@${at}/${ref("MYSQL_DATABASE")}`;
+    case "redis":
+      return `redis://default:${ref("REDIS_PASSWORD")}@${at}`;
+    case "mongodb":
+      return `mongodb://${ref("MONGO_INITDB_ROOT_USERNAME")}:${ref("MONGO_INITDB_ROOT_PASSWORD")}@${at}/?authSource=admin`;
   }
 }
 

@@ -55,6 +55,9 @@ type QueryTarget struct {
 	// Database is the default database from the container's environment
 	// (POSTGRES_DB, MYSQL_DATABASE), "" for the engine's default.
 	Database string
+	// AppUser is the application principal from the container's
+	// environment (MYSQL_USER), which set_password may also change.
+	AppUser string
 }
 
 // QueryCredential is the principal a query connects as. Its fields match
@@ -64,6 +67,9 @@ type QueryCredential struct {
 	// ReadonlyPassword is the container's ROUNDHOUSE_RO_PASSWORD, set only
 	// for provision_readonly, which creates roundhouse_ro with it.
 	ReadonlyPassword string
+	// NewPassword is the sealed credential's new password, set only for
+	// set_password.
+	NewPassword string
 }
 
 // DBQueryRunner runs one data-browser operation. Run honours ctx, whose
@@ -230,6 +236,12 @@ func failedRestore(id string) *protocol.RestoreResult {
 	return &protocol.RestoreResult{Type: protocol.TypeRestoreResult, RestoreID: id, Error: noBackups}
 }
 
+// SetsPasswords reports whether the node accepts the set_password op, for
+// the hello's db_set_password capability: it does whenever it runs queries.
+func (h *Handler) SetsPasswords() bool {
+	return h.opts.Query != nil
+}
+
 // RunQuery runs a db_query and answers db_query_result.
 func (h *Handler) RunQuery(m *protocol.DBQuery) {
 	h.goTask(func() {
@@ -281,6 +293,15 @@ func (h *Handler) query(ctx context.Context, m *protocol.DBQuery) *protocol.DBQu
 		}
 		qc.ReadonlyPassword = ro
 	}
+	if m.Op.Type == protocol.DBOpSetPassword {
+		// SECURITY: Validate refuses this already, but the frame reaching
+		// here is not re-validated; a password change never runs as the
+		// reader.
+		if m.Mode != "write" {
+			return queryError(m, "set_password runs as the admin")
+		}
+		qc.NewPassword = cred.NewPassword
+	}
 	res := h.opts.Query.Run(ctx, target, qc, m)
 	if res == nil {
 		return queryError(m, "the query runner returned no result")
@@ -314,6 +335,7 @@ func (h *Handler) target(ctx context.Context, m *protocol.DBQuery) (QueryTarget,
 			t.Database = env["POSTGRES_DB"]
 		case protocol.EngineMySQL:
 			t.Database = env["MYSQL_DATABASE"]
+			t.AppUser = env["MYSQL_USER"]
 		}
 		ro = env["ROUNDHOUSE_RO_PASSWORD"]
 	}

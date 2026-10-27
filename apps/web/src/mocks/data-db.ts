@@ -1,7 +1,8 @@
 /**
- * Data-service tables of the mock database (ADR 0004): volumes, backup policies,
- * backups, restores, the instance's backup bucket, each project's backup key, and the
- * rows the data browser reads. Row shapes are the API's own types.
+ * Data-service tables of the mock database (ADR 0004): volumes and their moves between
+ * nodes, backup policies, backups, restores, published TCP ports, credential rotations,
+ * the instance's backup bucket, each project's backup key, and the rows the data browser
+ * reads. Row shapes are the API's own types.
  *
  * The seed adds a PostgreSQL 18 service `postgres` to the storefront project: running in
  * production with a 5 GiB volume on hel-1, a nightly backup policy with four backups
@@ -17,7 +18,7 @@ import {
   type ServiceDatabaseEngine,
 } from "@roundhouse/shared";
 import type { Backup, BackupPolicy, Restore } from "../lib/api/backups-client";
-import type { Volume } from "../lib/api/data-client";
+import type { CredentialRotation, TcpProxy, Volume, VolumeMigration } from "../lib/api/data-client";
 import type { Service, ServiceConfig } from "../lib/api/deploy-types";
 import type { DbVariable, DeployDb } from "./deploy-db";
 
@@ -48,6 +49,10 @@ export interface DataDb {
   policies: DbBackupPolicy[];
   backups: Backup[];
   restores: Restore[];
+  migrations: VolumeMigration[];
+  /** Published ports; `host`, `node_id`, `status` and `open_to_all` are derived when read. */
+  tcpProxies: TcpProxy[];
+  rotations: CredentialRotation[];
   storage: DbBackupStorage | null;
   /** Project age identities, created with the first backup. */
   keys: Record<string, { identity: string; recipient: string }>;
@@ -59,6 +64,22 @@ export interface DataDb {
     reauthRequired: boolean;
     /** Database services whose node is offline (503 to queries). */
     offline: Set<string>;
+    /** Volume moves fail after the copy out, and roll back. */
+    failMigrations: boolean;
+    /** Nodes' agents can't enforce a TCP allowlist. */
+    tcpProxyUnsupported: boolean;
+    /** The next credential rotation times out after the engine accepts a password. */
+    interruptRotation: boolean;
+  };
+}
+
+function emptyKnobs(): DataDb["knobs"] {
+  return {
+    reauthRequired: false,
+    offline: new Set(),
+    failMigrations: false,
+    tcpProxyUnsupported: false,
+    interruptRotation: false,
   };
 }
 
@@ -320,6 +341,9 @@ export function seedData(deploy: DeployDb, now = Date.now()): DataDb {
       }),
     ],
     restores: [],
+    migrations: [],
+    tcpProxies: [],
+    rotations: [],
     storage: {
       endpoint: "https://acme.r2.cloudflarestorage.com",
       bucket: "roundhouse-backups",
@@ -368,7 +392,7 @@ export function seedData(deploy: DeployDb, now = Date.now()): DataDb {
         { namespace: "audit", name: "events", type: "view", columns: [], rows: [] },
       ],
     },
-    knobs: { reauthRequired: false, offline: new Set() },
+    knobs: emptyKnobs(),
   };
 }
 
@@ -383,9 +407,12 @@ export function emptyData(): DataDb {
     policies: [],
     backups: [],
     restores: [],
+    migrations: [],
+    tcpProxies: [],
+    rotations: [],
     storage: null,
     keys: {},
     tables: {},
-    knobs: { reauthRequired: false, offline: new Set() },
+    knobs: emptyKnobs(),
   };
 }

@@ -10,9 +10,11 @@
  * - The decryption key needs `backups:restore` (the ADR names
  *   `variables:reveal`, which ADR 0014 removed) and a fresh session; it
  *   hands out a key that decrypts every backup of the project.
- * - `new_service` restores answer 501 `restore_mode_unsupported` until
- *   database services can be created outside a change set; `in_place` is
- *   served.
+ * - `new_service` restores need `services:manage`, `variables:manage` and
+ *   `deployments:create` in the target environment too (they add and
+ *   deploy a database through a change set), and only database backups can
+ *   be restored that way: 422 `restore_mode_unsupported` for a snapshot of
+ *   any other service.
  *
  * @module
  */
@@ -32,6 +34,7 @@ import {
   json,
   LimitField,
   Millis,
+  ServiceSlugField,
   sessionAuth,
   sessionOnlyAuth,
 } from "../schemas";
@@ -165,6 +168,11 @@ export const RestoreBackupBody = z
     mode: z.enum(RESTORE_MODES),
     /** `new_service` only; the backup's environment by default. */
     target_environment_id: z.string().optional(),
+    /**
+     * `new_service` only: the new service's slug; `<slug>-restore-<yyyymmdd>`
+     * (with a numeric suffix when taken) by default.
+     */
+    slug: ServiceSlugField.optional(),
     /** Must equal the backed-up service's slug. */
     confirm: z.string().min(1).max(100),
     /** `in_place` only: skip the `pre_restore` safety backup. */
@@ -336,7 +344,10 @@ export const getBackupDecryptionKey = defineRoute(
 /**
  * Restores a succeeded backup. `confirm` must equal the service's slug.
  * `in_place` first takes a safety backup unless `skip_safety_backup`.
- * Needs a fresh session; `new_service` also needs `services:manage`.
+ * `new_service` adds a database of the same engine and version with fresh
+ * credentials, waits for it to be healthy, and restores into it; the
+ * original is not touched. Needs a fresh session; `new_service` also needs
+ * `services:manage`, `variables:manage` and `deployments:create`.
  */
 export const restoreBackup = defineRoute(
   session("backups:restore", ["restore.started"], { reauth: true }),
@@ -349,7 +360,7 @@ export const restoreBackup = defineRoute(
     request: { params: BackupIdParams, ...body(RestoreBackupBody) },
     responses: {
       202: json(RestoreSchema, "Started"),
-      ...errors(400, 401, 403, 404, 409, 501),
+      ...errors(400, 401, 403, 404, 409, 422),
     },
   },
 );

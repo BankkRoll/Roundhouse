@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/BankkRoll/Roundhouse/cli/internal/api"
 	"github.com/BankkRoll/Roundhouse/cli/internal/exitcode"
+	"github.com/BankkRoll/Roundhouse/cli/internal/ui"
 )
 
 func (a *App) dbBackupsCmd() *cobra.Command {
@@ -35,6 +37,7 @@ dashboard (Settings → Backups).`,
   roundhouse db backups run --wait
   roundhouse db backups policy set --schedule "0 2 * * *" --keep-last 14
   roundhouse db backups restore bak_01J9Z6Y4M0V8 --mode in_place --confirm postgres
+  roundhouse db backups restore bak_01J9Z6Y4M0V8 --mode new_service --slug postgres-copy
   roundhouse db backups download bak_01J9Z6Y4M0V8 --decrypt`,
 		Args: noArgs,
 	}
@@ -83,11 +86,17 @@ func backupSize(b *api.Backup) string {
 // pollUntil calls check every PollInterval until it reports done, riding
 // out a few network errors.
 func (a *App) pollUntil(ctx context.Context, label string, check func() (done bool, status string, err error)) error {
+	return a.pollSpinning(ctx, label, func(*ui.Spinner) (bool, string, error) { return check() })
+}
+
+// pollSpinning is pollUntil for checks that print progress lines above the
+// spinner.
+func (a *App) pollSpinning(ctx context.Context, label string, check func(spin *ui.Spinner) (done bool, status string, err error)) error {
 	spin := a.IO.StartSpinner(label)
 	defer spin.Stop()
 	failures := 0
 	for {
-		done, status, err := check()
+		done, status, err := check(spin)
 		switch {
 		case err == nil:
 			failures = 0
@@ -438,24 +447,31 @@ than --max-age-days are deleted; manual backups are exempt from
 // -----------------------------------------------------------------------------
 
 func (a *App) backupsRestoreCmd() *cobra.Command {
-	var mode, confirm string
+	var mode, confirm, slug, environment string
 	var skipSafety, wait bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "restore BACKUP_ID --mode in_place|new_service",
-		Short: "Restore a backup",
+		Short: "Restore a backup in place or into a new database",
 		Long: `Restore a succeeded backup.
 
 --mode in_place replaces the data of the backed-up database in its
 environment. A safety backup is taken first unless --skip-safety-backup is
-given. --mode new_service restores into a new database next to the
-original, leaving the original untouched.
+given.
+
+--mode new_service adds a new database next to the original, with the
+backup's engine and version, fresh credentials and its own volume, and
+restores into it once it runs; the original is not touched. --slug names
+it (default <slug>-restore-<yyyymmdd>) and --environment picks where it is
+added (default the backup's environment). Only a database dump restores
+this way; a snapshot restores in place.
 
 You are asked to type the database's slug; in scripts pass it with
 --confirm. Restoring needs a recent sign-in, so API tokens cannot restore.
 With --wait, follow the restore until it succeeds (exit 0) or fails (exit 1).`,
 		Example: `  roundhouse db backups restore bak_01J9Z6Y4M0V8 --mode in_place
-  roundhouse db backups restore bak_01J9Z6Y4M0V8 --mode in_place --confirm postgres --wait`,
+  roundhouse db backups restore bak_01J9Z6Y4M0V8 --mode in_place --confirm postgres --wait
+  roundhouse db backups restore bak_01J9Z6Y4M0V8 --mode new_service --slug postgres-copy --environment staging`,
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !slices.Contains(api.RestoreModes, mode) {
@@ -463,6 +479,9 @@ With --wait, follow the restore until it succeeds (exit 0) or fails (exit 1).`,
 			}
 			if skipSafety && mode != api.RestoreInPlace {
 				return exitcode.New(exitcode.Usage, "--skip-safety-backup applies to --mode in_place only")
+			}
+			if mode != api.RestoreNewService && (slug != "" || environment != "") {
+				return exitcode.New(exitcode.Usage, "--slug and --environment apply to --mode new_service only")
 			}
 			ctx := cmd.Context()
 			sess, err := a.connect()
@@ -481,11 +500,29 @@ With --wait, follow the restore until it succeeds (exit 0) or fails (exit 1).`,
 			if err != nil {
 				return err
 			}
+			in := api.RestoreBackupInput{Mode: mode, Confirm: svc.Slug, SkipSafetyBackup: skipSafety, Slug: slug}
+			var env *api.Environment
+			if mode == api.RestoreNewService {
+				p, err := c.GetProject(ctx, b.ProjectID)
+				if err != nil {
+					return err
+				}
+				if env, err = pickEnvironment(p, cmp.Or(environment, b.EnvironmentID)); err != nil {
+					return err
+				}
+				if environment != "" {
+					in.TargetEnvironmentID = env.ID
+				}
+			}
 			taken := formatInstant(millis(cmpInt64(b.FinishedAt, b.CreatedAt)))
 			warning := fmt.Sprintf("This replaces the data of %s with backup %s from %s.", svc.Name, b.ID, taken)
 			switch {
 			case mode == api.RestoreNewService:
-				warning = fmt.Sprintf("This restores backup %s of %s from %s into a new database.", b.ID, svc.Name, taken)
+				name := "a new database"
+				if slug != "" {
+					name += " " + slug
+				}
+				warning = fmt.Sprintf("This restores backup %s of %s from %s into %s in %s. %s is not touched.", b.ID, svc.Name, taken, name, env.Name, svc.Name)
 			case skipSafety:
 				warning += " No safety backup is taken: the current data is lost."
 			default:
@@ -494,23 +531,28 @@ With --wait, follow the restore until it succeeds (exit 0) or fails (exit 1).`,
 			if err := a.IO.ConfirmTyped(warning, svc.Slug, confirm); err != nil {
 				return err
 			}
-			r, err := c.RestoreBackup(ctx, b.ID, api.RestoreBackupInput{Mode: mode, Confirm: svc.Slug, SkipSafetyBackup: skipSafety})
+			r, err := c.RestoreBackup(ctx, b.ID, in)
 			if err != nil {
 				var apiErr *api.Error
 				if errors.As(err, &apiErr) && apiErr.Code == "restore_mode_unsupported" {
-					return withHint(exitcode.Wrap(exitcode.Unavailable, err), "restore in place instead: --mode in_place")
+					return withHint(err, "a snapshot restores in place only: --mode in_place")
 				}
 				return a.reauthHint(err, "restoring a backup")
+			}
+			var created *api.Service
+			if r.TargetServiceID != nil && r.Mode == api.RestoreNewService {
+				// NOTE: best effort; the restore has started either way, and
+				// its ID alone still identifies the new service.
+				created, _ = c.GetService(ctx, *r.TargetServiceID)
+			}
+			if !a.jsonOut {
+				a.printRestoreStarted(r, svc, created, env)
 			}
 			if !wait {
 				if a.jsonOut {
 					return a.printJSON(r)
 				}
-				a.printRestoreStarted(r, svc)
 				return nil
-			}
-			if !a.jsonOut {
-				a.printRestoreStarted(r, svc)
 			}
 			wctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
@@ -538,8 +580,19 @@ With --wait, follow the restore until it succeeds (exit 0) or fails (exit 1).`,
 				}
 				return exitcode.New(exitcode.Error, "%s", msg)
 			}
-			if !a.jsonOut {
-				fmt.Fprintf(a.IO.Out, "%s Restore %s succeeded\n", a.IO.OutColor().Green("✓"), r.ID)
+			if a.jsonOut {
+				return nil
+			}
+			pal := a.IO.OutColor()
+			if created == nil {
+				fmt.Fprintf(a.IO.Out, "%s Restore %s succeeded\n", pal.Green("✓"), r.ID)
+				return nil
+			}
+			fmt.Fprintf(a.IO.Out, "%s Restore %s succeeded into %s (%s)\n", pal.Green("✓"), r.ID, created.Name, created.Slug)
+			if created.Database != nil {
+				if keys := connectionKeys[created.Database.Engine]; len(keys) > 0 {
+					fmt.Fprintf(a.IO.Out, "  Reference it from another service:\n    roundhouse vars set '%s=%s' --service <app>\n", keys[0], reference(created.Slug, keys[0]))
+				}
 			}
 			return nil
 		},
@@ -547,6 +600,8 @@ With --wait, follow the restore until it succeeds (exit 0) or fails (exit 1).`,
 	cmd.Flags().StringVar(&mode, "mode", "", "in_place or new_service")
 	cmd.Flags().StringVar(&confirm, "confirm", "", "the database's slug, to skip the prompt")
 	cmd.Flags().BoolVar(&skipSafety, "skip-safety-backup", false, "with --mode in_place, do not back up the current data first")
+	cmd.Flags().StringVar(&slug, "slug", "", "with --mode new_service, the new database's slug (default <slug>-restore-<yyyymmdd>)")
+	cmd.Flags().StringVarP(&environment, "environment", "e", "", "with --mode new_service, the environment to add it to (default the backup's)")
 	cmd.Flags().BoolVarP(&wait, "wait", "w", false, "wait until the restore finishes")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "with --wait, give up after this long")
 	_ = cmd.MarkFlagRequired("mode")
@@ -560,14 +615,29 @@ func cmpInt64(p *int64, def int64) int64 {
 	return def
 }
 
-func (a *App) printRestoreStarted(r *api.Restore, svc *api.Service) {
+// printRestoreStarted reports a started restore; created and env are the
+// new database and its environment for a new_service restore, created nil
+// when it could not be read.
+func (a *App) printRestoreStarted(r *api.Restore, svc, created *api.Service, env *api.Environment) {
 	how := "in place into " + svc.Name
 	if r.Mode == api.RestoreNewService {
 		how = "into a new database"
+		switch {
+		case created != nil:
+			how += fmt.Sprintf(" %s (%s)", created.Name, created.Slug)
+		case r.TargetServiceID != nil:
+			how += " " + *r.TargetServiceID
+		}
+		if env != nil {
+			how += " in " + env.Name
+		}
 	}
 	fmt.Fprintf(a.IO.Out, "%s Started restore %s of %s %s\n", a.IO.OutColor().Green("✓"), r.ID, r.BackupID, how)
 	if r.SafetyBackupID != nil {
 		fmt.Fprintf(a.IO.Out, "  Safety backup: %s\n", *r.SafetyBackupID)
+	}
+	if r.Mode == api.RestoreNewService {
+		fmt.Fprintf(a.IO.Out, "  %s is not touched. The data is restored once the new database runs.\n", svc.Name)
 	}
 }
 

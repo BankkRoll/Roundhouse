@@ -342,6 +342,9 @@ const (
 	DBOpRows              = "rows"
 	DBOpRaw               = "raw"
 	DBOpProvisionReadonly = "provision_readonly"
+	// DBOpSetPassword sets User's password to the credential box's
+	// NewPassword, connected as the admin. System use only.
+	DBOpSetPassword = "set_password"
 )
 
 // DBOp is one data-browser operation, discriminated on Type. Fields other
@@ -365,6 +368,8 @@ type DBOp struct {
 	Params []*string `json:"params,omitempty"`
 	// Argv is a Redis command (raw).
 	Argv []string `json:"argv,omitempty"`
+	// User is the principal set_password changes.
+	User string `json:"user,omitempty"`
 }
 
 func validDBIdentifier(s string, required bool) bool {
@@ -377,6 +382,10 @@ func validDBIdentifier(s string, required bool) bool {
 func (o *DBOp) validate() error {
 	switch o.Type {
 	case DBOpListNamespaces, DBOpProvisionReadonly:
+	case DBOpSetPassword:
+		if !dbUserRE.MatchString(o.User) {
+			return errors.New("op: set_password needs a user")
+		}
 	case DBOpListTables:
 		if !validDBIdentifier(o.Namespace, false) || !validDBIdentifier(o.Pattern, false) ||
 			(o.Cursor != "" && !scanCursorRE.MatchString(o.Cursor)) {
@@ -458,8 +467,8 @@ func (m *DBQuery) Validate() error {
 	if err := m.Op.validate(); err != nil {
 		return err
 	}
-	if m.Op.Type == DBOpProvisionReadonly && m.Mode != "write" {
-		return errors.New("mode: provision_readonly runs as the admin")
+	if (m.Op.Type == DBOpProvisionReadonly || m.Op.Type == DBOpSetPassword) && m.Mode != "write" {
+		return fmt.Errorf("mode: %s runs as the admin", m.Op.Type)
 	}
 	if m.MaxRows < 1 || m.MaxRows > MaxDBQueryRows || m.MaxBytes < 1 || m.MaxBytes > MaxDBQueryResultBytes ||
 		m.TimeoutMS < 100 || m.TimeoutMS > MaxDBQueryTimeoutMS {

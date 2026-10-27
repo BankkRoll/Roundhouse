@@ -24,6 +24,7 @@ import {
   AGE_IDENTITY_RE,
   base64Bytes,
   boundedString,
+  DB_PASSWORD_RE,
   ENV_KEY_RE,
   MAX_BACKUP_PARTS,
   MAX_BACKUP_PARTS_PER_FRAME,
@@ -354,6 +355,8 @@ export type SealedRestoreSecrets = z.infer<typeof SealedRestoreSecretsSchema>;
 export const SealedDbCredentialSchema = z.object({
   username: boundedString(256, 1),
   password: boundedString(4096, 1),
+  /** `set_password` only: the password the op sets. */
+  new_password: z.string().regex(DB_PASSWORD_RE, "expected a generated password").optional(),
 });
 
 /** Plaintext of `db_query.credential_sealed`. */

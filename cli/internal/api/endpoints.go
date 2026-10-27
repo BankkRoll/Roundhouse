@@ -82,6 +82,9 @@ var Routes = []Route{
 	RouteDatabaseQuery, RouteDatabaseSchema,
 	RouteBackupPolicy, RoutePutBackupPolicy, RouteListBackups, RouteCreateBackup, RouteGetBackup,
 	RouteBackupDownload, RouteBackupKey, RouteRestoreBackup, RouteGetRestore,
+	RouteMigrationTargets, RouteMigrateVolume, RouteVolumeMigrations, RouteGetVolumeMigration,
+	RouteGetTCPProxy, RoutePutTCPProxy, RouteDeleteTCPProxy,
+	RouteRotateCredentials, RouteCredentialRotations,
 	RouteCronState, RouteListCronRuns, RouteTriggerCron, RouteGetCronRun, RouteCronRunLogs,
 	RouteCancelCronRun, RoutePauseCron, RouteResumeCron, RouteCronPreview,
 }

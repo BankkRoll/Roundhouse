@@ -1,7 +1,7 @@
 /**
  * MSW handlers for the data-service routes (ADR 0004): `DATABASE_ROUTES`,
- * `DATA_BROWSER_ROUTES` and `BACKUP_ROUTES` in `apps/api/src/contracts`, against the
- * in-memory {@link db}. `contract.test.ts` validates every response against the API's
+ * `CREDENTIAL_ROUTES`, `DATA_BROWSER_ROUTES` and `BACKUP_ROUTES` in
+ * `apps/api/src/contracts`, against the in-memory {@link db}. `contract.test.ts` validates every response against the API's
  * schemas.
  *
  * Requests are validated with the routes' own zod schemas first (400), then the API's
@@ -10,8 +10,9 @@
  * for it), then 409 conflicts.
  *
  * There is no agent: the data browser answers from the seeded relations in
- * `./data-db`, and backups and restores advance one status each time they are read
- * (`queued` → `running` → `succeeded`), so polling sees them finish.
+ * `./data-db`, backups and restores advance one status each time they are read
+ * (`queued` → `running` → `succeeded`), and a volume move one phase each time it is
+ * read, so polling sees them finish.
  *
  * @module
  */
@@ -21,23 +22,36 @@ import {
   DATABASE_ENGINE_SPECS,
   DEFAULT_BACKUP_KEEP_LAST,
   DEFAULT_BACKUP_SCHEDULE,
+  databasePrincipals,
   databaseVersion,
   freeSlug,
   nextCronRun,
   nextCronRuns,
   RESERVED_SERVICE_SLUGS,
+  type ServiceDatabaseEngine,
   slugify,
   VOLUME_DELETE_GRACE_MS,
 } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
 import {
   BACKUP_ROUTES,
+  CREDENTIAL_ROUTES,
   DATA_BROWSER_ROUTES,
   DATABASE_ROUTES,
   policyOf,
 } from "../../../api/src/contracts";
+import { isAllowlistEntry } from "../features/databases/allowlist";
+import { defaultRestoreSlug } from "../features/databases/database-meta";
 import type { Backup, BackupPolicy, Restore } from "../lib/api/backups-client";
-import type { DatabaseQueryOp, DatabaseQueryResult, Volume } from "../lib/api/data-client";
+import type {
+  DatabasePrincipal,
+  DatabaseQueryOp,
+  DatabaseQueryResult,
+  MigrationTargets,
+  TcpProxy,
+  Volume,
+  VolumeMigration,
+} from "../lib/api/data-client";
 import type { Environment, Project, Service, ServiceConfig } from "../lib/api/deploy-types";
 import {
   apiError,
@@ -58,7 +72,12 @@ import { broadcastRealtime, startDeployment } from "./deploy-handlers";
 // Validation with the contract's schemas
 // -----------------------------------------------------------------------------
 
-const ROUTES = { ...DATABASE_ROUTES, ...DATA_BROWSER_ROUTES, ...BACKUP_ROUTES };
+const ROUTES = {
+  ...DATABASE_ROUTES,
+  ...CREDENTIAL_ROUTES,
+  ...DATA_BROWSER_ROUTES,
+  ...BACKUP_ROUTES,
+};
 type RouteName = keyof typeof ROUTES;
 
 interface ZodIssue {
@@ -364,6 +383,380 @@ function newBackup(
 }
 
 // -----------------------------------------------------------------------------
+// Adding a database
+// -----------------------------------------------------------------------------
+
+interface AddDatabaseInput {
+  project: Project;
+  environment: Environment;
+  engine: ServiceDatabaseEngine;
+  version: string;
+  sizeMb: number | undefined;
+  name: string;
+  /** Wanted slug; suffixed when taken, as the API does. */
+  slug: string;
+  userId: string;
+  deploy: boolean;
+  /** Extra metadata on the change set's audit record, e.g. the backup a restore reads. */
+  auditMetadata?: Record<string, unknown>;
+}
+
+/**
+ * Adds a database service as the API's change set does: the service, its config, a
+ * volume and generated credentials in every environment, the audit records, and the
+ * first deployment in `environment` when asked.
+ */
+function addDatabase(input: AddDatabaseInput) {
+  const { project, environment, userId } = input;
+  const rendered = renderMockDatabase(input.engine, input.version, input.sizeMb);
+  const now = Date.now();
+  const taken = new Set(
+    db.deploy.services
+      .filter((row) => row.project_id === project.id && !row.deleted)
+      .map((row) => row.slug),
+  );
+  const service: Service = {
+    id: nextId("svc"),
+    project_id: project.id,
+    name: input.name,
+    slug: freeSlug(taken, input.slug, RESERVED_SERVICE_SLUGS),
+    kind: "database",
+    icon: DATABASE_ENGINE_SPECS[input.engine].icon,
+    database: { engine: input.engine, version: input.version },
+    created_at: now,
+    updated_at: now,
+  };
+  db.deploy.services.push(service);
+  const environments = db.deploy.environments.filter((row) => row.project_id === project.id);
+  const volumes: Volume[] = [];
+  for (const env of environments) {
+    const config = {
+      id: nextId("cfg"),
+      service_id: service.id,
+      environment_id: env.id,
+      version: 1,
+      created_by: userId,
+      created_at: now,
+      ...rendered.config,
+    } as ServiceConfig;
+    db.deploy.configs.push(config);
+    const volume = makeVolume({
+      id: nextId("vol"),
+      project_id: project.id,
+      environment_id: env.id,
+      service_id: service.id,
+      mount_path: rendered.volume.mount_path,
+      size_mb: rendered.volume.size_mb,
+    });
+    db.data.volumes.push(volume);
+    volumes.push(volume);
+    db.deploy.variables.push(
+      ...rendered.variables.map(
+        (v): DbVariable => ({
+          scope: "service",
+          owner_id: service.id,
+          environment_id: env.id,
+          key: v.key,
+          value: v.value,
+          tier: v.secret ? "secret" : "plain",
+          locked: false,
+          available_at_build: false,
+          mount_as_file: false,
+          version: 1,
+          updated_at: now,
+          updated_by: userId,
+        }),
+      ),
+    );
+  }
+  const changeSetId = nextId("chg");
+  const workspaceId = project.workspace_id;
+  audit(workspaceId, userId, "change_set.created", "change_set", changeSetId, {
+    project_id: project.id,
+    environment_id: environment.id,
+    source: "api",
+    ops: 1,
+    engine: input.engine,
+    ...input.auditMetadata,
+  });
+  audit(workspaceId, userId, "service.created", "service", service.id, {
+    name: service.name,
+    project_id: project.id,
+  });
+  audit(workspaceId, userId, "change_set.applied", "change_set", changeSetId, {
+    project_id: project.id,
+    environment_id: environment.id,
+  });
+  const deploymentIds: string[] = [];
+  if (input.deploy) {
+    const config = db.deploy.configs.find(
+      (row) => row.service_id === service.id && row.environment_id === environment.id,
+    )!;
+    const deployment = startDeployment(
+      service,
+      environment.id,
+      config,
+      undefined,
+      "manual",
+      userId,
+    );
+    deploymentIds.push(deployment.id);
+    audit(workspaceId, userId, "deployment.created", "deployment", deployment.id, {
+      service_id: service.id,
+      environment_id: environment.id,
+    });
+  }
+  return { service, volumes, rendered, changeSetId, deploymentIds };
+}
+
+// -----------------------------------------------------------------------------
+// Volume moves
+// -----------------------------------------------------------------------------
+
+/** Statuses the API moves a volume from. */
+const MOVABLE: readonly Volume["status"][] = ["ready", "degraded"];
+
+/** Copy throughput the downtime estimate assumes without a previous backup. */
+const COPY_BYTES_PER_S = 20 * MiB;
+
+function nodeById(nodeId: string | null) {
+  return db.nodes.find((row) => row.id === nodeId);
+}
+
+/** Why a node can't take a volume, in the API's words; `null` when it can. */
+function ineligibility(node: (typeof db.nodes)[number], volume: Volume): string | null {
+  if (node.id === volume.node_id) return "It already holds the volume";
+  if (node.status !== "online") return "It isn't online";
+  if (!node.capabilities?.docker) return "It doesn't run Docker workloads";
+  return null;
+}
+
+function migrationTargetsOf(volume: Volume, workspaceId: string): MigrationTargets {
+  const bytes = volume.used_bytes ?? volume.size_mb * MiB;
+  return {
+    volume_id: volume.id,
+    source_node_id: volume.node_id,
+    estimated_downtime_ms: Math.round(((2 * bytes) / COPY_BYTES_PER_S) * 1000) + 60_000,
+    targets: db.nodes
+      .filter((node) => node.workspace_id === workspaceId)
+      .map((node) => {
+        const reason = ineligibility(node, volume);
+        return {
+          node_id: node.id,
+          name: node.name,
+          eligible: reason === null,
+          reason,
+          quota_mode: node.status === "online" ? ("xfs_project" as const) : null,
+        };
+      }),
+  };
+}
+
+/**
+ * Moves a running migration one phase on, as the workflow would between two reads. With
+ * `failMigrations` set it fails after the copy out and rolls back to the source.
+ */
+function advanceMigration(migration: VolumeMigration): VolumeMigration {
+  if (migration.status === "succeeded" || migration.status === "failed") return migration;
+  const volume = db.data.volumes.find((row) => row.id === migration.volume_id);
+  const service = liveService(migration.service_id);
+  const project = service ? liveProject(service.project_id) : undefined;
+  const bytes = volume?.used_bytes ?? (volume?.size_mb ?? 0) * MiB;
+  const now = Date.now();
+  const system = (action: "volume.migrated" | "volume.migration_failed") => {
+    if (!project) return;
+    recordAudit({
+      workspaceId: project.workspace_id,
+      actorType: "system",
+      actorId: null,
+      action,
+      targetType: "volume",
+      targetId: migration.volume_id,
+      metadata: { migration_id: migration.id, service_id: migration.service_id },
+    });
+  };
+  switch (migration.phase) {
+    case "queued":
+      Object.assign(migration, { status: "running", phase: "preparing_target", started_at: now });
+      break;
+    case "preparing_target":
+      migration.phase = "stopping";
+      break;
+    case "stopping":
+      Object.assign(migration, { phase: "copying_out", copied_bytes: Math.round(bytes / 2) });
+      break;
+    case "copying_out":
+      if (db.data.knobs.failMigrations) {
+        Object.assign(migration, {
+          phase: "rolling_back",
+          error: "The copy on the target didn't match its SHA-256",
+        });
+      } else {
+        Object.assign(migration, { phase: "copying_in", copied_bytes: bytes });
+      }
+      break;
+    case "copying_in": {
+      const snapshot = service
+        ? newBackup(service, migration.environment_id, {
+            trigger: "migration",
+            pinned: false,
+            requested_by: migration.requested_by,
+            method: "snapshot",
+            status: "succeeded",
+            node_id: migration.source_node_id,
+            started_at: migration.started_at,
+            finished_at: now,
+            part_count: 1,
+            bytes_raw: bytes,
+            bytes_stored: Math.round(bytes / 4),
+            sha256: "c3".repeat(32),
+          })
+        : null;
+      Object.assign(migration, { phase: "starting", backup_id: snapshot?.id ?? null });
+      break;
+    }
+    case "starting": {
+      const target = nodeById(migration.target_node_id);
+      Object.assign(migration, {
+        phase: "done",
+        status: "succeeded",
+        finished_at: now,
+        cleanup_after: now + VOLUME_DELETE_GRACE_MS,
+      });
+      if (volume) {
+        touch(volume, {
+          status: "ready",
+          node_id: migration.target_node_id,
+          node_name: target?.name ?? null,
+        });
+      }
+      system("volume.migrated");
+      break;
+    }
+    case "rolling_back":
+      Object.assign(migration, { status: "failed", finished_at: now });
+      if (volume) touch(volume, { status: "ready" });
+      system("volume.migration_failed");
+      break;
+    case "done":
+      break;
+  }
+  return migration;
+}
+
+// -----------------------------------------------------------------------------
+// TCP proxies
+// -----------------------------------------------------------------------------
+
+/** First public port the mock hands out, inside `TCP_PROXY_PORT_RANGE`. */
+const FIRST_PUBLIC_PORT = 24_101;
+
+function ipv4ToInt(ip: string): number {
+  return ip.split(".").reduce((n, octet) => n * 256 + Number(octet), 0);
+}
+
+function intToIpv4(n: number): string {
+  return [24, 16, 8, 0].map((shift) => Math.floor(n / 2 ** shift) % 256).join(".");
+}
+
+/**
+ * Validates and normalises an allowlist as the API does: a bare address becomes a /32
+ * (or /128), IPv4 host bits are cleared, duplicates dropped.
+ */
+function normalizeAllowlist(
+  input: readonly string[],
+  acknowledgeOpen: boolean,
+): string[] | Response {
+  const out: string[] = [];
+  const invalid: string[] = [];
+  for (const raw of input) {
+    const entry = raw.trim().toLowerCase();
+    if (!isAllowlistEntry(entry)) {
+      invalid.push(raw);
+      continue;
+    }
+    const [address = "", bits] = entry.split("/");
+    const v4 = !address.includes(":");
+    let normalized = `${address}/${bits ?? (v4 ? "32" : "128")}`;
+    if (v4) {
+      const size = 2 ** (32 - Number(bits ?? 32));
+      normalized = `${intToIpv4(Math.floor(ipv4ToInt(address) / size) * size)}/${bits ?? 32}`;
+    }
+    if (!out.includes(normalized)) out.push(normalized);
+  }
+  if (invalid.length > 0) {
+    return apiError(
+      422,
+      "invalid_request",
+      `Not an IP address or CIDR block: ${invalid.slice(0, 5).join(", ")}`,
+      invalid.map((value) => ({ field: "allowed_cidrs", code: "invalid_cidr", message: value })),
+    );
+  }
+  if (out.some((cidr) => cidr.endsWith("/0")) && !acknowledgeOpen) {
+    return apiError(
+      422,
+      "confirmation_required",
+      "0.0.0.0/0 opens the port to the whole internet, unencrypted unless the client and the database negotiate TLS; send acknowledge_open to continue",
+    );
+  }
+  return out;
+}
+
+/** The node running a service's active replica in an environment. */
+function replicaNode(serviceId: string, environmentId: string) {
+  const deployment = db.deploy.deployments.find(
+    (row) =>
+      row.service_id === serviceId &&
+      row.environment_id === environmentId &&
+      row.status === "active",
+  );
+  const placement = deployment
+    ? db.deploy.placements.find((row) => row.deployment_id === deployment.id)
+    : undefined;
+  return placement ? nodeById(placement.node_id) : undefined;
+}
+
+function presentTcpProxy(proxy: TcpProxy): TcpProxy {
+  const node = replicaNode(proxy.service_id, proxy.environment_id);
+  return {
+    ...proxy,
+    host: node ? (node.hostname ?? node.public_ip) : null,
+    node_id: node?.id ?? null,
+    status: !node ? "pending" : db.data.knobs.tcpProxyUnsupported ? "unsupported" : "active",
+    open_to_all: proxy.allowed_cidrs.some((cidr) => cidr.endsWith("/0")),
+  };
+}
+
+function tcpProxyOf(serviceId: string, environmentId: string): TcpProxy | undefined {
+  return db.data.tcpProxies.find(
+    (row) => row.service_id === serviceId && row.environment_id === environmentId,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Credential rotations
+// -----------------------------------------------------------------------------
+
+/** Services of the project whose variables reference one of this service's. */
+function servicesReferencing(service: Service, environmentId: string): Service[] {
+  const marker = `\${{${service.slug}.`;
+  const ids = new Set(
+    db.deploy.variables
+      .filter(
+        (row) =>
+          row.scope === "service" &&
+          row.owner_id !== service.id &&
+          row.environment_id === environmentId &&
+          row.value.includes(marker),
+      )
+      .map((row) => row.owner_id),
+  );
+  return db.deploy.services.filter(
+    (row) => ids.has(row.id) && row.project_id === service.project_id && !row.deleted,
+  );
+}
+
+// -----------------------------------------------------------------------------
 // Data browser
 // -----------------------------------------------------------------------------
 
@@ -540,6 +933,7 @@ interface PolicyInput {
 interface RestoreInput {
   mode: "in_place" | "new_service";
   target_environment_id?: string;
+  slug?: string;
   confirm: string;
   skip_safety_backup?: boolean;
 }
@@ -600,117 +994,31 @@ export const dataHandlers = [
         `${DATABASE_ENGINE_SPECS[body.engine].name} has no version ${body.version}`,
       );
     }
-    const rendered = renderMockDatabase(body.engine, version.version, body.size_mb);
-    const userId = granted.guard.user.id;
-    const now = Date.now();
-    const name = body.name ?? DATABASE_ENGINE_SPECS[body.engine].name;
-    const taken = new Set(
-      db.deploy.services
-        .filter((row) => row.project_id === project!.id && !row.deleted)
-        .map((row) => row.slug),
-    );
-    const service: Service = {
-      id: nextId("svc"),
-      project_id: project!.id,
-      name,
-      slug: freeSlug(taken, body.slug ?? slugify(name, 40, "service"), RESERVED_SERVICE_SLUGS),
-      kind: "database",
-      icon: DATABASE_ENGINE_SPECS[body.engine].icon,
-      database: { engine: body.engine, version: version.version },
-      created_at: now,
-      updated_at: now,
-    };
-    db.deploy.services.push(service);
-    const environments = db.deploy.environments.filter((row) => row.project_id === project!.id);
-    const volumes: Volume[] = [];
-    for (const env of environments) {
-      const config = {
-        id: nextId("cfg"),
-        service_id: service.id,
-        environment_id: env.id,
-        version: 1,
-        created_by: userId,
-        created_at: now,
-        ...rendered.config,
-      } as ServiceConfig;
-      db.deploy.configs.push(config);
-      const volume = makeVolume({
-        id: nextId("vol"),
-        project_id: project!.id,
-        environment_id: env.id,
-        service_id: service.id,
-        mount_path: rendered.volume.mount_path,
-        size_mb: rendered.volume.size_mb,
-      });
-      db.data.volumes.push(volume);
-      volumes.push(volume);
-      db.deploy.variables.push(
-        ...rendered.variables.map(
-          (v): DbVariable => ({
-            scope: "service",
-            owner_id: service.id,
-            environment_id: env.id,
-            key: v.key,
-            value: v.value,
-            tier: v.secret ? "secret" : "plain",
-            locked: false,
-            available_at_build: false,
-            mount_as_file: false,
-            version: 1,
-            updated_at: now,
-            updated_by: userId,
-          }),
-        ),
-      );
-    }
-    const changeSetId = nextId("chg");
-    const workspaceId = project!.workspace_id;
-    audit(workspaceId, userId, "change_set.created", "change_set", changeSetId, {
-      project_id: project!.id,
-      environment_id: environment.id,
-      source: "api",
-      ops: 1,
+    const added = addDatabase({
+      project: project!,
+      environment,
       engine: body.engine,
+      version: version.version,
+      sizeMb: body.size_mb,
+      name: body.name ?? DATABASE_ENGINE_SPECS[body.engine].name,
+      slug:
+        body.slug ?? slugify(body.name ?? DATABASE_ENGINE_SPECS[body.engine].name, 40, "service"),
+      userId: granted.guard.user.id,
+      deploy: body.deploy,
     });
-    audit(workspaceId, userId, "service.created", "service", service.id, {
-      name,
-      project_id: project!.id,
-    });
-    audit(workspaceId, userId, "change_set.applied", "change_set", changeSetId, {
-      project_id: project!.id,
-      environment_id: environment.id,
-    });
-    const deploymentIds: string[] = [];
-    if (body.deploy) {
-      const config = db.deploy.configs.find(
-        (row) => row.service_id === service.id && row.environment_id === environment.id,
-      )!;
-      const deployment = startDeployment(
-        service,
-        environment.id,
-        config,
-        undefined,
-        "manual",
-        userId,
-      );
-      deploymentIds.push(deployment.id);
-      audit(workspaceId, userId, "deployment.created", "deployment", deployment.id, {
-        service_id: service.id,
-        environment_id: environment.id,
-      });
-    }
+    const { service } = added;
     broadcastRealtime(project!.id, { type: "service.updated", service });
     return HttpResponse.json(
       {
-        change_set_id: changeSetId,
+        change_set_id: added.changeSetId,
         service,
         engine: body.engine,
         version: version.version,
-        volumes,
-        variables: rendered.variables
+        volumes: added.volumes,
+        variables: added.rendered.variables
           .map((v) => ({ key: v.key, secret: v.secret }))
           .sort((a, b) => (a.key < b.key ? -1 : 1)),
-        deployment_ids: deploymentIds,
+        deployment_ids: added.deploymentIds,
         skipped: [],
       },
       { status: 201 },
@@ -800,6 +1108,378 @@ export const dataHandlers = [
       },
     );
     return HttpResponse.json(volume);
+  }),
+
+  // ---------------------------------------------------------------------------
+  // Volume moves
+  // ---------------------------------------------------------------------------
+  http.get(mswPath("listMigrationTargets"), async ({ request, params }) => {
+    const input = await validate("listMigrationTargets", request, params);
+    if (!input.ok) return input.response;
+    const found = volumeAccess(input.params.volumeId ?? "", actionOf("listMigrationTargets"));
+    if (!found.ok) return found.response;
+    return HttpResponse.json(migrationTargetsOf(found.volume, found.project.workspace_id));
+  }),
+
+  http.post(mswPath("migrateVolume"), async ({ request, params }) => {
+    const input = await validate<{ target_node_id: string; confirm: string }>(
+      "migrateVolume",
+      request,
+      params,
+    );
+    if (!input.ok) return input.response;
+    const found = volumeAccess(input.params.volumeId ?? "", actionOf("migrateVolume"));
+    if (!found.ok) return found.response;
+    if (!can(found.guard.membership.role, "deployments:create")) {
+      return apiError(
+        403,
+        "forbidden",
+        "Moving a volume redeploys its service: it needs deployments:create",
+      );
+    }
+    const stale = staleSession();
+    if (stale) return stale;
+    const { volume, service, project } = found;
+    if (input.body.confirm !== service.slug) {
+      return invalid("confirm must equal the service's slug");
+    }
+    if (!db.data.storage) return storageNotConfigured();
+    if (!volume.node_id || !MOVABLE.includes(volume.status)) {
+      return conflict(
+        `The volume is ${volume.status.replace(/_/g, " ")}; only a ready volume moves`,
+      );
+    }
+    const target = db.nodes.find(
+      (row) => row.id === input.body.target_node_id && row.workspace_id === project.workspace_id,
+    );
+    if (!target) return notFound("Node");
+    const reason = ineligibility(target, volume);
+    if (reason) {
+      return apiError(422, "migration_target_ineligible", `${target.name}: ${reason}`);
+    }
+    const now = Date.now();
+    const migration: VolumeMigration = {
+      id: nextId("mig"),
+      volume_id: volume.id,
+      service_id: volume.service_id,
+      environment_id: volume.environment_id,
+      source_node_id: volume.node_id,
+      target_node_id: target.id,
+      status: "queued",
+      phase: "queued",
+      backup_id: null,
+      deployment_id: null,
+      copied_bytes: null,
+      error: null,
+      requested_by: found.guard.user.id,
+      cleanup_after: null,
+      started_at: null,
+      finished_at: null,
+      created_at: now,
+    };
+    db.data.migrations.push(migration);
+    touch(volume, { status: "migrating" });
+    audit(
+      project.workspace_id,
+      found.guard.user.id,
+      "volume.migration_started",
+      "volume",
+      volume.id,
+      {
+        project_id: project.id,
+        service_id: volume.service_id,
+        environment_id: volume.environment_id,
+        migration_id: migration.id,
+        source_node_id: volume.node_id,
+        target_node_id: target.id,
+        size_mb: volume.size_mb,
+      },
+    );
+    return HttpResponse.json(migration, { status: 202 });
+  }),
+
+  http.get(mswPath("listVolumeMigrations"), async ({ request, params }) => {
+    const input = await validate("listVolumeMigrations", request, params);
+    if (!input.ok) return input.response;
+    const found = volumeAccess(input.params.volumeId ?? "", actionOf("listVolumeMigrations"));
+    if (!found.ok) return found.response;
+    const migrations = db.data.migrations
+      .filter((row) => row.volume_id === found.volume.id)
+      .reverse()
+      .sort((a, b) => b.created_at - a.created_at)
+      .slice(0, 20);
+    return HttpResponse.json({ migrations });
+  }),
+
+  http.get(mswPath("getVolumeMigration"), async ({ request, params }) => {
+    const input = await validate("getVolumeMigration", request, params);
+    if (!input.ok) return input.response;
+    const migration = db.data.migrations.find((row) => row.id === input.params.migrationId);
+    if (!migration) return currentUser() ? notFound("Volume migration") : unauthorized();
+    const found = volumeAccess(migration.volume_id, actionOf("getVolumeMigration"));
+    if (!found.ok) {
+      return found.response.status === 404 ? notFound("Volume migration") : found.response;
+    }
+    return HttpResponse.json(advanceMigration(migration));
+  }),
+
+  // ---------------------------------------------------------------------------
+  // TCP proxies
+  // ---------------------------------------------------------------------------
+  http.get(mswPath("getTcpProxy"), async ({ request, params }) => {
+    const input = await validate("getTcpProxy", request, params);
+    if (!input.ok) return input.response;
+    const found = serviceAccess(input.params.serviceId ?? "", actionOf("getTcpProxy"));
+    if (!found.ok) return found.response;
+    const env = environmentOf(found.project.id, input.query.environment_id);
+    if (!env) return notFound("Environment");
+    const proxy = tcpProxyOf(found.service.id, env.id);
+    return proxy ? HttpResponse.json(presentTcpProxy(proxy)) : notFound("TCP proxy");
+  }),
+
+  http.put(mswPath("putTcpProxy"), async ({ request, params }) => {
+    const input = await validate<{
+      environment_id: string;
+      container_port?: number;
+      allowed_cidrs: string[];
+      acknowledge_open?: boolean;
+    }>("putTcpProxy", request, params);
+    if (!input.ok) return input.response;
+    const body = input.body;
+    const found = serviceAccess(input.params.serviceId ?? "", actionOf("putTcpProxy"));
+    if (!found.ok) return found.response;
+    const env = environmentOf(found.project.id, body.environment_id);
+    if (!env) return notFound("Environment");
+    const stale = staleSession();
+    if (stale) return stale;
+    const { service, project } = found;
+    const allowed = normalizeAllowlist(body.allowed_cidrs, body.acknowledge_open ?? false);
+    if (allowed instanceof Response) return allowed;
+    const config = db.deploy.configs
+      .filter((row) => row.service_id === service.id && row.environment_id === env.id)
+      .sort((a, b) => b.version - a.version)[0];
+    if (!config) return conflict(`${service.name} has no config in ${env.name}`);
+    if (config.deploy.replicas > 1) {
+      return apiError(
+        422,
+        "volume_requires_single_replica",
+        "Only a single-replica service can publish a TCP port; scale it to one replica first",
+      );
+    }
+    const node = replicaNode(service.id, env.id);
+    if (node && db.data.knobs.tcpProxyUnsupported) {
+      return apiError(
+        409,
+        "tcp_proxy_unsupported",
+        `The agent on ${node.name} can't enforce a source allowlist; upgrade it to publish ports`,
+      );
+    }
+    const containerPort =
+      body.container_port ??
+      config.networking.port ??
+      (service.database ? DATABASE_ENGINE_SPECS[service.database.engine].port : 8080);
+    const existing = tcpProxyOf(service.id, env.id);
+    const now = Date.now();
+    let saved: TcpProxy;
+    if (existing) {
+      saved = Object.assign(existing, {
+        container_port: containerPort,
+        allowed_cidrs: allowed,
+        updated_at: now,
+      });
+    } else {
+      const used = new Set(db.data.tcpProxies.map((row) => row.public_port));
+      let port = FIRST_PUBLIC_PORT;
+      while (used.has(port)) port += 1;
+      saved = {
+        id: nextId("tcp"),
+        service_id: service.id,
+        environment_id: env.id,
+        container_port: containerPort,
+        public_port: port,
+        allowed_cidrs: allowed,
+        host: null,
+        node_id: null,
+        status: "pending",
+        open_to_all: false,
+        created_at: now,
+        updated_at: now,
+      };
+      db.data.tcpProxies.push(saved);
+    }
+    audit(
+      project.workspace_id,
+      found.guard.user.id,
+      existing ? "tcp_proxy.updated" : "tcp_proxy.enabled",
+      "service",
+      service.id,
+      {
+        project_id: project.id,
+        environment_id: env.id,
+        tcp_proxy_id: saved.id,
+        container_port: containerPort,
+        public_port: saved.public_port,
+        allowed_cidrs: allowed,
+        open_to_all: allowed.some((cidr) => cidr.endsWith("/0")),
+      },
+    );
+    return HttpResponse.json(presentTcpProxy(saved));
+  }),
+
+  http.delete(mswPath("deleteTcpProxy"), async ({ request, params }) => {
+    const input = await validate("deleteTcpProxy", request, params);
+    if (!input.ok) return input.response;
+    const found = serviceAccess(input.params.serviceId ?? "", actionOf("deleteTcpProxy"));
+    if (!found.ok) return found.response;
+    const env = environmentOf(found.project.id, input.query.environment_id);
+    if (!env) return notFound("Environment");
+    const proxy = tcpProxyOf(found.service.id, env.id);
+    if (!proxy) return notFound("TCP proxy");
+    db.data.tcpProxies = db.data.tcpProxies.filter((row) => row !== proxy);
+    audit(
+      found.project.workspace_id,
+      found.guard.user.id,
+      "tcp_proxy.disabled",
+      "service",
+      found.service.id,
+      {
+        project_id: found.project.id,
+        environment_id: env.id,
+        tcp_proxy_id: proxy.id,
+        public_port: proxy.public_port,
+      },
+    );
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ---------------------------------------------------------------------------
+  // Credential rotations
+  // ---------------------------------------------------------------------------
+  http.post(mswPath("rotateDatabaseCredentials"), async ({ request, params }) => {
+    const input = await validate<{
+      environment_id: string;
+      principals?: DatabasePrincipal[];
+      confirm: string;
+    }>("rotateDatabaseCredentials", request, params);
+    if (!input.ok) return input.response;
+    const body = input.body;
+    const found = serviceAccess(
+      input.params.serviceId ?? "",
+      actionOf("rotateDatabaseCredentials"),
+    );
+    if (!found.ok) return found.response;
+    const { service, project } = found;
+    const userId = found.guard.user.id;
+    for (const action of ["variables:manage", "deployments:create"] as const) {
+      if (!can(found.guard.membership.role, action)) {
+        return apiError(
+          403,
+          "forbidden",
+          `Rotating credentials stores variables and redeploys: it needs ${action}`,
+        );
+      }
+    }
+    const env = environmentOf(project.id, body.environment_id);
+    if (!env) return notFound("Environment");
+    const stale = staleSession();
+    if (stale) return stale;
+    if (body.confirm !== service.slug) return invalid("confirm must equal the service's slug");
+    if (!service.database) return conflict("This service is not a database");
+    const engine = service.database.engine;
+    const available = databasePrincipals(engine).map((p) => p.principal);
+    const unknown = body.principals?.find((principal) => !available.includes(principal));
+    if (unknown) {
+      return apiError(
+        422,
+        "invalid_request",
+        `${DATABASE_ENGINE_SPECS[engine].name} has no ${unknown} principal`,
+      );
+    }
+    const refused = queryTarget(service, env.id);
+    if (refused) return refused;
+    const now = Date.now();
+    let rotation = db.data.rotations.find(
+      (row) =>
+        row.service_id === service.id && row.environment_id === env.id && row.status === "running",
+    );
+    if (!rotation) {
+      const wanted = body.principals ?? available;
+      rotation = {
+        id: nextId("rot"),
+        service_id: service.id,
+        environment_id: env.id,
+        status: "running",
+        principals: available.filter((principal) => wanted.includes(principal)),
+        applied: [],
+        change_set_id: null,
+        deployment_ids: [],
+        error: null,
+        requested_by: userId,
+        created_at: now,
+        finished_at: null,
+      };
+      db.data.rotations.push(rotation);
+    }
+    if (db.data.knobs.interruptRotation) {
+      db.data.knobs.interruptRotation = false;
+      Object.assign(rotation, {
+        applied: rotation.principals.slice(0, 1),
+        error: "The database's server didn't answer in time",
+      });
+      return apiError(
+        504,
+        "query_timeout",
+        "The database's server didn't answer; the rotation is kept and the next request finishes it",
+      );
+    }
+    const changeSetId = nextId("chg");
+    const deploymentIds = [service, ...servicesReferencing(service, env.id)].flatMap((target) => {
+      const config = db.deploy.configs
+        .filter((row) => row.service_id === target.id && row.environment_id === env.id)
+        .sort((a, b) => b.version - a.version)[0];
+      return config
+        ? [startDeployment(target, env.id, config, undefined, "change_set", userId).id]
+        : [];
+    });
+    Object.assign(rotation, {
+      status: "succeeded",
+      applied: [...rotation.principals],
+      change_set_id: changeSetId,
+      deployment_ids: deploymentIds,
+      error: null,
+      finished_at: now,
+    });
+    audit(project.workspace_id, userId, "change_set.created", "change_set", changeSetId, {
+      project_id: project.id,
+      environment_id: env.id,
+      source: "api",
+    });
+    audit(project.workspace_id, userId, "change_set.applied", "change_set", changeSetId, {
+      project_id: project.id,
+      environment_id: env.id,
+    });
+    audit(project.workspace_id, userId, "database.credentials_rotated", "service", service.id, {
+      environment_id: env.id,
+      rotation_id: rotation.id,
+      principals: rotation.principals,
+      deployment_ids: deploymentIds,
+    });
+    return HttpResponse.json(rotation);
+  }),
+
+  http.get(mswPath("listCredentialRotations"), async ({ request, params }) => {
+    const input = await validate("listCredentialRotations", request, params);
+    if (!input.ok) return input.response;
+    const found = serviceAccess(input.params.serviceId ?? "", actionOf("listCredentialRotations"));
+    if (!found.ok) return found.response;
+    const env = environmentOf(found.project.id, input.query.environment_id);
+    if (!env) return notFound("Environment");
+    const rotations = db.data.rotations
+      .filter((row) => row.service_id === found.service.id && row.environment_id === env.id)
+      .reverse()
+      .sort((a, b) => b.created_at - a.created_at)
+      .slice(0, 20);
+    return HttpResponse.json({ rotations });
   }),
 
   // ---------------------------------------------------------------------------
@@ -1096,14 +1776,68 @@ export const dataHandlers = [
       return invalid("confirm must equal the service's slug");
     }
     if (body.mode === "new_service") {
-      if (!can(found.guard.membership.role, "services:manage")) {
-        return apiError(403, "forbidden", "Restoring into a new service needs services:manage");
+      const target = environmentOf(project.id, body.target_environment_id ?? backup.environment_id);
+      if (!target) return notFound("Environment");
+      for (const action of ["services:manage", "variables:manage", "deployments:create"] as const) {
+        if (!can(found.guard.membership.role, action)) {
+          return apiError(
+            403,
+            "forbidden",
+            `Restoring into a new service creates and deploys a database: it needs ${action}`,
+          );
+        }
       }
-      return apiError(
-        501,
-        "restore_mode_unsupported",
-        "Restoring into a new service isn't available yet; restore in place instead",
-      );
+      const engine = (backup.engine as ServiceDatabaseEngine | null) ?? service.database?.engine;
+      if (!engine || backup.method !== "dump") {
+        return apiError(
+          422,
+          "restore_mode_unsupported",
+          engine
+            ? "A snapshot of a database carries its passwords; restore it in place, or restore a dump into a new service"
+            : "Only a database backup can be restored into a new service; restore this snapshot in place",
+        );
+      }
+      if (backup.status !== "succeeded") return conflict("Only a succeeded backup can be restored");
+      if (!db.data.storage) return storageNotConfigured();
+      const now = Date.now();
+      const added = addDatabase({
+        project,
+        environment: target,
+        engine,
+        version: databaseVersion(engine, backup.engine_version ?? service.database?.version)!
+          .version,
+        sizeMb: volumeOf(backup.service_id, backup.environment_id)?.size_mb,
+        name: `${service.name} restore ${new Date(now).toISOString().slice(0, 10)}`.slice(0, 100),
+        slug: body.slug ?? defaultRestoreSlug(service.slug, now),
+        userId: found.guard.user.id,
+        deploy: true,
+        auditMetadata: { backup_id: backup.id },
+      });
+      const restore: Restore = {
+        id: nextId("rst"),
+        backup_id: backup.id,
+        mode: "new_service",
+        target_service_id: added.service.id,
+        target_environment_id: target.id,
+        safety_backup_id: null,
+        status: "queued",
+        error: null,
+        requested_by: found.guard.user.id,
+        started_at: null,
+        finished_at: null,
+        created_at: now,
+      };
+      db.data.restores.push(restore);
+      audit(project.workspace_id, found.guard.user.id, "restore.started", "restore", restore.id, {
+        project_id: project.id,
+        backup_id: backup.id,
+        mode: "new_service",
+        source_service_id: backup.service_id,
+        service_id: added.service.id,
+        environment_id: target.id,
+      });
+      broadcastRealtime(project.id, { type: "service.updated", service: added.service });
+      return HttpResponse.json(restore, { status: 202 });
     }
     if (body.target_environment_id && body.target_environment_id !== backup.environment_id) {
       return invalid("in_place restores into the backup's environment");

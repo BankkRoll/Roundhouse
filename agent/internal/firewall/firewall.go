@@ -1,5 +1,10 @@
-// Package firewall keeps containers on the agent's bridge networks away from
-// the cloud metadata endpoint.
+// Package firewall holds the agent's iptables rules.
+//
+// Responsibilities:
+//   - keep containers on the agent's bridge networks away from the cloud
+//     metadata endpoint ([Rules]);
+//   - enforce the TCP proxy's source allowlist on published ports
+//     ([Publisher], ADR 0004 "TCP proxy").
 //
 // Cloud providers serve instance credentials and user data (which may hold
 // the node's join token) at 169.254.169.254 (fd00:ec2::254 on AWS IPv6).

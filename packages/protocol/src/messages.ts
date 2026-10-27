@@ -129,6 +129,14 @@ export const CapabilitiesSchema = z.object({
    * Sent from `MESH_PROTOCOL_VERSION`.
    */
   ingress: z.boolean().optional(),
+  /**
+   * The node enforces `publish_allowed_cidrs` with a firewall rule it
+   * installs before the port is published, so it runs workloads with
+   * `ports[].publish` (ADR 0004, "TCP proxy"). Absent means `false`.
+   */
+  tcp_proxy: z.boolean().optional(),
+  /** The node's query runner accepts the `set_password` op. Absent means `false`. */
+  db_set_password: z.boolean().optional(),
 });
 
 /** Optional features a node can offer. */

@@ -70,6 +70,8 @@ export const ID_PREFIXES = {
   dbQuery: "dbq",
   /** A published TCP port of a single-replica service (ADR 0004). */
   tcpProxy: "tcp",
+  /** One rotation of a database's credentials. */
+  credentialRotation: "rot",
   /** A control-plane-issued TLS certificate (ADR 0009); also names its workflow instances. */
   certificate: "cer",
   /** One run of a cron service (ADR 0010); also its workflow instance ID. */

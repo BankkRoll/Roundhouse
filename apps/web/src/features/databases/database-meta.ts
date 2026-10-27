@@ -81,6 +81,21 @@ export function variableReference(serviceSlug: string, key: string): string {
   return `\${{${serviceSlug}.${key}}}`;
 }
 
+/**
+ * The slug the API gives a restored copy when none is typed, as `restoreServiceSlug`
+ * builds it: `<slug>-restore-<yyyymmdd>` in UTC, leaving room for a `-2` suffix.
+ *
+ * @param slug - The backed-up service's slug.
+ * @param at - When the restore starts.
+ * @returns The default slug.
+ * @example
+ * defaultRestoreSlug("db", Date.UTC(2026, 9, 27)); // "db-restore-20261027"
+ */
+export function defaultRestoreSlug(slug: string, at: number): string {
+  const suffix = `-restore-${new Date(at).toISOString().slice(0, 10).replace(/-/g, "")}`;
+  return `${slug.slice(0, 40 - suffix.length - 3).replace(/-+$/, "") || "db"}${suffix}`;
+}
+
 function isBinary(value: unknown): value is { $b64: string } {
   return (
     typeof value === "object" &&

@@ -5,9 +5,10 @@ import {
 } from "@roundhouse/shared";
 import { Badge, SettingsRow, SettingsSection } from "@roundhouse/ui";
 import type { Environment, Service } from "../../lib/api/deploy-types";
-import { usePermissions } from "../../lib/permissions";
 import { useServiceVariables } from "../../queries/variables";
+import { useEnvironmentGate } from "../access/environment-gate";
 import { CopyButton } from "./copy-button";
+import { CredentialRotationRows } from "./credential-rotation";
 import {
   databaseVariableNames,
   databaseVersionLabel,
@@ -27,13 +28,13 @@ export interface DatabaseSectionProps {
  * A database service's engine and how other services connect to it, as settings rows:
  * the private host and port, and each connection variable as a `${{slug.KEY}}` reference
  * with a copy button. Plain values (a user name) are shown; secret ones only by their
- * fingerprint, since the API never returns them.
+ * fingerprint, since the API never returns them. Credentials can be rotated from here.
  *
  * @param props - Workspace, the database service and the selected environment.
  * @returns The section.
  */
 export function DatabaseSection({ workspaceId, service, environment }: DatabaseSectionProps) {
-  const { can } = usePermissions(workspaceId);
+  const { can } = useEnvironmentGate(workspaceId, service.project_id, environment);
   const { engine, version } = service.database;
   const spec = DATABASE_ENGINE_SPECS[engine];
   const variables = useServiceVariables(service.id, environment?.id, can("variables:read"));
@@ -124,9 +125,11 @@ export function DatabaseSection({ workspaceId, service, environment }: DatabaseS
             })}
         </ul>
       </SettingsRow>
-      <SettingsRow
-        label="Credentials"
-        description="Generated when the database was added and stored write-only. Changing them isn't supported yet."
+      <CredentialRotationRows
+        workspaceId={workspaceId}
+        service={service}
+        engine={engine}
+        environment={environment}
       />
     </SettingsSection>
   );

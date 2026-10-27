@@ -2208,6 +2208,24 @@
                 "type"
               ],
               "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "set_password"
+                },
+                "user": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$"
+                }
+              },
+              "required": [
+                "type",
+                "user"
+              ],
+              "additionalProperties": false
             }
           ]
         },

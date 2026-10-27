@@ -157,6 +157,11 @@ func (s *mySession) run(ctx context.Context) (*resultSet, error) {
 		})
 	case protocol.DBOpProvisionReadonly:
 		return set, s.provision(ctx)
+	case protocol.DBOpSetPassword:
+		if err := s.setPassword(ctx); err != nil {
+			return nil, err
+		}
+		return passwordSet(s.req), nil
 	}
 	return nil, usageError("unsupported operation")
 }
@@ -330,6 +335,47 @@ func (s *mySession) provision(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// setPassword sets the new password on every host the user exists on (the
+// template's root is both root@'%' and root@'localhost').
+func (s *mySession) setPassword(ctx context.Context) error {
+	user := s.req.op.User
+	rows, err := s.conn.QueryContext(ctx, "SELECT Host FROM mysql.user WHERE User = ? ORDER BY Host", user)
+	if err != nil {
+		return err
+	}
+	var hosts []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			rows.Close()
+			return err
+		}
+		hosts = append(hosts, h)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(hosts) == 0 {
+		return usageError(fmt.Sprintf("user %q does not exist", user))
+	}
+	var mode string
+	if err := s.conn.QueryRowContext(ctx, "SELECT @@SESSION.sql_mode").Scan(&mode); err != nil {
+		return err
+	}
+	nbe := strings.Contains(strings.ToUpper(mode), "NO_BACKSLASH_ESCAPES")
+	lit := quoteMySQLString(s.req.cred.NewPassword, nbe)
+	specs := make([]string, len(hosts))
+	for i, h := range hosts {
+		specs[i] = quoteMySQLString(user, nbe) + "@" + quoteMySQLString(h, nbe) + " IDENTIFIED BY " + lit
+	}
+	// NOTE: one statement for every host, so the accounts change together
+	// (account management is atomic DDL since MySQL 8.0). The server
+	// rewrites the password out of its general and slow logs.
+	_, err = s.conn.ExecContext(ctx, "ALTER USER "+strings.Join(specs, ", "))
+	return err
 }
 
 // isNoSuchGrant reports MySQL error 1141/1147: the revoke already applies.

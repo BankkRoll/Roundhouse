@@ -173,8 +173,34 @@ func (s *pgSession) run(ctx context.Context) (*resultSet, error) {
 		return s.raw(ctx, set)
 	case protocol.DBOpProvisionReadonly:
 		return set, s.provision(ctx)
+	case protocol.DBOpSetPassword:
+		if err := s.inTx(ctx, func(tx pgx.Tx) error { return s.setPassword(ctx, tx) }); err != nil {
+			return nil, err
+		}
+		return passwordSet(s.req), nil
 	}
 	return nil, usageError("unsupported operation")
+}
+
+// setPassword sets an existing role's password to the new password.
+func (s *pgSession) setPassword(ctx context.Context, tx pgx.Tx) error {
+	user := s.req.op.User
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, user).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return usageError(fmt.Sprintf("role %q does not exist", user))
+	}
+	// SECURITY: as in provision, the role gets a SCRAM verifier, so
+	// statement logging on the server never records the password itself.
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return err
+	}
+	verifier := scramSHA256Verifier(s.req.cred.NewPassword, salt, scramIterations)
+	_, err := tx.Exec(ctx, `ALTER ROLE `+pgx.Identifier{user}.Sanitize()+` WITH PASSWORD `+quotePostgresString(verifier))
+	return err
 }
 
 // pgRelation is the quoted, schema-qualified name of op's table.

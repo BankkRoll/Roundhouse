@@ -2,6 +2,7 @@ package apitest
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"filippo.io/age"
 
@@ -39,6 +41,10 @@ type dataState struct {
 	// tests can advance them between polls.
 	onGetBackup  func(b *api.Backup)
 	onGetRestore func(r *api.Restore)
+
+	// ops holds volume migrations, TCP proxies and credential rotations; see
+	// [Fake.opsState].
+	ops *opsState
 }
 
 func (f *Fake) dataState() *dataState {
@@ -284,6 +290,7 @@ func (f *Fake) dataRoutes(mux *http.ServeMux, handlers map[api.Route]guarded) {
 	} {
 		handlers[r] = g
 	}
+	f.opsRoutes(handlers)
 	mux.HandleFunc("GET /_objects/{backupId}", f.serveObject)
 }
 
@@ -296,6 +303,9 @@ func (f *Fake) dataServiceOf(r *http.Request) string {
 		if i := slices.IndexFunc(d.volumes, func(v *api.Volume) bool { return v.ID == id }); i >= 0 {
 			return d.volumes[i].ServiceID
 		}
+	}
+	if id := f.migrationServiceOf(r.PathValue("migrationId")); id != "" {
+		return id
 	}
 	backupID := r.PathValue("backupId")
 	if id := r.PathValue("restoreId"); id != "" {
@@ -859,8 +869,12 @@ func (f *Fake) restoreBackup(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "invalid_request", "confirm must equal the service's slug")
 		return
 	}
+	if in.Mode == api.RestoreInPlace && (in.TargetEnvironmentID != "" || in.Slug != "") {
+		apiError(w, http.StatusBadRequest, "invalid_request", "in_place restores into the backup's environment")
+		return
+	}
 	if in.Mode == api.RestoreNewService {
-		apiError(w, http.StatusNotImplemented, "restore_mode_unsupported", "Restoring into a new service isn't available yet; restore in place instead")
+		f.restoreNewService(w, b, s, in)
 		return
 	}
 	if b.Status != api.BackupSucceeded {
@@ -885,6 +899,65 @@ func (f *Fake) restoreBackup(w http.ResponseWriter, r *http.Request) {
 		d.backups = append(d.backups, safety)
 		rst.SafetyBackupID = &safety.ID
 	}
+	d.restores = append(d.restores, rst)
+	writeJSON(w, http.StatusAccepted, rst)
+}
+
+// restoreNewService mirrors startNewServiceRestore: only a dump of a
+// database restores into a new service, which is added next to the
+// original as <slug>-restore-<yyyymmdd>.
+func (f *Fake) restoreNewService(w http.ResponseWriter, b *api.Backup, s *api.Service, in api.RestoreBackupInput) {
+	engine := deref(b.Engine)
+	if engine == "" && s.Database != nil {
+		engine = s.Database.Engine
+	}
+	if engine == "" || b.Method != "dump" {
+		msg := "Only a database backup can be restored into a new service; restore this snapshot in place"
+		if engine != "" {
+			msg = "A snapshot of a database carries its passwords; restore it in place, or restore a dump into a new service"
+		}
+		apiError(w, http.StatusUnprocessableEntity, "restore_mode_unsupported", msg)
+		return
+	}
+	if b.Status != api.BackupSucceeded {
+		apiError(w, http.StatusConflict, "conflict", "Only a succeeded backup can be restored")
+		return
+	}
+	if !f.storageConfigured(w) {
+		return
+	}
+	p, _ := f.serviceOf(s.ID)
+	envID := cmp.Or(in.TargetEnvironmentID, b.EnvironmentID)
+	if !slices.ContainsFunc(p.Environments, func(e api.Environment) bool { return e.ID == envID }) {
+		apiError(w, http.StatusNotFound, "not_found", "Environment not found")
+		return
+	}
+	slug := cmp.Or(in.Slug, s.Slug+"-restore-"+time.UnixMilli(Now).UTC().Format("20060102"))
+	taken := func(x string) bool {
+		return slices.ContainsFunc(p.Services, func(y api.Service) bool { return y.Slug == x })
+	}
+	if in.Slug != "" && taken(slug) {
+		apiError(w, http.StatusConflict, "conflict", "A service with slug "+slug+" already exists")
+		return
+	}
+	slug = uniqueSlug(slug, taken)
+	version := deref(b.EngineVersion)
+	if version == "" && s.Database != nil {
+		version = s.Database.Version
+	}
+	spec := engineSpecs[engine]
+	svc := api.Service{ID: f.nextID("svc"), ProjectID: p.ID, Name: s.Name + " restore " + time.UnixMilli(Now).UTC().Format("2006-01-02"),
+		Slug: slug, Kind: "database", Database: &api.ServiceDatabase{Engine: engine, Version: version}, CreatedAt: Now, UpdatedAt: Now}
+	p.Services = append(p.Services, svc)
+	port := spec.port
+	for _, e := range p.Environments {
+		f.configs[svc.ID+"/"+e.ID] = config(svc.ID, e.ID, api.ServiceSource{Type: "image", Image: engine + ":" + version}, &port)
+		f.newVolume(p.ID, e.ID, svc.ID, spec.mount, api.DefaultVolumeMB)
+		f.vars[varKey(svc.ID, e.ID)] = connectionVariables(engine)
+	}
+	rst := &api.Restore{ID: f.nextID("rst"), BackupID: b.ID, Mode: api.RestoreNewService, TargetServiceID: &svc.ID,
+		TargetEnvironmentID: &envID, Status: "queued", RequestedBy: str(f.user.ID), CreatedAt: Now}
+	d := f.dataState()
 	d.restores = append(d.restores, rst)
 	writeJSON(w, http.StatusAccepted, rst)
 }
