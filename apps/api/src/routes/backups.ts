@@ -20,7 +20,13 @@
  *
  * @module
  */
-import { backupPolicies, backups, restores } from "@roundhouse/db";
+import {
+  backupPolicies,
+  backups,
+  credentialRotations,
+  restores,
+  type services,
+} from "@roundhouse/db";
 import {
   DEFAULT_BACKUP_KEEP_LAST,
   DEFAULT_BACKUP_SCHEDULE,
@@ -28,7 +34,7 @@ import {
   newId,
   nextCronRuns,
 } from "@roundhouse/shared";
-import { and, desc, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
 import { type AppContext, clientIp, createRouter, requireInstanceAction } from "../context";
 import {
   createBackup,
@@ -55,7 +61,7 @@ import {
   startBackupWorkflow,
 } from "../lib/backups/backups";
 import { loadBackupIdentity } from "../lib/backups/keys";
-import { type RestoreRow, startRestoreWorkflow } from "../lib/backups/restores";
+import { type RestoreRow, restoreServiceSlug, startRestoreWorkflow } from "../lib/backups/restores";
 import { nextBackupSlot } from "../lib/backups/schedule";
 import {
   getBackupStorageView,
@@ -66,14 +72,17 @@ import {
   storageNotConfigured,
   putBackupStorage as storeBackupStorage,
 } from "../lib/backups/storage";
+import { addDatabaseService } from "../lib/changes/database";
+import type { ProjectRow } from "../lib/changes/store";
 import { ApiError, conflict, notFound } from "../lib/errors";
 import { requireFreshSession } from "../lib/fresh-session";
 import { DOWNLOAD_URL_TTL_S, headObject, presignGet, S3Error } from "../lib/s3";
-import { environmentOf, serviceScope } from "../lib/scope";
+import { environmentOf, projectScope, serviceScope } from "../lib/scope";
 import { volumeOf } from "../lib/volumes";
 
 type Action = NonNullable<ReturnType<typeof policyOf>["action"]>;
 type PolicyRow = typeof backupPolicies.$inferSelect;
+type ServiceRow = typeof services.$inferSelect;
 
 const ms = (d: Date | null) => (d ? +d : null);
 
@@ -146,6 +155,110 @@ function toApiPolicy(
     next_run_at: ms(p?.nextRunAt ?? null),
     next_runs: enabled ? nextCronRuns(schedule, now, 3) : [],
   };
+}
+
+/**
+ * Starts a `new_service` restore (ADR 0004, "Restore"): adds a database of
+ * the backup's engine and version, with fresh write-only credentials and its
+ * own volume, through a change set applied in the target environment, then
+ * hands the restore to `RestoreWorkflow`, which waits for it to run healthy
+ * before restoring into it. The backed-up service is not touched.
+ *
+ * Only dumps qualify: a snapshot carries the source's data directory, and
+ * with it the source's passwords, which the new service's credentials
+ * would not match.
+ */
+async function startNewServiceRestore(
+  c: AppContext,
+  input: {
+    backup: BackupRow;
+    service: ServiceRow;
+    project: ProjectRow;
+    body: { target_environment_id?: string | undefined; slug?: string | undefined };
+  },
+): Promise<RestoreRow> {
+  const { backup, service, body } = input;
+  const db = c.get("db");
+  const targetEnvId = body.target_environment_id ?? backup.environmentId;
+  const inTarget = await projectScope(c, input.project.id, "services:manage", targetEnvId);
+  for (const action of ["variables:manage", "deployments:create"] as const) {
+    if (!inTarget.caller.allows(action)) {
+      throw new ApiError(
+        403,
+        "forbidden",
+        `Restoring into a new service creates and deploys a database: it needs ${action}`,
+      );
+    }
+  }
+  const engine = backup.engine ?? service.databaseEngine;
+  if (!engine || backup.method !== "dump") {
+    throw new ApiError(
+      422,
+      "restore_mode_unsupported",
+      engine
+        ? "A snapshot of a database carries its passwords; restore it in place, or restore a dump into a new service"
+        : "Only a database backup can be restored into a new service; restore this snapshot in place",
+    );
+  }
+  if (backup.status !== "succeeded") throw conflict("Only a succeeded backup can be restored");
+  if (!(await isBackupStorageConfigured(db))) throw storageNotConfigured();
+  const { project, caller } = await projectScope(c, input.project.id, "projects:read");
+  const environment = await environmentOf(c, project.id, targetEnvId);
+  const source = await volumeOf(db, backup.serviceId, backup.environmentId);
+  const now = Date.now();
+  const { service: created } = await addDatabaseService(
+    c,
+    { project, environment, caller },
+    {
+      engine,
+      ...((backup.engineVersion ?? service.databaseVersion)
+        ? { version: (backup.engineVersion ?? service.databaseVersion)! }
+        : {}),
+      ...(source ? { sizeMb: source.sizeMb } : {}),
+      name: `${service.name} restore ${new Date(now).toISOString().slice(0, 10)}`.slice(0, 100),
+      slug: body.slug ?? restoreServiceSlug(service.slug, now),
+      deploy: true,
+      title: `Restore ${service.name} into a new service`,
+      auditMetadata: { backup_id: backup.id },
+    },
+  );
+  const id = newId("restore");
+  const at = new Date();
+  const [[restore]] = await db.batch([
+    db
+      .insert(restores)
+      .values({
+        id,
+        backupId: backup.id,
+        mode: "new_service",
+        targetServiceId: created.id,
+        targetEnvironmentId: environment.id,
+        safetyBackupId: null,
+        status: "queued",
+        requestedBy: caller.user.id,
+        createdAt: at,
+        updatedAt: at,
+      })
+      .returning(),
+    auditInsert(db, {
+      workspaceId: project.workspaceId,
+      ...caller.actor,
+      action: "restore.started",
+      targetType: "restore",
+      targetId: id,
+      metadata: {
+        project_id: project.id,
+        backup_id: backup.id,
+        mode: "new_service",
+        source_service_id: backup.serviceId,
+        service_id: created.id,
+        environment_id: environment.id,
+      },
+      ip: clientIp(c),
+    }),
+  ]);
+  await startRestoreWorkflow(c.env, id);
+  return restore!;
 }
 
 /**
@@ -456,14 +569,8 @@ export const backupRoutes = createRouter()
       throw new ApiError(400, "invalid_request", "confirm must equal the service's slug");
     }
     if (body.mode === "new_service") {
-      if (!caller.allows("services:manage")) {
-        throw new ApiError(403, "forbidden", "Restoring into a new service needs services:manage");
-      }
-      throw new ApiError(
-        501,
-        "restore_mode_unsupported",
-        "Restoring into a new service isn't available yet; restore in place instead",
-      );
+      const restore = await startNewServiceRestore(c, { backup, service, project, body });
+      return c.json(toApiRestore(restore), 202);
     }
     if (body.target_environment_id && body.target_environment_id !== backup.environmentId) {
       throw new ApiError(400, "invalid_request", "in_place restores into the backup's environment");
@@ -471,6 +578,28 @@ export const backupRoutes = createRouter()
     if (backup.status !== "succeeded") throw conflict("Only a succeeded backup can be restored");
     const db = c.get("db");
     if (!(await isBackupStorageConfigured(db))) throw storageNotConfigured();
+    if (service.databaseEngine && backup.method === "snapshot") {
+      // SECURITY: a snapshot puts back the passwords the data directory had;
+      // after a rotation the variables no longer match them, and nothing
+      // (the control plane included) could sign in to change them back.
+      const [rotated] = await db
+        .select({ id: credentialRotations.id })
+        .from(credentialRotations)
+        .where(
+          and(
+            eq(credentialRotations.serviceId, backup.serviceId),
+            eq(credentialRotations.environmentId, backup.environmentId),
+            gt(credentialRotations.createdAt, backup.startedAt ?? backup.createdAt),
+            sql`${credentialRotations.applied} <> '[]'`,
+          ),
+        )
+        .limit(1);
+      if (rotated) {
+        throw conflict(
+          "The credentials were rotated after this snapshot; restoring it would bring back passwords nothing knows. Restore a later backup, or a dump",
+        );
+      }
+    }
     const [busy] = await db
       .select({ id: restores.id })
       .from(restores)
