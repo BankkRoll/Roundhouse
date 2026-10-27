@@ -22,6 +22,7 @@ import { Route as AppWWorkspaceIdRouteRouteImport } from './routes/_app/w/$works
 import { Route as AppWWorkspaceIdIndexRouteImport } from './routes/_app/w/$workspaceId/index'
 import { Route as AppWWorkspaceIdAuditRouteImport } from './routes/_app/w/$workspaceId/audit'
 import { Route as AppWWorkspaceIdCanvasRouteImport } from './routes/_app/w/$workspaceId/canvas'
+import { Route as AppWWorkspaceIdDomainsTlsRouteImport } from './routes/_app/w/$workspaceId/domains-tls'
 import { Route as AppWWorkspaceIdInstanceAuditRouteImport } from './routes/_app/w/$workspaceId/instance-audit'
 import { Route as AppWWorkspaceIdLogsRouteImport } from './routes/_app/w/$workspaceId/logs'
 import { Route as AppWWorkspaceIdMcpClientsRouteImport } from './routes/_app/w/$workspaceId/mcp-clients'
@@ -118,6 +119,12 @@ const AppWWorkspaceIdCanvasRoute = AppWWorkspaceIdCanvasRouteImport.update({
   path: '/canvas',
   getParentRoute: () => AppWWorkspaceIdRouteRoute,
 } as any)
+const AppWWorkspaceIdDomainsTlsRoute =
+  AppWWorkspaceIdDomainsTlsRouteImport.update({
+    id: '/domains-tls',
+    path: '/domains-tls',
+    getParentRoute: () => AppWWorkspaceIdRouteRoute,
+  } as any)
 const AppWWorkspaceIdInstanceAuditRoute =
   AppWWorkspaceIdInstanceAuditRouteImport.update({
     id: '/instance-audit',
@@ -304,6 +311,7 @@ export interface FileRoutesByFullPath {
   '/settings/github': typeof AppSettingsGithubRoute
   '/w/$workspaceId/audit': typeof AppWWorkspaceIdAuditRoute
   '/w/$workspaceId/canvas': typeof AppWWorkspaceIdCanvasRoute
+  '/w/$workspaceId/domains-tls': typeof AppWWorkspaceIdDomainsTlsRoute
   '/w/$workspaceId/instance-audit': typeof AppWWorkspaceIdInstanceAuditRoute
   '/w/$workspaceId/logs': typeof AppWWorkspaceIdLogsRoute
   '/w/$workspaceId/mcp-clients': typeof AppWWorkspaceIdMcpClientsRoute
@@ -347,6 +355,7 @@ export interface FileRoutesByTo {
   '/settings/github': typeof AppSettingsGithubRoute
   '/w/$workspaceId/audit': typeof AppWWorkspaceIdAuditRoute
   '/w/$workspaceId/canvas': typeof AppWWorkspaceIdCanvasRoute
+  '/w/$workspaceId/domains-tls': typeof AppWWorkspaceIdDomainsTlsRoute
   '/w/$workspaceId/instance-audit': typeof AppWWorkspaceIdInstanceAuditRoute
   '/w/$workspaceId/logs': typeof AppWWorkspaceIdLogsRoute
   '/w/$workspaceId/mcp-clients': typeof AppWWorkspaceIdMcpClientsRoute
@@ -391,6 +400,7 @@ export interface FileRoutesById {
   '/_app/settings/github': typeof AppSettingsGithubRoute
   '/_app/w/$workspaceId/audit': typeof AppWWorkspaceIdAuditRoute
   '/_app/w/$workspaceId/canvas': typeof AppWWorkspaceIdCanvasRoute
+  '/_app/w/$workspaceId/domains-tls': typeof AppWWorkspaceIdDomainsTlsRoute
   '/_app/w/$workspaceId/instance-audit': typeof AppWWorkspaceIdInstanceAuditRoute
   '/_app/w/$workspaceId/logs': typeof AppWWorkspaceIdLogsRoute
   '/_app/w/$workspaceId/mcp-clients': typeof AppWWorkspaceIdMcpClientsRoute
@@ -437,6 +447,7 @@ export interface FileRouteTypes {
     | '/settings/github'
     | '/w/$workspaceId/audit'
     | '/w/$workspaceId/canvas'
+    | '/w/$workspaceId/domains-tls'
     | '/w/$workspaceId/instance-audit'
     | '/w/$workspaceId/logs'
     | '/w/$workspaceId/mcp-clients'
@@ -480,6 +491,7 @@ export interface FileRouteTypes {
     | '/settings/github'
     | '/w/$workspaceId/audit'
     | '/w/$workspaceId/canvas'
+    | '/w/$workspaceId/domains-tls'
     | '/w/$workspaceId/instance-audit'
     | '/w/$workspaceId/logs'
     | '/w/$workspaceId/mcp-clients'
@@ -523,6 +535,7 @@ export interface FileRouteTypes {
     | '/_app/settings/github'
     | '/_app/w/$workspaceId/audit'
     | '/_app/w/$workspaceId/canvas'
+    | '/_app/w/$workspaceId/domains-tls'
     | '/_app/w/$workspaceId/instance-audit'
     | '/_app/w/$workspaceId/logs'
     | '/_app/w/$workspaceId/mcp-clients'
@@ -655,6 +668,13 @@ declare module '@tanstack/react-router' {
       path: '/canvas'
       fullPath: '/w/$workspaceId/canvas'
       preLoaderRoute: typeof AppWWorkspaceIdCanvasRouteImport
+      parentRoute: typeof AppWWorkspaceIdRouteRoute
+    }
+    '/_app/w/$workspaceId/domains-tls': {
+      id: '/_app/w/$workspaceId/domains-tls'
+      path: '/domains-tls'
+      fullPath: '/w/$workspaceId/domains-tls'
+      preLoaderRoute: typeof AppWWorkspaceIdDomainsTlsRouteImport
       parentRoute: typeof AppWWorkspaceIdRouteRoute
     }
     '/_app/w/$workspaceId/instance-audit': {
@@ -935,6 +955,7 @@ const AppWWorkspaceIdPProjectIdRouteRouteWithChildren =
 interface AppWWorkspaceIdRouteRouteChildren {
   AppWWorkspaceIdAuditRoute: typeof AppWWorkspaceIdAuditRoute
   AppWWorkspaceIdCanvasRoute: typeof AppWWorkspaceIdCanvasRoute
+  AppWWorkspaceIdDomainsTlsRoute: typeof AppWWorkspaceIdDomainsTlsRoute
   AppWWorkspaceIdInstanceAuditRoute: typeof AppWWorkspaceIdInstanceAuditRoute
   AppWWorkspaceIdLogsRoute: typeof AppWWorkspaceIdLogsRoute
   AppWWorkspaceIdMcpClientsRoute: typeof AppWWorkspaceIdMcpClientsRoute
@@ -958,6 +979,7 @@ interface AppWWorkspaceIdRouteRouteChildren {
 const AppWWorkspaceIdRouteRouteChildren: AppWWorkspaceIdRouteRouteChildren = {
   AppWWorkspaceIdAuditRoute: AppWWorkspaceIdAuditRoute,
   AppWWorkspaceIdCanvasRoute: AppWWorkspaceIdCanvasRoute,
+  AppWWorkspaceIdDomainsTlsRoute: AppWWorkspaceIdDomainsTlsRoute,
   AppWWorkspaceIdInstanceAuditRoute: AppWWorkspaceIdInstanceAuditRoute,
   AppWWorkspaceIdLogsRoute: AppWWorkspaceIdLogsRoute,
   AppWWorkspaceIdMcpClientsRoute: AppWWorkspaceIdMcpClientsRoute,

@@ -1,16 +1,13 @@
 import {
   DEFAULT_LOG_RETENTION_DAYS,
-  LOCAL_APPS_DOMAIN,
   MAX_LOG_RETENTION_DAYS,
   PRODUCT_NAME,
-  type TlsMode,
 } from "@roundhouse/shared";
 import {
   Badge,
   Button,
   EmptyState,
   SaveBar,
-  Select,
   SettingsRow,
   SettingsSection,
   SettingsStack,
@@ -45,109 +42,6 @@ import { SigningKeysSection } from "./signing-keys-section";
 /** The MCP section of the API README: endpoint, tools, scopes and client setup. */
 export const MCP_DOCS_URL =
   "https://github.com/BankkRoll/Roundhouse/blob/main/apps/api/README.md#mcp";
-
-const HOSTNAME = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
-
-const TLS_COPY: Record<TlsMode, { label: string; hint: string }> = {
-  acme: {
-    label: "Let's Encrypt (automatic)",
-    hint: "Certificates are issued on demand for each hostname. Needs public DNS pointing at your servers.",
-  },
-  internal: {
-    label: "Internal CA",
-    hint: "Caddy's local CA signs certificates. For development; browsers warn until you trust the CA.",
-  },
-  off: { label: "Off (plain HTTP)", hint: "No TLS. Only for tests on a private network." },
-};
-
-function IngressForm({ settings }: { settings: InstanceSettings }) {
-  const update = useUpdateInstanceSettings();
-  const [domain, setDomain] = useState(settings.apps_domain ?? "");
-  const [mode, setMode] = useState<TlsMode>(settings.tls_mode);
-  const [error, setError] = useState<string | null>(null);
-  const modeId = useId();
-  const normalized = domain
-    .trim()
-    .toLowerCase()
-    .replace(/^\.+|\.+$/g, "");
-  const dirty = normalized !== (settings.apps_domain ?? "") || mode !== settings.tls_mode;
-
-  function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (normalized && (!HOSTNAME.test(normalized) || normalized.length > 253)) {
-      setError("Enter a hostname like apps.example.com.");
-      return;
-    }
-    setError(null);
-    update.mutate(
-      {
-        ...(normalized !== (settings.apps_domain ?? "") ? { apps_domain: normalized || null } : {}),
-        ...(mode !== settings.tls_mode ? { tls_mode: mode } : {}),
-      },
-      {
-        onSuccess: () => toast({ title: "Platform settings saved", tone: "success" }),
-        onError: (cause) => setError(errorMessage(cause)),
-      },
-    );
-  }
-
-  return (
-    <form onSubmit={onSubmit} noValidate aria-label="Ingress">
-      <SettingsSection
-        title="Ingress"
-        description={
-          <>
-            Generated domains are{" "}
-            <span className="font-mono text-foreground">service-env-xxxx.&lt;apps domain&gt;</span>.
-            Point a wildcard DNS record at your servers. Existing hostnames keep working when this
-            changes; new ones use the new domain.
-          </>
-        }
-      >
-        <SettingsField
-          label="Apps domain"
-          description={`Empty disables generated domains. For local development use ${LOCAL_APPS_DOMAIN}.`}
-          value={domain}
-          onChange={(event) => setDomain(event.target.value)}
-          placeholder="apps.example.com"
-          error={error}
-          inputClassName="font-mono"
-          spellCheck={false}
-        />
-        <SettingsRow
-          label="TLS mode"
-          description="How hostnames under the apps domain get their certificates."
-          htmlFor={modeId}
-        >
-          <Select
-            id={modeId}
-            value={mode}
-            aria-describedby={`${modeId}-description ${modeId}-hint`}
-            onChange={(event) => setMode(event.target.value as TlsMode)}
-          >
-            {(Object.keys(TLS_COPY) as TlsMode[]).map((value) => (
-              <option key={value} value={value}>
-                {TLS_COPY[value].label}
-              </option>
-            ))}
-          </Select>
-          <p id={`${modeId}-hint`} className="mt-1.5 text-xs text-muted-foreground">
-            {TLS_COPY[mode].hint}
-          </p>
-        </SettingsRow>
-      </SettingsSection>
-      <SaveBar
-        dirty={dirty}
-        saving={update.isPending}
-        onDiscard={() => {
-          setDomain(settings.apps_domain ?? "");
-          setMode(settings.tls_mode);
-          setError(null);
-        }}
-      />
-    </form>
-  );
-}
 
 function parseRetention(value: string): number | string {
   const days = Number(value.trim());
@@ -467,8 +361,7 @@ function GithubSection({
 }
 
 /**
- * Install-wide settings: the apps domain and TLS mode for generated domains, how long
- * logs are kept, whether the MCP endpoint is on, and the control-plane signing key and its
+ * Install-wide settings: how long logs are kept, whether the MCP endpoint is on, and the control-plane signing key and its
  * rollover (instance admins), and the GitHub App with its installations. Owners can
  * create the App through GitHub's manifest flow; anyone who manages projects can install
  * it.
@@ -504,7 +397,6 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
             />
           ) : (
             <>
-              <IngressForm settings={settings.data} />
               <LogRetentionForm settings={settings.data} />
               <McpSection settings={settings.data} />
               <BackupStorageSection />
@@ -515,7 +407,7 @@ export function PlatformPage({ workspaceId }: { workspaceId: string }) {
           <EmptyState
             icon={<ShieldIcon />}
             title="Instance settings are for owners"
-            description="The apps domain, TLS mode and log retention apply to the whole instance, so only workspace owners can change them."
+            description="Log retention, MCP, backup storage and signing keys apply to the whole instance, so only workspace owners can change them."
           />
         )}
         {github.isPending ? (

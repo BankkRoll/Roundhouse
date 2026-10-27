@@ -80,6 +80,7 @@ const ROUTE_MODULES = [
   "deployments",
   "github",
   "instance",
+  "tls",
   "realtime",
   "tokens",
   "providers",
@@ -1265,6 +1266,116 @@ describe("MSW mocks match the API contract", () => {
       as(null);
       expect((await call("GET", "/v1/instance/settings")).status).toBe(401);
       expect((await call("PATCH", "/v1/instance/settings", { tls_mode: "off" })).status).toBe(401);
+    });
+  });
+
+  it("domains & TLS: settings, managed mode, Cloudflare zone, certificates, wildcards, HSTS", async () => {
+    await fresh(async () => {
+      const D = "/v1/instance/domains";
+      expect(await call("GET", D)).toMatchObject({
+        status: 200,
+        body: {
+          tls_mode: "acme",
+          ingress_nodes: 2,
+          cloudflare_dns: null,
+          managed: { available: true, apps_wildcard: false, wildcard_domains: false },
+        },
+      });
+      expect((await call("PUT", D, {})).status).toBe(400);
+      expect((await call("PUT", D, { acme_directory_url: "http://ca.test/dir" })).status).toBe(400);
+      expect(
+        (await call("PUT", D, { cloudflare_dns: { zone_id: "nope", api_token: "x".repeat(20) } }))
+          .status,
+      ).toBe(400);
+      expect(
+        await call("PUT", D, {
+          cloudflare_dns: { zone_id: "a".repeat(32), api_token: "invalid-token-0123456789" },
+        }),
+      ).toMatchObject({ status: 422, body: { error: { code: "cloudflare_dns_invalid" } } });
+      expect(
+        await call("PUT", D, {
+          ingress_hostname: "ingress.example.com",
+          acme_email: "ops@example.com",
+          cloudflare_dns: { zone_id: "a".repeat(32), api_token: "cf-token-0123456789abcdef" },
+        }),
+      ).toMatchObject({
+        status: 200,
+        body: {
+          ingress_hostname: "ingress.example.com",
+          acme: { email: "ops@example.com" },
+          cloudflare_dns: { zone_name: "example.com" },
+          managed: { apps_wildcard: true, wildcard_domains: false },
+        },
+      });
+      expect(JSON.stringify(db.audit.at(-1))).not.toContain("cf-token");
+      expect((await call("GET", "/v1/instance/certificates")).body).toEqual({ certificates: [] });
+
+      expect((await call("PATCH", "/v1/instance/settings", { tls_mode: "acme" })).status).toBe(200);
+      db.deploy.tls.managed_problems = ["PUBLIC_ORIGIN must be https."];
+      expect((await call("PATCH", "/v1/instance/settings", { tls_mode: "managed" })).status).toBe(
+        422,
+      );
+      db.deploy.tls.managed_problems = [];
+      expect((await call("PATCH", "/v1/instance/settings", { tls_mode: "managed" })).status).toBe(
+        200,
+      );
+      expect((await call("GET", "/v1/instance/certificates")).body).toMatchObject({
+        certificates: [
+          { kind: "apps_wildcard", hostnames: ["*.apps.example.com"], status: "issued" },
+        ],
+      });
+
+      const S = `/v1/services/${SEED.web}/domains`;
+      const wildcard = await call("POST", S, {
+        environment_id: SEED.production,
+        hostname: "*.shop.test",
+      });
+      expect(wildcard).toMatchObject({
+        status: 201,
+        body: {
+          wildcard: true,
+          records: [
+            { purpose: "routing", value: "ingress.example.com" },
+            { purpose: "ownership", name: "_roundhouse.shop.test" },
+            { purpose: "acme_delegation", name: "_acme-challenge.shop.test" },
+          ],
+        },
+      });
+      const id = (wildcard.body as { id: string }).id;
+      expect(
+        (
+          await call("PATCH", `/v1/domains/${id}`, {
+            hsts: { enabled: true, max_age: 31536000, include_subdomains: true, preload: true },
+          })
+        ).body,
+      ).toMatchObject({ error: { code: "invalid_hsts" } });
+      expect(
+        await call("PATCH", `/v1/domains/${id}`, {
+          hsts: { enabled: true, max_age: 86400, include_subdomains: true, preload: false },
+        }),
+      ).toMatchObject({ status: 200, body: { hsts: { max_age: 86400 } } });
+      expect(
+        (
+          await call("PATCH", "/v1/domains/dom_web", {
+            hsts: { enabled: false, max_age: 0, include_subdomains: false, preload: false },
+          })
+        ).status,
+      ).toBe(409);
+      expect(await call("PUT", D, { cloudflare_dns: null })).toMatchObject({
+        status: 200,
+        body: { cloudflare_dns: null, managed: { wildcard_domains: false } },
+      });
+
+      db.sessionStale = true;
+      expect((await call("PUT", D, { ingress_hostname: null })).status).toBe(403);
+      db.sessionStale = false;
+      as("admin");
+      expect((await call("GET", D)).status).toBe(403);
+      expect((await call("PUT", D, { ingress_hostname: null })).status).toBe(403);
+      expect((await call("GET", "/v1/instance/certificates")).status).toBe(403);
+      as(null);
+      expect((await call("GET", D)).status).toBe(401);
+      expect((await call("GET", "/v1/instance/certificates")).status).toBe(401);
     });
   });
 

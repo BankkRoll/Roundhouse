@@ -45,6 +45,7 @@ import { providerHandlers } from "./providers-handlers";
 import { securityHandlers } from "./security-handlers";
 import { signingKeyHandlers } from "./signing-keys-mock";
 import { templateHandlers } from "./templates-handlers";
+import { tlsHandlers } from "./tls-mock";
 
 export { apiError } from "./common";
 
@@ -753,6 +754,7 @@ export const handlers = [
   ...metricsHandlers,
   ...dataHandlers,
   ...signingKeyHandlers,
+  ...tlsHandlers,
   ...securityHandlers,
   ...accountSecurityHandlers,
 ];
