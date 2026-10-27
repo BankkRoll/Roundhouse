@@ -197,7 +197,7 @@ export class DrainWorkflow extends WorkflowEntrypoint<Env, DrainParams> {
         .update(placements)
         .set({ state: "parked", updatedAt: new Date() })
         .where(eq(placements.id, r.placement.id));
-      await degradeService(db, r, "node_maintenance", drain.nodeId);
+      await degradeService(this.env, db, r, "node_maintenance", drain.nodeId);
     }
     if (!(await this.save(drainId, { moves }))) return { kind: "stop", status: "cancelled" };
     if (stateful.length) await refreshNodes(this.env, db, [drain.nodeId]);

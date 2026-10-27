@@ -296,7 +296,9 @@ describe("offline rescheduling", () => {
     }, 10_000);
     expect(rows[0]!.replacesWorkloadId).toBe(s.webDep.workloadIds[0]);
 
-    expect(await recoverNodeServices(db, s.n1, ["node_offline"])).toEqual([s.dbService.service.id]);
+    expect(await recoverNodeServices(env, db, s.n1, ["node_offline"])).toEqual([
+      s.dbService.service.id,
+    ]);
     const audit = await env.DB.prepare(
       "SELECT action FROM audit_logs WHERE action IN ('service.degraded', 'service.recovered') ORDER BY seq",
     ).all<{ action: string }>();

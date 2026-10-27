@@ -56,7 +56,7 @@ import { ApiError, conflict, isUniqueViolation, notFound } from "../lib/errors";
 import { effectiveStatus } from "../lib/nodes";
 import { publicOrigin } from "../lib/origin";
 import { environmentOf, projectScope, serviceScope } from "../lib/scope";
-import { toApiService } from "../lib/serialize";
+import { toApiServiceWithHealth } from "../lib/service-health";
 import {
   allocatePublicPort,
   defaultContainerPort,
@@ -168,7 +168,7 @@ export const databaseRoutes = createRouter()
     return c.json(
       {
         change_set_id: applied.set.id,
-        service: toApiService(service),
+        service: await toApiServiceWithHealth(db, service),
         engine: service.databaseEngine!,
         version: service.databaseVersion!,
         volumes: await Promise.all(vols.map((v) => present(db, v))),

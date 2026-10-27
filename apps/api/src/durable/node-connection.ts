@@ -1149,7 +1149,7 @@ export class NodeConnection extends DurableObject<Env> {
       .update(nodes)
       .set({ rescheduledAt: null })
       .where(and(eq(nodes.id, nodeId), sql`${nodes.rescheduledAt} IS NOT NULL`));
-    await recoverNodeServices(this.db, nodeId, ["node_offline"]);
+    await recoverNodeServices(this.env, this.db, nodeId, ["node_offline"]);
   }
 
   /**

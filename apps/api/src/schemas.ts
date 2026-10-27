@@ -387,6 +387,12 @@ export const ServiceSchema = z
      */
     health: z.enum(SERVICE_HEALTH),
     health_reason: z.enum(SERVICE_HEALTH_REASONS).nullable(),
+    /**
+     * The server a `degraded` service waits on: the offline one that holds
+     * its data, or the one whose forced drain stopped it. `null` while `ok`,
+     * or when that server is gone.
+     */
+    health_node: z.object({ id: z.string(), name: z.string() }).nullable(),
     created_at: Millis,
     updated_at: Millis,
   })

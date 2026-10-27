@@ -311,6 +311,7 @@ function write(
       icon: s.icon,
       health: "ok",
       health_reason: null,
+      health_node: null,
       created_at: now,
       updated_at: now,
     };

@@ -84,12 +84,8 @@ import {
   projectScope,
   serviceScope,
 } from "../lib/scope";
-import {
-  toApiDeployment,
-  toApiDeploymentEvent,
-  toApiPlacement,
-  toApiService,
-} from "../lib/serialize";
+import { toApiDeployment, toApiDeploymentEvent, toApiPlacement } from "../lib/serialize";
+import { toApiServiceWithHealth } from "../lib/service-health";
 import { getIngressSettings } from "../lib/settings";
 import { projectSummaries } from "../lib/summaries";
 import { listVariables, projectKey, type VariableTarget } from "../lib/variables";
@@ -393,7 +389,7 @@ const getServiceTool = defineTool({
       : await productionOf(c, project.id);
     const page = await deploymentPage(c, project.id, service.id, environment.id, input.limit);
     return {
-      service: toApiService(service),
+      service: await toApiServiceWithHealth(c.get("db"), service),
       environment_id: environment.id,
       deployments: page.deployments,
     };
