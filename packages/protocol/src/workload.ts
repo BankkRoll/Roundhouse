@@ -261,15 +261,32 @@ export function privateServiceAlias(serviceId: string): string {
 
 /**
  * BuildKit cache scope of a service's builds. Agents also isolate BuildKit
- * per project, so the key only separates services within one project.
+ * per project, so the key only separates services within one project, and
+ * preview builds from the others.
  *
  * @param projectId - Project ID.
  * @param serviceId - Service ID.
- * @returns `<project_id>.<service_id>`.
+ * @param isolation - `preview` for pull request builds.
+ * @returns `<project_id>.<service_id>`, or `<project_id>.<service_id>.preview`.
  */
-export function buildCacheKey(projectId: string, serviceId: string): string {
-  return `${projectId}.${serviceId}`;
+export function buildCacheKey(
+  projectId: string,
+  serviceId: string,
+  isolation?: BuildIsolation,
+): string {
+  return isolation ? `${projectId}.${serviceId}.${isolation}` : `${projectId}.${serviceId}`;
 }
+
+/**
+ * Build isolation classes. `preview` builds pull request code (ADR 0014
+ * section 14): the agent runs it in the project's separate preview BuildKit
+ * daemon, with its own cache, so it can't read or poison the cache the
+ * project's other environments build from.
+ */
+export const BUILD_ISOLATIONS = ["preview"] as const;
+
+/** A build isolation class; see {@link BUILD_ISOLATIONS}. */
+export type BuildIsolation = (typeof BUILD_ISOLATIONS)[number];
 
 // -----------------------------------------------------------------------------
 // Parts

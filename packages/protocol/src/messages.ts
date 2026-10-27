@@ -76,6 +76,7 @@ import { HelloMeshSchema, MeshConfigSchema, MeshKeySchema, MeshStatusSchema } fr
 import { MAX_METRICS_INTERVAL_MS, MetricsSchema, MIN_METRICS_INTERVAL_MS } from "./metrics";
 import { KeyAnnounceSchema, SigningKeyAnnouncementsSchema } from "./signing-keys";
 import {
+  BUILD_ISOLATIONS,
   buildCacheKey,
   INGRESS_TLS_MODES,
   localImageRepository,
@@ -652,7 +653,13 @@ export const BuildJobSchema = z
       .refine((r) => r.startsWith(`${REGISTRY_LISTEN}/`), {
         message: `must be in the local registry at ${REGISTRY_LISTEN}`,
       }),
-    /** Exactly `buildCacheKey(project_id, service_id)`. */
+    /**
+     * `preview` for pull request code: built in the project's preview BuildKit
+     * daemon (`<project_id>-preview`) with its own cache (ADR 0014 section
+     * 14). Sent from protocol version 7; see `PREVIEW_BUILDS_PROTOCOL_VERSION`.
+     */
+    isolation: z.enum(BUILD_ISOLATIONS).optional(),
+    /** Exactly `buildCacheKey(project_id, service_id, isolation)`. */
     cache_key: z.string().regex(CACHE_KEY_RE, "expected a cache key"),
     /** The builder cancels and fails the build after this many seconds. */
     timeout_s: z.number().int().min(60).max(7200),
@@ -675,8 +682,8 @@ export const BuildJobSchema = z
     message: "image_repository must be the service's local repository",
     path: ["image_repository"],
   })
-  .refine((j) => j.cache_key === buildCacheKey(j.project_id, j.service_id), {
-    message: "cache_key must be buildCacheKey(project_id, service_id)",
+  .refine((j) => j.cache_key === buildCacheKey(j.project_id, j.service_id, j.isolation), {
+    message: "cache_key must be buildCacheKey(project_id, service_id, isolation)",
     path: ["cache_key"],
   })
   .refine((j) => !carriesCredentials(j) || isShortLived(j), SHORT_LIVED_ISSUE);

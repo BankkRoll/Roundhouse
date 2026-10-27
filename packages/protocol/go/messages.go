@@ -8,9 +8,10 @@ import "slices"
 // version 4 seals workload environments and build secrets to the node
 // (ADR 0014); version 5 is Phase 2 (mesh, volumes, backups, queries,
 // signing-key rollover) and version 6 Phase 3 (jobs, metrics,
-// certificates). ADR 0015 records why phases sit one above ADR 0013's plan.
+// certificates); version 7 adds [BuildJob].Isolation (ADR 0007, ADR 0014
+// section 14). ADR 0015 records why phases sit one above ADR 0013's plan.
 // See PROTOCOL_VERSION in versions.ts.
-const ProtocolVersion = 6
+const ProtocolVersion = 7
 
 // MinProtocolVersion is the oldest version the control plane accepts. ADR
 // 0013 raises it with each phase's release, not with its contracts.
@@ -74,6 +75,12 @@ const MetricsProtocolVersion = 6
 // wildcard route hostnames and route HSTS (ADR 0009). Mirrors
 // CERTS_PROTOCOL_VERSION.
 const CertsProtocolVersion = 6
+
+// PreviewBuildsProtocolVersion is the first version that builds
+// [BuildJob].Isolation [BuildIsolationPreview] in a separate per-project
+// preview BuildKit daemon and cache; no pull request build goes to an
+// older agent. Mirrors PREVIEW_BUILDS_PROTOCOL_VERSION.
+const PreviewBuildsProtocolVersion = 7
 
 // Message type discriminators carried in every frame's "type" field.
 const (
@@ -481,7 +488,11 @@ type BuildJob struct {
 	BuildSecretsSealed *SealedBox `json:"build_secrets_sealed,omitempty"`
 	// ImageRepository is exactly [LocalImageRepository](ProjectID, ServiceID).
 	ImageRepository string `json:"image_repository"`
-	// CacheKey is exactly [BuildCacheKey](ProjectID, ServiceID).
+	// Isolation is [BuildIsolationPreview] for pull request code, which the
+	// builder runs in the project's preview BuildKit daemon with its own
+	// cache; empty for every other build.
+	Isolation string `json:"isolation,omitempty"`
+	// CacheKey is exactly [BuildCacheKeyFor](ProjectID, ServiceID, Isolation).
 	CacheKey string `json:"cache_key"`
 	// TimeoutS is when the builder cancels and fails the build.
 	TimeoutS int `json:"timeout_s"`

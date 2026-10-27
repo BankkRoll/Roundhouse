@@ -5,6 +5,7 @@ import {
   BuildCancelSchema,
   BuildJobSchema,
   BuildResultSchema,
+  buildCacheKey,
   ControlMessageSchema,
   CREDENTIAL_FRAME_TTL_MS,
   carriesCredentials,
@@ -16,6 +17,7 @@ import {
   MAX_LOG_LINES_PER_FRAME,
   MAX_WORKLOADS_PER_NODE,
   MIN_PROTOCOL_VERSION,
+  PREVIEW_BUILDS_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   SEALED_ENV_PROTOCOL_VERSION,
   SECRET_BUILD_ARGS_PROTOCOL_VERSION,
@@ -99,8 +101,9 @@ function buildJob(overrides: Record<string, unknown> = {}) {
 }
 
 describe("protocol version", () => {
-  it("follows ADR 0015: Phase 3 is version 6, still accepting version 3", () => {
-    expect(PROTOCOL_VERSION).toBe(6);
+  it("follows ADR 0015: Phase 3 is version 7 with preview builds, still accepting version 3", () => {
+    expect(PROTOCOL_VERSION).toBe(7);
+    expect(PREVIEW_BUILDS_PROTOCOL_VERSION).toBe(7);
     expect(MIN_PROTOCOL_VERSION).toBe(3);
   });
 
@@ -363,6 +366,9 @@ describe("BuildJobSchema", () => {
     ["a bad secret build arg name", { build_args: { "a-b": "1" }, secret_build_args: ["a-b"] }],
     ["another service's repository", { image_repository: "127.0.0.1:5000/prj_1/svc_2" }],
     ["another project's cache", { cache_key: "prj_2.svc_1" }],
+    ["a preview build on the shared cache", { isolation: "preview" }],
+    ["a regular build on the preview cache", { cache_key: "prj_1.svc_1.preview" }],
+    ["an unknown isolation", { isolation: "fork", cache_key: "prj_1.svc_1.fork" }],
     ["a missing project id", { project_id: undefined }],
     [
       "a ref that reads as an option",
@@ -389,6 +395,12 @@ describe("BuildJobSchema", () => {
     ["a malformed secrets box", { build_secrets_sealed: { ...BOX, ct: "not base64!" } }],
   ])("rejects %s", (_name, overrides) => {
     expect(BuildJobSchema.safeParse(buildJob(overrides)).success).toBe(false);
+  });
+
+  it("builds pull requests in the preview isolation with their own cache", () => {
+    const job = buildJob({ isolation: "preview", cache_key: "prj_1.svc_1.preview" });
+    expect(BuildJobSchema.parse(job).isolation).toBe("preview");
+    expect(buildCacheKey("prj_1", "svc_1", "preview")).toBe("prj_1.svc_1.preview");
   });
 
   it("marks build args as secret by name", () => {

@@ -222,8 +222,11 @@ func (m *BuildJob) Validate() error {
 	if m.ImageRepository != LocalImageRepository(m.ProjectID, m.ServiceID) {
 		return errors.New("image_repository: must be the service's local repository")
 	}
-	if !cacheKeyRE.MatchString(m.CacheKey) || m.CacheKey != BuildCacheKey(m.ProjectID, m.ServiceID) {
-		return fmt.Errorf("cache_key: must be %s", BuildCacheKey(m.ProjectID, m.ServiceID))
+	if m.Isolation != "" && m.Isolation != BuildIsolationPreview {
+		return fmt.Errorf("isolation: unknown %q", m.Isolation)
+	}
+	if want := BuildCacheKeyFor(m.ProjectID, m.ServiceID, m.Isolation); !cacheKeyRE.MatchString(m.CacheKey) || m.CacheKey != want {
+		return fmt.Errorf("cache_key: must be %s", want)
 	}
 	if m.TimeoutS < 60 || m.TimeoutS > 7200 {
 		return errors.New("timeout_s: out of range")

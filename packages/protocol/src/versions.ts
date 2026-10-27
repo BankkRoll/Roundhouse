@@ -14,7 +14,7 @@
  * | 4       | ADR 0014   | sealed env and build secrets                             |
  * | 5       | 2          | mesh, volumes, backups, `db_query`, signing-key rollover |
  * | 6       | 3          | jobs, metrics, certificates                              |
- * | 7       | 4 (future) | exec, image push, edge gateway — not defined yet         |
+ * | 7       | 3          | preview build isolation (`build_job.isolation`)          |
  *
  * @module
  */
@@ -39,12 +39,14 @@
  * - Version 6 (Phase 3, ADRs 0008, 0009, 0010): `job_*`, `metrics`,
  *   `cert_*`, wildcard routes, HSTS, `desired_state.ingress`, and the
  *   `managed` TLS mode.
+ * - Version 7 (Phase 3, ADRs 0007 and 0014 section 14): `build_job.isolation`.
+ *   See {@link PREVIEW_BUILDS_PROTOCOL_VERSION}.
  *
  * Every field or frame added after version 4 is optional on the wire or a new
  * frame type, so agents from {@link MIN_PROTOCOL_VERSION} up keep working:
  * the control plane sends each only at or above its gate.
  */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /**
  * Oldest `hello.protocol_version` the control plane accepts. An older
@@ -130,3 +132,11 @@ export const METRICS_PROTOCOL_VERSION = 6;
  * wildcard route hostnames and route `hsts`.
  */
 export const CERTS_PROTOCOL_VERSION = 6;
+
+/**
+ * First protocol version whose agents build `build_job.isolation: "preview"`
+ * in a separate per-project preview BuildKit daemon and cache (ADR 0014
+ * section 14). A pull request build never goes to an older agent: one
+ * would ignore the field and build in the project's regular daemon.
+ */
+export const PREVIEW_BUILDS_PROTOCOL_VERSION = 7;
