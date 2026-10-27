@@ -20,6 +20,7 @@ import type {
   DomainTlsStatus,
   DomainType,
   DomainVerificationStatus,
+  PlacementOnlyState,
 } from "@roundhouse/shared";
 import { sql } from "drizzle-orm";
 import {
@@ -150,6 +151,12 @@ export const deploymentEvents = sqliteTable(
   (t) => [index("deployment_events_deployment_id_idx").on(t.deploymentId, t.id)],
 );
 
+/** Re-exported so database callers find it next to {@link PlacementState}. */
+export { PLACEMENT_ONLY_STATES } from "@roundhouse/shared";
+
+/** A placement's state: an agent-reported workload state or a `PLACEMENT_ONLY_STATES` one. */
+export type PlacementState = WorkloadState | PlacementOnlyState;
+
 /** Where one replica of a deployment runs, and its last reported state. */
 export const placements = sqliteTable(
   "placements",
@@ -165,8 +172,14 @@ export const placements = sqliteTable(
     /** `wl_…`; the workload's ID in `desired_state` and `workload_status`. */
     workloadId: text("workload_id").notNull().unique(),
     containerId: text("container_id"),
-    state: text("state").$type<WorkloadState>().notNull().default("pending"),
+    state: text("state").$type<PlacementState>().notNull().default("pending"),
     lastStatusAt: timestamp("last_status_at"),
+    /**
+     * The placement this one replaces during a move (drain or offline
+     * rescheduling, ADR 0005). For a moment both rows exist for one replica;
+     * the old one is deleted once this one is healthy.
+     */
+    replacesWorkloadId: text("replaces_workload_id"),
     /**
      * The replica's mesh IP in its node's /24 (ADR 0005), NATed 1:1 to its
      * bridge IP; cleared once the deployment stops being live.
@@ -175,13 +188,21 @@ export const placements = sqliteTable(
     ...timestamps,
   },
   (t) => [
-    uniqueIndex("placements_deployment_replica_uq").on(t.deploymentId, t.replica),
+    // Not unique: a move briefly has two live rows for one replica.
+    index("placements_deployment_replica_idx").on(t.deploymentId, t.replica),
     index("placements_node_idx").on(t.nodeId),
     uniqueIndex("placements_node_mesh_ip_uq")
       .on(t.nodeId, t.meshIp)
       .where(sql`${t.meshIp} IS NOT NULL`),
   ],
 );
+
+/** A DNS record Cloudflare for SaaS asks the customer for. */
+export interface CloudflareDcvRecord {
+  type: "TXT" | "CNAME";
+  name: string;
+  value: string;
+}
 
 /** A hostname routed to a service in an environment. */
 export const domains = sqliteTable(
@@ -237,6 +258,16 @@ export const domains = sqliteTable(
     tlsError: text("tls_error"),
     /** When the `tls_*` columns last changed: a node's report or an issuance. */
     tlsUpdatedAt: timestamp("tls_updated_at"),
+    /** Cloudflare for SaaS mode: the custom hostname's ID in the SaaS zone. */
+    cfCustomHostnameId: text("cf_custom_hostname_id"),
+    /** Cloudflare's `status` of the custom hostname, as last read. */
+    cfStatus: text("cf_status"),
+    /** Cloudflare's `ssl.status`, as last read. */
+    cfSslStatus: text("cf_ssl_status"),
+    /** Cloudflare's verification and validation errors, verbatim (its words for the customer). */
+    cfErrors: json<string[]>("cf_errors"),
+    /** Validation records Cloudflare asks for (pre-validation TXT, certificate TXT). */
+    cfDcv: json<CloudflareDcvRecord[]>("cf_dcv"),
     ...timestamps,
   },
   (t) => [

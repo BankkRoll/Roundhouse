@@ -27,8 +27,15 @@ export const DOMAIN_STATUSES = [
 /** A domain lifecycle state; see {@link DOMAIN_STATUSES}. */
 export type DomainStatus = (typeof DOMAIN_STATUSES)[number];
 
-/** How the control plane serves a custom domain. Only `direct` exists today. */
+/**
+ * How the control plane serves a custom domain: `direct` (DNS points at the
+ * ingress servers) or `cloudflare_saas` (a Cloudflare for SaaS custom
+ * hostname in front of them, ADR 0009).
+ */
 export const DOMAIN_MODES = ["direct", "cloudflare_saas"] as const;
+
+/** Hostnames a Cloudflare for SaaS plan includes before per-hostname billing starts. */
+export const SAAS_INCLUDED_HOSTNAMES = 100;
 
 /** A custom-domain mode; see {@link DOMAIN_MODES}. */
 export type DomainMode = (typeof DOMAIN_MODES)[number];
@@ -40,11 +47,12 @@ export const DNS_RECORD_TYPES = ["CNAME", "A", "AAAA", "TXT"] as const;
 export type DnsRecordType = (typeof DNS_RECORD_TYPES)[number];
 
 /**
- * Why a record is needed: routing to the install, proving ownership, or (for
+ * Why a record is needed: routing to the install, proving ownership, (for
  * a wildcard) delegating `_acme-challenge` so the control plane can answer
- * DNS-01 for it.
+ * DNS-01 for it, or (Cloudflare for SaaS) Cloudflare's own hostname and
+ * certificate validation.
  */
-export const DNS_RECORD_PURPOSES = ["routing", "ownership", "acme_delegation"] as const;
+export const DNS_RECORD_PURPOSES = ["routing", "ownership", "acme_delegation", "cf_dcv"] as const;
 
 /** A record's purpose; see {@link DNS_RECORD_PURPOSES}. */
 export type DnsRecordPurpose = (typeof DNS_RECORD_PURPOSES)[number];

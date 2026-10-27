@@ -15,6 +15,8 @@ import type {
   ProtectionRules,
   ResourcesConfig,
   ServiceDatabaseEngine,
+  ServiceHealth,
+  ServiceHealthReason,
   ServiceKind,
   ServiceSource,
   VariableScope,
@@ -140,6 +142,13 @@ export const services = sqliteTable(
     databaseEngine: text("database_engine").$type<ServiceDatabaseEngine>(),
     /** Registry version of {@link services.databaseEngine}, e.g. `18`. */
     databaseVersion: text("database_version"),
+    /**
+     * Service-level health, separate from deployment status (ADR 0005): a
+     * stateful replica whose node went offline or was drained by force.
+     */
+    health: text("health").$type<ServiceHealth>().notNull().default("ok"),
+    /** Why the service is `degraded`; `null` while `ok`. */
+    healthReason: text("health_reason").$type<ServiceHealthReason>(),
     ...timestamps,
     deletedAt: timestamp("deleted_at"),
   },

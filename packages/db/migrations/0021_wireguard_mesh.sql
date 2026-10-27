@@ -1,7 +1,11 @@
--- Hand-written (ADR 0005): the WireGuard mesh between a workspace's nodes.
--- Each node's mesh index (its /24), its reported mesh state and key
--- rotation progress; each environment's nftables tag; each placement's mesh
--- IP; the pairs' preshared keys (sealed under the KEK) and paths. Additive.
+-- Hand-written (ADR 0005, 0009): the WireGuard mesh between a workspace's
+-- nodes. Each node's mesh index (its /24), its reported mesh state and key
+-- rotation progress; each environment's nftables tag; each placement's and
+-- cron run's mesh IP; the pairs' preshared keys (sealed under the KEK) and
+-- paths; per-node registry pull credentials; placement moves (drain and
+-- offline rescheduling) and service health; node drains; Cloudflare for
+-- SaaS custom hostnames. Additive apart from the placements index, which
+-- stops being unique so a move can hold two rows for one replica.
 -- No snapshot: the next generated migration diffs against the schema
 -- source, not this file.
 
@@ -55,3 +59,49 @@ CREATE TABLE `mesh_paths` (
 	`updated_at` integer NOT NULL,
 	FOREIGN KEY (`relay_node_id`) REFERENCES `nodes`(`id`) ON UPDATE no action ON DELETE set null
 );
+
+--> statement-breakpoint
+ALTER TABLE `nodes` ADD `registry_pull_user` text;--> statement-breakpoint
+ALTER TABLE `nodes` ADD `registry_pull_password_sealed` text;--> statement-breakpoint
+ALTER TABLE `nodes` ADD `registry_pull_bcrypt` text;--> statement-breakpoint
+ALTER TABLE `nodes` ADD `rescheduled_at` integer;--> statement-breakpoint
+
+-- A move (drain, offline rescheduling) briefly holds two rows for one replica.
+DROP INDEX IF EXISTS `placements_deployment_replica_uq`;--> statement-breakpoint
+CREATE INDEX `placements_deployment_replica_idx` ON `placements` (`deployment_id`,`replica`);--> statement-breakpoint
+ALTER TABLE `placements` ADD `replaces_workload_id` text;--> statement-breakpoint
+
+ALTER TABLE `services` ADD `health` text DEFAULT 'ok' NOT NULL;--> statement-breakpoint
+ALTER TABLE `services` ADD `health_reason` text;--> statement-breakpoint
+
+-- Live only while the run is starting or running, so the index frees the
+-- address the moment the run ends.
+ALTER TABLE `cron_runs` ADD `mesh_ip` text;--> statement-breakpoint
+CREATE UNIQUE INDEX `cron_runs_node_mesh_ip_uq` ON `cron_runs` (`node_id`,`mesh_ip`) WHERE mesh_ip IS NOT NULL AND status IN ('starting', 'running');--> statement-breakpoint
+
+CREATE TABLE `node_drains` (
+	`id` text PRIMARY KEY NOT NULL,
+	`workspace_id` text NOT NULL,
+	`node_id` text NOT NULL,
+	`force` integer DEFAULT false NOT NULL,
+	`status` text DEFAULT 'running' NOT NULL,
+	`moves` text NOT NULL,
+	`blocked` text NOT NULL,
+	`error` text,
+	`workflow_instance_id` text,
+	`started_by` text,
+	`finished_at` integer,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL,
+	FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`node_id`) REFERENCES `nodes`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`started_by`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE set null
+);
+--> statement-breakpoint
+CREATE INDEX `node_drains_node_idx` ON `node_drains` (`node_id`,`id`);--> statement-breakpoint
+
+ALTER TABLE `domains` ADD `cf_custom_hostname_id` text;--> statement-breakpoint
+ALTER TABLE `domains` ADD `cf_status` text;--> statement-breakpoint
+ALTER TABLE `domains` ADD `cf_ssl_status` text;--> statement-breakpoint
+ALTER TABLE `domains` ADD `cf_errors` text;--> statement-breakpoint
+ALTER TABLE `domains` ADD `cf_dcv` text;

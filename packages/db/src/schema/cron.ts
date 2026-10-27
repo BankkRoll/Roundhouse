@@ -75,6 +75,12 @@ export const cronRuns = sqliteTable(
     nodeId: text("node_id").references(() => nodes.id, { onDelete: "set null" }),
     /** `wl_…` of the job container. */
     workloadId: text("workload_id"),
+    /**
+     * The job container's mesh IP on a meshed node (ADR 0005), from the
+     * same /24 as the node's replicas; live while the run is `starting`
+     * or `running`.
+     */
+    meshIp: text("mesh_ip"),
     exitCode: integer("exit_code"),
     /** For `missed`: how many slots this record covers. */
     missedCount: integer("missed_count"),
@@ -92,5 +98,8 @@ export const cronRuns = sqliteTable(
       .where(sql`"trigger" IN ('schedule', 'retry')`),
     index("cron_runs_svc_env_id_idx").on(t.serviceId, t.environmentId, t.id),
     index("cron_runs_status_idx").on(t.status),
+    uniqueIndex("cron_runs_node_mesh_ip_uq")
+      .on(t.nodeId, t.meshIp)
+      .where(sql`mesh_ip IS NOT NULL AND status IN ('starting', 'running')`),
   ],
 );

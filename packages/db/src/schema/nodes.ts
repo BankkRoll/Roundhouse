@@ -4,7 +4,7 @@
  * @module
  */
 import type { Capabilities, VolumeQuotaMode } from "@roundhouse/protocol";
-import type { NodeStatus } from "@roundhouse/shared";
+import type { DrainMoveState, NodeDrainStatus, NodeStatus } from "@roundhouse/shared";
 import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { users } from "./auth";
@@ -82,6 +82,21 @@ export const nodes = sqliteTable(
     meshReady: integer("mesh_ready", { mode: "boolean" }).notNull().default(false),
     meshError: text("mesh_error"),
     meshStatusAt: timestamp("mesh_status_at"),
+    /**
+     * The htpasswd user this node pulls from the builder's registry with,
+     * over the mesh (ADR 0005, "Registry over the mesh"); derived from the
+     * node ID. Set with the password the first time it is needed.
+     */
+    registryPullUser: text("registry_pull_user"),
+    /** Its password, sealed under the KEK (setting `registry_pull`, field = node ID). */
+    registryPullPasswordSealed: json<unknown>("registry_pull_password_sealed"),
+    /** bcrypt of the password, computed once when the password is made, for `pull_users`. */
+    registryPullBcrypt: text("registry_pull_bcrypt"),
+    /**
+     * When the node's stateless replicas were last rescheduled because it was
+     * offline; cleared when it comes back, so one outage reschedules once.
+     */
+    rescheduledAt: timestamp("rescheduled_at"),
     /** Agent's Ed25519 identity key from join, base64. */
     identityPublicKey: text("identity_public_key").notNull(),
     /**
@@ -185,6 +200,59 @@ export const meshPaths = sqliteTable("mesh_paths", {
   sides: json<Record<string, MeshPairSide>>("sides"),
   ...timestamps,
 });
+
+/** One replica move of a drain, as {@link nodeDrains} records it. */
+export interface NodeDrainMove {
+  workloadId: string;
+  deploymentId: string;
+  serviceId: string;
+  environmentId: string;
+  replica: number;
+  state: DrainMoveState;
+  toNodeId: string | null;
+  newWorkloadId: string | null;
+  error: string | null;
+}
+
+/** A volume service a drain can't move. */
+export interface NodeDrainBlock {
+  serviceId: string;
+  environmentId: string;
+  serviceName: string;
+}
+
+/**
+ * One drain of a node (ADR 0005, "Node lifecycle"), driven by
+ * `DRAIN_WORKFLOW`, with each move's progress for the dashboard.
+ */
+export const nodeDrains = sqliteTable(
+  "node_drains",
+  {
+    id: id(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    nodeId: text("node_id")
+      .notNull()
+      .references(() => nodes.id, { onDelete: "cascade" }),
+    /** Volume services are stopped (and degraded) instead of blocking the drain. */
+    force: integer("force", { mode: "boolean" }).notNull().default(false),
+    status: text("status").$type<NodeDrainStatus>().notNull().default("running"),
+    moves: json<NodeDrainMove[]>("moves")
+      .notNull()
+      .$defaultFn(() => []),
+    blocked: json<NodeDrainBlock[]>("blocked")
+      .notNull()
+      .$defaultFn(() => []),
+    error: text("error"),
+    /** `drain-<node>-<ts>`. */
+    workflowInstanceId: text("workflow_instance_id"),
+    startedBy: text("started_by").references(() => users.id, { onDelete: "set null" }),
+    finishedAt: timestamp("finished_at"),
+    ...timestamps,
+  },
+  (t) => [index("node_drains_node_idx").on(t.nodeId, t.id)],
+);
 
 /** Single-use token that lets a new machine join a workspace. Only the hash is stored. */
 export const nodeJoinTokens = sqliteTable(

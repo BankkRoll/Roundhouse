@@ -394,3 +394,73 @@ describe("schedule across the mesh (ADR 0005)", () => {
     expect(result.ok && result.placements.map((p) => p.nodeId).sort()).toEqual(["a", "b"]);
   });
 });
+
+describe("schedule while draining and across zones (ADR 0005)", () => {
+  it("never places on an excluded node, and says so", () => {
+    const result = schedule(request({ excludeNodeIds: ["a"] }), [node("a"), node("b")]);
+    expect(result.ok && result.placements).toEqual([{ replica: 0, nodeId: "b" }]);
+    const only = schedule(request({ excludeNodeIds: ["a"] }), [node("a")]);
+    expect(only).toMatchObject({ ok: false, reason: "excluded" });
+  });
+
+  it("orders excluded right after offline, so a dead excluded node reads offline", () => {
+    expect(SCHEDULE_FAILURE_REASONS.indexOf("excluded")).toBe(
+      SCHEDULE_FAILURE_REASONS.indexOf("offline") + 1,
+    );
+    const result = schedule(request({ excludeNodeIds: ["a"] }), [
+      node("a"),
+      node("b", { status: "offline" }),
+    ]);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "excluded",
+      rejected: [
+        { nodeId: "a", reason: "excluded" },
+        { nodeId: "b", reason: "offline" },
+      ],
+    });
+  });
+
+  it("spreads replicas across zones before doubling up inside one", () => {
+    const zoned = (id: string, zone: string, replicas = 0) =>
+      node(id, { zone, serviceReplicas: replicas ? { svc_1: replicas } : {} });
+    // a and b share zone-1, which already runs one replica on a.
+    const result = schedule(request(), [
+      zoned("a", "zone-1", 1),
+      zoned("b", "zone-1"),
+      zoned("c", "zone-2"),
+    ]);
+    expect(result.ok && result.placements).toEqual([{ replica: 0, nodeId: "c" }]);
+  });
+
+  it("counts the zone's replicas it places itself", () => {
+    const nodes = [
+      node("a", { zone: "z1" }),
+      node("b", { zone: "z1" }),
+      node("c", { zone: "z2" }),
+      node("d", { zone: "z2" }),
+    ];
+    const result = schedule(request({ replicas: 2 }), nodes);
+    const zones = result.ok ? result.placements.map((p) => (p.nodeId < "c" ? "z1" : "z2")) : [];
+    expect(zones.sort()).toEqual(["z1", "z2"]);
+  });
+
+  it("treats nodes without a zone as before", () => {
+    const result = schedule(request({ replicas: 2 }), [node("a"), node("b", { zone: null })]);
+    expect(result.ok && result.placements.map((p) => p.nodeId).sort()).toEqual(["a", "b"]);
+  });
+
+  it("is deterministic with zones and exclusions in any node order", () => {
+    const rand = seeded(7);
+    for (let run = 0; run < 50; run++) {
+      const nodes = Array.from({ length: int(rand, 2, 6) }, (_, i) =>
+        node(`n${i}`, {
+          zone: pick(rand, ["z1", "z2", null]),
+          serviceReplicas: { svc_1: int(rand, 0, 2) },
+        }),
+      );
+      const req = request({ replicas: int(rand, 1, 3), excludeNodeIds: [nodes[0]!.id] });
+      expect(schedule(req, shuffle(rand, nodes))).toEqual(schedule(req, nodes));
+    }
+  });
+});
