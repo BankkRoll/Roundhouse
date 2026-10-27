@@ -36,6 +36,8 @@ export interface TokenPrincipalRow {
   name: string;
   workspaceId: string;
   scopes: readonly Action[];
+  /** Unix ms, or `null` for a token that never expires. */
+  expiresAt: number | null;
   /** Creator's current role in the token's workspace. */
   role: Role;
   user: { id: string; name: string; email: string; image: string | null };
@@ -107,6 +109,7 @@ export async function resolveApiToken(
     name: token.name,
     workspaceId: token.workspaceId!,
     scopes: token.scopes.filter(isApiTokenScope),
+    expiresAt: token.expiresAt ? +token.expiresAt : null,
     role: row.role,
     user: { id: user.id, name: user.name, email: user.email, image: user.image ?? null },
   };
