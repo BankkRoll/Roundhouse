@@ -127,9 +127,6 @@ export const SHELL_DENIAL_CLOSE_CODES: Record<ShellDenial, ShellCloseCode> = {
   protected_environment: SHELL_CLOSE_CODES.protectedEnvironment,
 };
 
-/** How long a session outlives its browser socket before it is closed (no resume in v1). */
-export const SHELL_DISCONNECT_GRACE_MS = 30_000;
-
 /** How long before the idle timeout the terminal starts its countdown. */
 export const SHELL_IDLE_WARNING_S = 60;
 
