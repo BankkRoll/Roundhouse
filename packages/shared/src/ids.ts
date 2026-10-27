@@ -74,6 +74,8 @@ export const ID_PREFIXES = {
   certificate: "cer",
   /** One run of a cron service (ADR 0010); also its workflow instance ID. */
   cronRun: "crn",
+  /** One pull request's preview of one project (ADR 0007). */
+  preview: "prv",
 } as const;
 
 /** An entity kind that has an ID prefix. */

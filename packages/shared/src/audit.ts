@@ -133,6 +133,13 @@ export const AUDIT_ACTIONS = [
   "cron.run_cancelled",
   "cron.paused",
   "cron.resumed",
+  "preview.settings_updated",
+  "preview.created",
+  "preview.gated",
+  "preview.approved",
+  "preview.expired",
+  "preview.closed",
+  "preview.deleted",
 ] as const;
 
 /** An audited action name. */
