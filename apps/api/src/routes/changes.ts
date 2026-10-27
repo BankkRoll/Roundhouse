@@ -195,7 +195,10 @@ export const changeRoutes = createRouter()
     const summaries = await Promise.all(
       sets.map(async (s) => toApiChangeSetSummary(s, await loadOps(db, s.id))),
     );
-    return c.json({ change_sets: summaries }, 200);
+    return c.json(
+      { change_sets: summaries, environment_requires_approval: requiresApproval(environment) },
+      200,
+    );
   })
   .openapi(listWorkspaceChangeSets, async (c) => {
     const { workspaceId } = c.req.valid("param");

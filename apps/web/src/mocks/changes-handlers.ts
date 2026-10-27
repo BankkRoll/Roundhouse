@@ -1493,7 +1493,10 @@ export const changeHandlers = [
           (input.query.status === "all" || s.status === "open" || s.status === "applying"),
       )
       .sort((a, b) => (a.id < b.id ? 1 : -1));
-    return HttpResponse.json({ change_sets: sets.map(toSummary) });
+    return HttpResponse.json({
+      change_sets: sets.map(toSummary),
+      environment_requires_approval: requiresApproval(scope.environment),
+    });
   }),
 
   http.post(mswPath("createChangeSet"), async ({ request, params }) => {

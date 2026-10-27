@@ -245,20 +245,24 @@ type AppliedChangeSet struct {
 	Skipped       []SkippedDeploy `json:"skipped"`
 }
 
+// ChangeSetList is an environment's change sets and whether applying
+// there needs an approval.
+type ChangeSetList struct {
+	ChangeSets []ChangeSetSummary `json:"change_sets"`
+	// EnvironmentRequiresApproval is set when the environment is protected
+	// and its protection requires approval: a set applies only once its
+	// review status is approved.
+	EnvironmentRequiresApproval bool `json:"environment_requires_approval"`
+}
+
 // ListChangeSets lists an environment's change sets, newest first: the
 // open ones, or every one when all is set.
-func (c *Client) ListChangeSets(ctx context.Context, environmentID string, all bool) ([]ChangeSetSummary, error) {
+func (c *Client) ListChangeSets(ctx context.Context, environmentID string, all bool) (*ChangeSetList, error) {
 	status := "open"
 	if all {
 		status = "all"
 	}
-	var out struct {
-		ChangeSets []ChangeSetSummary `json:"change_sets"`
-	}
-	if err := c.call(ctx, RouteListChangeSets, url.Values{"status": {status}}, nil, &out, environmentID); err != nil {
-		return nil, err
-	}
-	return out.ChangeSets, nil
+	return fetch[ChangeSetList](ctx, c, RouteListChangeSets, url.Values{"status": {status}}, nil, environmentID)
 }
 
 // Draft returns an environment's shared dashboard draft, or nil when

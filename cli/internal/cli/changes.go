@@ -81,15 +81,16 @@ func (a *App) runChangesList(ctx context.Context, f targetFlags, all bool) error
 	if err != nil {
 		return err
 	}
-	sets, err := t.sess.client.ListChangeSets(ctx, t.env.ID, all)
+	list, err := t.sess.client.ListChangeSets(ctx, t.env.ID, all)
 	if err != nil {
 		return err
 	}
+	sets := list.ChangeSets
 	if a.jsonOut {
 		if sets == nil {
 			sets = []api.ChangeSetSummary{}
 		}
-		return a.printJSON(sets)
+		return a.printJSON(changeSetListJSON{ChangeSets: sets, EnvironmentRequiresApproval: list.EnvironmentRequiresApproval})
 	}
 	if len(sets) == 0 {
 		if all {
@@ -99,16 +100,35 @@ func (a *App) runChangesList(ctx context.Context, f targetFlags, all bool) error
 		}
 		return nil
 	}
-	tbl := a.newTable("id", "title", "status", "review", "changes", "conflicts", "source", "updated")
+	tbl := a.newTable("id", "title", "status", "review", "approval", "changes", "conflicts", "source", "updated")
 	for _, s := range sets {
 		review := s.ReviewStatus
 		if review == "" || review == api.ReviewNone {
 			review = "-"
 		}
-		tbl.row(s.ID, changeSetTitle(s), s.Status, review, fmt.Sprint(s.OpCount), fmt.Sprint(s.ConflictedCount), s.Source, ago(a.Now(), s.UpdatedAt))
+		tbl.row(s.ID, changeSetTitle(s), s.Status, review, approvalCell(s, list.EnvironmentRequiresApproval),
+			fmt.Sprint(s.OpCount), fmt.Sprint(s.ConflictedCount), s.Source, ago(a.Now(), s.UpdatedAt))
 	}
 	tbl.flush()
 	return nil
+}
+
+// changeSetListJSON is what `changes list --json` prints.
+type changeSetListJSON struct {
+	ChangeSets                  []api.ChangeSetSummary `json:"change_sets"`
+	EnvironmentRequiresApproval bool                   `json:"environment_requires_approval"`
+}
+
+// approvalCell says whether an open set still needs an approval before it
+// can apply.
+func approvalCell(s api.ChangeSetSummary, required bool) string {
+	switch {
+	case !required || s.Status != api.ChangeSetOpen:
+		return "-"
+	case s.ReviewStatus == api.ReviewApproved:
+		return "approved"
+	}
+	return "required"
 }
 
 func changeSetTitle(s api.ChangeSetSummary) string {

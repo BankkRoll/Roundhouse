@@ -60,7 +60,7 @@ export const changesApi = {
    * @returns The sets, newest first.
    */
   listChangeSets: (environmentId: string, status: "open" | "all" = "open", signal?: AbortSignal) =>
-    request<{ change_sets: ChangeSetSummary[] }>(
+    request<{ change_sets: ChangeSetSummary[]; environment_requires_approval: boolean }>(
       "GET",
       `/v1/environments/${seg(environmentId)}/change-sets`,
       { query: { status }, signal },

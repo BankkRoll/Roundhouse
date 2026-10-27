@@ -267,13 +267,20 @@ func (f *Fake) listChangeSets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []api.ChangeSetSummary{}
+	// The fake keeps the approval rule per set; an environment requires
+	// approval when any of its sets was staged under that rule.
+	requires := false
 	for i := len(f.changeSets) - 1; i >= 0; i-- {
 		cs := f.changeSets[i]
-		if cs.EnvironmentID == env && (status == "all" || cs.Status == api.ChangeSetOpen) {
+		if cs.EnvironmentID != env {
+			continue
+		}
+		requires = requires || cs.requireApproval
+		if status == "all" || cs.Status == api.ChangeSetOpen {
 			out = append(out, cs.ChangeSetSummary)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"change_sets": out})
+	writeJSON(w, http.StatusOK, map[string]any{"change_sets": out, "environment_requires_approval": requires})
 }
 
 func (f *Fake) getDraft(w http.ResponseWriter, r *http.Request) {

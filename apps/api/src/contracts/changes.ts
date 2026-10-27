@@ -607,7 +607,18 @@ export const listChangeSets = defineRoute(session("projects:read"), {
   security: sessionAuth,
   request: { params: EnvironmentParams, query: ChangeSetListQuery },
   responses: {
-    200: json(z.object({ change_sets: z.array(ChangeSetSummarySchema) }).openapi("ChangeSetList")),
+    200: json(
+      z
+        .object({
+          change_sets: z.array(ChangeSetSummarySchema),
+          /**
+           * Applying here needs an approval (protected with `require_approval`), so a set
+           * whose `review_status` isn't `approved` can't apply yet.
+           */
+          environment_requires_approval: z.boolean(),
+        })
+        .openapi("ChangeSetList"),
+    ),
     ...errors(400, 401, 403, 404),
   },
 });

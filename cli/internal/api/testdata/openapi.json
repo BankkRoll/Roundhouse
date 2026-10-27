@@ -1553,10 +1553,14 @@
               "$ref": "#/components/schemas/ChangeSetSummary"
             },
             "type": "array"
+          },
+          "environment_requires_approval": {
+            "type": "boolean"
           }
         },
         "required": [
-          "change_sets"
+          "change_sets",
+          "environment_requires_approval"
         ],
         "type": "object"
       },

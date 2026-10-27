@@ -742,6 +742,15 @@ describe("workspace settings and protection", () => {
       json: { protected: true },
     });
     expect(kept.body.require_approval).toBe(true);
+    const list = await s.owner.json<{ environment_requires_approval: boolean }>(
+      `/v1/environments/${s.envId}/change-sets`,
+    );
+    expect(list.body.environment_requires_approval).toBe(true);
+    await s.owner.json(path, { method: "PUT", json: { protected: false } });
+    const off = await s.owner.json<{ environment_requires_approval: boolean }>(
+      `/v1/environments/${s.envId}/change-sets`,
+    );
+    expect(off.body.environment_requires_approval).toBe(false);
   });
 });
 

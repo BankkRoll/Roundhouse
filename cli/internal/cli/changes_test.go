@@ -55,17 +55,36 @@ func TestChangesList(t *testing.T) {
 	}
 
 	r = h.ok("", "changes", "ls", "--all", "--json")
-	var out []api.ChangeSetSummary
-	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil {
+	var list api.ChangeSetList
+	if err := json.Unmarshal([]byte(r.stdout), &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(out) != 2 || out[0].ID != other || out[0].Status != api.ChangeSetDiscarded || out[1].OpCount != 2 {
-		t.Fatalf("--all: %+v", out)
+	out := list.ChangeSets
+	if len(out) != 2 || out[0].ID != other || out[0].Status != api.ChangeSetDiscarded || out[1].OpCount != 2 || list.EnvironmentRequiresApproval {
+		t.Fatalf("--all: %+v", list)
 	}
 
 	r = h.ok("", "changes", "list", "--environment", "staging", "--json")
-	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || len(out) != 1 || out[0].EnvironmentID != apitest.StagingID {
-		t.Fatalf("staging: %v %+v", err, out)
+	list = api.ChangeSetList{}
+	if err := json.Unmarshal([]byte(r.stdout), &list); err != nil || len(list.ChangeSets) != 1 || list.ChangeSets[0].EnvironmentID != apitest.StagingID {
+		t.Fatalf("staging: %v %+v", err, list)
+	}
+}
+
+func TestChangesListShowsApprovalRequired(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	id := h.fake.StageChangeSet(apitest.ChangeSetSpec{EnvironmentID: apitest.ProductionID, Title: "Scale up", RequireApproval: true,
+		Changes: []api.StagedChange{{Summary: "update API config"}}})
+	r := h.ok("", "changes", "list")
+	contains(t, r.stdout, "APPROVAL")
+	contains(t, r.stdout, id)
+	contains(t, r.stdout, "required")
+
+	r = h.ok("", "changes", "list", "--json")
+	var list api.ChangeSetList
+	if err := json.Unmarshal([]byte(r.stdout), &list); err != nil || !list.EnvironmentRequiresApproval {
+		t.Fatalf("json: %v %+v", err, list)
 	}
 }
 
