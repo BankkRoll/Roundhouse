@@ -42,6 +42,11 @@ export interface VariableRow {
    */
   fingerprint: string | null;
   change: "none" | "added" | "changed" | "deleted";
+  /**
+   * A preview placeholder (ADR 0007): the base environment held a secret here, so this
+   * preview got an empty value. Cleared once a new value is staged.
+   */
+  withheld: boolean;
   /** Saved version, when the key exists on the server. */
   version?: number;
 }
@@ -120,6 +125,7 @@ export function mergeRows(saved: readonly Variable[], draft: VariablesDraft): Va
       isSecret: staged ? staged.isSecret : variable.tier === "secret",
       fingerprint: staged ? null : variable.fingerprint,
       change: draft.remove.has(variable.key) ? "deleted" : staged ? "changed" : "none",
+      withheld: !staged && variable.withheld,
       version: variable.version,
     });
   }
@@ -131,6 +137,7 @@ export function mergeRows(saved: readonly Variable[], draft: VariablesDraft): Va
       isSecret: staged.isSecret,
       fingerprint: null,
       change: "added",
+      withheld: false,
     });
   }
   return [...rows.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));

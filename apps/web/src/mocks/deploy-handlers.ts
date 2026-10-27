@@ -362,6 +362,7 @@ function toVariable(row: DbVariable): Variable {
     fingerprint: mockFingerprint(row.value),
     available_at_build: row.available_at_build,
     mount_as_file: row.mount_as_file,
+    withheld: row.withheld ?? false,
     version: row.version,
     updated_at: row.updated_at,
     updated_by: row.updated_by,
@@ -1086,6 +1087,7 @@ export const deployHandlers = [
       pr_number: null,
       source_branch: null,
       protected: true,
+      preview_id: null,
       created_at: now,
     });
     recordAudit({
@@ -1223,6 +1225,7 @@ export const deployHandlers = [
       pr_number: (input.body.pr_number as number | undefined) ?? null,
       source_branch: (input.body.source_branch as string | undefined) ?? null,
       protected: false,
+      preview_id: null,
       created_at: Date.now(),
     };
     db.deploy.environments.push(environment);

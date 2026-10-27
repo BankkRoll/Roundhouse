@@ -1,5 +1,15 @@
 import { VARIABLE_NAME_RE } from "@roundhouse/shared";
-import { Badge, Button, copyText, EmptyState, Input, Label, Skeleton, toast } from "@roundhouse/ui";
+import {
+  Badge,
+  Button,
+  copyText,
+  EmptyState,
+  Input,
+  Label,
+  Skeleton,
+  Tooltip,
+  toast,
+} from "@roundhouse/ui";
 import { Switch } from "@roundhouse/ui/controls";
 import { useQueries } from "@tanstack/react-query";
 import {
@@ -541,6 +551,13 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
                           {row.key}
                         </span>
                         {row.isSecret ? <Badge>secret</Badge> : null}
+                        {row.withheld ? (
+                          <Tooltip content="The base environment holds a secret here; this preview got an empty placeholder instead.">
+                            <Badge tone="info" tabIndex={0}>
+                              Withheld from preview
+                            </Badge>
+                          </Tooltip>
+                        ) : null}
                         {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
                       </div>
                       <div className="min-w-0">

@@ -50,6 +50,8 @@ export interface DbVariable {
   locked: boolean;
   available_at_build: boolean;
   mount_as_file: boolean;
+  /** A preview placeholder: the base environment held a secret here (ADR 0007). */
+  withheld?: boolean;
   version: number;
   updated_at: number;
   updated_by: string | null;
@@ -500,6 +502,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         // NOTE: Created before ADR 0014, so the migration left it unprotected; the tools
         // project's production shows the protected case.
         protected: false,
+        preview_id: null,
         created_at: now - 7 * DAY,
       },
       {
@@ -511,6 +514,7 @@ export function seedDeploy(workspaceId: string, now = Date.now()): DeployDb {
         pr_number: null,
         source_branch: null,
         protected: true,
+        preview_id: null,
         created_at: now - 14 * DAY,
       },
     ],

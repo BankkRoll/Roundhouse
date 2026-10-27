@@ -43,6 +43,7 @@ import { Route as AppWWorkspaceIdTeamsTeamIdRouteImport } from './routes/_app/w/
 import { Route as AppWWorkspaceIdTemplatesIndexRouteImport } from './routes/_app/w/$workspaceId/templates/index'
 import { Route as AppWWorkspaceIdTemplatesTemplateIdRouteImport } from './routes/_app/w/$workspaceId/templates/$templateId'
 import { Route as AppWWorkspaceIdPProjectIdIndexRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/index'
+import { Route as AppWWorkspaceIdPProjectIdPreviewsRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/previews'
 import { Route as AppWWorkspaceIdPProjectIdSServiceIdRouteRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/s/$serviceId/route'
 import { Route as AppWWorkspaceIdPProjectIdSettingsIndexRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/settings/index'
 import { Route as AppWWorkspaceIdPProjectIdSettingsAccessRouteImport } from './routes/_app/w/$workspaceId/p/$projectId/settings/access'
@@ -243,6 +244,12 @@ const AppWWorkspaceIdPProjectIdIndexRoute =
     path: '/',
     getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
   } as any)
+const AppWWorkspaceIdPProjectIdPreviewsRoute =
+  AppWWorkspaceIdPProjectIdPreviewsRouteImport.update({
+    id: '/previews',
+    path: '/previews',
+    getParentRoute: () => AppWWorkspaceIdPProjectIdRouteRoute,
+  } as any)
 const AppWWorkspaceIdPProjectIdSServiceIdRouteRoute =
   AppWWorkspaceIdPProjectIdSServiceIdRouteRouteImport.update({
     id: '/s/$serviceId',
@@ -367,6 +374,7 @@ export interface FileRoutesByFullPath {
   '/w/$workspaceId/servers/': typeof AppWWorkspaceIdServersIndexRoute
   '/w/$workspaceId/teams/': typeof AppWWorkspaceIdTeamsIndexRoute
   '/w/$workspaceId/templates/': typeof AppWWorkspaceIdTemplatesIndexRoute
+  '/w/$workspaceId/p/$projectId/previews': typeof AppWWorkspaceIdPProjectIdPreviewsRoute
   '/w/$workspaceId/p/$projectId/': typeof AppWWorkspaceIdPProjectIdIndexRoute
   '/w/$workspaceId/p/$projectId/s/$serviceId': typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren
   '/w/$workspaceId/p/$projectId/settings/access': typeof AppWWorkspaceIdPProjectIdSettingsAccessRoute
@@ -415,6 +423,7 @@ export interface FileRoutesByTo {
   '/w/$workspaceId/servers': typeof AppWWorkspaceIdServersIndexRoute
   '/w/$workspaceId/teams': typeof AppWWorkspaceIdTeamsIndexRoute
   '/w/$workspaceId/templates': typeof AppWWorkspaceIdTemplatesIndexRoute
+  '/w/$workspaceId/p/$projectId/previews': typeof AppWWorkspaceIdPProjectIdPreviewsRoute
   '/w/$workspaceId/p/$projectId': typeof AppWWorkspaceIdPProjectIdIndexRoute
   '/w/$workspaceId/p/$projectId/settings/access': typeof AppWWorkspaceIdPProjectIdSettingsAccessRoute
   '/w/$workspaceId/p/$projectId/settings/environments': typeof AppWWorkspaceIdPProjectIdSettingsEnvironmentsRoute
@@ -466,6 +475,7 @@ export interface FileRoutesById {
   '/_app/w/$workspaceId/servers/': typeof AppWWorkspaceIdServersIndexRoute
   '/_app/w/$workspaceId/teams/': typeof AppWWorkspaceIdTeamsIndexRoute
   '/_app/w/$workspaceId/templates/': typeof AppWWorkspaceIdTemplatesIndexRoute
+  '/_app/w/$workspaceId/p/$projectId/previews': typeof AppWWorkspaceIdPProjectIdPreviewsRoute
   '/_app/w/$workspaceId/p/$projectId/': typeof AppWWorkspaceIdPProjectIdIndexRoute
   '/_app/w/$workspaceId/p/$projectId/s/$serviceId': typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren
   '/_app/w/$workspaceId/p/$projectId/settings/access': typeof AppWWorkspaceIdPProjectIdSettingsAccessRoute
@@ -518,6 +528,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/servers/'
     | '/w/$workspaceId/teams/'
     | '/w/$workspaceId/templates/'
+    | '/w/$workspaceId/p/$projectId/previews'
     | '/w/$workspaceId/p/$projectId/'
     | '/w/$workspaceId/p/$projectId/s/$serviceId'
     | '/w/$workspaceId/p/$projectId/settings/access'
@@ -566,6 +577,7 @@ export interface FileRouteTypes {
     | '/w/$workspaceId/servers'
     | '/w/$workspaceId/teams'
     | '/w/$workspaceId/templates'
+    | '/w/$workspaceId/p/$projectId/previews'
     | '/w/$workspaceId/p/$projectId'
     | '/w/$workspaceId/p/$projectId/settings/access'
     | '/w/$workspaceId/p/$projectId/settings/environments'
@@ -616,6 +628,7 @@ export interface FileRouteTypes {
     | '/_app/w/$workspaceId/servers/'
     | '/_app/w/$workspaceId/teams/'
     | '/_app/w/$workspaceId/templates/'
+    | '/_app/w/$workspaceId/p/$projectId/previews'
     | '/_app/w/$workspaceId/p/$projectId/'
     | '/_app/w/$workspaceId/p/$projectId/s/$serviceId'
     | '/_app/w/$workspaceId/p/$projectId/settings/access'
@@ -882,6 +895,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWWorkspaceIdPProjectIdIndexRouteImport
       parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
     }
+    '/_app/w/$workspaceId/p/$projectId/previews': {
+      id: '/_app/w/$workspaceId/p/$projectId/previews'
+      path: '/previews'
+      fullPath: '/w/$workspaceId/p/$projectId/previews'
+      preLoaderRoute: typeof AppWWorkspaceIdPProjectIdPreviewsRouteImport
+      parentRoute: typeof AppWWorkspaceIdPProjectIdRouteRoute
+    }
     '/_app/w/$workspaceId/p/$projectId/s/$serviceId': {
       id: '/_app/w/$workspaceId/p/$projectId/s/$serviceId'
       path: '/s/$serviceId'
@@ -1036,6 +1056,7 @@ const AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren =
   )
 
 interface AppWWorkspaceIdPProjectIdRouteRouteChildren {
+  AppWWorkspaceIdPProjectIdPreviewsRoute: typeof AppWWorkspaceIdPProjectIdPreviewsRoute
   AppWWorkspaceIdPProjectIdIndexRoute: typeof AppWWorkspaceIdPProjectIdIndexRoute
   AppWWorkspaceIdPProjectIdSServiceIdRouteRoute: typeof AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren
   AppWWorkspaceIdPProjectIdSettingsAccessRoute: typeof AppWWorkspaceIdPProjectIdSettingsAccessRoute
@@ -1045,6 +1066,8 @@ interface AppWWorkspaceIdPProjectIdRouteRouteChildren {
 
 const AppWWorkspaceIdPProjectIdRouteRouteChildren: AppWWorkspaceIdPProjectIdRouteRouteChildren =
   {
+    AppWWorkspaceIdPProjectIdPreviewsRoute:
+      AppWWorkspaceIdPProjectIdPreviewsRoute,
     AppWWorkspaceIdPProjectIdIndexRoute: AppWWorkspaceIdPProjectIdIndexRoute,
     AppWWorkspaceIdPProjectIdSServiceIdRouteRoute:
       AppWWorkspaceIdPProjectIdSServiceIdRouteRouteWithChildren,

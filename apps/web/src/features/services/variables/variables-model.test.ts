@@ -69,6 +69,7 @@ describe("staging", () => {
       fingerprint: null,
       available_at_build: false,
       mount_as_file: false,
+      withheld: false,
       updated_by: null,
     },
     {
@@ -81,6 +82,7 @@ describe("staging", () => {
       fingerprint: "0a1b2c3d",
       available_at_build: false,
       mount_as_file: false,
+      withheld: false,
       updated_by: null,
     },
   ];

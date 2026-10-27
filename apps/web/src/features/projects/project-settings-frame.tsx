@@ -9,7 +9,8 @@ import { useProjectEnvironment } from "./use-project-environment";
 type ProjectSettingsPath =
   | "/w/$workspaceId/p/$projectId/settings"
   | "/w/$workspaceId/p/$projectId/settings/access"
-  | "/w/$workspaceId/p/$projectId/settings/environments";
+  | "/w/$workspaceId/p/$projectId/settings/environments"
+  | "/w/$workspaceId/p/$projectId/previews";
 
 /** Props for {@link ProjectSettingsFrame}. */
 export interface ProjectSettingsFrameProps {
@@ -26,7 +27,7 @@ export interface ProjectSettingsFrameProps {
 
 /**
  * Every project settings view: a back link to the project, the sub-navigation (General,
- * Access for project admins, Environments) beside a titled column. Links keep the
+ * Access for project admins, Environments, Previews) beside a titled column. Links keep the
  * selected environment.
  *
  * @param props - Ids, title, description, actions and the view.
@@ -77,6 +78,7 @@ export function ProjectSettingsFrame({
                 ? item("/w/$workspaceId/p/$projectId/settings/access", "Access")
                 : null}
               {item("/w/$workspaceId/p/$projectId/settings/environments", "Environments")}
+              {item("/w/$workspaceId/p/$projectId/previews", "Previews")}
             </SettingsNavGroup>
           </SettingsNav>
         }

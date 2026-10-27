@@ -505,6 +505,7 @@ export const templateHandlers = [
       pr_number: null,
       source_branch: null,
       protected: true,
+      preview_id: null,
       created_at: now,
     };
     db.deploy.projects.push(project);

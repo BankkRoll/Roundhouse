@@ -71,6 +71,7 @@ const environment = {
   pr_number: null,
   source_branch: null,
   protected: true,
+  preview_id: null,
   created_at: 1,
 };
 

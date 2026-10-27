@@ -48,6 +48,7 @@ import {
 import { SEED } from "./deploy-db";
 import { realtimeSubscriptions, sentRealtimeMessages } from "./deploy-handlers";
 import { handlers } from "./handlers";
+import { addPreviewEnvironment, PREVIEW_SEED } from "./previews-db";
 import { MOCK_BACKUP_CODES, MOCK_TOTP_CODE } from "./security-db";
 
 // -----------------------------------------------------------------------------
@@ -98,6 +99,7 @@ const ROUTE_MODULES = [
   "auth-security",
   "cron",
   "access",
+  "previews",
 ] as const;
 
 async function loadApiRoutes(): Promise<ApiRoute[]> {
@@ -3416,6 +3418,96 @@ describe("MSW mocks match the API contract", () => {
       as(null);
       expect((await call("GET", `${svc}/cron?${env}`)).status).toBe(401);
       expect((await preview("schedule=@daily")).status).toBe(401);
+    });
+  });
+
+  it("ADR 0007 previews: settings, list, approve, redeploy and tear down", async () => {
+    await fresh(async () => {
+      addPreviewEnvironment(db.deploy);
+      const settings = `/v1/projects/${SEED.project}/preview-settings`;
+      const list = `/v1/projects/${SEED.project}/previews`;
+      const one = (id: string) => `/v1/previews/${id}`;
+      const valid = {
+        enabled: true,
+        base_environment_id: SEED.production,
+        fork_policy: "approval",
+        build_node_selector: { pool: "untrusted" },
+      };
+
+      expect(await call("GET", settings)).toMatchObject({
+        status: 200,
+        body: { configured: true, fork_policy: "approval", pull_request_events_seen: true },
+      });
+      expect(await call("GET", `/v1/projects/${SEED.toolsProject}/preview-settings`)).toMatchObject(
+        { status: 200, body: { configured: false, enabled: false } },
+      );
+      expect((await call("GET", "/v1/projects/prj_nope/preview-settings")).status).toBe(404);
+      expect(await call("PUT", settings, { ...valid, ttl_hours: 24 })).toMatchObject({
+        status: 200,
+        body: { ttl_hours: 24, max_active: 5, comment: true },
+      });
+      expect((await call("PUT", settings, { ...valid, build_node_selector: {} })).status).toBe(400);
+      expect(
+        (
+          await call("PUT", settings, {
+            ...valid,
+            base_environment_id: PREVIEW_SEED.environment,
+          })
+        ).status,
+      ).toBe(400);
+      expect((await call("PUT", settings, { ...valid, ttl_hours: 0 })).status).toBe(400);
+
+      expect(await call("GET", list)).toMatchObject({ status: 200 });
+      const open = (await call("GET", list)).body as { previews: { id: string }[] };
+      expect(open.previews.map((row) => row.id)).not.toContain(PREVIEW_SEED.closed);
+      const all = (await call("GET", `${list}?status=all`)).body as { previews: { id: string }[] };
+      expect(all.previews.map((row) => row.id)).toContain(PREVIEW_SEED.closed);
+      expect((await call("GET", `${list}?status=bogus`)).status).toBe(400);
+      expect(await call("GET", one(PREVIEW_SEED.active))).toMatchObject({
+        status: 200,
+        body: { pr_number: 42, environment_id: PREVIEW_SEED.environment },
+      });
+      expect((await call("GET", one("prv_nope"))).status).toBe(404);
+
+      const approve = (id: string, head_sha: string) =>
+        call("POST", `${one(id)}/approve`, { head_sha });
+      as("member");
+      expect((await call("PUT", settings, valid)).status).toBe(403);
+      expect((await approve(PREVIEW_SEED.pending, PREVIEW_SEED.pendingSha)).status).toBe(403);
+      as("owner");
+      expect((await approve(PREVIEW_SEED.pending, "nothex")).status).toBe(400);
+      expect(await approve(PREVIEW_SEED.pending, PREVIEW_SEED.newerSha)).toMatchObject({
+        status: 409,
+        body: { error: { code: "head_moved" } },
+      });
+      expect(await approve(PREVIEW_SEED.pending, PREVIEW_SEED.pendingSha)).toMatchObject({
+        status: 200,
+        body: { status: "creating", approved_sha: PREVIEW_SEED.pendingSha },
+      });
+      expect((await approve(PREVIEW_SEED.active, PREVIEW_SEED.activeSha)).status).toBe(409);
+
+      as("viewer");
+      expect((await call("POST", `${one(PREVIEW_SEED.active)}/redeploy`)).status).toBe(403);
+      expect((await call("DELETE", one(PREVIEW_SEED.active))).status).toBe(403);
+      as("member");
+      expect((await call("POST", `${one(PREVIEW_SEED.active)}/redeploy`)).status).toBe(200);
+      expect((await call("POST", `${one(PREVIEW_SEED.forkDisabled)}/redeploy`)).status).toBe(409);
+      expect(await call("DELETE", one(PREVIEW_SEED.active))).toMatchObject({
+        status: 200,
+        body: { status: "closed", environment_id: null },
+      });
+      expect(db.deploy.environments.some((row) => row.id === PREVIEW_SEED.environment)).toBe(false);
+      expect(db.audit.map((entry) => entry.action)).toEqual(
+        expect.arrayContaining([
+          "preview.settings_updated",
+          "preview.approved",
+          "deployment.created",
+          "preview.deleted",
+        ]),
+      );
+      as(null);
+      expect((await call("GET", list)).status).toBe(401);
+      expect((await call("GET", one(PREVIEW_SEED.active))).status).toBe(401);
     });
   });
 

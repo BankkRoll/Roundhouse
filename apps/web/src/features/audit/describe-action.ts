@@ -143,6 +143,13 @@ const VERBS: Record<AuditAction, string> = {
   "cron.run_cancelled": "cancelled a cron run",
   "cron.paused": "paused a cron job",
   "cron.resumed": "resumed a cron job",
+  "preview.settings_updated": "changed preview settings",
+  "preview.created": "created a preview for",
+  "preview.gated": "held back a preview for",
+  "preview.approved": "approved a preview for",
+  "preview.expired": "expired the preview for",
+  "preview.closed": "closed the preview for",
+  "preview.deleted": "tore down the preview for",
 };
 
 /**
@@ -178,6 +185,12 @@ const TARGETS: Partial<Record<AuditAction, (metadata: Metadata) => string | null
     const reason = stringField(metadata, "reason") ?? stringField(metadata, "code");
     return reason ? `(${reason.replace(/_/g, " ")})` : null;
   },
+  "preview.created": pullRequestOf,
+  "preview.gated": pullRequestOf,
+  "preview.approved": pullRequestOf,
+  "preview.expired": pullRequestOf,
+  "preview.closed": pullRequestOf,
+  "preview.deleted": pullRequestOf,
 };
 
 function isKnownAction(action: string): action is AuditAction {
@@ -204,6 +217,11 @@ function stringField(metadata: Metadata, key: string): string | null {
 
 function hostnameOf(metadata: Metadata): string | null {
   return stringField(metadata, "hostname");
+}
+
+function pullRequestOf(metadata: Metadata): string | null {
+  const number = metadata?.pr_number;
+  return typeof number === "number" ? `#${number}` : null;
 }
 
 function providerName(metadata: Metadata): string | null {
