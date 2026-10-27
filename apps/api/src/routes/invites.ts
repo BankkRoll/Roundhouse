@@ -25,6 +25,7 @@ import {
   requireWorkspace,
   signUp,
 } from "../context";
+import { defineRoute, session } from "../contracts/policy";
 import { auditInsert, recordAudit } from "../lib/audit";
 import { forwardCookies } from "../lib/cookies";
 import { hashToken, randomToken } from "../lib/crypto";
@@ -79,11 +80,14 @@ const list = createRoute({
   responses: { 200: json(z.object({ invites: z.array(InviteSchema) })), ...errors(401, 403, 404) },
 });
 
-const create = createRoute({
+// SECURITY: An invite admits someone with a role, so like a role change it
+// needs a fresh session (ADR 0014 "Fresh sessions"); the router enforces it.
+const create = defineRoute(session("members:manage", ["invite.created"], { reauth: true }), {
   method: "post",
   path: "/v1/workspaces/{workspaceId}/invites",
   tags: ["invites"],
   summary: "Invite someone by email",
+  description: "Needs a fresh session (403 `reauth_required`); API tokens can't create invites.",
   security: sessionAuth,
   request: {
     params: WorkspaceParams,

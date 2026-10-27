@@ -23134,6 +23134,7 @@
         ]
       },
       "post": {
+        "description": "Needs a fresh session (403 `reauth_required`); API tokens can't create invites.",
         "parameters": [
           {
             "in": "path",
@@ -23253,7 +23254,15 @@
         "summary": "Invite someone by email",
         "tags": [
           "invites"
-        ]
+        ],
+        "x-roundhouse-policy": {
+          "action": "members:manage",
+          "audit": [
+            "invite.created"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
       }
     },
     "/v1/workspaces/{workspaceId}/invites/{inviteId}": {
@@ -23935,6 +23944,7 @@
     },
     "/v1/workspaces/{workspaceId}/nodes/join-tokens": {
       "post": {
+        "description": "Needs a fresh session (403 `reauth_required`); API tokens can't create join tokens.",
         "parameters": [
           {
             "in": "path",
@@ -24016,7 +24026,15 @@
         "summary": "Create a single-use join token and install command",
         "tags": [
           "nodes"
-        ]
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [
+            "node.join_token_created"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
       }
     },
     "/v1/workspaces/{workspaceId}/nodes/provision": {

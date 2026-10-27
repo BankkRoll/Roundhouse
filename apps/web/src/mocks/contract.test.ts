@@ -446,6 +446,15 @@ describe("MSW mocks match the API contract", () => {
       expect(
         await call("POST", `${WS}/invites`, { email: "CARA@example.com", role: "viewer" }),
       ).toMatchObject({ status: 409, body: { error: { code: "conflict" } } });
+      db.sessionStale = true;
+      expect(
+        await call("POST", `${WS}/invites`, { email: "frank@example.com", role: "viewer" }),
+      ).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required", details: [{ code: "session_stale" }] } },
+      });
+      expect((await call("GET", `${WS}/invites`)).status).toBe(200);
+      db.sessionStale = false;
       expect(
         await call("POST", `${WS}/invites`, { email: "Frank@Example.com", role: "viewer" }),
       ).toMatchObject({ status: 201, body: { invite: { email: "frank@example.com" } } });
@@ -523,6 +532,12 @@ describe("MSW mocks match the API contract", () => {
       expect(expires_at - before).toBeLessThanOrEqual(JOIN_TOKEN_TTL_MS + 1000);
       expect(install_command).toMatch(/\| sudo bash -s -- --token njt_/);
       expect((await call("POST", `${OTHER_WS}/nodes/join-tokens`)).status).toBe(404);
+      db.sessionStale = true;
+      expect(await call("POST", `${WS}/nodes/join-tokens`)).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.sessionStale = false;
 
       as("member");
       expect((await call("POST", `${WS}/nodes/join-tokens`)).status).toBe(403);
