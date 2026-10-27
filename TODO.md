@@ -9,7 +9,6 @@ On branch `feat/volumes-next` (migration 0024, protocol version 8), not yet in
 `main`. Read the branch's last commit message before picking it up.
 
 Done on the branch:
-
 - Protocol 8: base backups, WAL archiving, WAL fetch and `restore_job.pitr`,
   with sealed URLs and the 60-second credential lifetime.
 - Agent: `pg_basebackup` base backups, the `walship` WAL uploader, and
@@ -20,7 +19,6 @@ Done on the branch:
   `POST /v1/services/{id}/pitr/restore`.
 
 Left:
-
 1. API tests for PITR: turning it on and off, the `wal_archive` and
    `wal_fetch` handlers, the restorable window, the restore route (including
    `422 pitr_target_unavailable` and future times), stream restart after a
@@ -41,18 +39,14 @@ Left:
    `packages/db/migrations/meta/0018_snapshot.json`, then run every suite,
    the agent integration suite with `-race`, and the phase 1 end-to-end test.
 
-## CI to confirm on GitHub's runners
+## Watch in CI
 
-These fixes landed without a GitHub run behind them; check them on the first
-CI run after they reach `main`:
-
-- `TestMeshTwoNodes` now tags the image ID that `docker load` prints, because
-  the runner's classic image store and the nodes' containerd store name
-  images differently. Reproduced and fixed locally only.
 - MongoDB 8.0 sometimes never became ready on runner image `20261025.353.1`
-  (Linux 7.0 kernel). The cause is unconfirmed; test containers now print
-  their log tail on failure. If it is the kernel, real nodes on that kernel
-  are affected too.
+  (Linux 7.0 kernel). It passed on the run for `e2244a1`, so the cause is
+  unconfirmed; test containers now print their log tail on failure. If it is
+  the kernel, real nodes on that kernel are affected too.
+- Some dashboard tests time out only when the whole web suite runs on a
+  heavily loaded machine; each passes on its own.
 
 ## Needs live verification
 
