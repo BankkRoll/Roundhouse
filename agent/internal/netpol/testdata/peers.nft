@@ -1,0 +1,72 @@
+table inet roundhouse {}
+delete table inet roundhouse
+table inet roundhouse {
+	set nodes {
+		type ipv4_addr
+		elements = { 10.200.1.1, 10.200.2.1 }
+	}
+	set routed {
+		type ipv4_addr . inet_service
+		elements = { 10.200.1.10 . 80, 10.200.1.10 . 8080 }
+	}
+	set env_7 {
+		type ipv4_addr
+		elements = { 10.200.1.10, 10.200.2.10 }
+	}
+	chain env_7_out {
+		ct original ip daddr @env_7 meta mark set meta mark or 0x02000000 accept
+		drop
+	}
+	chain env_7_in {
+		ip saddr @env_7 meta mark set meta mark or 0x02000000 accept
+		ip saddr @nodes ct original ip daddr . tcp dport @routed meta mark set meta mark or 0x02000000 accept
+		drop
+	}
+	map mesh_dnat {
+		type ipv4_addr : ipv4_addr
+		elements = { 10.200.1.10 : 172.18.0.2 }
+	}
+	map mesh_snat {
+		type ipv4_addr : ipv4_addr
+		elements = { 172.18.0.2 : 10.200.1.10 }
+	}
+	map bridge_env {
+		type ipv4_addr : verdict
+		elements = { 172.18.0.2 : jump env_7_out }
+	}
+	map mesh_env_in {
+		type ipv4_addr : verdict
+		elements = { 10.200.1.10 : jump env_7_in }
+	}
+	chain nat_prerouting {
+		type nat hook prerouting priority dstnat - 1; policy accept;
+		ip daddr 10.200.0.0/16 dnat ip to ip daddr map @mesh_dnat
+	}
+	chain nat_postrouting {
+		type nat hook postrouting priority srcnat - 1; policy accept;
+		oifname "wg0" snat ip to ip saddr map @mesh_snat
+	}
+	chain filter_forward {
+		type filter hook forward priority filter - 1; policy accept;
+		oifname "wg0" tcp flags syn tcp option maxseg size set rt mtu
+		ct state established,related ct original ip daddr 10.200.0.0/16 meta mark set meta mark or 0x02000000 accept
+		ct state established,related ct original ip saddr 10.200.0.0/16 meta mark set meta mark or 0x02000000 accept
+		iifname "wg0" ip saddr != 10.200.0.0/16 drop
+		iifname != "wg0" ct original ip daddr 10.200.0.0/16 ip saddr vmap @bridge_env
+		iifname != "wg0" ct original ip daddr 10.200.0.0/16 drop
+		iifname "wg0" ct original ip daddr vmap @mesh_env_in
+		iifname "wg0" drop
+		oifname "wg0" drop
+	}
+	chain filter_input {
+		type filter hook input priority filter - 1; policy accept;
+		iifname "wg0" ct state established,related accept
+		iifname "wg0" ip saddr != 10.200.0.0/16 drop
+		ip daddr 10.200.1.2 udp dport 53 iifname != "wg0" accept
+		ip daddr 10.200.1.2 tcp dport 53 iifname != "wg0" accept
+		ip daddr 10.200.1.2 drop
+		iifname "wg0" ip daddr 10.200.1.1 tcp dport 5000 ip saddr @nodes accept
+		iifname "wg0" ip daddr 10.200.1.1 icmp type echo-request accept
+		iifname "wg0" drop
+	}
+}
