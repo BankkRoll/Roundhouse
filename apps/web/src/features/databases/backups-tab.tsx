@@ -4,8 +4,10 @@ import {
   Button,
   Checkbox,
   EmptyState,
+  Input,
   Label,
   SaveBar,
+  Select,
   SettingsRow,
   SettingsSection,
   SettingsStack,
@@ -33,7 +35,7 @@ import { type FormEvent, useId, useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
 import { ErrorState } from "../../components/error-state";
 import { SettingsField } from "../../components/settings-field";
-import type { Backup, BackupPolicy } from "../../lib/api/backups-client";
+import type { Backup, BackupPolicy, RestoreBody } from "../../lib/api/backups-client";
 import { errorMessage, isApiError } from "../../lib/api/client";
 import type { Environment, Service } from "../../lib/api/deploy-types";
 import { formatBytes, formatDuration, formatRelativeTime, formatTimestamp } from "../../lib/format";
@@ -52,6 +54,7 @@ import {
 import { useMe } from "../../queries/me";
 import { findService, useProjectEnvironment } from "../projects/use-project-environment";
 import type { ServicePageProps } from "../services/service-layout";
+import { defaultRestoreSlug } from "./database-meta";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "info";
 
@@ -279,60 +282,124 @@ function PolicySection({
 // Restore
 // -----------------------------------------------------------------------------
 
+type RestoreMode = RestoreBody["mode"];
+
+const SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+function ModeOption({
+  mode,
+  checked,
+  disabled,
+  title,
+  description,
+  onSelect,
+}: {
+  mode: RestoreMode;
+  checked: boolean;
+  disabled?: boolean;
+  title: string;
+  description: string;
+  onSelect: (mode: RestoreMode) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border bg-background px-3 py-2 transition-colors has-[:checked]:border-accent-text has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
+      <input
+        type="radio"
+        name="restore-mode"
+        value={mode}
+        checked={checked}
+        disabled={disabled}
+        onChange={() => onSelect(mode)}
+        className="mt-0.5 size-3.5 shrink-0 accent-accent-text focus-visible:ring-2 focus-visible:ring-ring"
+      />
+      <span className="grid gap-0.5">
+        <span className="text-sm text-foreground">{title}</span>
+        <span className="text-xs text-muted-foreground">{description}</span>
+      </span>
+    </label>
+  );
+}
+
 function RestoreDialog({
   service,
   environment,
+  environments,
   backup,
   onOpenChange,
   onStarted,
 }: {
   service: Service;
   environment: Environment;
+  environments: readonly Environment[];
   backup: Backup | null;
   onOpenChange: (open: boolean) => void;
   onStarted: (restoreId: string) => void;
 }) {
-  const restore = useRestoreBackup(service.id, environment.id);
+  const restore = useRestoreBackup(service.id, environment.id, service.project_id);
+  const snapshot = backup?.method === "snapshot";
+  const [chosen, setChosen] = useState<RestoreMode>("new_service");
+  const mode: RestoreMode = snapshot ? "in_place" : chosen;
   const [skipSafety, setSkipSafety] = useState(false);
+  const [slug, setSlug] = useState("");
+  const [targetEnvId, setTargetEnvId] = useState(environment.id);
   const skipId = useId();
+  const slugId = useId();
+  const envId = useId();
+  const placeholder = defaultRestoreSlug(service.slug, Date.now());
+  const slugError =
+    slug.trim() !== "" && !SLUG.test(slug.trim())
+      ? "Lowercase letters, digits and dashes, starting and ending with a letter or digit."
+      : null;
+  const target = environments.find((env) => env.id === targetEnvId) ?? environment;
+
+  function reset() {
+    restore.reset();
+    setChosen("new_service");
+    setSkipSafety(false);
+    setSlug("");
+    setTargetEnvId(environment.id);
+  }
+
+  const body: RestoreBody =
+    mode === "new_service"
+      ? {
+          mode,
+          confirm: service.slug,
+          ...(slug.trim() ? { slug: slug.trim() } : {}),
+          ...(targetEnvId !== backup?.environment_id ? { target_environment_id: targetEnvId } : {}),
+        }
+      : { mode, confirm: service.slug, ...(skipSafety ? { skip_safety_backup: true } : {}) };
+
   return (
     <ConfirmDialog
       open={backup !== null}
       onOpenChange={(open) => {
         onOpenChange(open);
-        if (!open) {
-          restore.reset();
-          setSkipSafety(false);
-        }
+        if (!open) reset();
       }}
       title={`Restore ${service.name}?`}
       description={
         backup ? (
           <>
-            Replaces everything in {service.name} in {environment.name} with the backup from{" "}
-            {formatTimestamp(backup.created_at)}. The database is stopped while it restores.
-            Restoring into a new service isn't available yet.
+            From the {TRIGGER[backup.trigger].toLowerCase()} backup taken{" "}
+            {formatTimestamp(backup.created_at)}.
           </>
         ) : null
       }
-      confirmLabel="Restore in place"
+      confirmLabel={mode === "new_service" ? "Restore into a new service" : "Restore in place"}
+      destructive={mode === "in_place"}
       confirmText={service.slug}
+      confirmDisabled={mode === "new_service" && slugError !== null}
       pending={restore.isPending}
       error={restore.isError ? actionError(restore.error) : null}
       onConfirm={() => {
         if (!backup) return;
         restore.mutate(
-          {
-            backupId: backup.id,
-            body: {
-              mode: "in_place",
-              confirm: service.slug,
-              ...(skipSafety ? { skip_safety_backup: true } : {}),
-            },
-          },
+          { backupId: backup.id, body },
           {
             onSuccess: (started) => {
               onOpenChange(false);
+              reset();
               onStarted(started.id);
               toast({ title: "Restore started", tone: "success" });
             },
@@ -340,43 +407,147 @@ function RestoreDialog({
         );
       }}
     >
-      <div className="flex items-start gap-2">
-        <Checkbox
-          id={skipId}
-          checked={skipSafety}
-          onChange={(event) => setSkipSafety(event.target.checked)}
+      <fieldset className="grid gap-2">
+        <legend className="mb-1 text-sm font-medium text-foreground">Restore into</legend>
+        <ModeOption
+          mode="new_service"
+          checked={mode === "new_service"}
+          disabled={snapshot}
+          title="A new service"
+          description={
+            snapshot
+              ? "Only a dump can go into a new service: a snapshot carries the old passwords."
+              : `Adds a database of the same engine and version with fresh credentials, then restores into it. ${service.name} keeps running untouched.`
+          }
+          onSelect={setChosen}
         />
-        <Label htmlFor={skipId} className="grid gap-0.5 font-normal">
-          <span className="text-sm text-foreground">Skip the safety backup</span>
-          <span className="text-xs text-muted-foreground">
-            By default the current data is backed up first, so the restore can be undone.
-          </span>
-        </Label>
-      </div>
+        <ModeOption
+          mode="in_place"
+          checked={mode === "in_place"}
+          title={`${service.name}, in place`}
+          description={`Replaces everything in ${service.name} in ${environment.name}. The database is stopped while it restores.`}
+          onSelect={setChosen}
+        />
+      </fieldset>
+      {mode === "new_service" ? (
+        <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor={slugId}>New service slug</Label>
+            <Input
+              id={slugId}
+              value={slug}
+              placeholder={placeholder}
+              onChange={(event) => setSlug(event.target.value)}
+              aria-invalid={slugError ? true : undefined}
+              aria-describedby={`${slugId}-hint`}
+              autoComplete="off"
+              spellCheck={false}
+              className="font-mono"
+            />
+            <p
+              id={`${slugId}-hint`}
+              className={slugError ? "text-xs text-danger" : "text-xs text-muted-foreground"}
+            >
+              {slugError ?? "Leave empty for the name shown; a number is added if it is taken."}
+            </p>
+          </div>
+          {environments.length > 1 ? (
+            <div className="grid gap-1.5">
+              <Label htmlFor={envId}>Environment</Label>
+              <Select
+                id={envId}
+                value={targetEnvId}
+                onChange={(event) => setTargetEnvId(event.target.value)}
+              >
+                {environments.map((env) => (
+                  <option key={env.id} value={env.id}>
+                    {env.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            The new database is added and deployed in {target.name}, so this needs permission to
+            manage services and variables and to deploy there.
+          </p>
+        </div>
+      ) : (
+        <div className="flex items-start gap-2">
+          <Checkbox
+            id={skipId}
+            checked={skipSafety}
+            onChange={(event) => setSkipSafety(event.target.checked)}
+          />
+          <Label htmlFor={skipId} className="grid gap-0.5 font-normal">
+            <span className="text-sm text-foreground">Skip the safety backup</span>
+            <span className="text-xs text-muted-foreground">
+              By default the current data is backed up first, so the restore can be undone.
+            </span>
+          </Label>
+        </div>
+      )}
     </ConfirmDialog>
   );
 }
 
-function RestoreStatus({ restoreId }: { restoreId: string }) {
+function RestoreStatus({
+  restoreId,
+  workspaceId,
+  projectId,
+  services,
+  environments,
+}: {
+  restoreId: string;
+  workspaceId: string;
+  projectId: string;
+  services: readonly Service[];
+  environments: readonly Environment[];
+}) {
   const restore = useRestore(restoreId);
   if (!restore.data) return null;
-  const { status, error } = restore.data;
+  const { status, error, mode, target_service_id, target_environment_id } = restore.data;
   const tone =
     status === "failed"
       ? "border-danger/40 bg-danger/10"
       : status === "succeeded"
         ? "border-success/40 bg-success/10"
         : "border-info/40 bg-info/10";
-  const text = {
-    queued: "Restore queued",
-    running: "Restoring… the database is stopped until it finishes",
-    succeeded: "Restore finished",
-    failed: `Restore failed${error ? `: ${error}` : ""}`,
-  }[status];
+  const created =
+    mode === "new_service" ? services.find((row) => row.id === target_service_id) : undefined;
+  const env = environments.find((row) => row.id === target_environment_id);
+  const name = created?.name ?? "the new service";
+  const text =
+    mode === "new_service"
+      ? {
+          queued: "Restore queued",
+          running: `Restoring into ${name}… it starts, turns healthy, then takes the data`,
+          succeeded: `Restored into ${name}`,
+          failed: `Restore into ${name} failed${error ? `: ${error}` : ""}`,
+        }[status]
+      : {
+          queued: "Restore queued",
+          running: "Restoring… the database is stopped until it finishes",
+          succeeded: "Restore finished",
+          failed: `Restore failed${error ? `: ${error}` : ""}`,
+        }[status];
   return (
-    <p role="status" className={`rounded-lg border px-3.5 py-2 text-sm text-foreground ${tone}`}>
-      {text}
-    </p>
+    <div
+      role="status"
+      className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg border px-3.5 py-2 text-sm text-foreground ${tone}`}
+    >
+      <span>{text}</span>
+      {mode === "new_service" && target_service_id ? (
+        <Link
+          to="/w/$workspaceId/p/$projectId/s/$serviceId"
+          params={{ workspaceId, projectId, serviceId: target_service_id }}
+          search={{ env: env && env.kind !== "production" ? env.slug : undefined }}
+          className="font-medium text-accent-text underline-offset-2 hover:underline"
+        >
+          Open {created?.name ?? "new service"}
+        </Link>
+      ) : null}
+    </div>
   );
 }
 
@@ -500,7 +671,8 @@ function BackupRow({
 /**
  * A database service's Backups tab (ADR 0004): the scheduled-backup policy with a
  * next-runs preview, "Back up now", and the backups with their status, size and
- * duration, each restorable in place (typed slug, fresh session) and downloadable as an
+ * duration, each restorable into a new service (the default) or in place (typed slug,
+ * fresh session, progress until it finishes) and downloadable as an
  * encrypted file. Without backup storage it says so and links instance admins to the
  * setting.
  *
@@ -551,7 +723,15 @@ export function BackupsTab({ workspaceId, projectId, serviceId }: ServicePagePro
   return (
     <section aria-label="Backups" className="grid min-w-0 gap-6">
       {storageMissing ? <StorageNotice workspaceId={workspaceId} canFix={admin} /> : null}
-      {restoreId ? <RestoreStatus restoreId={restoreId} /> : null}
+      {restoreId ? (
+        <RestoreStatus
+          restoreId={restoreId}
+          workspaceId={workspaceId}
+          projectId={projectId}
+          services={project.data?.services ?? []}
+          environments={project.data?.environments ?? []}
+        />
+      ) : null}
       <SettingsStack>
         <PolicySection
           key={`${environment.id}:${policy.data.id ?? "default"}`}
@@ -647,6 +827,7 @@ export function BackupsTab({ workspaceId, projectId, serviceId }: ServicePagePro
       <RestoreDialog
         service={service}
         environment={environment}
+        environments={project.data?.environments ?? [environment]}
         backup={restoring}
         onOpenChange={(open) => {
           if (!open) setRestoring(null);

@@ -13,6 +13,8 @@ import {
   backupsApi,
   type RestoreBody,
 } from "../lib/api/backups-client";
+import { queryKeys } from "./keys";
+import { invalidateProjectSummaries } from "./projects";
 
 /** How often the backup list refreshes while a backup or restore runs. */
 export const BACKUP_POLL_MS = 5_000;
@@ -119,12 +121,15 @@ export function useBackupDownload() {
 
 /**
  * Starts a restore and refreshes the list (an in-place restore queues a safety backup).
+ * A restore into a new service also refreshes the project and its summaries, which now
+ * hold the new database.
  *
  * @param serviceId - Service id.
  * @param environmentId - Environment id.
+ * @param projectId - The service's project.
  * @returns A mutation taking the backup id and restore body.
  */
-export function useRestoreBackup(serviceId: string, environmentId: string) {
+export function useRestoreBackup(serviceId: string, environmentId: string, projectId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ backupId, body }: { backupId: string; body: RestoreBody }) =>
@@ -132,6 +137,10 @@ export function useRestoreBackup(serviceId: string, environmentId: string) {
     onSuccess: (restore) => {
       queryClient.setQueryData(backupKeys.restore(restore.id), restore);
       void queryClient.invalidateQueries({ queryKey: backupKeys.list(serviceId, environmentId) });
+      if (restore.mode === "new_service") {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.project(projectId) });
+        invalidateProjectSummaries(queryClient, projectId);
+      }
     },
   });
 }
