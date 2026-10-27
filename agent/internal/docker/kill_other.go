@@ -2,6 +2,8 @@
 
 package docker
 
-// killHostProcess cannot reach engine processes off Linux (Docker Desktop
+import "syscall"
+
+// signalHostProcess cannot reach engine processes off Linux (Docker Desktop
 // runs them in a VM).
-func killHostProcess(int, string) (bool, error) { return false, nil }
+func signalHostProcess(int, string, syscall.Signal) (bool, error) { return false, nil }
