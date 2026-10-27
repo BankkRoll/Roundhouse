@@ -152,6 +152,7 @@ function config(
     created_by: "usr_ada",
     created_at: createdAt,
     ...defaultServiceConfig(source),
+    cron: null,
     source,
     ...overrides,
   };

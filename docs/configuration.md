@@ -94,6 +94,7 @@ the first deploy; there are no IDs to copy.
 | `BACKUP_WORKFLOW`       | Workflow         | One database or volume backup per instance                              |
 | `RESTORE_WORKFLOW`      | Workflow         | One restore per instance                                                |
 | `CERT_WORKFLOW`         | Workflow         | One certificate order per attempt (managed TLS, ADR 0009)               |
+| `CRON_RUN_WORKFLOW`     | Workflow         | One cron run per instance (ADR 0010)                                    |
 | `AUTH_LIMITER`          | Rate limit       | 10 a minute per IP on secret-accepting endpoints and agent connects     |
 | `WEBHOOK_LIMITER`       | Rate limit       | 300 a minute per IP on the GitHub webhook receiver                      |
 | `MCP_LIMITER`           | Rate limit       | 60 a minute per token on MCP tool calls                                 |

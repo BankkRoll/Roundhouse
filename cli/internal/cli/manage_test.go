@@ -343,3 +343,33 @@ func TestServersAddProvisionErrors(t *testing.T) {
 	r = h.expect(exitcode.Forbidden, "", "servers", "add", "--provider", "hetzner", "--plan", "cx23", "--region", "fsn1", "--insecure")
 	contains(t, r.stderr, "hint: API tokens cannot provision servers")
 }
+
+func TestServicesCreateCron(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	r := h.ok("", "services", "create", "Nightly", "--kind", "cron", "--image", "ghcr.io/acme/report:1",
+		"--schedule", "0 3 * * *", "--timezone", "Europe/Berlin")
+	contains(t, r.stdout, "✓ Created service Nightly (nightly) in Shop")
+	contains(t, r.stdout, "  Runs on 0 3 * * * (Europe/Berlin) once deployed; change it with `roundhouse cron set`\n")
+	body := lastBody(t, h, api.RouteCreateService.String())
+	cfg, _ := body["config"].(map[string]any)
+	if body["kind"] != "cron" || len(cfg) != 1 {
+		t.Fatalf("body = %v", body)
+	}
+	if cron, _ := cfg["cron"].(map[string]any); len(cron) != 2 || cron["schedule"] != "0 3 * * *" || cron["timezone"] != "Europe/Berlin" {
+		t.Errorf("cron = %v", cfg["cron"])
+	}
+	r = h.ok("", "cron", "status", "--service", "nightly")
+	contains(t, r.stdout, "not deployed")
+	contains(t, r.stdout, "Schedule   0 3 * * * (Europe/Berlin)\n")
+
+	r = h.ok("", "services", "create", "Hourly", "--kind", "cron", "--image", "busybox", "--schedule", "@hourly", "--json")
+	h.golden("services-create-cron.json", r.stdout)
+
+	r = h.expect(exitcode.Usage, "", "services", "create", "x", "--kind", "cron", "--image", "busybox")
+	contains(t, r.stderr, "a cron service needs --schedule")
+	r = h.expect(exitcode.Usage, "", "services", "create", "x", "--image", "busybox", "--timezone", "UTC")
+	contains(t, r.stderr, "--schedule and --timezone are only for --kind cron")
+	r = h.expect(exitcode.Invalid, "", "services", "create", "x", "--kind", "cron", "--image", "busybox", "--schedule", "61 * * * *")
+	contains(t, r.stderr, "  61 * * * *\n  ^^\n")
+}

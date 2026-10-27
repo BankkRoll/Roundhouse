@@ -108,10 +108,10 @@ func TestBoxThatDoesNotOpenLeavesWorkloadPending(t *testing.T) {
 }
 
 func TestWrongKeyIsReportedDistinctly(t *testing.T) {
-	if got := envFailure(errors.Join(errors.New("workload wl_a"), protocol.ErrBoxWrongKey)); !strings.Contains(got, "re-join") {
+	if got := EnvFailure(errors.Join(errors.New("workload wl_a"), protocol.ErrBoxWrongKey)); !strings.Contains(got, "re-join") {
 		t.Fatalf("wrong key message %q", got)
 	}
-	if got := envFailure(errors.New("sealed box: decryption failed")); strings.Contains(got, "re-join") {
+	if got := EnvFailure(errors.New("sealed box: decryption failed")); strings.Contains(got, "re-join") {
 		t.Fatalf("generic failure blames the key: %q", got)
 	}
 }

@@ -3,6 +3,7 @@
  * domain routes and change set apply so both enforce the same rules:
  *
  * - {@link checkCustomHostname}: normalisation and the names the install owns.
+ * - {@link assertServesTraffic}: cron services (ADR 0010) take no domains.
  * - {@link domainPort} / {@link assertDomainCapacity}: a service needs a port,
  *   and at most `MAX_CUSTOM_DOMAINS_PER_SERVICE` domains per environment.
  * - {@link hostnameHolder}: instance-wide uniqueness, with takeover of a
@@ -35,6 +36,18 @@ import { INGRESS_HOSTNAME_SETTING } from "./records";
 
 /** A `domains` row. */
 export type DomainRow = typeof domains.$inferSelect;
+
+/**
+ * Refuses a domain for a service that serves no traffic.
+ *
+ * @param service - The service the domain would route to.
+ * @throws {ApiError} 422 `cron_has_no_endpoint` for a cron service.
+ */
+export function assertServesTraffic(service: { kind: string }): void {
+  if (service.kind === "cron") {
+    throw new ApiError(422, "cron_has_no_endpoint", "A cron service serves no traffic");
+  }
+}
 
 /**
  * Normalises a hostname and refuses names that can't be a custom domain:

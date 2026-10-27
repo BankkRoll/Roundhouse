@@ -79,12 +79,14 @@ import {
   PresenceEditingSchema,
   PresenceUpdateMessageSchema,
 } from "./schemas/changes";
+import { CronConfigFields, CronConfigSchema, CronRunUpdatedMessageSchema } from "./schemas/cron";
 import { CostEstimateSchema } from "./schemas/providers";
 import { VariableKeyField } from "./schemas/variables";
 
 export * from "./schemas/access";
 export * from "./schemas/auth";
 export * from "./schemas/changes";
+export * from "./schemas/cron";
 export * from "./schemas/instance";
 export * from "./schemas/keys";
 export * from "./schemas/providers";
@@ -534,6 +536,8 @@ export const ServiceConfigSchema = z
     healthcheck: HealthcheckConfigSchema.nullable(),
     networking: NetworkingConfigSchema,
     placement: PlacementConfigSchema,
+    /** Set exactly for `cron` services (ADR 0010). */
+    cron: CronConfigSchema.nullable(),
   })
   .openapi("ServiceConfig");
 
@@ -552,6 +556,11 @@ export const ServiceConfigPatchSchema = z
     healthcheck: HealthcheckConfigSchema.nullable().optional(),
     networking: NetworkingConfigFields.partial().optional(),
     placement: PlacementConfigFields.partial().optional(),
+    /**
+     * Merged into the latest `cron` part, or into the defaults when there is
+     * none (`schedule` is then required); `null` removes it.
+     */
+    cron: CronConfigFields.partial().nullable().optional(),
   })
   .openapi("ServiceConfigPatch");
 
@@ -564,6 +573,7 @@ export const SERVICE_CONFIG_PARTS = [
   "healthcheck",
   "networking",
   "placement",
+  "cron",
 ] as const;
 
 // -----------------------------------------------------------------------------
@@ -909,6 +919,12 @@ export const RealtimeLogSourceSchema = z.discriminatedUnion("type", [
     workload_id: z.string(),
   }),
   z.object({ type: z.literal("build"), service_id: z.string(), build_id: z.string() }),
+  z.object({
+    type: z.literal("job"),
+    service_id: z.string(),
+    run_id: z.string(),
+    workload_id: z.string(),
+  }),
 ]);
 
 /** Server → browser messages on `/v1/projects/{projectId}/realtime`. */
@@ -926,6 +942,7 @@ export const RealtimeServerMessageSchema = z
     ChangeSetUpdatedMessageSchema,
     ChangeSetAppliedMessageSchema,
     CanvasLayoutUpdatedMessageSchema,
+    CronRunUpdatedMessageSchema,
     CanvasEdgesUpdatedMessageSchema,
     /**
      * Sent right before the server closes the socket with
@@ -949,6 +966,7 @@ export type RealtimeServerMessage = z.infer<typeof RealtimeServerMessageSchema>;
 export const RealtimeTopicSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("deployment_logs"), deployment_id: z.string() }),
   z.object({ kind: z.literal("build_logs"), build_id: z.string() }),
+  z.object({ kind: z.literal("cron_run_logs"), run_id: z.string() }),
 ]);
 
 /**

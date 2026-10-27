@@ -66,6 +66,11 @@
       "name": "roundhouse-certificate",
       "binding": "CERT_WORKFLOW",
       "class_name": "CertificateWorkflow"
+    },
+    {
+      "name": "roundhouse-cron-run",
+      "binding": "CRON_RUN_WORKFLOW",
+      "class_name": "CronRunWorkflow"
     }
   ],
   // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
@@ -106,7 +111,8 @@
   // Hourly retention: expired log chunks (R2 and D1), GitHub delivery IDs,
   // join tokens, sessions, invites, verifications. See src/lib/retention.ts.
   // Every minute: custom-domain DNS checks that are due (src/lib/domains/check.ts),
-  // and certificate orders and renewals in the managed TLS mode (src/lib/certificates).
+  // certificate orders and renewals in the managed TLS mode (src/lib/certificates),
+  // cron service runs (src/lib/cron/schedule.ts) and the other claimers in src/lib/dispatch.ts.
   "triggers": { "crons": ["17 * * * *", "* * * * *"] },
   "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": true }],
   "observability": { "enabled": true }

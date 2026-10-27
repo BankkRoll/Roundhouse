@@ -57,7 +57,7 @@ import type { StagedOpInputSchema } from "../../contracts/changes";
 import { auditInsert } from "../audit";
 import type { KeyEnv, Sealed } from "../crypto";
 import { databaseCreateOp } from "../databases";
-import { assertHostnameFree, checkCustomHostname } from "../domains/manage";
+import { assertHostnameFree, assertServesTraffic, checkCustomHostname } from "../domains/manage";
 import { ApiError, type ErrorCode, notFound } from "../errors";
 import { mergeConfig, slugFor, specOf } from "../projects";
 import type { Caller } from "../scope";
@@ -561,6 +561,7 @@ async function prepare(
 
     case "domain.add": {
       const svc = await liveService(db, project.id, input.service);
+      assertServesTraffic(svc);
       const hostname = await checkCustomHostname(ctx.c, db, input.hostname);
       const op: StagedOp = { type: "domain.add", service: svc.id, hostname };
       const prior = rowOf(targetKeyOf(op));

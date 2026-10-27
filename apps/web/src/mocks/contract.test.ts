@@ -31,6 +31,7 @@ import { PHASE1_ROUTES } from "../../../api/src/contracts";
 import { RealtimeServerMessageSchema } from "../../../api/src/schemas";
 import { ACCESS_SEED } from "./access-db";
 import { requireApprovalIn } from "./changes-handlers";
+import { CRON_SEED } from "./cron-db";
 import { DATA_SEED } from "./data-db";
 import {
   db,
@@ -95,6 +96,7 @@ const ROUTE_MODULES = [
   "signing-keys",
   "instance-admin",
   "auth-security",
+  "cron",
   "access",
 ] as const;
 
@@ -1784,6 +1786,7 @@ describe("MSW mocks match the API contract", () => {
               latest_deployment: { id: SEED.apiActive, project_id: SEED.project },
             },
             { service: { id: DATA_SEED.database, kind: "database" }, domain: null },
+            { service: { id: CRON_SEED.service, kind: "cron" }, domain: null },
             {
               service: { id: SEED.web },
               config_version: 3,
@@ -1805,7 +1808,7 @@ describe("MSW mocks match the API contract", () => {
       const projects = (all.body as { projects: { name: string; services: unknown[] }[] }).projects;
       expect(projects.map((project) => [project.name, project.services.length])).toEqual([
         ["internal-tools", 1],
-        ["storefront", 4],
+        ["storefront", 5],
       ]);
       expect((await call("GET", `${OTHER_WS}/projects/summary`)).status).toBe(404);
 
@@ -3268,6 +3271,151 @@ describe("MSW mocks match the API contract", () => {
       expect((await call("PUT", storage, body)).status).toBe(403);
       as(null);
       expect((await call("GET", storage)).status).toBe(401);
+    });
+  });
+
+  it("cron: preview, state, runs, logs, run now, cancel, pause and resume", async () => {
+    await fresh(async () => {
+      const env = `environment_id=${SEED.production}`;
+      const svc = `/v1/services/${CRON_SEED.service}`;
+      const preview = (query: string) =>
+        call("GET", `/v1/projects/${SEED.project}/cron/preview?${query}`);
+      expect(
+        await preview("schedule=0%203%20*%20*%20*&timezone=Europe%2FBerlin&count=3"),
+      ).toMatchObject({
+        status: 200,
+        body: {
+          valid: true,
+          error: null,
+          next_runs: [expect.any(Number), expect.any(Number), expect.any(Number)],
+        },
+      });
+      expect(await preview("schedule=0%203%20*%20*")).toMatchObject({
+        status: 200,
+        body: { valid: false, next_runs: [], error: { code: "invalid_schedule" } },
+      });
+      expect((await preview("timezone=UTC")).status).toBe(400);
+      expect((await call("GET", "/v1/projects/prj_nope/cron/preview?schedule=@daily")).status).toBe(
+        404,
+      );
+
+      expect(await call("GET", `${svc}/cron?${env}`)).toMatchObject({
+        status: 200,
+        body: {
+          paused: false,
+          armed_deployment_id: CRON_SEED.deployment,
+          schedule: CRON_SEED.schedule,
+          timezone: CRON_SEED.timezone,
+          next_run_at: expect.any(Number),
+        },
+      });
+      expect((await call("GET", `/v1/services/${SEED.web}/cron?${env}`)).status).toBe(409);
+      expect((await call("GET", `${svc}/cron?environment_id=env_nope`)).status).toBe(404);
+      expect((await call("GET", `${svc}/cron`)).status).toBe(400);
+
+      const first = await call("GET", `${svc}/cron-runs?${env}&limit=2`);
+      expect(first).toMatchObject({
+        status: 200,
+        body: { runs: [{ id: CRON_SEED.running }, { id: CRON_SEED.lastSucceeded }] },
+      });
+      const cursor = (first.body as { next_cursor: string }).next_cursor;
+      expect(
+        (await call("GET", `${svc}/cron-runs?${env}&limit=2&cursor=${cursor}`)).body,
+      ).toMatchObject({
+        runs: [{ id: CRON_SEED.outdated }, { id: CRON_SEED.missed }],
+      });
+      expect((await call("GET", `${svc}/cron-runs?${env}&status=missed`)).body).toMatchObject({
+        runs: [{ id: CRON_SEED.missed, missed_count: 1 }],
+        next_cursor: null,
+      });
+      expect((await call("GET", `${svc}/cron-runs?${env}&cursor=bogus`)).status).toBe(400);
+      expect((await call("GET", `${svc}/cron-runs?${env}&status=exploded`)).status).toBe(400);
+
+      expect(await call("GET", `/v1/cron-runs/${CRON_SEED.failed}`)).toMatchObject({
+        status: 200,
+        body: { status: "failed", exit_code: 3 },
+      });
+      expect((await call("GET", "/v1/cron-runs/crn_nope")).status).toBe(404);
+      expect(await call("GET", `/v1/cron-runs/${CRON_SEED.failed}/logs?limit=1`)).toMatchObject({
+        status: 200,
+        body: { lines: [{ stream: "stderr" }], next_cursor: "o1" },
+      });
+
+      const trigger = (body: Record<string, unknown>, service = svc) =>
+        call("POST", `${service}/cron-runs`, { environment_id: SEED.production, ...body });
+      expect(await trigger({})).toMatchObject({
+        status: 409,
+        body: { error: { code: "run_in_progress" } },
+      });
+      expect((await trigger({}, `/v1/services/${SEED.web}`)).status).toBe(409);
+      expect((await trigger({ force: "yes" })).status).toBe(400);
+      as("viewer");
+      expect((await trigger({ force: true })).status).toBe(403);
+      expect((await call("POST", `/v1/cron-runs/${CRON_SEED.running}/cancel`)).status).toBe(403);
+      expect(
+        (await call("POST", `${svc}/cron/pause`, { environment_id: SEED.production })).status,
+      ).toBe(403);
+      as("owner");
+      const forced = await trigger({ force: true });
+      expect(forced).toMatchObject({ status: 201, body: { status: "queued", trigger: "manual" } });
+      expect(db.cron.runs.find((run) => run.id === CRON_SEED.running)?.status).toBe("cancelled");
+
+      const queued = (forced.body as { id: string }).id;
+      expect(await call("POST", `/v1/cron-runs/${queued}/cancel`)).toMatchObject({
+        status: 200,
+        body: { status: "cancelled" },
+      });
+      expect((await call("POST", `/v1/cron-runs/${queued}/cancel`)).status).toBe(409);
+      expect((await call("POST", "/v1/cron-runs/crn_nope/cancel")).status).toBe(404);
+
+      expect(
+        await call("POST", `${svc}/cron/pause`, { environment_id: SEED.production }),
+      ).toMatchObject({
+        status: 200,
+        body: { paused: true, next_run_at: null, next_runs: [] },
+      });
+      expect(
+        await call("POST", `${svc}/cron/resume`, { environment_id: SEED.production }),
+      ).toMatchObject({
+        status: 200,
+        body: { paused: false, next_run_at: expect.any(Number) },
+      });
+      expect(
+        (
+          await call("POST", `/v1/services/${SEED.web}/cron/resume`, {
+            environment_id: SEED.production,
+          })
+        ).status,
+      ).toBe(409);
+      expect((await call("POST", `${svc}/cron/resume`, {})).status).toBe(400);
+      expect(db.audit.map((entry) => entry.action)).toEqual(
+        expect.arrayContaining([
+          "cron.run_triggered",
+          "cron.run_cancelled",
+          "cron.paused",
+          "cron.resumed",
+        ]),
+      );
+      // A protected environment's deploy and config rules gate run now and pause.
+      const production = db.deploy.environments.find((row) => row.id === SEED.production);
+      if (production) production.protected = true;
+      db.access.rules[SEED.production] = {
+        deploy: { roles: [], userIds: [], teamIds: [] },
+        config: { roles: [], userIds: [], teamIds: [] },
+        variables: { roles: [], userIds: [], teamIds: [] },
+      };
+      as("member");
+      expect(await trigger({ force: true })).toMatchObject({
+        status: 403,
+        body: { error: { code: "forbidden" } },
+      });
+      expect(
+        (await call("POST", `${svc}/cron/pause`, { environment_id: SEED.production })).status,
+      ).toBe(403);
+      expect((await call("GET", `${svc}/cron-runs?${env}`)).status).toBe(200);
+      as(null);
+      expect((await call("GET", `${svc}/cron?${env}`)).status).toBe(401);
+      expect((await preview("schedule=@daily")).status).toBe(401);
     });
   });
 

@@ -28,6 +28,15 @@ describe("project canvas", () => {
     expect(screen.getByRole("list", { name: "Edge legend" })).toHaveTextContent("private network");
   });
 
+  it("shows a cron node's next run and last run status", async () => {
+    const { canvas } = await openCanvas();
+    const node = within(canvas).getByRole("button", { name: /^nightly-report / });
+    await waitFor(() =>
+      expect(node).toHaveAccessibleDescription(/^Next \w{3} \d{1,2} \w{3} 03:00 last run Running$/),
+    );
+    expect(node).toHaveAccessibleName("nightly-report nightly-report Active, cron service");
+  });
+
   it("stages a config edit from the panel, reviews it and applies it with a deploy", async () => {
     const { canvas, user } = await openCanvas();
     const before = latestApiConfig().version;

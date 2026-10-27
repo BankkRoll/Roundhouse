@@ -12,7 +12,8 @@
  *   (`AuditChain`), and the deploy and key rotation workflows
  *   (`DeployWorkflow`, `KeyRotationWorkflow`), and one-click server
  *   provisioning (`ProvisionWorkflow`), and backups and restores
- *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), and certificate orders
+ *   (`BackupWorkflow`, `RestoreWorkflow`, ADR 0004), cron runs
+ *   (`CronRunWorkflow`, ADR 0010) and certificate orders
  *   (`CertificateWorkflow`, ADR 0009), exported for their bindings
  * - The public ACME HTTP-01 responder (`routes/acme.ts`) and the Domains &
  *   TLS settings (`routes/tls.ts`)
@@ -51,6 +52,7 @@ import { auditRoutes } from "./routes/audit";
 import { authSecurityRoutes } from "./routes/auth-security";
 import { backupRoutes } from "./routes/backups";
 import { changeRoutes } from "./routes/changes";
+import { cronRoutes } from "./routes/cron";
 import { dataBrowserRoutes } from "./routes/data-browser";
 import { databaseRoutes } from "./routes/databases";
 import { deploymentRoutes } from "./routes/deployments";
@@ -80,6 +82,7 @@ export { NodeConnection } from "./durable/node-connection";
 export { ProjectRoom } from "./durable/project-room";
 export { BackupWorkflow } from "./workflows/backup";
 export { CertificateWorkflow } from "./workflows/certificate";
+export { CronRunWorkflow } from "./workflows/cron-run";
 export { DeployWorkflow } from "./workflows/deploy";
 export { KeyRotationWorkflow } from "./workflows/key-rotation";
 export { ProvisionWorkflow } from "./workflows/provision";
@@ -143,6 +146,7 @@ app
   .route("/", providerRoutes)
   .route("/", templateRoutes)
   .route("/", backupRoutes)
+  .route("/", cronRoutes)
   .route("/", mcpRoutes)
   .route("/", oauthRoutes)
   .route("/", oauthConsentRoutes);

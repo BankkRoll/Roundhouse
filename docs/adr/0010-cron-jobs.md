@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted; implemented with the changes listed under "Implementation notes".
 - Date: 2026-10-22
 - Phase: 3
 - Protocol: version 5
@@ -373,6 +373,28 @@ and `pre_deploy_finished`.
   they are recorded as missed when it returns. Running a scheduler on the
   nodes would avoid that, at the cost of a second source of truth and of
   duplicate runs after partitions. That trade is not made.
+
+## Implementation notes
+
+Where the implementation differs from the text above:
+- **Protocol.** Jobs ship in protocol 6 (`JOBS_PROTOCOL_VERSION = 6`, ADR
+  0015), and `job_run` is always a credential frame because its environment
+  is a sealed `job-env` box bound to the node, run and workload (ADR 0014).
+- **No `JOBS` queue.** The claimer and run now start `CronRunWorkflow`
+  directly. The run ID is the instance ID, so a repeated start is a no-op,
+  and a later tick re-starts `queued` runs whose start failed. Scheduled and
+  retry runs get IDs derived from their slot and attempt, so overlapping
+  ticks collapse into one run as well as one row.
+- **Routes.** The preview is `GET /v1/projects/{projectId}/cron/preview`, so
+  `projects:read` has a project to check. `GET /v1/services/{serviceId}/cron`
+  returns the schedule state (paused, next slot, armed deployment) that the
+  dashboard and CLI show.
+- **Pre-deploy runs** take the service's `cron.timeout_s`, or 3,600 s when
+  it has no cron part, never retry, and ignore the concurrency policy. The
+  deployment's events `pre_deploy_started` and `pre_deploy_finished` carry
+  the run ID; cancelling the deployment cancels its run.
+- **Endpoints.** A cron service gets no generated domain, and adding a
+  custom one is `422 cron_has_no_endpoint`.
 
 ## Open questions
 

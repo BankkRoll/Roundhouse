@@ -153,8 +153,8 @@ function parseNdjson(text: string): StoredLogLine[] {
 
 const CURSOR_RE = /^(log_[0-9A-Za-z]{1,64})~(\d{1,7})$/;
 
-/** Which lines a page reads: one deployment's runtime logs, or one build's. */
-export type LogFilter = { deploymentId: string } | { buildId: string };
+/** Which lines a page reads: one deployment's runtime logs, one build's, or one cron run's. */
+export type LogFilter = { deploymentId: string } | { buildId: string } | { cronRunId: string };
 
 /** How many chunk index rows to read per round trip while paging. */
 const CHUNK_BATCH = 16;
@@ -168,7 +168,7 @@ const CHUNK_BATCH = 16;
  *
  * @param db - Database client.
  * @param bucket - The `LOGS` bucket.
- * @param filter - Deployment or build.
+ * @param filter - Deployment, build or cron run.
  * @param cursor - From a previous page's `next_cursor`.
  * @param limit - Most lines to return.
  * @returns Lines in chronological order and the cursor to the page before.
@@ -190,7 +190,9 @@ export async function readLogPage(
   const owner =
     "deploymentId" in filter
       ? eq(logChunks.deploymentId, filter.deploymentId)
-      : eq(logChunks.buildId, filter.buildId);
+      : "buildId" in filter
+        ? eq(logChunks.buildId, filter.buildId)
+        : eq(logChunks.cronRunId, filter.cronRunId);
 
   const collected: StoredLogLine[] = [];
   let next: string | null = null;

@@ -20,47 +20,50 @@ const SecretsMountPath = "/run/secrets"
 // disk and vanish on reboot, when the agent writes them again.
 const DefaultSecretsDir = "/run/roundhouse/secrets"
 
-// secretsDir returns the host directory of one workload's secret files.
-func (r *Runtime) secretsDir(workloadID string) string {
-	return filepath.Join(r.opts.SecretsDir, workloadID)
-}
-
 // writeSecretFiles writes s.SecretFiles into the workload's directory and
 // returns the bind mount that shows it read-only at [SecretsMountPath], or
 // "" when the workload has no secret files.
-//
-// SECURITY: the root directory is 0700 so no other host user can list or
-// read workloads' files; the per-workload directory (0755) and files (0444)
-// are readable by any user inside the container, whose image may run as
-// any UID. The mount is read-only, and `docker inspect` shows its path only.
-// Modes are set explicitly because the agent runs with umask 0077.
 func (r *Runtime) writeSecretFiles(s *wantSpec) (string, error) {
-	if len(s.SecretFiles) == 0 {
+	return WriteSecretFiles(r.opts.SecretsDir, s.ID, s.SecretFiles)
+}
+
+// WriteSecretFiles writes files into root/<workloadID> and returns the bind
+// mount that shows that directory read-only at [SecretsMountPath], or ""
+// when there are no files. Every key must be a variable name.
+//
+// SECURITY: root is 0700 so no other host user can list or read workloads'
+// files; the per-workload directory (0755) and files (0444) are readable by
+// any user inside the container, whose image may run as any UID. The mount
+// is read-only, and `docker inspect` shows its path only. Modes are set
+// explicitly because the agent runs with umask 0077.
+func WriteSecretFiles(root, workloadID string, files map[string]string) (string, error) {
+	if len(files) == 0 {
 		return "", nil
 	}
-	if r.opts.SecretsDir == "" {
+	if root == "" {
 		return "", errors.New("this agent has no secrets directory for mount_as_file variables")
 	}
-	if err := os.MkdirAll(r.opts.SecretsDir, 0o700); err != nil {
+	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", err
 	}
-	if err := os.Chmod(r.opts.SecretsDir, 0o700); err != nil {
+	if err := os.Chmod(root, 0o700); err != nil {
 		return "", err
 	}
-	dir := r.secretsDir(s.ID)
+	dir := filepath.Join(root, workloadID)
 	if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 		return "", err
 	}
 	if err := os.Chmod(dir, 0o755); err != nil {
 		return "", err
 	}
-	for _, key := range slices.Sorted(maps.Keys(s.SecretFiles)) {
-		// NOTE: OpenWorkloadEnv only admits env-var names, which can't
-		// name a path; this guards the invariant the paths rely on.
+	for _, key := range slices.Sorted(maps.Keys(files)) {
+		// NOTE: OpenWorkloadEnv and OpenJobEnv only admit env-var names,
+		// which can't name a path; this guards the invariant the paths
+		// rely on.
 		if key == "" || strings.ContainsAny(key, `/\.`) {
 			return "", fmt.Errorf("secret file name %q is not a variable name", key)
 		}
-		if err := writeReadOnly(filepath.Join(dir, key), []byte(s.SecretFiles[key])); err != nil {
+		if err := writeReadOnly(filepath.Join(dir, key), []byte(files[key])); err != nil {
 			return "", fmt.Errorf("write secret file %s: %w", key, err)
 		}
 	}

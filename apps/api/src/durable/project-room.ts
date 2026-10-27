@@ -34,7 +34,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { apiTokens, createDb, projects, sessions, workspaces } from "@roundhouse/db";
-import type { LogLine, LogSource } from "@roundhouse/protocol";
+import type { AnyLogSource, LogLine } from "@roundhouse/protocol";
 import {
   type Action,
   PRESENCE_BROADCAST_INTERVAL_MS,
@@ -130,7 +130,7 @@ type PresenceUser = Extract<RealtimeServerMessage, { type: "presence" }>["users"
 
 interface Attachment {
   viewer: RoomViewer;
-  /** `deployment_logs:<id>` or `build_logs:<id>`. */
+  /** `deployment_logs:<id>`, `build_logs:<id>` or `cron_run_logs:<id>`. */
   topics: string[];
   /** The socket's latest `presence.update`, and when it arrived. */
   presence?: Omit<PresenceUpdate, "type"> & { at: number };
@@ -155,9 +155,26 @@ interface Queue {
 function topicKey(
   topic: Extract<RealtimeClientMessage, { type: "subscribe" | "unsubscribe" }>["topic"],
 ): string {
-  return topic.kind === "deployment_logs"
-    ? `deployment_logs:${topic.deployment_id}`
-    : `build_logs:${topic.build_id}`;
+  switch (topic.kind) {
+    case "deployment_logs":
+      return `deployment_logs:${topic.deployment_id}`;
+    case "build_logs":
+      return `build_logs:${topic.build_id}`;
+    case "cron_run_logs":
+      return `cron_run_logs:${topic.run_id}`;
+  }
+}
+
+/** The topic a log batch belongs to. */
+function logTopic(source: LogLinesMessage["source"]): string {
+  switch (source.type) {
+    case "runtime":
+      return `deployment_logs:${source.deployment_id}`;
+    case "build":
+      return `build_logs:${source.build_id}`;
+    case "job":
+      return `cron_run_logs:${source.run_id}`;
+  }
 }
 
 /** Durable Object fanning project updates out to browsers. */
@@ -291,10 +308,7 @@ export class ProjectRoom extends DurableObject<Env> {
   async broadcast(message: RealtimeServerMessage): Promise<void> {
     let topic: string | null = null;
     if (message.type === "log.lines") {
-      topic =
-        message.source.type === "runtime"
-          ? `deployment_logs:${message.source.deployment_id}`
-          : `build_logs:${message.source.build_id}`;
+      topic = logTopic(message.source);
     }
     if (topic && message.type === "log.lines") this.remember(topic, message);
     const data = JSON.stringify(message);
@@ -311,10 +325,14 @@ export class ProjectRoom extends DurableObject<Env> {
    * Forwards log lines ingested by a node's Durable Object.
    *
    * @param serviceId - Service the lines belong to.
-   * @param source - Runtime or build source from the agent frame.
+   * @param source - Runtime, build or job source from the agent frame.
    * @param lines - Lines, already redacted.
    */
-  async publishLogs(serviceId: string, source: LogSource, lines: LogLine[]): Promise<void> {
+  async publishLogs(
+    serviceId: string,
+    source: Exclude<AnyLogSource, { type: "task" }>,
+    lines: LogLine[],
+  ): Promise<void> {
     await this.broadcast({
       type: "log.lines",
       source:
@@ -325,7 +343,14 @@ export class ProjectRoom extends DurableObject<Env> {
               deployment_id: source.deployment_id,
               workload_id: source.workload_id,
             }
-          : { type: "build", service_id: serviceId, build_id: source.build_id },
+          : source.type === "build"
+            ? { type: "build", service_id: serviceId, build_id: source.build_id }
+            : {
+                type: "job",
+                service_id: serviceId,
+                run_id: source.run_id,
+                workload_id: source.workload_id,
+              },
       lines: lines.map((l) => ({ ts: l.ts, stream: l.stream, text: l.text })),
     });
   }

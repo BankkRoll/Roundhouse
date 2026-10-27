@@ -34,7 +34,7 @@ export const AddDomainBody = z
  * records to create; the domain is routed only once both the routing record
  * and the ownership TXT are seen. 409 `domain_taken` when another service
  * holds it; 422 `hostname_not_allowed` for wildcards, IPs, non-public names
- * and the install's own names.
+ * and the install's own names; 422 `cron_has_no_endpoint` for a cron service.
  */
 export const addDomain = defineRoute(
   session("services:manage", ["domain.added", "domain.verified"]),

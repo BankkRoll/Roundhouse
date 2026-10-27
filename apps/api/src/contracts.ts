@@ -82,6 +82,7 @@ export * from "./contracts/access";
 export * from "./contracts/auth";
 export * from "./contracts/backups";
 export * from "./contracts/changes";
+export * from "./contracts/cron";
 export * from "./contracts/data-browser";
 export * from "./contracts/databases";
 export * from "./contracts/domains";

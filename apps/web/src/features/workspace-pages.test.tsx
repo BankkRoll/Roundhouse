@@ -57,8 +57,8 @@ describe("home page", () => {
   it("never shows invented costs, and counts services from real deployments", async () => {
     renderApp(BASE);
     const services = await screen.findByRole("region", { name: "Services" });
-    await waitFor(() => expect(services).toHaveTextContent("4 live · 1 deploying · 2 projects"));
-    expect(services).toHaveTextContent(/^Services5/);
+    await waitFor(() => expect(services).toHaveTextContent("5 live · 1 deploying · 2 projects"));
+    expect(services).toHaveTextContent(/^Services6/);
     expect(await screen.findByRole("region", { name: "Incidents" })).toHaveTextContent(
       "Nothing to report",
     );

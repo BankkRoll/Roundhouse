@@ -42,7 +42,8 @@
       },
       "placement": {
         "node_selector": {}
-      }
+      },
+      "cron": null
     },
     {
       "id": "cfg_svc_0004_env_staging",
@@ -76,7 +77,8 @@
       },
       "placement": {
         "node_selector": {}
-      }
+      },
+      "cron": null
     }
   ]
 }

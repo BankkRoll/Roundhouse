@@ -397,7 +397,11 @@
               "restore.failed",
               "key.rollover_scheduled",
               "key.rollover_completed",
-              "key.rollover_cancelled"
+              "key.rollover_cancelled",
+              "cron.run_triggered",
+              "cron.run_cancelled",
+              "cron.paused",
+              "cron.resumed"
             ],
             "type": "string"
           },
@@ -1541,7 +1545,11 @@
               "restore.failed",
               "key.rollover_scheduled",
               "key.rollover_completed",
-              "key.rollover_cancelled"
+              "key.rollover_cancelled",
+              "cron.run_triggered",
+              "cron.run_cancelled",
+              "cron.paused",
+              "cron.resumed"
             ],
             "type": "string"
           },
@@ -2369,6 +2377,64 @@
                 },
                 "type": "object"
               },
+              "cron": {
+                "properties": {
+                  "concurrency": {
+                    "description": "When a slot comes while the previous run still runs: `forbid` skips it, `replace` cancels the running one, `allow` runs both.",
+                    "enum": [
+                      "forbid",
+                      "replace",
+                      "allow"
+                    ],
+                    "type": "string"
+                  },
+                  "history_limit": {
+                    "maximum": 1000,
+                    "minimum": 10,
+                    "type": "integer"
+                  },
+                  "retries": {
+                    "maximum": 5,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "retry_backoff_s": {
+                    "description": "Wait before the first retry, doubled per further retry.",
+                    "maximum": 3600,
+                    "minimum": 10,
+                    "type": "integer"
+                  },
+                  "schedule": {
+                    "description": "Five-field cron expression or macro (`@daily`), read in `timezone`.",
+                    "example": "0 3 * * *",
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "starting_deadline_s": {
+                    "description": "How late a run may still start; later slots are recorded as missed.",
+                    "maximum": 3600,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "timeout_s": {
+                    "maximum": 86400,
+                    "minimum": 10,
+                    "type": "integer"
+                  },
+                  "timezone": {
+                    "description": "IANA time zone",
+                    "example": "Europe/Berlin",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "deploy": {
                 "properties": {
                   "drain_s": {
@@ -2632,6 +2698,323 @@
         "required": [
           "service",
           "configs"
+        ],
+        "type": "object"
+      },
+      "CronConfig": {
+        "properties": {
+          "concurrency": {
+            "description": "When a slot comes while the previous run still runs: `forbid` skips it, `replace` cancels the running one, `allow` runs both.",
+            "enum": [
+              "forbid",
+              "replace",
+              "allow"
+            ],
+            "type": "string"
+          },
+          "history_limit": {
+            "maximum": 1000,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "retries": {
+            "maximum": 5,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_backoff_s": {
+            "description": "Wait before the first retry, doubled per further retry.",
+            "maximum": 3600,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "schedule": {
+            "description": "Five-field cron expression or macro (`@daily`), read in `timezone`.",
+            "example": "0 3 * * *",
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "starting_deadline_s": {
+            "description": "How late a run may still start; later slots are recorded as missed.",
+            "maximum": 3600,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timeout_s": {
+            "maximum": 86400,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "timezone": {
+            "description": "IANA time zone",
+            "example": "Europe/Berlin",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule",
+          "timezone",
+          "concurrency",
+          "timeout_s",
+          "starting_deadline_s",
+          "retries",
+          "retry_backoff_s",
+          "history_limit"
+        ],
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "CronEnvironment": {
+        "properties": {
+          "environment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment_id"
+        ],
+        "type": "object"
+      },
+      "CronPreview": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ScheduleError"
+          },
+          "next_runs": {
+            "items": {
+              "description": "Unix time in milliseconds",
+              "example": 1767225600000,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "valid": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "next_runs",
+          "error"
+        ],
+        "type": "object"
+      },
+      "CronRun": {
+        "properties": {
+          "attempt": {
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "Unix milliseconds",
+            "type": "integer"
+          },
+          "deployment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "description": "Unix milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "missed_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "scheduled_for": {
+            "description": "Unix milliseconds",
+            "type": "integer"
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "description": "Unix milliseconds",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "starting",
+              "running",
+              "succeeded",
+              "failed",
+              "timed_out",
+              "cancelled",
+              "skipped",
+              "missed",
+              "lost"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "enum": [
+              "schedule",
+              "manual",
+              "retry",
+              "pre_deploy"
+            ],
+            "type": "string"
+          },
+          "triggered_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "description": "Unix milliseconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "service_id",
+          "environment_id",
+          "deployment_id",
+          "trigger",
+          "scheduled_for",
+          "attempt",
+          "status",
+          "node_id",
+          "exit_code",
+          "missed_count",
+          "error",
+          "triggered_by",
+          "started_at",
+          "finished_at",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "CronRunPage": {
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/CronRun"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "CronState": {
+        "properties": {
+          "armed_deployment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "last_scheduled_for": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "next_run_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "next_runs": {
+            "items": {
+              "description": "Unix time in milliseconds",
+              "example": 1767225600000,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "service_id",
+          "environment_id",
+          "paused",
+          "next_run_at",
+          "last_scheduled_for",
+          "armed_deployment_id",
+          "schedule",
+          "timezone",
+          "next_runs"
         ],
         "type": "object"
       },
@@ -3197,6 +3580,8 @@
               "replica_status",
               "route_switched",
               "rollout_finished",
+              "pre_deploy_started",
+              "pre_deploy_finished",
               "error"
             ],
             "type": "string"
@@ -6483,6 +6868,36 @@
         ],
         "type": "string"
       },
+      "ScheduleError": {
+        "properties": {
+          "code": {
+            "enum": [
+              "invalid_schedule",
+              "invalid_timezone"
+            ],
+            "type": "string"
+          },
+          "end": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "start": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "start",
+          "end"
+        ],
+        "type": [
+          "object",
+          "null"
+        ]
+      },
       "ScheduleSigningKeyRollover": {
         "properties": {
           "delay_hours": {
@@ -6619,6 +7034,9 @@
               "null"
             ]
           },
+          "cron": {
+            "$ref": "#/components/schemas/CronConfig"
+          },
           "deploy": {
             "$ref": "#/components/schemas/DeployConfig"
           },
@@ -6664,7 +7082,8 @@
           "resources",
           "healthcheck",
           "networking",
-          "placement"
+          "placement",
+          "cron"
         ],
         "type": "object"
       },
@@ -6707,6 +7126,64 @@
               }
             },
             "type": "object"
+          },
+          "cron": {
+            "properties": {
+              "concurrency": {
+                "description": "When a slot comes while the previous run still runs: `forbid` skips it, `replace` cancels the running one, `allow` runs both.",
+                "enum": [
+                  "forbid",
+                  "replace",
+                  "allow"
+                ],
+                "type": "string"
+              },
+              "history_limit": {
+                "maximum": 1000,
+                "minimum": 10,
+                "type": "integer"
+              },
+              "retries": {
+                "maximum": 5,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "retry_backoff_s": {
+                "description": "Wait before the first retry, doubled per further retry.",
+                "maximum": 3600,
+                "minimum": 10,
+                "type": "integer"
+              },
+              "schedule": {
+                "description": "Five-field cron expression or macro (`@daily`), read in `timezone`.",
+                "example": "0 3 * * *",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "starting_deadline_s": {
+                "description": "How late a run may still start; later slots are recorded as missed.",
+                "maximum": 3600,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "timeout_s": {
+                "maximum": 86400,
+                "minimum": 10,
+                "type": "integer"
+              },
+              "timezone": {
+                "description": "IANA time zone",
+                "example": "Europe/Berlin",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "deploy": {
             "properties": {
@@ -7414,6 +7891,64 @@
                     },
                     "type": "object"
                   },
+                  "cron": {
+                    "properties": {
+                      "concurrency": {
+                        "description": "When a slot comes while the previous run still runs: `forbid` skips it, `replace` cancels the running one, `allow` runs both.",
+                        "enum": [
+                          "forbid",
+                          "replace",
+                          "allow"
+                        ],
+                        "type": "string"
+                      },
+                      "history_limit": {
+                        "maximum": 1000,
+                        "minimum": 10,
+                        "type": "integer"
+                      },
+                      "retries": {
+                        "maximum": 5,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "retry_backoff_s": {
+                        "description": "Wait before the first retry, doubled per further retry.",
+                        "maximum": 3600,
+                        "minimum": 10,
+                        "type": "integer"
+                      },
+                      "schedule": {
+                        "description": "Five-field cron expression or macro (`@daily`), read in `timezone`.",
+                        "example": "0 3 * * *",
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "starting_deadline_s": {
+                        "description": "How late a run may still start; later slots are recorded as missed.",
+                        "maximum": 3600,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "timeout_s": {
+                        "maximum": 86400,
+                        "minimum": 10,
+                        "type": "integer"
+                      },
+                      "timezone": {
+                        "description": "IANA time zone",
+                        "example": "Europe/Berlin",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
                   "deploy": {
                     "properties": {
                       "drain_s": {
@@ -7888,6 +8423,64 @@
                       }
                     },
                     "type": "object"
+                  },
+                  "cron": {
+                    "properties": {
+                      "concurrency": {
+                        "description": "When a slot comes while the previous run still runs: `forbid` skips it, `replace` cancels the running one, `allow` runs both.",
+                        "enum": [
+                          "forbid",
+                          "replace",
+                          "allow"
+                        ],
+                        "type": "string"
+                      },
+                      "history_limit": {
+                        "maximum": 1000,
+                        "minimum": 10,
+                        "type": "integer"
+                      },
+                      "retries": {
+                        "maximum": 5,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "retry_backoff_s": {
+                        "description": "Wait before the first retry, doubled per further retry.",
+                        "maximum": 3600,
+                        "minimum": 10,
+                        "type": "integer"
+                      },
+                      "schedule": {
+                        "description": "Five-field cron expression or macro (`@daily`), read in `timezone`.",
+                        "example": "0 3 * * *",
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "starting_deadline_s": {
+                        "description": "How late a run may still start; later slots are recorded as missed.",
+                        "maximum": 3600,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "timeout_s": {
+                        "maximum": 86400,
+                        "minimum": 10,
+                        "type": "integer"
+                      },
+                      "timezone": {
+                        "description": "IANA time zone",
+                        "example": "Europe/Berlin",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "type": [
+                      "object",
+                      "null"
+                    ]
                   },
                   "deploy": {
                     "properties": {
@@ -8857,6 +9450,20 @@
           "off"
         ],
         "type": "string"
+      },
+      "TriggerCronRun": {
+        "properties": {
+          "environment_id": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "environment_id"
+        ],
+        "type": "object"
       },
       "UpdateCanvasLayout": {
         "properties": {
@@ -11437,6 +12044,269 @@
         }
       }
     },
+    "/v1/cron-runs/{runId}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRun"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a cron run",
+        "tags": [
+          "cron"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/cron-runs/{runId}/cancel": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRun"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Cancel a cron run",
+        "tags": [
+          "cron"
+        ],
+        "x-roundhouse-policy": {
+          "action": "deployments:create",
+          "audit": [
+            "cron.run_cancelled"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/cron-runs/{runId}/logs": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get cron run logs",
+        "tags": [
+          "cron",
+          "logs"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/deployments/{deploymentId}": {
       "get": {
         "parameters": [
@@ -13560,7 +14430,11 @@
                 "restore.failed",
                 "key.rollover_scheduled",
                 "key.rollover_completed",
-                "key.rollover_cancelled"
+                "key.rollover_cancelled",
+                "cron.run_triggered",
+                "cron.run_cancelled",
+                "cron.paused",
+                "cron.resumed"
               ],
               "type": "string"
             }
@@ -16291,6 +17165,121 @@
         }
       }
     },
+    "/v1/projects/{projectId}/cron/preview": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "schedule",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "UTC",
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "count",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 10,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronPreview"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Preview a cron schedule",
+        "tags": [
+          "cron"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/projects/{projectId}/databases": {
       "post": {
         "description": "Applies through a change set. 404 for an unknown engine version; 422 for more than one replica.",
@@ -18376,6 +19365,552 @@
         "x-roundhouse-policy": {
           "action": "services:read",
           "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/services/{serviceId}/cron": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronState"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get a cron service's schedule state",
+        "tags": [
+          "cron"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/services/{serviceId}/cron-runs": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "enum": [
+                "queued",
+                "starting",
+                "running",
+                "succeeded",
+                "failed",
+                "timed_out",
+                "cancelled",
+                "skipped",
+                "missed",
+                "lost"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRunPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List cron runs",
+        "tags": [
+          "cron"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerCronRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRun"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Run a cron service now",
+        "tags": [
+          "cron"
+        ],
+        "x-roundhouse-policy": {
+          "action": "deployments:create",
+          "audit": [
+            "cron.run_triggered"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/services/{serviceId}/cron/pause": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronEnvironment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronState"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Pause a cron service",
+        "tags": [
+          "cron"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "cron.paused"
+          ],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/services/{serviceId}/cron/resume": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronEnvironment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronState"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Resume a cron service",
+        "tags": [
+          "cron"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:manage",
+          "audit": [
+            "cron.resumed"
+          ],
           "auth": "session"
         }
       }

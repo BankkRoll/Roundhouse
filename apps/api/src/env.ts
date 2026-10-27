@@ -7,6 +7,7 @@
 import type { AuditChain } from "./durable/audit-chain";
 import type { NodeConnection } from "./durable/node-connection";
 import type { ProjectRoom } from "./durable/project-room";
+import type { CronRunParams } from "./lib/cron/runs";
 import type { BackupParams } from "./workflows/backup";
 import type { CertificateParams } from "./workflows/certificate";
 import type { DeployParams } from "./workflows/deploy";
@@ -84,6 +85,8 @@ export interface Env {
   BACKUP_WORKFLOW: Workflow<BackupParams>;
   /** Runs one restore per instance (instance ID = the `rst_…` restore ID), ADR 0004. */
   RESTORE_WORKFLOW: Workflow<RestoreParams>;
+  /** Runs one cron run per instance (instance ID = the `crn_…` run ID), ADR 0010. */
+  CRON_RUN_WORKFLOW: Workflow<CronRunParams>;
   /**
    * Runs one certificate issuance attempt (ADR 0009, `managed` TLS mode);
    * instance ID `<cer_… id>-<attempt>`.

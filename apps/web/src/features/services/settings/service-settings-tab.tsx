@@ -1,4 +1,11 @@
 import {
+  CRON_CONCURRENCY_POLICIES,
+  CRON_LIMITS,
+  type CronConcurrencyPolicy,
+  type CronConfig,
+  DEFAULT_CRON_CONFIG,
+} from "@roundhouse/shared";
+import {
   Button,
   DangerZone,
   Input,
@@ -18,7 +25,7 @@ import { Slider, Switch } from "@roundhouse/ui/controls";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { RocketIcon } from "lucide-react";
-import { type FormEvent, type ReactNode, useId, useState } from "react";
+import { type FormEvent, type ReactNode, useId, useMemo, useState } from "react";
 import { ConfirmDialog } from "../../../components/confirm-dialog";
 import { ErrorState } from "../../../components/error-state";
 import { FormField } from "../../../components/form-field";
@@ -30,7 +37,7 @@ import type {
   ServiceConfig,
   UpdateServiceBody,
 } from "../../../lib/api/deploy-types";
-import { formatCpu, formatMemoryMb, formatRelativeTime } from "../../../lib/format";
+import { formatCpu, formatDuration, formatMemoryMb, formatRelativeTime } from "../../../lib/format";
 import { describeDenial, useProjectPermissions } from "../../../lib/permissions";
 import { useDeploy } from "../../../queries/deployments";
 import { latestDeploymentQueryOptions } from "../../../queries/projects";
@@ -51,6 +58,9 @@ import {
   rootDirError,
 } from "../../projects/new-service/source";
 import { findService, useProjectEnvironment } from "../../projects/use-project-environment";
+import { previewSchedule, shortestInterval, timeZones } from "../cron/cron-format";
+import { MissingScheduleBanner } from "../cron/missing-schedule-banner";
+import { ScheduleField, TimezoneField } from "../cron/schedule-field";
 import { DomainsSection } from "../domains/domains-section";
 import type { ServicePageProps } from "../service-layout";
 import {
@@ -95,6 +105,9 @@ const SECTIONS = [
   { id: "domains", label: "Domains" },
   { id: "placement", label: "Placement" },
 ] as const;
+
+/** Sections a cron service leaves out: it serves no traffic, so nothing probes or routes to it. */
+const NOT_FOR_CRON: ReadonlySet<string> = new Set(["healthcheck", "networking", "domains"]);
 
 /**
  * One part of the config as its own form: the rows, any save error, and a save bar that
@@ -429,7 +442,16 @@ function BuildSection({ config, context }: { config: ServiceConfig; context: Sav
   );
 }
 
-function DeploySection({ config, context }: { config: ServiceConfig; context: SaveContext }) {
+function DeploySection({
+  config,
+  context,
+  cron,
+}: {
+  config: ServiceConfig;
+  context: SaveContext;
+  /** A cron service: each run is one container, so replicas and restarts don't apply. */
+  cron: boolean;
+}) {
   const deploy = config.deploy;
   const [start, setStart] = useState(deploy.start_command ?? "");
   const [preDeploy, setPreDeploy] = useState(deploy.pre_deploy_command ?? "");
@@ -437,7 +459,8 @@ function DeploySection({ config, context }: { config: ServiceConfig; context: Sa
   const [policy, setPolicy] = useState(deploy.restart_policy);
   const [retries, setRetries] = useState(String(deploy.max_retries));
   const [drain, setDrain] = useState(String(deploy.drain_s));
-  const valid = isWhole(replicas, 0, 20) && isWhole(retries, 0, 100) && isWhole(drain, 0, 3600);
+  const valid =
+    cron || (isWhole(replicas, 0, 20) && isWhole(retries, 0, 100) && isWhole(drain, 0, 3600));
   const dirty =
     start !== (deploy.start_command ?? "") ||
     preDeploy !== (deploy.pre_deploy_command ?? "") ||
@@ -450,7 +473,11 @@ function DeploySection({ config, context }: { config: ServiceConfig; context: Sa
     <Section
       id="deploy"
       title="Deploy"
-      description="How the service runs once built. Replicas spread across servers when they can."
+      description={
+        cron
+          ? "How each run starts once built. A run is one container that exits when done."
+          : "How the service runs once built. Replicas spread across servers when they can."
+      }
       dirty={dirty}
       part="deploy"
       context={context}
@@ -467,10 +494,14 @@ function DeploySection({ config, context }: { config: ServiceConfig; context: Sa
         context.save("deploy", {
           start_command: start.trim() || undefined,
           pre_deploy_command: preDeploy.trim() || undefined,
-          replicas: Number(replicas),
-          restart_policy: policy,
-          max_retries: Number(retries),
-          drain_s: Number(drain),
+          ...(cron
+            ? {}
+            : {
+                replicas: Number(replicas),
+                restart_policy: policy,
+                max_retries: Number(retries),
+                drain_s: Number(drain),
+              }),
         });
       }}
     >
@@ -485,48 +516,52 @@ function DeploySection({ config, context }: { config: ServiceConfig; context: Sa
       />
       <SettingsField
         label="Pre-deploy command"
-        description="Runs once before the rollout."
+        description="Runs once in a one-off container before the rollout; if it fails, the deploy stops."
         value={preDeploy}
         onChange={(event) => setPreDeploy(event.target.value)}
         placeholder="e.g. npm run migrate"
         inputClassName="font-mono"
         spellCheck={false}
       />
-      <NumberField
-        label="Replicas"
-        description="0 stops the service."
-        value={replicas}
-        onChange={setReplicas}
-        min={0}
-        max={20}
-      />
-      <SelectRow
-        label="Restart policy"
-        description="When a crashed replica is started again."
-        value={policy}
-        onChange={(value) => setPolicy(value as typeof policy)}
-      >
-        <option value="on_failure">On failure</option>
-        <option value="always">Always</option>
-        <option value="never">Never</option>
-      </SelectRow>
-      <NumberField
-        label="Max retries"
-        description="Restarts before the replica is marked crashed."
-        value={retries}
-        onChange={setRetries}
-        min={0}
-        max={100}
-      />
-      <NumberField
-        label="Drain"
-        suffix="seconds"
-        description="Old replicas keep serving this long."
-        value={drain}
-        onChange={setDrain}
-        min={0}
-        max={3600}
-      />
+      {cron ? null : (
+        <>
+          <NumberField
+            label="Replicas"
+            description="0 stops the service."
+            value={replicas}
+            onChange={setReplicas}
+            min={0}
+            max={20}
+          />
+          <SelectRow
+            label="Restart policy"
+            description="When a crashed replica is started again."
+            value={policy}
+            onChange={(value) => setPolicy(value as typeof policy)}
+          >
+            <option value="on_failure">On failure</option>
+            <option value="always">Always</option>
+            <option value="never">Never</option>
+          </SelectRow>
+          <NumberField
+            label="Max retries"
+            description="Restarts before the replica is marked crashed."
+            value={retries}
+            onChange={setRetries}
+            min={0}
+            max={100}
+          />
+          <NumberField
+            label="Drain"
+            suffix="seconds"
+            description="Old replicas keep serving this long."
+            value={drain}
+            onChange={setDrain}
+            min={0}
+            max={3600}
+          />
+        </>
+      )}
     </Section>
   );
 }
@@ -918,6 +953,167 @@ function PlacementSection({ config, context }: { config: ServiceConfig; context:
   );
 }
 
+const CONCURRENCY: Record<CronConcurrencyPolicy, { label: string; description: string }> = {
+  forbid: {
+    label: "Forbid",
+    description: "A slot that comes while a run is still going is skipped.",
+  },
+  replace: {
+    label: "Replace",
+    description: "The running run is cancelled, then the new one starts.",
+  },
+  allow: { label: "Allow", description: "The new run starts alongside the running one." },
+};
+
+type CronNumber = keyof typeof CRON_LIMITS;
+
+const CRON_NUMBERS: readonly {
+  key: CronNumber;
+  label: string;
+  suffix?: string;
+  description: string;
+}[] = [
+  {
+    key: "timeout_s",
+    label: "Timeout",
+    suffix: "seconds",
+    description: "A run still going after this long is stopped and marked timed out.",
+  },
+  {
+    key: "starting_deadline_s",
+    label: "Starting deadline",
+    suffix: "seconds",
+    description:
+      "How late a run may still start after its slot; later ones are recorded as missed.",
+  },
+  {
+    key: "retries",
+    label: "Retries",
+    description: "Extra attempts after a failed, timed-out or lost run.",
+  },
+  {
+    key: "retry_backoff_s",
+    label: "Retry backoff",
+    suffix: "seconds",
+    description: "Wait before the first retry, doubled for each further one.",
+  },
+  {
+    key: "history_limit",
+    label: "History",
+    suffix: "runs",
+    description: "Runs kept per environment; older ones are deleted.",
+  },
+];
+
+/** Slots checked for the overlap warning; enough to see the shortest gap of most schedules. */
+const OVERLAP_SAMPLE = 24;
+
+function cronNumbers(cron: CronConfig): Record<CronNumber, string> {
+  return Object.fromEntries(CRON_NUMBERS.map(({ key }) => [key, String(cron[key])])) as Record<
+    CronNumber,
+    string
+  >;
+}
+
+/** Fields in a fixed order, so a draft and the saved part compare by their JSON. */
+function orderedCron(cron: CronConfig): CronConfig {
+  return {
+    schedule: cron.schedule,
+    timezone: cron.timezone,
+    concurrency: cron.concurrency,
+    timeout_s: cron.timeout_s,
+    starting_deadline_s: cron.starting_deadline_s,
+    retries: cron.retries,
+    retry_backoff_s: cron.retry_backoff_s,
+    history_limit: cron.history_limit,
+  };
+}
+
+function CronSection({ config, context }: { config: ServiceConfig; context: SaveContext }) {
+  const saved: CronConfig = config.cron ?? { ...DEFAULT_CRON_CONFIG, schedule: "" };
+  const [schedule, setSchedule] = useState(saved.schedule);
+  const [timezone, setTimezone] = useState(saved.timezone);
+  const [concurrency, setConcurrency] = useState(saved.concurrency);
+  const [numbers, setNumbers] = useState(() => cronNumbers(saved));
+  const zones = useMemo(() => timeZones(saved.timezone), [saved.timezone]);
+  const preview = useMemo(
+    () => previewSchedule(schedule, timezone, OVERLAP_SAMPLE),
+    [schedule, timezone],
+  );
+  const valid =
+    preview.error === null &&
+    CRON_NUMBERS.every(({ key }) =>
+      isWhole(numbers[key], CRON_LIMITS[key].min, CRON_LIMITS[key].max),
+    );
+  const next = orderedCron({
+    schedule: schedule.trim(),
+    timezone,
+    concurrency,
+    ...(Object.fromEntries(CRON_NUMBERS.map(({ key }) => [key, Number(numbers[key])])) as Record<
+      CronNumber,
+      number
+    >),
+  });
+  const dirty = JSON.stringify(next) !== JSON.stringify(orderedCron(saved));
+  const interval = shortestInterval(preview.slots);
+  const timeoutMs = Number(numbers.timeout_s) * 1000;
+  const overlap = concurrency === "allow" && interval !== null && timeoutMs > interval;
+
+  return (
+    <Section
+      id="cron"
+      title="Cron"
+      description="When the job runs, and what happens when runs overlap or fail."
+      dirty={dirty}
+      part="cron"
+      context={context}
+      onReset={() => {
+        setSchedule(saved.schedule);
+        setTimezone(saved.timezone);
+        setConcurrency(saved.concurrency);
+        setNumbers(cronNumbers(saved));
+      }}
+      onSubmit={() => {
+        if (valid) context.save("cron", next);
+      }}
+    >
+      <ScheduleField value={schedule} onChange={setSchedule} timezone={timezone} />
+      <TimezoneField value={timezone} onChange={setTimezone} zones={zones} />
+      <SelectRow
+        label="Concurrency"
+        description={CONCURRENCY[concurrency].description}
+        value={concurrency}
+        onChange={(value) => setConcurrency(value as CronConcurrencyPolicy)}
+      >
+        {CRON_CONCURRENCY_POLICIES.map((policy) => (
+          <option key={policy} value={policy}>
+            {CONCURRENCY[policy].label}
+          </option>
+        ))}
+      </SelectRow>
+      {CRON_NUMBERS.map(({ key, label, suffix, description }) => (
+        <NumberField
+          key={key}
+          label={label}
+          suffix={suffix}
+          description={description}
+          value={numbers[key]}
+          onChange={(value) => setNumbers((current) => ({ ...current, [key]: value }))}
+          min={CRON_LIMITS[key].min}
+          max={CRON_LIMITS[key].max}
+        />
+      ))}
+      {overlap ? (
+        <p role="status" className="py-3 text-xs text-warning">
+          Runs can pile up: the timeout ({formatDuration(timeoutMs)}) is longer than the{" "}
+          {formatDuration(interval)} between slots, and Allow starts every slot even while earlier
+          runs are still going.
+        </p>
+      ) : null}
+    </Section>
+  );
+}
+
 function GeneralSection({
   service,
   serviceId,
@@ -1048,8 +1244,24 @@ const DATABASE_SECTIONS = [
   { id: "volume", label: "Volume" },
 ] as const;
 
-function SectionNav({ canDelete, database }: { canDelete: boolean; database: boolean }) {
-  const sections = database ? [SECTIONS[0], ...DATABASE_SECTIONS, ...SECTIONS.slice(1)] : SECTIONS;
+function SectionNav({
+  canDelete,
+  database,
+  cron,
+}: {
+  canDelete: boolean;
+  database: boolean;
+  cron: boolean;
+}) {
+  const sections = database
+    ? [SECTIONS[0], ...DATABASE_SECTIONS, ...SECTIONS.slice(1)]
+    : cron
+      ? [
+          SECTIONS[0],
+          { id: "cron", label: "Cron" },
+          ...SECTIONS.slice(1).filter((section) => !NOT_FOR_CRON.has(section.id)),
+        ]
+      : SECTIONS;
   return (
     <SettingsNav label="Service settings" className="hidden lg:block">
       <SettingsNavGroup label="On this page">
@@ -1067,7 +1279,8 @@ function SectionNav({ canDelete, database }: { canDelete: boolean; database: boo
 /**
  * Every part of a service's config, one form per part. Each save writes a new immutable
  * version (guarded by `expected_version`, so concurrent editors can't overwrite each
- * other) and takes effect on the next deploy, which the notice at the top offers.
+ * other) and takes effect on the next deploy, which the notice at the top offers. A cron
+ * service adds its Cron part and leaves out Healthcheck, Networking and Domains.
  *
  * @param props - Workspace, project and service ids.
  * @returns The tab.
@@ -1146,9 +1359,12 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
   const deleteLocked = deleteBlockedIn
     ? `Deleting removes the service from every environment. ${describeDenial("environment_protected", "services:manage", deleteBlockedIn.name)}`
     : null;
+  const isCron = service.kind === "cron";
 
   return (
-    <SettingsLayout nav={<SectionNav canDelete={canDelete} database={Boolean(service.database)} />}>
+    <SettingsLayout
+      nav={<SectionNav canDelete={canDelete} database={Boolean(service.database)} cron={isCron} />}
+    >
       <div className="mb-8 grid gap-3">
         {configLocked ? <LockedNote reason={configLocked} /> : null}
         <p className="text-sm text-muted-foreground">
@@ -1157,6 +1373,15 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
             config v{current.version} · saved {formatRelativeTime(current.created_at)}
           </span>
         </p>
+        {isCron && !current.cron ? (
+          <MissingScheduleBanner>
+            {context.canEdit ? (
+              <Button size="sm" variant="primary" asChild>
+                <a href="#cron">Set a schedule</a>
+              </Button>
+            ) : null}
+          </MissingScheduleBanner>
+        ) : null}
         {undeployed && latest.data ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 py-2 pr-2 pl-3.5 text-sm text-foreground">
             <span>
@@ -1206,13 +1431,18 @@ export function ServiceSettingsTab({ workspaceId, projectId, serviceId }: Servic
             <VolumeSection workspaceId={workspaceId} service={service} environment={environment} />
           </>
         ) : null}
+        {isCron ? <CronSection config={current} context={context} /> : null}
         <SourceSection config={current} context={context} />
         <BuildSection config={current} context={context} />
-        <DeploySection config={current} context={context} />
+        <DeploySection config={current} context={context} cron={isCron} />
         <ResourcesSection config={current} context={context} />
-        <HealthcheckSection config={current} context={context} />
-        <NetworkingSection config={current} context={context} />
-        <DomainsSection workspaceId={workspaceId} projectId={projectId} serviceId={serviceId} />
+        {isCron ? null : (
+          <>
+            <HealthcheckSection config={current} context={context} />
+            <NetworkingSection config={current} context={context} />
+            <DomainsSection workspaceId={workspaceId} projectId={projectId} serviceId={serviceId} />
+          </>
+        )}
         <PlacementSection config={current} context={context} />
         {canDelete ? (
           <div id="danger-zone" className="scroll-mt-20">

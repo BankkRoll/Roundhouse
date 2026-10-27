@@ -31,7 +31,12 @@ import {
 } from "../contracts";
 import { recordAudit } from "../lib/audit";
 import { checkDomain, refreshServiceNodes } from "../lib/domains/check";
-import { addCustomDomain, checkCustomHostname, removeCustomDomain } from "../lib/domains/manage";
+import {
+  addCustomDomain,
+  assertServesTraffic,
+  checkCustomHostname,
+  removeCustomDomain,
+} from "../lib/domains/manage";
 import { presentDomains } from "../lib/domains/present";
 import { ApiError, conflict, notFound } from "../lib/errors";
 import { environmentOf, serviceScope } from "../lib/scope";
@@ -81,6 +86,7 @@ export const domainRoutes = createRouter()
     );
     const env = await environmentOf(c, project.id, body.environment_id);
     const db = c.get("db");
+    assertServesTraffic(service);
     const hostname = await checkCustomHostname(c, db, body.hostname);
     const checked = await addCustomDomain(c, {
       workspaceId: project.workspaceId,

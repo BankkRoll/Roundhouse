@@ -1,5 +1,5 @@
 import { Button, cn, StatusDot, statusMeta } from "@roundhouse/ui";
-import { BoxIcon, DatabaseIcon, MaximizeIcon, MinusIcon, PlusIcon, TimerIcon } from "lucide-react";
+import { BoxIcon, ClockIcon, DatabaseIcon, MaximizeIcon, MinusIcon, PlusIcon } from "lucide-react";
 import {
   type KeyboardEvent,
   memo,
@@ -13,6 +13,7 @@ import {
 } from "react";
 import type { Canvas, CanvasEdge, CanvasNode } from "../../lib/api/changes-types";
 import type { ServiceView } from "../projects/service-list";
+import { CronNodeSummary } from "./cron-node-summary";
 import {
   autoLayout,
   edgePath,
@@ -43,7 +44,7 @@ export interface ProjectCanvasProps {
   className?: string;
 }
 
-const KIND_ICONS = { app: BoxIcon, database: DatabaseIcon, cron: TimerIcon } as const;
+const KIND_ICONS = { app: BoxIcon, database: DatabaseIcon, cron: ClockIcon } as const;
 
 /** Pixels a pointer must travel before a press on a node becomes a drag. */
 const DRAG_THRESHOLD = 4;
@@ -126,6 +127,7 @@ const ServiceNode = memo(function ServiceNode({
       data-node-id={node.id}
       aria-label={nodeLabel(node, view, peers)}
       aria-pressed={selected}
+      aria-describedby={node.kind === "cron" ? `cron-summary-${node.id}` : undefined}
       onPointerDown={(e) => onPointerDown(node.id, e)}
       onKeyDown={(e) => onKeyDown(node.id, e)}
       onClick={() => onClick(node.id)}
@@ -188,6 +190,13 @@ const ServiceNode = memo(function ServiceNode({
           <span className="shrink-0">{statusText}</span>
         )}
       </span>
+      {node.kind === "cron" ? (
+        <CronNodeSummary
+          id={`cron-summary-${node.id}`}
+          serviceId={node.id}
+          environmentId={view?.latest?.environment_id}
+        />
+      ) : null}
     </button>
   );
 });

@@ -83,9 +83,11 @@ func containerCreate(s *wantSpec) docker.ContainerCreate {
 			exposed[strconv.Itoa(p.ContainerPort)+"/tcp"] = struct{}{}
 		}
 	}
-	mem := int64(s.Resources.MemoryMB) << 20
-	pids := int64(s.Resources.PIDs)
 	grace := s.StopGrace()
+	hc := HardenedHostConfig(s.Network, s.Resources)
+	hc.PortBindings = s.hostPorts
+	hc.Binds = s.binds
+	hc.Mounts = s.mounts
 	return docker.ContainerCreate{
 		Image:        s.Image,
 		Cmd:          s.Command,
@@ -94,46 +96,54 @@ func containerCreate(s *wantSpec) docker.ContainerCreate {
 		Labels:       containerLabels(s),
 		ExposedPorts: exposed,
 		StopTimeout:  &grace,
-		HostConfig: docker.HostConfig{
-			NetworkMode:  s.Network,
-			PortBindings: s.hostPorts,
-			// NOTE: the agent restarts containers itself so it sees every
-			// crash, reports it and applies its own backoff.
-			RestartPolicy: docker.RestartPolicy{Name: "no"},
-			Binds:         s.binds,
-			Mounts:        s.mounts,
-			// SECURITY: no seccomp or apparmor option, so the engine applies its
-			// default seccomp profile and docker-default AppArmor profile wherever
-			// the host supports them; workloads are never unconfined (ADR 0014 H4).
-			SecurityOpt: []string{"no-new-privileges:true"},
-			CapDrop:     []string{"ALL"},
-			CapAdd:      DefaultCapAdd,
-			LogConfig: docker.LogConfig{Type: "json-file", Config: map[string]string{
-				"max-size": logMaxSize,
-				"max-file": logMaxFiles,
-			}},
-			Memory:     mem,
-			MemorySwap: mem,
-			NanoCPUs:   int64(s.Resources.CPUMillis) * 1_000_000,
-			PidsLimit:  &pids,
-		},
+		HostConfig:   hc,
 		NetworkingConfig: &docker.NetworkingConfig{EndpointsConfig: map[string]docker.EndpointSettings{
 			s.Network: {Aliases: networkAliases(s)},
 		}},
 	}
 }
 
-// pullAuth returns the credential to pull s.Image with, or nil.
+// HardenedHostConfig returns the host config every workload container gets
+// on network, limited to res: no new privileges, every capability dropped
+// but [DefaultCapAdd], rotated json-file logs, no swap beyond the memory
+// limit, a PID limit, and no engine restart policy.
+func HardenedHostConfig(network string, res protocol.Resources) docker.HostConfig {
+	mem := int64(res.MemoryMB) << 20
+	pids := int64(res.PIDs)
+	return docker.HostConfig{
+		NetworkMode: network,
+		// NOTE: the agent restarts containers itself so it sees every
+		// crash, reports it and applies its own backoff.
+		RestartPolicy: docker.RestartPolicy{Name: "no"},
+		// SECURITY: no seccomp or apparmor option, so the engine applies its
+		// default seccomp profile and docker-default AppArmor profile wherever
+		// the host supports them; workloads are never unconfined (ADR 0014 H4).
+		SecurityOpt: []string{"no-new-privileges:true"},
+		CapDrop:     []string{"ALL"},
+		CapAdd:      DefaultCapAdd,
+		LogConfig: docker.LogConfig{Type: "json-file", Config: map[string]string{
+			"max-size": logMaxSize,
+			"max-file": logMaxFiles,
+		}},
+		Memory:     mem,
+		MemorySwap: mem,
+		NanoCPUs:   int64(res.CPUMillis) * 1_000_000,
+		PidsLimit:  &pids,
+	}
+}
+
+// pullAuth returns the credential to pull w.Image with, or nil, and false
+// when w carries a credential for another registry than the image's.
 //
 // SECURITY: the engine sends X-Registry-Auth to whichever registry the image
 // names, so a credential for one registry is never attached to a pull from
 // another.
-func pullAuth(s *wantSpec) (*docker.AuthConfig, bool) {
-	a := s.RegistryAuth
+func pullAuth(w *protocol.WorkloadSpec) (*docker.AuthConfig, bool) {
+	a := w.RegistryAuth
 	if a == nil {
 		return nil, true
 	}
-	if !docker.SameRegistry(docker.ParseReference(s.Image).Domain, a.Server) {
+	if !docker.SameRegistry(docker.ParseReference(w.Image).Domain, a.Server) {
 		return nil, false
 	}
 	return &docker.AuthConfig{Username: a.Username, Password: a.Password, ServerAddress: a.Server}, true

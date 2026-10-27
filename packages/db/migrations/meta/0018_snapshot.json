@@ -1384,6 +1384,348 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "cron_runs": {
+      "name": "cron_runs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "environment_id": {
+          "name": "environment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "deployment_id": {
+          "name": "deployment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "trigger": {
+          "name": "trigger",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scheduled_for": {
+          "name": "scheduled_for",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "attempt": {
+          "name": "attempt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "node_id": {
+          "name": "node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "workload_id": {
+          "name": "workload_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "exit_code": {
+          "name": "exit_code",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "missed_count": {
+          "name": "missed_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "workflow_instance_id": {
+          "name": "workflow_instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "triggered_by": {
+          "name": "triggered_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "cron_runs_slot_uq": {
+          "name": "cron_runs_slot_uq",
+          "columns": [
+            "service_id",
+            "environment_id",
+            "scheduled_for",
+            "attempt"
+          ],
+          "isUnique": true,
+          "where": "\"trigger\" IN ('schedule', 'retry')"
+        },
+        "cron_runs_svc_env_id_idx": {
+          "name": "cron_runs_svc_env_id_idx",
+          "columns": [
+            "service_id",
+            "environment_id",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "cron_runs_status_idx": {
+          "name": "cron_runs_status_idx",
+          "columns": [
+            "status"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "cron_runs_service_id_services_id_fk": {
+          "name": "cron_runs_service_id_services_id_fk",
+          "tableFrom": "cron_runs",
+          "tableTo": "services",
+          "columnsFrom": [
+            "service_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "cron_runs_environment_id_environments_id_fk": {
+          "name": "cron_runs_environment_id_environments_id_fk",
+          "tableFrom": "cron_runs",
+          "tableTo": "environments",
+          "columnsFrom": [
+            "environment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "cron_runs_deployment_id_deployments_id_fk": {
+          "name": "cron_runs_deployment_id_deployments_id_fk",
+          "tableFrom": "cron_runs",
+          "tableTo": "deployments",
+          "columnsFrom": [
+            "deployment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "cron_runs_node_id_nodes_id_fk": {
+          "name": "cron_runs_node_id_nodes_id_fk",
+          "tableFrom": "cron_runs",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "cron_runs_triggered_by_users_id_fk": {
+          "name": "cron_runs_triggered_by_users_id_fk",
+          "tableFrom": "cron_runs",
+          "tableTo": "users",
+          "columnsFrom": [
+            "triggered_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "cron_states": {
+      "name": "cron_states",
+      "columns": {
+        "service_id": {
+          "name": "service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "environment_id": {
+          "name": "environment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "paused": {
+          "name": "paused",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "next_run_at": {
+          "name": "next_run_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_scheduled_for": {
+          "name": "last_scheduled_for",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "cron_states_next_idx": {
+          "name": "cron_states_next_idx",
+          "columns": [
+            "next_run_at"
+          ],
+          "isUnique": false,
+          "where": "next_run_at IS NOT NULL"
+        }
+      },
+      "foreignKeys": {
+        "cron_states_service_id_services_id_fk": {
+          "name": "cron_states_service_id_services_id_fk",
+          "tableFrom": "cron_states",
+          "tableTo": "services",
+          "columnsFrom": [
+            "service_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "cron_states_environment_id_environments_id_fk": {
+          "name": "cron_states_environment_id_environments_id_fk",
+          "tableFrom": "cron_states",
+          "tableTo": "environments",
+          "columnsFrom": [
+            "environment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "cron_states_service_id_environment_id_pk": {
+          "columns": [
+            "service_id",
+            "environment_id"
+          ],
+          "name": "cron_states_service_id_environment_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "backup_parts": {
       "name": "backup_parts",
       "columns": {
@@ -3281,6 +3623,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "cron_run_id": {
+          "name": "cron_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "r2_key": {
           "name": "r2_key",
           "type": "text",
@@ -3363,6 +3712,14 @@
           ],
           "isUnique": false
         },
+        "log_chunks_cron_run_ts_idx": {
+          "name": "log_chunks_cron_run_ts_idx",
+          "columns": [
+            "cron_run_id",
+            "first_ts"
+          ],
+          "isUnique": false
+        },
         "log_chunks_last_ts_idx": {
           "name": "log_chunks_last_ts_idx",
           "columns": [
@@ -3417,6 +3774,19 @@
           "tableTo": "builds",
           "columnsFrom": [
             "build_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "log_chunks_cron_run_id_cron_runs_id_fk": {
+          "name": "log_chunks_cron_run_id_cron_runs_id_fk",
+          "tableFrom": "log_chunks",
+          "tableTo": "cron_runs",
+          "columnsFrom": [
+            "cron_run_id"
           ],
           "columnsTo": [
             "id"
@@ -5391,6 +5761,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "cron": {
+          "name": "cron",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "created_at": {

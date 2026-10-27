@@ -12,6 +12,9 @@
  * - apply `workload_status` (and `hello.statuses`) to placements, move
  *   deployments between `active` and `crashed`, and wake deploy workflows;
  * - record `build_result`s and wake the waiting workflow;
+ * - send `job_run` and `job_cancel` (ADR 0010) to agents at
+ *   `JOBS_PROTOCOL_VERSION`, apply `job_status` to cron runs and file `job`
+ *   log sources under their run (`./node/handlers/jobs.ts`);
  * - redact (with each deployment's frozen secret set and its encodings),
  *   store (R2 + `log_chunks`) and forward `logs` to the project
  *   room, flushing on the Durable Object's alarm and dropping lines whose
@@ -48,6 +51,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   builds,
   createDb,
+  cronRuns,
   type Db,
   deployments,
   logChunks,
@@ -58,6 +62,7 @@ import {
 import {
   type AgentFrame,
   AgentFrameSchema,
+  type AnyLogs,
   BACKUPS_PROTOCOL_VERSION,
   BUILD_CANCEL_PROTOCOL_VERSION,
   type BuildJob,
@@ -70,9 +75,10 @@ import {
   DB_QUERY_PROTOCOL_VERSION,
   type Heartbeat,
   type Hello,
+  JOBS_PROTOCOL_VERSION,
+  type JobRun,
   KEY_ROLLOVER_PROTOCOL_VERSION,
   type LogLine,
-  type Logs,
   MAX_AGENT_FRAME_BYTES,
   MAX_CONTROL_FRAME_BYTES,
   METRICS_PROTOCOL_VERSION,
@@ -125,6 +131,7 @@ import {
 import { type BackupJobFrameBody, onBackupFrame } from "./node/handlers/backups";
 import { onCertFrame } from "./node/handlers/certs";
 import { MAX_QUERIES_PER_NODE, PendingQueries, UserQueryLimiter } from "./node/handlers/data";
+import { jobLogOwner, onJobStatus } from "./node/handlers/jobs";
 import { MetricOwners, onMetrics } from "./node/handlers/metrics";
 import { onVolumeStatus } from "./node/handlers/volumes";
 
@@ -180,6 +187,8 @@ export const FRAME_RATE_LIMITS = {
   cert_ack: 8,
   /** On change, and for every routed host after a reconnect. */
   cert_status: 32,
+  /** A few per run (pulling, running, terminal), re-sent for every run after a reconnect. */
+  job_status: 32,
   other: 64,
 } as const;
 
@@ -257,6 +266,8 @@ interface LogOwner {
   environmentId: string;
   deploymentId: string | null;
   buildId: string | null;
+  /** Set for a cron run's output (ADR 0010). */
+  cronRunId: string | null;
   /** Deployment whose frozen secret set redacts the lines (a build's own, for build logs). */
   redactionDeploymentId: string;
 }
@@ -282,6 +293,15 @@ export type BuildJobRejection =
 
 /** Why {@link NodeConnection.sendBuildCancel} could not deliver. */
 export type BuildCancelRejection = "not_connected" | "protocol_too_old";
+
+/** Fields a caller supplies for a `job_run`; the signed header is added when sent. */
+export type JobRunBody = Omit<JobRun, "id" | "node_id" | "iat" | "exp" | "type">;
+
+/** Why {@link NodeConnection.sendJobRun} or {@link NodeConnection.sendJobCancel} could not deliver. */
+export type JobRejection = "not_connected" | "protocol_too_old";
+
+/** A `logs` frame this object ingests: a replica's, a build's or a job run's. */
+type IngestedLogs = AnyLogs & { source: Exclude<AnyLogs["source"], { type: "task" }> };
 
 /** Whether a D1 error is a failed foreign key check. */
 function isForeignKeyViolation(err: unknown): boolean {
@@ -406,13 +426,18 @@ export class NodeConnection extends DurableObject<Env> {
         await this.onBuildResult(attachment.nodeId, message);
         return;
       case "logs": {
-        // NOTE: job and task sources (protocol 5–6) have no ingest here yet;
-        // their lines are dropped rather than filed under a replica.
+        // NOTE: task sources (protocol 5) have no ingest here yet; their
+        // lines are dropped rather than filed under a replica.
         const { source } = message;
-        if (source.type !== "runtime" && source.type !== "build") return;
+        if (source.type === "task") return;
+        if (source.type === "job" && attachment.protocolVersion < JOBS_PROTOCOL_VERSION) return;
         await this.onLogs(attachment.nodeId, { ...message, source });
         return;
       }
+      case "job_status":
+        if (attachment.protocolVersion < JOBS_PROTOCOL_VERSION) return;
+        await onJobStatus({ db: this.db, env: this.env, nodeId: attachment.nodeId }, message);
+        return;
       case "metrics":
         // A frame the control plane never asked for (an older protocol) is dropped.
         if (attachment.protocolVersion < METRICS_PROTOCOL_VERSION) return;
@@ -629,6 +654,58 @@ export class NodeConnection extends DurableObject<Env> {
       type: "build_cancel",
       ...this.header(attachment.nodeId, Date.now()),
       build_id: buildId,
+    });
+    return { sent: true };
+  }
+
+  /**
+   * Signs and sends a `job_run` (ADR 0010) with the credential TTL: its
+   * environment is a box the caller sealed to this node, bound to the run
+   * and workload, so no plaintext reaches this object.
+   *
+   * @param job - Frame fields.
+   * @returns `{ sent: true }`, or why it could not be delivered.
+   */
+  async sendJobRun(
+    job: JobRunBody,
+  ): Promise<{ sent: true } | { sent: false; reason: JobRejection }> {
+    const ws = this.greetedSocket();
+    if (!ws) return { sent: false, reason: "not_connected" };
+    const attachment = ws.deserializeAttachment() as Attachment;
+    if (attachment.protocolVersion < JOBS_PROTOCOL_VERSION) {
+      return { sent: false, reason: "protocol_too_old" };
+    }
+    await this.send(ws, {
+      type: "job_run",
+      ...this.header(attachment.nodeId, Date.now(), CREDENTIAL_FRAME_TTL_MS),
+      ...job,
+    });
+    return { sent: true };
+  }
+
+  /**
+   * Signs and sends a `job_cancel`; the agent answers with a `cancelled`
+   * `job_status`, or ignores it for a run it no longer runs.
+   *
+   * @param runId - The run to stop.
+   * @param reason - Shown in the run's log, e.g. `replaced by crn_…`.
+   * @returns `{ sent: true }`, or why it could not be delivered.
+   */
+  async sendJobCancel(
+    runId: string,
+    reason: string,
+  ): Promise<{ sent: true } | { sent: false; reason: JobRejection }> {
+    const ws = this.greetedSocket();
+    if (!ws) return { sent: false, reason: "not_connected" };
+    const attachment = ws.deserializeAttachment() as Attachment;
+    if (attachment.protocolVersion < JOBS_PROTOCOL_VERSION) {
+      return { sent: false, reason: "protocol_too_old" };
+    }
+    await this.send(ws, {
+      type: "job_cancel",
+      ...this.header(attachment.nodeId, Date.now()),
+      run_id: runId,
+      reason: reason.slice(0, 256),
     });
     return { sent: true };
   }
@@ -1055,14 +1132,18 @@ export class NodeConnection extends DurableObject<Env> {
     if (deployment) await wakeWorkflow(this.env, deployment, "build", { ok });
   }
 
-  private async onLogs(nodeId: string, frame: Logs) {
+  private async onLogs(nodeId: string, frame: IngestedLogs) {
     const owner = await this.logOwner(nodeId, frame);
     if (!owner) return;
     const secrets = await this.redactions(owner);
     const lines: LogLine[] = frame.lines.map((l) => ({ ...l, text: redact(l.text, secrets) }));
-    const workloadId = frame.source.type === "runtime" ? frame.source.workload_id : undefined;
+    const workloadId = frame.source.type === "build" ? undefined : frame.source.workload_id;
 
-    const key = owner.deploymentId ? `d:${owner.deploymentId}` : `b:${owner.buildId}`;
+    const key = owner.cronRunId
+      ? `j:${owner.cronRunId}`
+      : owner.deploymentId
+        ? `d:${owner.deploymentId}`
+        : `b:${owner.buildId}`;
     let buffer = this.logBuffers.get(key);
     if (!buffer) {
       buffer = { owner, lines: [], bytes: 0 };
@@ -1130,15 +1211,22 @@ export class NodeConnection extends DurableObject<Env> {
    * Resolves (and caches) where a `logs` frame belongs, accepting only
    * sources this node runs: its own placements or builds sent to it.
    */
-  private async logOwner(nodeId: string, frame: Logs): Promise<LogOwner | null> {
+  private async logOwner(nodeId: string, frame: IngestedLogs): Promise<LogOwner | null> {
     const src = frame.source;
     const key =
-      src.type === "runtime" ? `r:${src.workload_id}:${src.deployment_id}` : `b:${src.build_id}`;
+      src.type === "runtime"
+        ? `r:${src.workload_id}:${src.deployment_id}`
+        : src.type === "build"
+          ? `b:${src.build_id}`
+          : `j:${src.run_id}:${src.workload_id}`;
     const cached = this.owners.get(key);
     if (cached && Date.now() - cached.at < LOOKUP_TTL_MS) return cached.owner;
 
     let owner: LogOwner | null = null;
-    if (src.type === "runtime") {
+    if (src.type === "job") {
+      const job = await jobLogOwner(this.db, nodeId, src);
+      if (job) owner = { ...job, deploymentId: null, buildId: null };
+    } else if (src.type === "runtime") {
       const [row] = await this.db
         .select({
           projectId: services.projectId,
@@ -1161,6 +1249,7 @@ export class NodeConnection extends DurableObject<Env> {
           ...row,
           deploymentId: src.deployment_id,
           buildId: null,
+          cronRunId: null,
           redactionDeploymentId: src.deployment_id,
         };
       }
@@ -1177,7 +1266,7 @@ export class NodeConnection extends DurableObject<Env> {
         .innerJoin(services, eq(services.id, builds.serviceId))
         .where(and(eq(builds.id, src.build_id), eq(builds.nodeId, nodeId)))
         .limit(1);
-      if (row) owner = { ...row, deploymentId: null, buildId: src.build_id };
+      if (row) owner = { ...row, deploymentId: null, buildId: src.build_id, cronRunId: null };
     }
     if (this.owners.size > 1024) this.owners.clear();
     this.owners.set(key, { owner, at: Date.now() });
@@ -1223,8 +1312,16 @@ export class NodeConnection extends DurableObject<Env> {
     if (current === null || current > due) await this.ctx.storage.setAlarm(due);
   }
 
-  /** Whether the deployment or build a buffer belongs to still exists. */
+  /** Whether the deployment, build or cron run a buffer belongs to still exists. */
   private async ownerExists(owner: LogOwner): Promise<boolean> {
+    if (owner.cronRunId) {
+      const [run] = await this.db
+        .select({ id: cronRuns.id })
+        .from(cronRuns)
+        .where(eq(cronRuns.id, owner.cronRunId))
+        .limit(1);
+      return run !== undefined;
+    }
     const row = owner.deploymentId
       ? await this.db.query.deployments.findFirst({
           where: eq(deployments.id, owner.deploymentId),
@@ -1259,6 +1356,7 @@ export class NodeConnection extends DurableObject<Env> {
         serviceId: owner.serviceId,
         deploymentId: owner.deploymentId,
         buildId: owner.buildId,
+        cronRunId: owner.cronRunId,
         r2Key,
         firstTs: new Date(Math.min(firstTs, lastTs)),
         lastTs: new Date(Math.max(firstTs, lastTs)),

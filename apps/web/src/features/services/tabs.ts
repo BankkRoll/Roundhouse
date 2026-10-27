@@ -15,7 +15,8 @@ export type ServiceTab =
   | "backups"
   | "variables"
   | "settings"
-  | "domains";
+  | "domains"
+  | "runs";
 
 /** Route of each service tab. */
 export const SERVICE_TAB_PATHS = {
@@ -27,6 +28,7 @@ export const SERVICE_TAB_PATHS = {
   variables: "/w/$workspaceId/p/$projectId/s/$serviceId/variables",
   settings: "/w/$workspaceId/p/$projectId/s/$serviceId/settings",
   domains: "/w/$workspaceId/p/$projectId/s/$serviceId/domains",
+  runs: "/w/$workspaceId/p/$projectId/s/$serviceId/runs",
 } as const satisfies Record<ServiceTab, string>;
 
 /** Tabs of an app service, in display order, with their labels. */
@@ -42,6 +44,7 @@ export const SERVICE_TABS: readonly { id: ServiceTab; label: string }[] = [
 /**
  * The tabs a service shows. A database service adds Data (for callers with
  * `data:read`) and Backups, and drops Domains: it listens on the private network only.
+ * A cron service leads with Runs and drops Metrics and Domains: it serves no traffic.
  *
  * @param service - The service; `database` is set for database services.
  * @param can - The caller's permission check.
@@ -51,9 +54,18 @@ export const SERVICE_TABS: readonly { id: ServiceTab; label: string }[] = [
  * // ["deployments", "logs", "metrics", "data", "backups", "variables", "settings"]
  */
 export function serviceTabs(
-  service: { database?: unknown } | undefined,
+  service: { database?: unknown; kind?: string } | undefined,
   can: (action: Action) => boolean,
 ): readonly { id: ServiceTab; label: string }[] {
+  if (service?.kind === "cron") {
+    return [
+      { id: "runs", label: "Runs" },
+      { id: "deployments", label: "Deployments" },
+      { id: "logs", label: "Logs" },
+      { id: "variables", label: "Variables" },
+      { id: "settings", label: "Settings" },
+    ];
+  }
   if (!service?.database) return SERVICE_TABS;
   return [
     { id: "deployments", label: "Deployments" },

@@ -72,6 +72,8 @@ export const ID_PREFIXES = {
   tcpProxy: "tcp",
   /** A control-plane-issued TLS certificate (ADR 0009); also names its workflow instances. */
   certificate: "cer",
+  /** One run of a cron service (ADR 0010); also its workflow instance ID. */
+  cronRun: "crn",
 } as const;
 
 /** An entity kind that has an ID prefix. */
