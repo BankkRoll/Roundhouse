@@ -97,6 +97,7 @@ import { CHANGE_TOOLS } from "./change-tools";
 import { CRON_TOOLS } from "./cron-tools";
 import { DATA_TOOLS } from "./data-tools";
 import { MESH_TOOLS } from "./mesh-tools";
+import { PREVIEW_TOOLS } from "./preview-tools";
 import { deployTemplateTool, listTemplatesTool } from "./template-tools";
 
 // -----------------------------------------------------------------------------
@@ -814,6 +815,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   ...MESH_TOOLS,
   ...DATA_TOOLS,
   ...CRON_TOOLS,
+  ...PREVIEW_TOOLS,
   listTemplatesTool,
   deployTemplateTool,
 ] as readonly McpTool[];

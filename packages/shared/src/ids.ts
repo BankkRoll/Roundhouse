@@ -78,6 +78,8 @@ export const ID_PREFIXES = {
   cronRun: "crn",
   /** One drain of a node (ADR 0005); its workflow instance ID is `drain-<node>-<ts>`. */
   nodeDrain: "drn",
+  /** One pull request's preview of one project (ADR 0007). */
+  preview: "prv",
   /** One web shell session (ADR 0012). */
   shellSession: "shl",
   /** One Cloudflare Containers deployment of a service (ADR 0011). */

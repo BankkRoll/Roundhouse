@@ -64,6 +64,15 @@ func TestValidateJob(t *testing.T) {
 		}, "not the service's repository"},
 		{"other project's cache", func(j *protocol.BuildJob) { j.CacheKey = protocol.BuildCacheKey("prj_other", "svc_B") }, "invalid cache key"},
 		{"service-only cache key", func(j *protocol.BuildJob) { j.CacheKey = "svc_B" }, "invalid cache key"},
+		{"valid preview", func(j *protocol.BuildJob) {
+			j.Isolation = protocol.BuildIsolationPreview
+			j.CacheKey = protocol.BuildCacheKeyFor("prj_A", "svc_B", protocol.BuildIsolationPreview)
+		}, ""},
+		{"preview on the shared cache", func(j *protocol.BuildJob) { j.Isolation = protocol.BuildIsolationPreview }, "invalid cache key"},
+		{"shared build on the preview cache", func(j *protocol.BuildJob) {
+			j.CacheKey = protocol.BuildCacheKeyFor("prj_A", "svc_B", protocol.BuildIsolationPreview)
+		}, "invalid cache key"},
+		{"unknown isolation", func(j *protocol.BuildJob) { j.Isolation = "fork" }, "unknown build isolation"},
 		{"missing project", func(j *protocol.BuildJob) { j.ProjectID = "" }, "invalid project or service id"},
 		{"bad service", func(j *protocol.BuildJob) { j.ServiceID = "../svc" }, "invalid project or service id"},
 		{"safe ref", func(j *protocol.BuildJob) { j.Source.Ref = "refs/heads/main" }, ""},

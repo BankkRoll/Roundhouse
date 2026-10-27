@@ -407,6 +407,21 @@ func PrivateServiceAlias(serviceID string) string {
 // Mirrors buildCacheKey in TypeScript.
 func BuildCacheKey(projectID, serviceID string) string { return projectID + "." + serviceID }
 
+// BuildIsolationPreview marks a pull request build (ADR 0014 section 14):
+// built in the project's preview BuildKit daemon with its own cache.
+// Mirrors BUILD_ISOLATIONS in TypeScript.
+const BuildIsolationPreview = "preview"
+
+// BuildCacheKeyFor returns the cache scope of a build with an isolation
+// class: [BuildCacheKey] for "", and a separate scope for
+// [BuildIsolationPreview]. Mirrors buildCacheKey(project, service, isolation).
+func BuildCacheKeyFor(projectID, serviceID, isolation string) string {
+	if isolation == "" {
+		return BuildCacheKey(projectID, serviceID)
+	}
+	return BuildCacheKey(projectID, serviceID) + "." + isolation
+}
+
 // Validate checks w against the constraints of the zod WorkloadSpecSchema.
 func (w *WorkloadSpec) Validate() error {
 	if !idRE.MatchString(w.ID) {

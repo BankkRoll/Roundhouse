@@ -44,6 +44,7 @@ import {
   MIN_PROTOCOL_VERSION,
   meshPsksAad,
   openBox,
+  PREVIEW_BUILDS_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   registryUpstreamAad,
   restoreSecretsAad,
@@ -99,6 +100,7 @@ describe("version gates (ADR 0015)", () => {
     }
     expect(SEALED_ENV_PROTOCOL_VERSION).toBe(4);
     expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(CERTS_PROTOCOL_VERSION);
+    expect(PREVIEW_BUILDS_PROTOCOL_VERSION).toBeGreaterThan(CERTS_PROTOCOL_VERSION);
     expect(MIN_PROTOCOL_VERSION).toBeLessThan(MESH_PROTOCOL_VERSION);
   });
 });

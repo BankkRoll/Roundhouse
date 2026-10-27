@@ -73,8 +73,10 @@ type Environment struct {
 	SourceBranch *string `json:"source_branch"`
 	// Protected is true when protection rules narrow deploys, config and
 	// variable changes here; production starts protected.
-	Protected bool  `json:"protected"`
-	CreatedAt int64 `json:"created_at"`
+	Protected bool `json:"protected"`
+	// PreviewID is the pull request preview this environment belongs to.
+	PreviewID *string `json:"preview_id"`
+	CreatedAt int64   `json:"created_at"`
 }
 
 // Service is a service of a project. Its config lives per environment.
@@ -188,9 +190,12 @@ type Variable struct {
 	AvailableAtBuild bool `json:"available_at_build"`
 	// MountAsFile delivers the value as the file /run/secrets/KEY instead
 	// of an environment variable.
-	MountAsFile bool  `json:"mount_as_file"`
-	Version     int   `json:"version"`
-	UpdatedAt   int64 `json:"updated_at"`
+	MountAsFile bool `json:"mount_as_file"`
+	// Withheld marks a preview placeholder: the base environment's value
+	// was a secret or derived from one, so the preview got an empty value.
+	Withheld  bool  `json:"withheld"`
+	Version   int   `json:"version"`
+	UpdatedAt int64 `json:"updated_at"`
 	// UpdatedBy is the ID of the user who last wrote the variable.
 	UpdatedBy *string `json:"updated_by"`
 }
@@ -455,17 +460,20 @@ type Node struct {
 	AgentVersion         *string       `json:"agent_version"`
 	// WorkloadsBlocked says why the server takes no workloads, e.g.
 	// "upgrade_agent"; nil when it takes them.
-	WorkloadsBlocked *string         `json:"workloads_blocked"`
-	Capabilities     json.RawMessage `json:"capabilities"`
-	CPUTotal         *float64        `json:"cpu_total"`
-	MemTotal         *float64        `json:"mem_total"`
-	DiskTotal        *float64        `json:"disk_total"`
-	CPUPercent       *float64        `json:"cpu_percent"`
-	MemUsed          *float64        `json:"mem_used"`
-	DiskUsed         *float64        `json:"disk_used"`
-	Load1            *float64        `json:"load1"`
-	LastHeartbeatAt  *int64          `json:"last_heartbeat_at"`
-	CreatedAt        int64           `json:"created_at"`
+	WorkloadsBlocked *string `json:"workloads_blocked"`
+	// Labels are operator-set key/value pairs that placement selectors and
+	// a project's preview build node selector match.
+	Labels          map[string]string `json:"labels"`
+	Capabilities    json.RawMessage   `json:"capabilities"`
+	CPUTotal        *float64          `json:"cpu_total"`
+	MemTotal        *float64          `json:"mem_total"`
+	DiskTotal       *float64          `json:"disk_total"`
+	CPUPercent      *float64          `json:"cpu_percent"`
+	MemUsed         *float64          `json:"mem_used"`
+	DiskUsed        *float64          `json:"disk_used"`
+	Load1           *float64          `json:"load1"`
+	LastHeartbeatAt *int64            `json:"last_heartbeat_at"`
+	CreatedAt       int64             `json:"created_at"`
 }
 
 // JoinToken is a single-use node join token and the command that uses it.
@@ -552,7 +560,8 @@ var APITokenScopes = []string{
 	"services:read", "services:manage", "deployments:create",
 	"variables:read", "variables:read_plain", "variables:manage",
 	"data:read", "data:write", "backups:manage", "backups:restore",
-	"changes:approve", "changes:auto_apply", "shell:open",
+	"changes:approve", "changes:auto_apply",
+	"environments:manage", "previews:manage", "shell:open",
 }
 
 // APITokenPresets are the named scope sets of API_TOKEN_PRESETS.

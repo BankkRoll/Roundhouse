@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -282,3 +284,135 @@ type hintedError struct {
 func (e *hintedError) Unwrap() error { return e.error }
 
 func withHint(err error, hint string) error { return &hintedError{error: err, hint: hint} }
+
+// -----------------------------------------------------------------------------
+// servers label
+// -----------------------------------------------------------------------------
+
+// maxNodeLabels is the most labels a server may carry, as the API enforces.
+const maxNodeLabels = 16
+
+// nodeLabelKey and nodeLabelValue mirror LabelKey and LabelValue in
+// apps/api/src/routes/nodes.ts, so a bad label fails before any request.
+var (
+	nodeLabelKey   = regexp.MustCompile(`^[a-z0-9]([a-z0-9._/-]{0,61}[a-z0-9])?$`)
+	nodeLabelValue = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?)?$`)
+)
+
+// formatLabels renders labels as sorted key=value pairs, e.g.
+// "builder=fork, zone=eu".
+func formatLabels(labels map[string]string) string {
+	pairs := make([]string, 0, len(labels))
+	for _, k := range slices.Sorted(maps.Keys(labels)) {
+		pairs = append(pairs, sanitizeCell(k, 63)+"="+sanitizeCell(labels[k], 63))
+	}
+	return strings.Join(pairs, ", ")
+}
+
+// applyLabelChanges returns current with sets (key=value arguments) applied
+// and removes deleted, or a usage error naming the first bad argument.
+func applyLabelChanges(current map[string]string, sets, removes []string) (map[string]string, error) {
+	next := maps.Clone(current)
+	if next == nil {
+		next = map[string]string{}
+	}
+	setKeys := map[string]bool{}
+	for _, arg := range sets {
+		k, v, ok := strings.Cut(arg, "=")
+		switch {
+		case !ok:
+			return nil, exitcode.New(exitcode.Usage, "invalid label %q: expected key=value; remove a label with --remove key", arg)
+		case !nodeLabelKey.MatchString(k):
+			return nil, exitcode.New(exitcode.Usage, "invalid label key %q: up to 63 lowercase letters, digits, '.', '_', '-' and '/', starting and ending with a letter or digit", k)
+		case !nodeLabelValue.MatchString(v):
+			return nil, exitcode.New(exitcode.Usage, "invalid value for label %s: up to 63 letters, digits, '.', '_' and '-', starting and ending with a letter or digit, or empty", k)
+		case setKeys[k]:
+			return nil, exitcode.New(exitcode.Usage, "label %s is given twice", k)
+		}
+		setKeys[k] = true
+		next[k] = v
+	}
+	for _, k := range removes {
+		if setKeys[k] {
+			return nil, exitcode.New(exitcode.Usage, "label %s is both set and removed", k)
+		}
+		delete(next, k)
+	}
+	if len(next) > maxNodeLabels {
+		return nil, exitcode.New(exitcode.Usage, "a server can have at most %d labels; this would leave %d", maxNodeLabels, len(next))
+	}
+	return next, nil
+}
+
+func (a *App) serversLabelCmd() *cobra.Command {
+	var workspace string
+	var removes []string
+	cmd := &cobra.Command{
+		Use:   "label SERVER [KEY=VALUE ...]",
+		Short: "Show or change a server's labels",
+		Long: `Show a server's labels, or set and remove some. Labels are what placement
+selectors and a project's preview build node selector match, e.g.
+builder=fork for the servers that may build pull requests from forks.
+
+KEY=VALUE adds or changes a label; --remove KEY (repeatable) drops one.
+Other labels are kept. Changing labels never moves running workloads; new
+placements and builds match the new set. Keys are lowercase letters, digits,
+'.', '_', '-' and '/'; values letters, digits, '.', '_' and '-', or empty.
+A server has at most 16 labels.`,
+		Example: `  roundhouse servers label web-1
+  roundhouse servers label build-1 builder=fork zone=eu
+  roundhouse servers label build-1 --remove builder --json`,
+		Args: minArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			sess, err := a.connect()
+			if err != nil {
+				return err
+			}
+			ws, err := a.findWorkspace(ctx, sess.client, workspace)
+			if err != nil {
+				return err
+			}
+			nodes, err := sess.client.ListNodes(ctx, ws.ID)
+			if err != nil {
+				return err
+			}
+			n := findNode(nodes, args[0])
+			if n == nil {
+				return exitcode.New(exitcode.NotFound, "no server %q in %s; list them with `roundhouse servers list`", args[0], ws.Name)
+			}
+			if len(args) > 1 || len(removes) > 0 {
+				next, err := applyLabelChanges(n.Labels, args[1:], removes)
+				if err != nil {
+					return err
+				}
+				for _, k := range removes {
+					if _, ok := n.Labels[k]; !ok {
+						a.IO.Warn("%s has no label %s", n.Name, k)
+					}
+				}
+				if !maps.Equal(next, n.Labels) {
+					if n, err = sess.client.SetNodeLabels(ctx, ws.ID, n.ID, next); err != nil {
+						return err
+					}
+				}
+			}
+			if a.jsonOut {
+				return a.printJSON(n)
+			}
+			if len(n.Labels) == 0 {
+				fmt.Fprintf(a.IO.Out, "%s has no labels\n", n.Name)
+				return nil
+			}
+			tb := a.newTable("key", "value")
+			for _, k := range slices.Sorted(maps.Keys(n.Labels)) {
+				tb.row(sanitizeCell(k, 63), orDash(sanitizeCell(n.Labels[k], 63)))
+			}
+			tb.flush()
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "workspace ID, slug or name")
+	cmd.Flags().StringSliceVar(&removes, "remove", nil, "remove the label with this key (repeatable)")
+	return cmd
+}

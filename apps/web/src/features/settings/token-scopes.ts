@@ -39,6 +39,8 @@ export const SCOPE_LABELS: Record<ApiTokenScope, string> = {
   "backups:restore": "Restore and download backups",
   "changes:approve": "Approve or reject staged changes",
   "changes:auto_apply": "Apply staged changes without a person's approval",
+  "environments:manage": "Create, clone, promote and delete environments, and tear down previews",
+  "previews:manage": "Change preview settings and approve fork pull requests",
   "shell:open": "Open shells in running replicas (unprotected environments only)",
 };
 

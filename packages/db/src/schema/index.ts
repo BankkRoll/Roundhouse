@@ -17,6 +17,7 @@ export * from "./instance";
 export * from "./metrics";
 export * from "./nodes";
 export * from "./oauth";
+export * from "./previews";
 export * from "./projects";
 export * from "./providers";
 export * from "./shell";

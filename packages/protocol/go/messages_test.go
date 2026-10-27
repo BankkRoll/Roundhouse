@@ -232,6 +232,12 @@ func TestBuildJobValidate(t *testing.T) {
 	if err := validBuildJob().Validate(); err != nil {
 		t.Fatalf("valid job rejected: %v", err)
 	}
+	preview := validBuildJob()
+	preview.Isolation = BuildIsolationPreview
+	preview.CacheKey = BuildCacheKeyFor(preview.ProjectID, preview.ServiceID, preview.Isolation)
+	if err := preview.Validate(); err != nil || preview.CacheKey != "prj_1.svc_1.preview" {
+		t.Fatalf("preview job %q rejected: %v", preview.CacheKey, err)
+	}
 	cases := map[string]func(*BuildJob){
 		"credentials in url":   func(j *BuildJob) { j.Source.URL = "https://x:y@github.com/a/b" },
 		"http url":             func(j *BuildJob) { j.Source.URL = "http://github.com/a/b" },
@@ -243,16 +249,22 @@ func TestBuildJobValidate(t *testing.T) {
 			j.Builder = BuilderDockerfile
 			j.DockerfilePath = "a/../../b"
 		},
-		"foreign repository":  func(j *BuildJob) { j.ImageRepository = "ghcr.io/acme/api" },
-		"tagged repository":   func(j *BuildJob) { j.ImageRepository = "127.0.0.1:5000/a/b:latest" },
-		"bad build arg":       func(j *BuildJob) { j.BuildArgs = map[string]string{"a-b": ""} },
-		"short timeout":       func(j *BuildJob) { j.TimeoutS = 5 },
-		"other service repo":  func(j *BuildJob) { j.ImageRepository = "127.0.0.1:5000/prj_1/svc_2" },
-		"other project cache": func(j *BuildJob) { j.CacheKey = "prj_2.svc_1" },
-		"missing project":     func(j *BuildJob) { j.ProjectID = "" },
-		"option-like ref":     func(j *BuildJob) { j.Source.Ref = "--upload-pack=sh" },
-		"dotdot ref":          func(j *BuildJob) { j.Source.Ref = "a..b" },
-		"bad secrets box":     func(j *BuildJob) { j.BuildSecretsSealed = &SealedBox{V: 1, KID: "x"} },
+		"foreign repository":    func(j *BuildJob) { j.ImageRepository = "ghcr.io/acme/api" },
+		"tagged repository":     func(j *BuildJob) { j.ImageRepository = "127.0.0.1:5000/a/b:latest" },
+		"bad build arg":         func(j *BuildJob) { j.BuildArgs = map[string]string{"a-b": ""} },
+		"short timeout":         func(j *BuildJob) { j.TimeoutS = 5 },
+		"other service repo":    func(j *BuildJob) { j.ImageRepository = "127.0.0.1:5000/prj_1/svc_2" },
+		"other project cache":   func(j *BuildJob) { j.CacheKey = "prj_2.svc_1" },
+		"preview, shared cache": func(j *BuildJob) { j.Isolation = BuildIsolationPreview },
+		"shared, preview cache": func(j *BuildJob) { j.CacheKey = "prj_1.svc_1.preview" },
+		"unknown isolation": func(j *BuildJob) {
+			j.Isolation = "fork"
+			j.CacheKey = "prj_1.svc_1.fork"
+		},
+		"missing project": func(j *BuildJob) { j.ProjectID = "" },
+		"option-like ref": func(j *BuildJob) { j.Source.Ref = "--upload-pack=sh" },
+		"dotdot ref":      func(j *BuildJob) { j.Source.Ref = "a..b" },
+		"bad secrets box": func(j *BuildJob) { j.BuildSecretsSealed = &SealedBox{V: 1, KID: "x"} },
 		"long-lived secrets": func(j *BuildJob) {
 			j.BuildSecretsSealed = testBox()
 			j.ExpiresAt++
@@ -581,6 +593,9 @@ func TestLocalImageRepository(t *testing.T) {
 func TestProtocolVersions(t *testing.T) {
 	if ProtocolVersion != 7 || MinProtocolVersion != 3 {
 		t.Errorf("versions %d..%d, want 3..7", MinProtocolVersion, ProtocolVersion)
+	}
+	if PreviewBuildsProtocolVersion != 7 {
+		t.Errorf("preview builds gate %d, want 7", PreviewBuildsProtocolVersion)
 	}
 	if ExecProtocolVersion != 7 || ImagePushProtocolVersion != 7 {
 		t.Errorf("gates exec=%d image_push=%d, want 7", ExecProtocolVersion, ImagePushProtocolVersion)

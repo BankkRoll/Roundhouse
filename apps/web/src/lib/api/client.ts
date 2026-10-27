@@ -458,6 +458,19 @@ export const api = {
       signal,
     }),
   /**
+   * Replaces a server's labels, which placement selectors and preview build node
+   * selectors match.
+   *
+   * @param workspaceId - Workspace id.
+   * @param nodeId - Node id.
+   * @param labels - The complete new set; at most 16.
+   * @returns The node.
+   */
+  putNodeLabels: (workspaceId: string, nodeId: string, labels: Record<string, string>) =>
+    request<Node>("PUT", `/v1/workspaces/${seg(workspaceId)}/nodes/${seg(nodeId)}/labels`, {
+      body: { labels },
+    }),
+  /**
    * Removes a server and revokes its credential. For a server Roundhouse provisioned,
    * this also deletes it at the provider unless `keepServer`.
    *

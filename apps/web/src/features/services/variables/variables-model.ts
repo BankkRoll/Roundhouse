@@ -58,6 +58,11 @@ export interface VariableRow {
    */
   fingerprint: string | null;
   change: "none" | "added" | "changed" | "deleted";
+  /**
+   * A preview placeholder (ADR 0007): the base environment held a secret here, so this
+   * preview got an empty value. Cleared once a new value is staged.
+   */
+  withheld: boolean;
   /** Saved version, when the key exists on the server. */
   version?: number;
 }
@@ -197,6 +202,7 @@ export function mergeRows(saved: readonly Variable[], draft: VariablesDraft): Va
       mountAsFile: staged?.mountAsFile ?? variable.mount_as_file,
       fingerprint: newValue === undefined ? variable.fingerprint : null,
       change: draft.remove.has(variable.key) ? "deleted" : staged ? "changed" : "none",
+      withheld: !staged && variable.withheld,
       version: variable.version,
     });
   }
@@ -210,6 +216,7 @@ export function mergeRows(saved: readonly Variable[], draft: VariablesDraft): Va
       mountAsFile: staged.mountAsFile ?? false,
       fingerprint: null,
       change: "added",
+      withheld: false,
     });
   }
   return [...rows.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));

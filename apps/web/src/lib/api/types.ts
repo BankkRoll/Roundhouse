@@ -190,6 +190,11 @@ export interface Node {
   docker_version: string | null;
   agent_version: string | null;
   capabilities: NodeCapabilities | null;
+  /**
+   * Operator-set labels that placement selectors and a project's preview build node
+   * selector match, e.g. `pool=untrusted`.
+   */
+  labels: Record<string, string>;
   /** Logical CPU count. */
   cpu_total: number | null;
   /** Bytes. */

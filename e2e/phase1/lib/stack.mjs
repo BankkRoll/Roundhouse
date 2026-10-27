@@ -237,10 +237,12 @@ export function stopControlPlane({ pid, state, varsFile }) {
 /**
  * Applies migrations to fresh local state and starts `wrangler dev`.
  *
- * @param {{ port: number }} opts
+ * @param {{ port: number, vars?: Record<string, string>, varsName?: string }} opts - `vars`
+ *   are added to the Worker's variables (e.g. `GITHUB_API_URL` for a fake GitHub); `varsName`
+ *   is the `--env-file` under `apps/api`, so suites never share one.
  * @returns {Promise<ControlPlane>}
  */
-export async function startControlPlane({ port }) {
+export async function startControlPlane({ port, vars = {}, varsName = ".dev.vars.phase1" }) {
   const taken = await fetch(`http://127.0.0.1:${port}/`).then(
     () => true,
     () => false,
@@ -250,7 +252,7 @@ export async function startControlPlane({ port }) {
   }
   const state = mkdtempSync(join(tmpdir(), "roundhouse-e2e-state-"));
   const masterKey = randomBytes(32).toString("base64");
-  const varsFile = join(API_DIR, ".dev.vars.phase1");
+  const varsFile = join(API_DIR, varsName);
   // NOTE: Docker Desktop's node reaches the API at host.docker.internal while the
   // harness uses 127.0.0.1, so no single PUBLIC_ORIGIN fits both; there the
   // ROUNDHOUSE_DEV fallback (URLs follow the request) is used. Linux, as in CI,
@@ -259,7 +261,10 @@ export async function startControlPlane({ port }) {
     process.platform === "linux" ? `PUBLIC_ORIGIN=http://127.0.0.1:${port}\n` : "";
   writeFileSync(
     varsFile,
-    `MASTER_KEY=${masterKey}\nROLLOUT_TIMEOUT_S=${ROLLOUT_TIMEOUT_S}\n${publicOrigin}ROUNDHOUSE_DEV=1\n`,
+    `MASTER_KEY=${masterKey}\nROLLOUT_TIMEOUT_S=${ROLLOUT_TIMEOUT_S}\n${publicOrigin}ROUNDHOUSE_DEV=1\n` +
+      Object.entries(vars)
+        .map(([k, v]) => `${k}=${v}\n`)
+        .join(""),
   );
   mkdirSync(ARTIFACTS, { recursive: true });
   const logFile = join(ARTIFACTS, "wrangler.log");
@@ -286,7 +291,7 @@ export async function startControlPlane({ port }) {
       "--persist-to",
       state,
       "--env-file",
-      ".dev.vars.phase1",
+      varsName,
       "--show-interactive-dev-session=false",
     ],
     { cwd: API_DIR, shell: isWindows, detached: !isWindows, windowsHide: true },

@@ -254,6 +254,7 @@ export interface ListedVariable {
   fingerprint: string | null;
   available_at_build: boolean;
   mount_as_file: boolean;
+  withheld: boolean;
   version: number;
   updated_at: number;
   updated_by: string | null;
@@ -286,6 +287,7 @@ export async function listVariables(
       fingerprint: r.fingerprint,
       available_at_build: r.availableAtBuild,
       mount_as_file: r.mountAsFile,
+      withheld: r.withheld,
       version: r.version,
       updated_at: +r.updatedAt,
       updated_by: r.updatedBy,
@@ -370,7 +372,13 @@ export async function putVariables(
   t: VariableTarget,
   change: VariablesChange,
   actorId: string | null,
-): Promise<{ set: string[]; deleted: string[]; warnings: VariableWriteWarning[] }> {
+): Promise<{
+  set: string[];
+  deleted: string[];
+  /** Preview placeholders (ADR 0007) this write gave a real value. */
+  unwithheld: string[];
+  warnings: VariableWriteWarning[];
+}> {
   const existing = new Map<string, VariableRow>();
   const keys = [...change.set.map((s) => s.key), ...change.delete];
   if (keys.length) {
@@ -485,6 +493,8 @@ export async function putVariables(
       locked: p.locked,
       availableAtBuild: p.availableAtBuild,
       mountAsFile: p.mountAsFile,
+      // A new value replaces a preview placeholder; a flags-only write keeps it one.
+      withheld: p.entry.value === undefined ? (prior?.withheld ?? false) : false,
       updatedBy: actorId,
       version: coordinates.version,
     };
@@ -508,7 +518,10 @@ export async function putVariables(
   if (statements.length) {
     await db.batch(statements as [(typeof statements)[number], ...typeof statements]);
   }
-  return { set: planned.map((p) => p.entry.key), deleted, warnings };
+  const unwithheld = planned
+    .filter((p) => p.entry.value !== undefined && existing.get(p.entry.key)?.withheld)
+    .map((p) => p.entry.key);
+  return { set: planned.map((p) => p.entry.key), deleted, unwithheld, warnings };
 }
 
 /**
@@ -750,51 +763,4 @@ export async function loadEnvironmentVariables(
     }
   }
   return out;
-}
-
-/**
- * Copies every variable of one environment into another, sealing each value
- * for its new row. Returns rows to insert in the same batch as the
- * environment (rows, not inserts; see {@link newProjectKeyRow}).
- *
- * @param db - Database client.
- * @param key - Project DEK.
- * @param projectId - The project.
- * @param fromEnvironmentId - Source environment.
- * @param toEnvironmentId - New environment.
- * @returns Rows to insert.
- */
-export async function copiedVariableRows(
-  db: Db,
-  key: CryptoKey,
-  projectId: string,
-  fromEnvironmentId: string,
-  toEnvironmentId: string,
-) {
-  const rows = await db
-    .select()
-    .from(variables)
-    .where(and(eq(variables.projectId, projectId), eq(variables.environmentId, fromEnvironmentId)));
-  return Promise.all(
-    rows.map(async (r) => {
-      const coordinates: StoredVariable = {
-        id: newId("variable"),
-        projectId,
-        environmentId: toEnvironmentId,
-        scope: r.scope,
-        serviceId: r.serviceId,
-        key: r.key,
-        version: 1,
-      };
-      return {
-        ...coordinates,
-        ...(await sealVariable(key, coordinates, await openVariable(key, r))),
-        tier: r.tier,
-        locked: r.locked,
-        availableAtBuild: r.availableAtBuild,
-        mountAsFile: r.mountAsFile,
-        updatedBy: r.updatedBy,
-      } satisfies typeof variables.$inferInsert;
-    }),
-  );
 }

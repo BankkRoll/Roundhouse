@@ -82,6 +82,8 @@ export type ErrorCode =
   | "cloudflare_saas_invalid"
   | "cloudflare_unavailable"
   | "wildcard_requires_enterprise"
+  | "build_node_selector_required"
+  | "head_moved"
   | "provider_ineligible"
   | "cloudflare_account_invalid"
   | "internal";

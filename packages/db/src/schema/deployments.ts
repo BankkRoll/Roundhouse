@@ -127,6 +127,12 @@ export const builds = sqliteTable(
     startedAt: timestamp("started_at"),
     finishedAt: timestamp("finished_at"),
     error: text("error"),
+    /**
+     * Built from a fork pull request (ADR 0014 section 14): untrusted code
+     * ran on its node, which then never builds the project's other
+     * environments.
+     */
+    untrusted: integer("untrusted", { mode: "boolean" }).notNull().default(false),
     ...timestamps,
   },
   (t) => [

@@ -51,14 +51,15 @@ credentials, provider tokens) is unrecoverable.
 
 ### Variables
 
-| Name                 | Default                                | Purpose                                                                                                                                                                                                                    |
-| -------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PUBLIC_ORIGIN`      | required                               | The control plane's public origin, e.g. `https://cp.example.com` (https, no path). The only source of absolute URLs, cookies and the same-origin check (ADR 0014); without it the API answers `503 public_origin_missing`. |
-| `ROUNDHOUSE_DEV`     | unset                                  | `1` in local development only: uses the request's origin when `PUBLIC_ORIGIN` is unset, allows `http://` OAuth issuers and provider callbacks, and lets agents run workloads over `ws://`. Never set it in production.     |
-| `CLOUDFLARE_API_URL` | unset                                  | Development only, honoured with `ROUNDHOUSE_DEV=1`: the Cloudflare API base (DNS-01, Cloudflare for SaaS), so tests can use `e2e/lib/fake-cloudflare.mjs`. Ignored otherwise.                                              |
-| `CF_ACCOUNT_ID`      | unset                                  | Cloudflare account ID, needed with `CF_ANALYTICS_TOKEN` to query the Analytics Engine SQL API.                                                                                                                             |
-| `METRICS_BACKEND`    | auto                                   | `d1` forces the short-retention D1 metrics store; `analytics_engine` refuses to fall back. Unset uses Analytics Engine when `CF_ACCOUNT_ID` and `CF_ANALYTICS_TOKEN` are set, D1 otherwise.                                |
-| `DNS_RESOLVER_URL`   | `https://cloudflare-dns.com/dns-query` | DNS-over-HTTPS JSON endpoint for custom-domain checks, e.g. one that sees split-horizon records. Google's resolver is always the fallback.                                                                                 |
+| Name                 | Default                                | Purpose                                                                                                                                                                                                                                                                                                   |
+| -------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PUBLIC_ORIGIN`      | required                               | The control plane's public origin, e.g. `https://cp.example.com` (https, no path). The only source of absolute URLs, cookies and the same-origin check (ADR 0014); without it the API answers `503 public_origin_missing`.                                                                                |
+| `ROUNDHOUSE_DEV`     | unset                                  | `1` in local development only: uses the request's origin when `PUBLIC_ORIGIN` is unset, allows `http://` OAuth issuers and provider callbacks, and lets agents run workloads over `ws://`. Never set it in production.                                                                                    |
+| `CLOUDFLARE_API_URL` | unset                                  | Development only, honoured with `ROUNDHOUSE_DEV=1`: the Cloudflare API base (DNS-01, Cloudflare for SaaS), so tests can use `e2e/lib/fake-cloudflare.mjs`. Ignored otherwise.                                                                                                                             |
+| `CF_ACCOUNT_ID`      | unset                                  | Cloudflare account ID, needed with `CF_ANALYTICS_TOKEN` to query the Analytics Engine SQL API.                                                                                                                                                                                                            |
+| `METRICS_BACKEND`    | auto                                   | `d1` forces the short-retention D1 metrics store; `analytics_engine` refuses to fall back. Unset uses Analytics Engine when `CF_ACCOUNT_ID` and `CF_ANALYTICS_TOKEN` are set, D1 otherwise.                                                                                                               |
+| `DNS_RESOLVER_URL`   | `https://cloudflare-dns.com/dns-query` | DNS-over-HTTPS JSON endpoint for custom-domain checks, e.g. one that sees split-horizon records. Google's resolver is always the fallback.                                                                                                                                                                |
+| `GITHUB_API_URL`     | `https://api.github.com`               | GitHub REST API origin for every App call (tokens, commit statuses, PR comments, labels, collaborator checks): GitHub Enterprise, or a fake GitHub in end-to-end tests. Must be `https://` (plain `http://` only with `ROUNDHOUSE_DEV=1`); a malformed value fails GitHub calls rather than falling back. |
 
 Variables can be set as secrets too (`wrangler secret put PUBLIC_ORIGIN`),
 which is the simplest way to keep them out of `wrangler.jsonc`. Plain-text
@@ -100,6 +101,7 @@ the first deploy; there are no IDs to copy.
 | `CERT_WORKFLOW`             | Workflow         | One certificate order per attempt (managed TLS, ADR 0009)               |
 | `CRON_RUN_WORKFLOW`         | Workflow         | One cron run per instance (ADR 0010)                                    |
 | `DRAIN_WORKFLOW`            | Workflow         | One drain of a server per instance (ADR 0005)                           |
+| `PREVIEW_WORKFLOW`          | Workflow         | Pull request previews: one instance per delivery and project (ADR 0007) |
 | `AUTH_LIMITER`              | Rate limit       | 10 a minute per IP on secret-accepting endpoints and agent connects     |
 | `WEBHOOK_LIMITER`           | Rate limit       | 300 a minute per IP on the GitHub webhook receiver                      |
 | `MCP_LIMITER`               | Rate limit       | 60 a minute per token on MCP tool calls                                 |
@@ -110,9 +112,10 @@ Two cron triggers run in the same Worker: hourly retention (`17 * * * *`),
 which also applies backup retention, and a minute tick that seals the audit
 chain, checks custom domains, starts certificate orders and renewals (managed
 TLS), starts scheduled backups, sends volume deletions past their grace
-period, moves mesh key rotations along and, in Cloudflare for SaaS mode,
-keeps the origin records, the fallback origin and Cloudflare's IP ranges
-current.
+period, expires idle PR previews, admits queued ones, removes torn-down
+preview environments once their volumes are gone, moves mesh key rotations
+along and, in Cloudflare for SaaS mode, keeps the origin records, the
+fallback origin and Cloudflare's IP ranges current.
 
 ### Stored in the database, not in the environment
 
@@ -194,6 +197,40 @@ servers that run the service; the dashboard and `roundhouse domain` list
 exactly those when some servers don't. With the mesh on and ready, any
 ingress server answers for any hostname, so DNS may point at any or all of
 them.
+
+### PR previews
+
+Each project's previews are configured under Project → Previews
+(`GET`/`PUT /v1/projects/{projectId}/preview-settings`, ADR 0007). Nothing
+is set in the environment. Previews are off until enabled.
+
+| Setting               | Default                                          | Purpose                                                                                                                                                                                            |
+| --------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`             | `false`                                          | Create a preview environment per pull request against a tracked branch.                                                                                                                            |
+| `base_environment_id` | production                                       | The environment previews copy configs and variables from. Never a preview environment.                                                                                                             |
+| `services`            | every git service                                | Git services built at the PR's head; a PR matches when one of them tracks its base repository and branch through the delivering installation. Other services deploy as they are.                   |
+| `ttl_hours`           | `72`                                             | Hours without activity before a preview is torn down (`expired`); 1 to 720. A later push recreates it.                                                                                             |
+| `max_active`          | `5`                                              | Previews creating or running at once; 1 to 50. Further ones wait as `queued_limit` and start when one ends.                                                                                        |
+| `caps`                | 1 replica, 1000 mCPU, 1024 MiB, 1024 MiB volumes | Upper bounds per preview service; never raises a base value.                                                                                                                                       |
+| `skip_drafts`         | `true`                                           | Draft PRs get no preview; converting to draft tears it down.                                                                                                                                       |
+| `same_repo_secrets`   | `copy`                                           | `omit` gives same-repository PRs placeholders instead of secrets, like forks.                                                                                                                      |
+| `database_seed`       | `empty`                                          | `latest_backup` restores the base environment's latest database dump into each preview database (fresh credentials kept). Needs backup storage; never for forks or previews that withhold secrets. |
+| `fork_policy`         | `disabled`                                       | `approval`: a fork PR builds only after someone with write access approves its exact head commit (label or dashboard); every push needs a new approval.                                            |
+| `approval_label`      | `roundhouse:preview`                             | The label that approves a fork PR's head. The sender's permission is checked with GitHub's collaborators API.                                                                                      |
+| `build_node_selector` | `{}`                                             | Required with `fork_policy: approval`: labels of the builder nodes fork code builds on. They never build the project's other environments, and other builds avoid them.                            |
+| `node_selector`       | `{}`                                             | Merged into every preview service's placement.                                                                                                                                                     |
+| `comment`             | `true`                                           | Keep one comment per PR with each service's status and URL. Comments and statuses never carry variable values or build output.                                                                     |
+
+A fork preview, or any preview with `same_repo_secrets: omit`, gets empty
+placeholders (`withheld`) for every secret variable, every plain one whose
+value looks like a credential or resolves through a secret, and every build
+secret. Its databases start empty with fresh credentials, whatever `database_seed` says. Every preview
+builds in a separate per-project preview BuildKit daemon and cache, which
+needs agents at protocol version 7.
+
+GitHub Apps created before previews must subscribe to the **Pull request**
+event in the App's settings; the Previews page says so until a
+`pull_request` delivery arrives.
 
 ### Cloudflare Containers provider
 

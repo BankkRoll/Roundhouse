@@ -18,7 +18,8 @@
  *
  * The webhook verifies `X-Hub-Signature-256` over the raw bytes before
  * parsing anything, records each `X-GitHub-Delivery` once, tracks
- * installations, and deploys production services tracking a pushed branch.
+ * installations, deploys production services tracking a pushed branch, and
+ * hands `pull_request` deliveries to the preview workflow (ADR 0007).
  *
  * @module
  */
@@ -64,7 +65,7 @@ import {
   unseal,
   verifyState,
 } from "../lib/crypto";
-import { createDeployment } from "../lib/deployments";
+import { createDeployment, disposeRpc } from "../lib/deployments";
 import { ApiError, conflict, notFound } from "../lib/errors";
 import {
   buildManifest,
@@ -87,7 +88,9 @@ import {
   userCanAccessInstallation,
   verifyWebhookSignature,
 } from "../lib/github";
+import { matchPreviewProjects, parsePullRequestEvent } from "../lib/previews/events";
 import { getSetting, putSetting, SettingKey } from "../lib/settings";
+import { previewEventInstanceId } from "../workflows/preview";
 
 /** Purpose of signed claim states. */
 const CLAIM_STATE = "github-claim";
@@ -625,6 +628,47 @@ async function handleEvent(
     return;
   }
   if (event === "push") await handlePush(c, delivery, payload);
+  if (event === "pull_request") await handlePullRequest(c, delivery, payload);
+}
+
+/**
+ * Starts one preview workflow instance per project a `pull_request`
+ * delivery concerns (ADR 0007, "Webhook intake"), with only the fields
+ * previews need, and leaves everything else to the workflow so GitHub gets
+ * its answer well within 10 s.
+ */
+async function handlePullRequest(c: AppContext, delivery: string, payload: WebhookPayload) {
+  const event = parsePullRequestEvent(payload);
+  if (!event) return;
+  const db = c.get("db");
+  const installation = await db.query.githubInstallations.findFirst({
+    where: eq(githubInstallations.installationId, event.installation_id),
+  });
+  // SECURITY: an unclaimed installation belongs to no workspace, so it acts on nothing.
+  if (!installation?.workspaceId) return;
+  const projectIds = await matchPreviewProjects(db, event, {
+    id: installation.id,
+    workspaceId: installation.workspaceId,
+  });
+  for (const projectId of projectIds) {
+    try {
+      disposeRpc(
+        await c.env.PREVIEW_WORKFLOW.create({
+          id: await previewEventInstanceId(projectId, event.number, delivery),
+          params: {
+            kind: "event",
+            project_id: projectId,
+            delivery_id: delivery,
+            origin: originOf(c),
+            event,
+          },
+        }),
+      );
+    } catch (err) {
+      // Already started for this delivery: a retried request after a partial failure.
+      if (!(err instanceof Error && /already exists/i.test(err.message))) throw err;
+    }
+  }
 }
 
 const ZERO_SHA = /^0+$/;

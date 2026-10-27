@@ -76,13 +76,27 @@ func validateJob(job *protocol.BuildJob, allowLoopbackHTTP bool) error {
 	if job.ImageRepository != protocol.LocalImageRepository(job.ProjectID, job.ServiceID) {
 		return userErrorf("image repository %q is not the service's repository", job.ImageRepository)
 	}
-	if !cacheKeyRE.MatchString(job.CacheKey) || job.CacheKey != protocol.BuildCacheKey(job.ProjectID, job.ServiceID) {
+	if job.Isolation != "" && job.Isolation != protocol.BuildIsolationPreview {
+		return userErrorf("unknown build isolation %q", job.Isolation)
+	}
+	if !cacheKeyRE.MatchString(job.CacheKey) || job.CacheKey != protocol.BuildCacheKeyFor(job.ProjectID, job.ServiceID, job.Isolation) {
 		return userErrorf("invalid cache key %q", job.CacheKey)
 	}
 	if job.TimeoutS <= 0 {
 		return userErrorf("timeout_s must be positive")
 	}
 	return nil
+}
+
+// daemonKey names the BuildKit daemon, and its state volume, a job builds
+// in: the project's own, or for pull request code (ADR 0014 section 14) the
+// project's separate preview daemon, so untrusted code can neither read
+// nor poison the cache the project's other environments build from.
+func daemonKey(job *protocol.BuildJob) string {
+	if job.Isolation == protocol.BuildIsolationPreview {
+		return job.ProjectID + "-" + protocol.BuildIsolationPreview
+	}
+	return job.ProjectID
 }
 
 // validateGitURL allows https, and plain http only to a loopback host when

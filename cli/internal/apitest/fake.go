@@ -75,11 +75,13 @@ type Request struct {
 }
 
 type variable struct {
-	value     string
-	secret    bool
-	locked    bool
-	build     bool
-	file      bool
+	value  string
+	secret bool
+	locked bool
+	build  bool
+	file   bool
+	// withheld marks a preview placeholder; see [Fake.WithholdVariable].
+	withheld  bool
 	version   int
 	updatedBy string
 }
@@ -129,6 +131,8 @@ type Fake struct {
 	// cron holds cron schedule states and runs; see [Fake.cronState].
 	cron *cronState
 
+	// previews holds pull request previews; see [Fake.previewState].
+	previews *previewState
 	// shell holds shell targets and sessions; cf the Cloudflare statuses set
 	// with [Fake.SetCloudflare].
 	shell *shellState
@@ -290,7 +294,7 @@ func (f *Fake) seed() {
 	}
 	f.nodes = []api.Node{{ID: NodeID, Name: "edge-1", Hostname: str("edge-1"), Status: "online", Provider: "manual", PublicIP: str("203.0.113.10"),
 		OS: str("linux"), Arch: str("amd64"), AgentVersion: str("0.4.0"), Capabilities: json.RawMessage(`{"docker":true,"builder":true}`),
-		LastHeartbeatAt: i64(Now - 5000), CreatedAt: Now - 86400000}}
+		LastHeartbeatAt: i64(Now - 5000), Labels: map[string]string{}, CreatedAt: Now - 86400000}}
 	f.providers = map[string]bool{"hetzner": true}
 	offer := func(plan, region, regionName string, vcpus, memMiB, disk, cents int) api.ProviderOffer {
 		return api.ProviderOffer{ID: plan + "@" + region, Plan: plan, Description: strings.ToUpper(plan), Category: str("shared"),
@@ -316,6 +320,9 @@ var ProviderDisplayNames = map[string]string{
 func (f *Fake) AddNode(n api.Node) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if n.Labels == nil {
+		n.Labels = map[string]string{}
+	}
 	f.nodes = append(f.nodes, n)
 }
 
@@ -578,7 +585,7 @@ func (f *Fake) workspaceOf(r *http.Request) string {
 	if id := r.PathValue("workspaceId"); id != "" {
 		return id
 	}
-	projectID := r.PathValue("projectId")
+	projectID := cmp.Or(f.previewProjectOf(r), f.environmentProjectOf(r), r.PathValue("projectId"))
 	serviceID := r.PathValue("serviceId")
 	if id := f.dataServiceOf(r); id != "" {
 		serviceID = id
@@ -702,6 +709,7 @@ func (f *Fake) routes(mux *http.ServeMux) {
 		api.RouteNodeProvision:   {"nodes:read", f.getNodeProvision},
 		api.RouteCancelProvision: {"nodes:manage", f.cancelNodeProvision},
 		api.RouteRemoveNode:      {"nodes:manage", f.removeNode},
+		api.RouteNodeLabels:      {"nodes:manage", f.putNodeLabels},
 		api.RouteListTokens:      {"tokens:manage", f.listTokens},
 		api.RouteCreateToken:     {"tokens:manage", f.createToken},
 		api.RouteRevokeToken:     {"tokens:manage", f.revokeToken},
@@ -729,6 +737,8 @@ func (f *Fake) routes(mux *http.ServeMux) {
 	f.cronRoutes(handlers)
 	f.meshRoutes(handlers)
 	f.drainRoutes(handlers)
+	f.previewRoutes(handlers)
+	f.environmentRoutes(handlers)
 	f.shellRoutes(handlers)
 	for route, g := range handlers {
 		mux.HandleFunc(route.Method+" "+route.Path, f.guard(g.action, g.h))
@@ -1152,7 +1162,7 @@ func (f *Fake) listed(key string, plain bool) []api.Variable {
 	for _, k := range slices.Sorted(mapKeys(vars)) {
 		v := vars[k]
 		item := api.Variable{Key: k, Tier: v.tier(), Locked: v.locked, Fingerprint: str(fingerprint(v.value)),
-			AvailableAtBuild: v.build, MountAsFile: v.file, Version: v.version, UpdatedAt: Now, UpdatedBy: str(cmp.Or(v.updatedBy, f.user.ID))}
+			AvailableAtBuild: v.build, MountAsFile: v.file, Withheld: v.withheld, Version: v.version, UpdatedAt: Now, UpdatedBy: str(cmp.Or(v.updatedBy, f.user.ID))}
 		if !v.secret && plain {
 			item.Value = str(v.value)
 		}
@@ -1774,6 +1784,45 @@ func (f *Fake) removeNode(w http.ResponseWriter, r *http.Request) {
 	}
 	f.nodes = slices.Delete(f.nodes, i, i+1)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+var (
+	nodeLabelKey   = regexp.MustCompile(`^[a-z0-9]([a-z0-9._/-]{0,61}[a-z0-9])?$`)
+	nodeLabelValue = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?)?$`)
+)
+
+// putNodeLabels mirrors the API: the body is the complete new set, at most
+// 16 labels, each key and value matching the API's patterns.
+func (f *Fake) putNodeLabels(w http.ResponseWriter, r *http.Request) {
+	if !f.workspace(w, r) {
+		return
+	}
+	i := slices.IndexFunc(f.nodes, func(n api.Node) bool { return n.ID == r.PathValue("nodeId") })
+	if i < 0 {
+		apiError(w, http.StatusNotFound, "not_found", "Server not found")
+		return
+	}
+	var in api.NodeLabelsInput
+	if decode(r, &in) != nil || in.Labels == nil {
+		apiError(w, http.StatusBadRequest, "invalid_request", "labels: Required")
+		return
+	}
+	if len(in.Labels) > 16 {
+		apiError(w, http.StatusBadRequest, "invalid_request", "labels: at most 16 labels")
+		return
+	}
+	for k, v := range in.Labels {
+		if !nodeLabelKey.MatchString(k) {
+			apiError(w, http.StatusBadRequest, "invalid_request", "labels: expected a lowercase label key")
+			return
+		}
+		if !nodeLabelValue.MatchString(v) {
+			apiError(w, http.StatusBadRequest, "invalid_request", "labels."+k+": expected a label value")
+			return
+		}
+	}
+	f.nodes[i].Labels = in.Labels
+	writeJSON(w, http.StatusOK, f.nodes[i])
 }
 
 func (f *Fake) getNodeProvision(w http.ResponseWriter, r *http.Request) {

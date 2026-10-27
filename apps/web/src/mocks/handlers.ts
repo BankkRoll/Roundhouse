@@ -24,6 +24,7 @@ import {
   slugify,
 } from "@roundhouse/shared";
 import { HttpResponse, http } from "msw";
+import { MAX_NODE_LABELS, NODE_LABEL_KEY, NODE_LABEL_VALUE } from "../features/servers/node-labels";
 import type { AuditLogPage, Invite, Me, Member, Node, Workspace } from "../lib/api/types";
 import { accessHandlers } from "./access-handlers";
 import { forgetMember } from "./access-resolve";
@@ -45,8 +46,10 @@ import { dataHandlers } from "./data-handlers";
 import { type DbAuditEntry, type DbInvite, type DbMembership, db, nextId } from "./db";
 import { deployHandlers } from "./deploy-handlers";
 import { domainHandlers } from "./domains-mock";
+import { environmentHandlers } from "./environments-handlers";
 import { meshHandlers } from "./mesh-handlers";
 import { metricsHandlers } from "./metrics-handlers";
+import { previewHandlers } from "./previews-handlers";
 import { providerHandlers } from "./providers-handlers";
 import { registryHandlers } from "./registry-handlers";
 import { securityHandlers } from "./security-handlers";
@@ -715,6 +718,40 @@ const phase0Handlers = [
     return row ? HttpResponse.json(toApiNode(row)) : notFound("Server");
   }),
 
+  http.put("*/v1/workspaces/:workspaceId/nodes/:nodeId/labels", async ({ params, request }) => {
+    const workspaceId = String(params.workspaceId);
+    const labels = (await readJson(request)).labels;
+    if (typeof labels !== "object" || labels === null || Array.isArray(labels)) {
+      return invalid("labels: expected an object");
+    }
+    const entries = Object.entries(labels as Record<string, unknown>);
+    for (const [key, value] of entries) {
+      if (!NODE_LABEL_KEY.test(key)) return invalid(`labels.${key}: expected a label key`);
+      if (typeof value !== "string" || !NODE_LABEL_VALUE.test(value)) {
+        return invalid(`labels.${key}: expected a label value`);
+      }
+    }
+    if (entries.length > MAX_NODE_LABELS) return invalid("labels: at most 16 labels");
+    const access = requireWorkspace(workspaceId, "nodes:manage");
+    if (!access.ok) return access.response;
+    const row = db.nodes.find(
+      (node) => node.id === params.nodeId && node.workspace_id === workspaceId,
+    );
+    if (!row) return notFound("Server");
+    const before = row.labels;
+    row.labels = Object.fromEntries(entries) as Record<string, string>;
+    recordAudit({
+      workspaceId,
+      actorType: "user",
+      actorId: access.user.id,
+      action: "node.labels_updated",
+      targetType: "node",
+      targetId: row.id,
+      metadata: { name: row.name, before, after: row.labels },
+    });
+    return HttpResponse.json(toApiNode(row));
+  }),
+
   http.delete("*/v1/workspaces/:workspaceId/nodes/:nodeId", ({ params, request }) => {
     const workspaceId = String(params.workspaceId);
     const keepServer = new URL(request.url).searchParams.get("keep_server") === "true";
@@ -804,6 +841,8 @@ export const handlers = [
   ...cronHandlers,
   ...meshHandlers,
   ...registryHandlers,
+  ...previewHandlers,
+  ...environmentHandlers,
   ...signingKeyHandlers,
   ...tlsHandlers,
   ...securityHandlers,

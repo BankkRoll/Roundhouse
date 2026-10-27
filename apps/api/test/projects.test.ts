@@ -112,9 +112,10 @@ describe("projects", () => {
   });
 
   it.each([
-    ["viewer", { read: 200, manage: 403 }],
-    ["member", { read: 200, manage: 403 }],
-    ["admin", { read: 200, manage: 201 }],
+    // ADR 0007: environments:manage makes staging day-to-day work for members.
+    ["viewer", { read: 200, manage: 403, environments: 403 }],
+    ["member", { read: 200, manage: 403, environments: 201 }],
+    ["admin", { read: 200, manage: 201, environments: 201 }],
   ] as const)("lets a %s read and manage as the role allows", async (role, expected) => {
     const { owner, workspaceId } = await install();
     const p = await createProject(owner, workspaceId);
@@ -133,7 +134,7 @@ describe("projects", () => {
       method: "POST",
       json: { name: "staging", kind: "staging" },
     });
-    expect(envRes.status).toBe(expected.manage);
+    expect(envRes.status).toBe(expected.environments);
     if (expected.manage === 403) {
       expect((await c.request(`/v1/projects/${p.id}`, { method: "DELETE" })).status).toBe(403);
     }

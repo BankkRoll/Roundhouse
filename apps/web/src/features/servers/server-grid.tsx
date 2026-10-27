@@ -8,6 +8,7 @@ import { formatAgentVersion, formatRelativeTime } from "../../lib/format";
 import { useNow } from "../../lib/use-now";
 import { provisionStepLabel } from "./cloud-offers";
 import { COST_ESTIMATE_NOTE, formatCostEstimate } from "./cost-estimate";
+import { formatLabels } from "./node-labels";
 import { nodeMeterRows, nodeSubtitle } from "./node-metrics";
 import { managedProvider, ProviderBadges } from "./provider-badge";
 
@@ -53,6 +54,9 @@ export function NodeCard({
       footer={
         <>
           0 services · agent {formatAgentVersion(node.agent_version) ?? "not reporting"}
+          {Object.keys(node.labels).length > 0 ? (
+            <span className="font-mono"> · {formatLabels(node.labels).join(" ")}</span>
+          ) : null}
           {managedProvider(node) && node.estimated_monthly_cost ? (
             <span title={COST_ESTIMATE_NOTE}>
               {" "}

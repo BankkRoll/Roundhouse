@@ -77,7 +77,12 @@
       "binding": "CRON_RUN_WORKFLOW",
       "class_name": "CronRunWorkflow"
     },
-    { "name": "roundhouse-drain", "binding": "DRAIN_WORKFLOW", "class_name": "DrainWorkflow" }
+    { "name": "roundhouse-drain", "binding": "DRAIN_WORKFLOW", "class_name": "DrainWorkflow" },
+    {
+      "name": "roundhouse-preview",
+      "binding": "PREVIEW_WORKFLOW",
+      "class_name": "PreviewWorkflow"
+    }
   ],
   // NOTE: namespace_id is shared by every Worker in the Cloudflare account, so
   // a small number like the docs' "1001" can collide with another project's

@@ -4,12 +4,13 @@ import { FolderXIcon } from "lucide-react";
 import { ErrorState } from "../../components/error-state";
 import { errorMessage, isApiError } from "../../lib/api/client";
 import { RealtimeProvider } from "../../lib/realtime/provider";
-import { useProject } from "../../queries/projects";
+import { PreviewBanner } from "../previews/preview-banner";
+import { useProjectEnvironment } from "./use-project-environment";
 
 /**
  * Layout for every page of a project: loads the project once, shows its loading, missing
  * and error states, and holds the project's single realtime socket while any of its
- * pages is open.
+ * pages is open. Inside a preview environment, every page starts with the preview's banner.
  *
  * @param props - Workspace and project ids.
  * @returns The layout.
@@ -21,7 +22,7 @@ export function ProjectLayout({
   workspaceId: string;
   projectId: string;
 }) {
-  const project = useProject(projectId);
+  const { project, environment } = useProjectEnvironment(projectId);
 
   if (project.isPending) {
     return (
@@ -59,6 +60,7 @@ export function ProjectLayout({
   }
   return (
     <RealtimeProvider projectId={projectId}>
+      <PreviewBanner workspaceId={workspaceId} projectId={projectId} environment={environment} />
       <Outlet />
     </RealtimeProvider>
   );

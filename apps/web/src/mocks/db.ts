@@ -22,6 +22,7 @@ import { type CronDb, emptyCron, seedCron } from "./cron-db";
 import { type DataDb, emptyData, seedData } from "./data-db";
 import { type DeployDb, emptyDeploy, seedDeploy } from "./deploy-db";
 import { emptyMesh, type MeshDb } from "./mesh-db";
+import { emptyPreviews, type PreviewsDb, seedPreviews } from "./previews-db";
 import { emptyProviders, type ProvidersDb } from "./providers-db";
 import { type SecurityDb, seedSecurity } from "./security-db";
 
@@ -95,6 +96,8 @@ export interface MockDb {
   cron: CronDb;
   /** Each server's mesh state and the pairs between servers. */
   mesh: MeshDb;
+  /** Pull request preview settings and previews. */
+  previews: PreviewsDb;
   /** Two-factor, sessions and lockouts. */
   security: SecurityDb;
   /** Teams, project grants, protection rules and default project roles. */
@@ -157,6 +160,7 @@ export function makeNode(overrides: Partial<Node> = {}): Node {
     docker_version: "27.3.1",
     agent_version: "0.1.0",
     capabilities: { docker: true, gvisor: false, builder: true },
+    labels: { region: "eu-central" },
     cpu_total: 8,
     mem_total: 16 * GiB,
     disk_total: 160 * GiB,
@@ -192,6 +196,7 @@ export function makePendingNode(overrides: Partial<Node> = {}): Node {
     docker_version: null,
     agent_version: null,
     capabilities: null,
+    labels: {},
     cpu_total: null,
     mem_total: null,
     disk_total: null,
@@ -294,6 +299,7 @@ function seed(): MockDb {
     data: seedData(deploy, now),
     cron: seedCron(deploy, now),
     mesh: emptyMesh(),
+    previews: seedPreviews(now),
     providers: emptyProviders(),
     changes: emptyChanges(),
     security: seedSecurity(USERS.owner.id, now),
@@ -340,6 +346,7 @@ export function seedFreshInstall(masterKeyConfigured = true): void {
     data: emptyData(),
     cron: emptyCron(),
     mesh: emptyMesh(),
+    previews: emptyPreviews(),
     access: emptyAccess(),
   };
 }

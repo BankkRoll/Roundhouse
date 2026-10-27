@@ -5,26 +5,19 @@
  *   key in the same batch.
  * - Deleting one is a soft delete that also stops every deployment and
  *   pulls its replicas from nodes; the slug is free again at once.
- * - Creating an environment gives every service config version 1 there,
- *   copied from another environment when asked (variables included).
+ * - Environments are listed here; creating, cloning, diffing, promoting
+ *   and deleting them live in `./environments`.
  * - Summaries return every service's state in one environment in a fixed
  *   number of queries.
  * - A taken slug on create is suffixed (-2, -3, …), never refused.
  *
  * @module
  */
-import { environments, projectKeys, projects, services, variables } from "@roundhouse/db";
-import {
-  DEFAULT_ENVIRONMENT,
-  defaultServiceConfig,
-  newId,
-  type ProjectAction,
-  type ServiceConfigSpec,
-} from "@roundhouse/shared";
+import { environments, projectKeys, projects, services } from "@roundhouse/db";
+import { DEFAULT_ENVIRONMENT, newId, type ProjectAction } from "@roundhouse/shared";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { clientIp, createRouter, requireKeys, requireWorkspace, visibleProjects } from "../context";
 import {
-  createEnvironment,
   createProject,
   deleteProject,
   getProject,
@@ -37,22 +30,13 @@ import {
 } from "../contracts";
 import { recordAudit } from "../lib/audit";
 import { conflict, isUniqueViolation, notFound } from "../lib/errors";
-import {
-  configInsert,
-  insertWithFreeSlug,
-  latestConfig,
-  liveServices,
-  slugFor,
-  specOf,
-  syncGeneratedDomain,
-  tearDownServices,
-} from "../lib/projects";
+import { insertWithFreeSlug, liveServices, slugFor, tearDownServices } from "../lib/projects";
 import { revalidateProjects } from "../lib/realtime";
 import { environmentOf, projectScope } from "../lib/scope";
 import { toApiEnvironment, toApiProject, toApiService } from "../lib/serialize";
 import { getIngressSettings } from "../lib/settings";
 import { projectSummaries } from "../lib/summaries";
-import { copiedVariableRows, newProjectKeyRow, projectKey } from "../lib/variables";
+import { newProjectKeyRow } from "../lib/variables";
 
 const productionFirst = sql`CASE WHEN ${environments.kind} = 'production' THEN 0 ELSE 1 END`;
 
@@ -179,7 +163,7 @@ export const projectRoutes = createRouter()
       db
         .select()
         .from(environments)
-        .where(eq(environments.projectId, projectId))
+        .where(and(eq(environments.projectId, projectId), isNull(environments.retiredAt)))
         .orderBy(productionFirst, asc(environments.id)),
       liveServices(db, projectId),
     ]);
@@ -267,106 +251,7 @@ export const projectRoutes = createRouter()
       .get("db")
       .select()
       .from(environments)
-      .where(eq(environments.projectId, projectId))
+      .where(and(eq(environments.projectId, projectId), isNull(environments.retiredAt)))
       .orderBy(productionFirst, asc(environments.id));
     return c.json({ environments: rows.map(toApiEnvironment) }, 200);
-  })
-  .openapi(createEnvironment, async (c) => {
-    const { projectId } = c.req.valid("param");
-    const { project, caller } = await projectScope(
-      c,
-      projectId,
-      policyOf(createEnvironment).action!,
-    );
-    const body = c.req.valid("json");
-    const db = c.get("db");
-    const from = body.copy_from_environment_id
-      ? await environmentOf(c, projectId, body.copy_from_environment_id)
-      : null;
-    const [production] = await db
-      .select()
-      .from(environments)
-      .where(and(eq(environments.projectId, projectId), eq(environments.kind, "production")))
-      .limit(1);
-
-    const envId = newId("environment");
-    const live = await liveServices(db, projectId);
-    const configs: { service: (typeof live)[number]; spec: ServiceConfigSpec }[] = [];
-    for (const s of live) {
-      const copied = from ? await latestConfig(db, s.id, from.id) : undefined;
-      const fallback =
-        copied ?? (production ? await latestConfig(db, s.id, production.id) : undefined);
-      if (!fallback) continue;
-      configs.push({
-        service: s,
-        spec: copied ? specOf(copied) : defaultServiceConfig(fallback.source),
-      });
-    }
-    const variableRows = from
-      ? await copiedVariableRows(
-          db,
-          await projectKey(db, requireKeys(c), projectId),
-          projectId,
-          from.id,
-          envId,
-        )
-      : [];
-    const { slug } = await insertWithFreeSlug({
-      base: body.slug ?? slugFor(body.name, "env"),
-      uniqueOn: "environments",
-      taken: async () =>
-        (
-          await db
-            .select({ slug: environments.slug })
-            .from(environments)
-            .where(eq(environments.projectId, projectId))
-        ).map((t) => t.slug),
-      insert: (slug) =>
-        db.batch([
-          db.insert(environments).values({
-            id: envId,
-            projectId,
-            name: body.name,
-            slug,
-            kind: body.kind,
-            prNumber: body.pr_number ?? null,
-            sourceBranch: body.source_branch ?? null,
-          }),
-          ...configs.map((cfg) =>
-            configInsert(db, {
-              serviceId: cfg.service.id,
-              environmentId: envId,
-              version: 1,
-              createdBy: caller.user.id,
-              spec: cfg.spec,
-            }),
-          ),
-          ...(variableRows.length ? [db.insert(variables).values(variableRows)] : []),
-        ]),
-    });
-    const ingress = await getIngressSettings(db);
-    for (const cfg of configs) {
-      await syncGeneratedDomain(
-        db,
-        {
-          serviceId: cfg.service.id,
-          serviceSlug: cfg.service.slug,
-          environmentId: envId,
-          environmentSlug: slug,
-          spec: cfg.spec,
-        },
-        ingress,
-      );
-    }
-    await recordAudit(db, {
-      workspaceId: project.workspaceId,
-      ...caller.actor,
-      action: "project.updated",
-      targetType: "project",
-      targetId: projectId,
-      metadata: { environment_id: envId, environment: slug, copied_from: from?.id ?? null },
-      ip: clientIp(c),
-    });
-    const env = (await db.query.environments.findFirst({ where: eq(environments.id, envId) }))!;
-    return c.json(toApiEnvironment(env), 201);
   });

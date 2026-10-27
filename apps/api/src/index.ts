@@ -69,6 +69,7 @@ import { dataBrowserRoutes } from "./routes/data-browser";
 import { databaseRoutes } from "./routes/databases";
 import { deploymentRoutes } from "./routes/deployments";
 import { domainRoutes } from "./routes/domains";
+import { environmentRoutes } from "./routes/environments";
 import { githubRoutes } from "./routes/github";
 import { instanceRoutes } from "./routes/instance";
 import { instanceAdminRoutes } from "./routes/instance-admin";
@@ -77,6 +78,7 @@ import { keyRoutes } from "./routes/keys";
 import { meshRoutes } from "./routes/mesh";
 import { metricsRoutes } from "./routes/metrics";
 import { nodeRoutes } from "./routes/nodes";
+import { previewRoutes } from "./routes/previews";
 import { projectRoutes } from "./routes/projects";
 import { providerRoutes } from "./routes/providers";
 import { REALTIME_PATH, realtimeRoutes } from "./routes/realtime";
@@ -103,6 +105,7 @@ export { CronRunWorkflow } from "./workflows/cron-run";
 export { DeployWorkflow } from "./workflows/deploy";
 export { DrainWorkflow } from "./workflows/drain";
 export { KeyRotationWorkflow } from "./workflows/key-rotation";
+export { PreviewWorkflow } from "./workflows/preview";
 export { ProvisionWorkflow } from "./workflows/provision";
 export { RestoreWorkflow } from "./workflows/restore";
 export { VolumeMigrationWorkflow } from "./workflows/volume-migration";
@@ -152,6 +155,7 @@ app
   .route("/", auditRoutes)
   .route("/", agentRoutes)
   .route("/", projectRoutes)
+  .route("/", environmentRoutes)
   .route("/", serviceRoutes)
   .route("/", metricsRoutes)
   .route("/", dataBrowserRoutes)
@@ -178,6 +182,7 @@ app
   .route("/", templateRoutes)
   .route("/", backupRoutes)
   .route("/", cronRoutes)
+  .route("/", previewRoutes)
   .route("/", mcpRoutes)
   .route("/", oauthRoutes)
   .route("/", oauthConsentRoutes);

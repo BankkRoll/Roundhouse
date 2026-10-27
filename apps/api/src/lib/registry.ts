@@ -45,7 +45,7 @@ import {
 import { isMeshed, MESH_HANDSHAKE_STALE_MS, meshAddress, pairKey } from "./mesh";
 import { effectiveStatus } from "./nodes";
 import { ACTIVE_PROVISION_STATUSES } from "./provisioning";
-import { getSetting, type MeshSettings, putSetting, SettingKey } from "./settings";
+import { getMeshSettings, getSetting, type MeshSettings, putSetting, SettingKey } from "./settings";
 
 // -----------------------------------------------------------------------------
 // The `registry_storage` setting
@@ -304,8 +304,23 @@ export async function designatedBuilder(db: Db, workspaceId: string): Promise<st
 }
 
 /**
- * The nodes a build may be sent to: every builder with S3 storage, only the
- * designated one with filesystem storage.
+ * Whether builds must stay on one builder per workspace: the mesh is on and
+ * builds live on a builder's disk, so every other node pulls through that
+ * one registry (ADR 0005). Without the mesh each node runs only what its own
+ * builder built, as before, so several builders (such as a dedicated fork
+ * builder, ADR 0007) keep working.
+ *
+ * @param db - Database client.
+ * @returns `true` when only the designated builder may build.
+ */
+async function singleBuilder(db: Db): Promise<boolean> {
+  return (await getMeshSettings(db)).enabled && !(await usesS3Registry(db));
+}
+
+/**
+ * The nodes a build may be sent to: only the designated builder while the
+ * mesh pulls through it ({@link singleBuilder}), every online builder
+ * otherwise.
  *
  * @param db - Database client.
  * @param workspaceId - The workspace.
@@ -315,14 +330,14 @@ export async function buildCandidates(db: Db, workspaceId: string): Promise<Node
   const builders = (await workspaceBuilders(db, workspaceId)).filter(
     (n) => effectiveStatus(n) === "online",
   );
-  if (await usesS3Registry(db)) return builders;
+  if (!(await singleBuilder(db))) return builders;
   const designated = await designatedBuilder(db, workspaceId);
   return builders.filter((n) => n.id === designated);
 }
 
 /**
- * Refuses a second builder for a workspace while builds are stored on the
- * builder's disk: the point where builders are chosen is provisioning one
+ * Refuses a second builder for a workspace while the mesh is on and builds are
+ * stored on the builder's disk: the point where builders are chosen is provisioning one
  * (a hand-joined agent reports the capability itself, and only the
  * {@link designatedBuilder} then gets builds).
  *
@@ -331,7 +346,7 @@ export async function buildCandidates(db: Db, workspaceId: string): Promise<Node
  * @throws {ApiError} 409 `registry_requires_s3`.
  */
 export async function assertBuilderAllowed(db: Db, workspaceId: string): Promise<void> {
-  if (await usesS3Registry(db)) return;
+  if (!(await singleBuilder(db))) return;
   const [pending] = await db
     .select({ id: nodeProvisions.id })
     .from(nodeProvisions)

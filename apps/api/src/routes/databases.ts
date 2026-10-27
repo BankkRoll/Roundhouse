@@ -385,6 +385,8 @@ export const databaseRoutes = createRouter()
       body.environment_id,
     );
     const env = await environmentOf(c, project.id, body.environment_id);
+    // ADR 0007: a pull request preview publishes nothing but its generated domains.
+    if (env.previewId) throw conflict("A pull request preview can't publish TCP ports");
     const db = c.get("db");
     const allowed = normalizeAllowlist(body.allowed_cidrs, body.acknowledge_open ?? false);
     const config = await configAt(db, service.id, env.id);
@@ -552,6 +554,10 @@ export const databaseRoutes = createRouter()
       throw new ApiError(400, "invalid_request", "confirm must equal the service's slug");
     }
     const environment = await environmentOf(c, project.id, body.environment_id);
+    if (environment.previewId) {
+      // ADR 0007: a preview's credentials were minted for it alone and die with it.
+      throw conflict("A pull request preview's database credentials can't be rotated");
+    }
     const row = await rotateCredentials(c, {
       service,
       project,

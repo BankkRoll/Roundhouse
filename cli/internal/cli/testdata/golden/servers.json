@@ -16,6 +16,7 @@
     "docker_version": null,
     "agent_version": "0.4.0",
     "workloads_blocked": null,
+    "labels": {},
     "capabilities": {
       "docker": true,
       "builder": true

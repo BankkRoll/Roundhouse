@@ -484,7 +484,7 @@ describe("App setup", () => {
       request_oauth_on_install: true,
       public: false,
       default_permissions: GITHUB_APP_PERMISSIONS,
-      default_events: ["push"],
+      default_events: ["push", "pull_request"],
     });
     expect(res.body.post_url).toBe(
       `https://github.com/settings/apps/new?state=${encodeURIComponent(res.body.state)}`,

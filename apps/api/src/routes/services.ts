@@ -99,7 +99,7 @@ export const serviceRoutes = createRouter()
     const envs = await db
       .select()
       .from(environments)
-      .where(eq(environments.projectId, projectId))
+      .where(and(eq(environments.projectId, projectId), isNull(environments.retiredAt)))
       .orderBy(asc(environments.id));
     for (const e of envs) {
       await assertPlainBuildArgs(db, c.env, {

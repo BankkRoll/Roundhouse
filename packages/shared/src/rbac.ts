@@ -107,6 +107,9 @@ export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
  * - `backups:restore`: restore a backup or download its encrypted object.
  * - `changes:approve`: approve or reject a change set someone else staged
  *   (ADR 0006).
+ * - `environments:manage`: tear down a pull request preview environment (ADR 0007).
+ * - `previews:manage`: PR preview settings and approving a fork PR's preview
+ *   (ADR 0007). Project admins only: approving runs outside code.
  * - `changes:auto_apply`: an API token may apply staged changes without a
  *   person approving them first. Sessions never need it; as a token scope it
  *   must be chosen explicitly, since no preset carries it (ADR 0012).
@@ -134,6 +137,8 @@ export const PROJECT_ACTIONS = [
   "backups:restore",
   "changes:approve",
   "changes:auto_apply",
+  "environments:manage",
+  "previews:manage",
   "shell:open",
 ] as const;
 
@@ -226,6 +231,7 @@ const DEVELOP: ProjectAction[] = [
   "data:read",
   "backups:manage",
   "changes:auto_apply",
+  "environments:manage",
 ];
 
 const PROJECT_GRANTS: Record<ProjectRole, ReadonlySet<ProjectAction>> = {

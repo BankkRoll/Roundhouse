@@ -14,6 +14,7 @@ import type { CertificateParams } from "./workflows/certificate";
 import type { DeployParams } from "./workflows/deploy";
 import type { DrainParams } from "./workflows/drain";
 import type { KeyRotationParams } from "./workflows/key-rotation";
+import type { PreviewParams } from "./workflows/preview";
 import type { ProvisionParams } from "./workflows/provision";
 import type { RestoreParams } from "./workflows/restore";
 
@@ -103,6 +104,17 @@ export interface Env {
    * `drain-<node>-<ts>`, progress in `node_drains`.
    */
   DRAIN_WORKFLOW: Workflow<DrainParams>;
+  /**
+   * Handles pull request previews (ADR 0007): one instance per webhook
+   * delivery and project, or per dashboard or tick action on a preview.
+   */
+  PREVIEW_WORKFLOW: Workflow<PreviewParams>;
+  /**
+   * GitHub REST API origin, default `https://api.github.com`: GitHub
+   * Enterprise, or a fake GitHub in end-to-end tests. Must be https (http
+   * only with `ROUNDHOUSE_DEV=1`).
+   */
+  GITHUB_API_URL?: string;
   /**
    * Seconds a provisioned server gets to join, overriding `JOIN_TIMEOUT_MS`;
    * and seconds between join checks. For development and tests; unset in production.

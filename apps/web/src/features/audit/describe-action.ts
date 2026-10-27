@@ -47,6 +47,7 @@ const VERBS: Record<AuditAction, string> = {
   "node.provision_failed": "failed to create server",
   "node.deprovisioned": "deleted cloud server",
   "node.provision_cancelled": "cancelled creating server",
+  "node.labels_updated": "changed the labels of server",
   "provider.connected": "connected",
   "provider.disconnected": "disconnected",
   "project.created": "created project",
@@ -155,6 +156,17 @@ const VERBS: Record<AuditAction, string> = {
   "service.recovered": "marked recovered",
   "node.mesh_joined": "joined the private network",
   "node.mesh_key_rotated": "rotated the mesh key of",
+  "preview.settings_updated": "changed preview settings",
+  "preview.created": "created a preview for",
+  "preview.gated": "held back a preview for",
+  "preview.approved": "approved a preview for",
+  "preview.expired": "expired the preview for",
+  "preview.closed": "closed the preview for",
+  "preview.deleted": "tore down the preview for",
+  "environment.created": "created the environment",
+  "environment.cloned": "cloned into the environment",
+  "environment.deleted": "deleted the environment",
+  "environment.promote_proposed": "proposed a promotion into",
   "shell.opened": "opened a shell",
   "shell.closed": "closed a shell",
   "shell.terminated": "terminated a shell session",
@@ -195,7 +207,21 @@ const TARGETS: Partial<Record<AuditAction, (metadata: Metadata) => string | null
     const reason = stringField(metadata, "reason") ?? stringField(metadata, "code");
     return reason ? `(${reason.replace(/_/g, " ")})` : null;
   },
+  "preview.created": pullRequestOf,
+  "preview.gated": pullRequestOf,
+  "preview.approved": pullRequestOf,
+  "preview.expired": pullRequestOf,
+  "preview.closed": pullRequestOf,
+  "preview.deleted": pullRequestOf,
+  "environment.created": environmentOf,
+  "environment.cloned": environmentOf,
+  "environment.deleted": environmentOf,
+  "environment.promote_proposed": environmentOf,
 };
+
+function environmentOf(metadata: Metadata): string | null {
+  return stringField(metadata, "environment");
+}
 
 function isKnownAction(action: string): action is AuditAction {
   return Object.hasOwn(VERBS, action);
@@ -221,6 +247,11 @@ function stringField(metadata: Metadata, key: string): string | null {
 
 function hostnameOf(metadata: Metadata): string | null {
   return stringField(metadata, "hostname");
+}
+
+function pullRequestOf(metadata: Metadata): string | null {
+  const number = metadata?.pr_number;
+  return typeof number === "number" ? `#${number}` : null;
 }
 
 function providerName(metadata: Metadata): string | null {

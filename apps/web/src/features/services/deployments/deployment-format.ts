@@ -18,6 +18,7 @@ export const TRIGGER_LABELS: Record<Deployment["trigger"], string> = {
   change_set: "staged changes",
   migration: "volume move",
   recovery: "volume recovery",
+  promote: "promotion",
 };
 
 /**

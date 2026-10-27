@@ -406,9 +406,82 @@ shows the decision.
      staging → production with `image: true`: production's new
      deployment has staging's digest and no build.
 
+## How PR previews were built (2026-10-27)
+
+The previews half of this ADR is implemented, with ADR 0014 section 14 on
+top. Where the build differs from the text above:
+- **No `JOBS` queue.** The webhook starts `PREVIEW_WORKFLOW` directly, one
+  instance per delivery and project (`prv-<pr>-<hash>`). Its steps: the
+  approver's permission (collaborators API, only for the approval label),
+  `apply` (D1 only, ordered by `updated_at`), then label removal, create,
+  deploy or teardown, and the comment and status. Dashboard approvals,
+  redeploys, the queue and expiry start `action` instances of the same
+  workflow.
+- **No system change set.** A preview environment is written in one D1
+  batch (environment, configs, variables, volumes, the preview link); a
+  concurrent create loses on the `pr-<n>` slug and adopts the winner's.
+  Generated domains and paused cron states follow idempotently.
+- **Teardown keeps the row.** Deleting an environment cascades to its
+  volume rows, which the 72 h deletion still needs. Teardown sets
+  `environments.retired_at`, renames the slug so `pr-<n>` is free again,
+  and hides it from every listing; the minute tick deletes it once its
+  volumes are gone. Deployments, domains and cron schedules go at once.
+- **Withholding** follows section 14: a variable is withheld when stored
+  `secret`, when its value is recognised as a credential (a known format
+  or high entropy; a secret-looking name alone doesn't count, since
+  `DATABASE_URL = ${{db.DATABASE_URL}}` holds only a reference), or when it
+  resolves through one of those. Fresh database credentials never count, so
+  references into the preview's own database keep working. The deploy
+  workflow blanks every build secret and secret build arg of a withheld
+  preview again, and sends a fork build no sealed secrets at all.
+- **Builders.** Every preview build carries `build_job.isolation: "preview"`
+  (protocol version 7): the agent builds it in `<project>-preview`, a
+  daemon and cache of its own, and its cache key differs, so an older agent
+  refuses it. Fork code builds only on nodes matching `build_node_selector`
+  (required for `fork_policy: approval`) that never built the project's
+  other environments; every other build of the project avoids nodes that
+  ran its fork code and nodes the selector reserves. Builds record
+  `untrusted`. Servers are labelled with
+  `PUT /v1/workspaces/{id}/nodes/{nodeId}/labels`, which did not exist.
+- **Approval.** `POST …/approve` takes the `head_sha` the approver saw
+  (409 `head_moved` otherwise) and records the Roundhouse user's name as
+  `approved_by_login`. Bots' labels are ignored; the App's own label
+  after a dashboard approval is therefore harmless.
+- **Feedback.** The per-deployment commit statuses are not posted in
+  preview environments; the aggregated `roundhouse/preview/<project>`
+  status and the comment use generic descriptions, never failure reasons.
+- **Database seeding.** `database_seed: latest_backup` and a clone's
+  `volumes: latest_backup` restore each database from the source's latest
+  successful _dump_ through the restore workflow's new-database path, which
+  keeps the target's fresh credentials. Snapshots don't qualify (they carry
+  the source's passwords). A preview that withholds secrets, every fork
+  included, always starts empty; a clone's restore needs `backups:restore`.
+- **Environment lifecycle, as built.** Cloning, diff and delete are routes
+  of their own (`routes/environments.ts`) on the same copy and retirement
+  code previews use, not change sets. `environments:manage` replaces
+  `projects:manage` on creation. Delete needs a fresh session and
+  `?confirm=<slug>`, `access:manage` for a protected environment, and is
+  refused for production and for the base of enabled previews. Promote
+  stages `config.patch`, `variable.set`/`delete` and `deployment.promote`
+  ops (clients can't stage the latter); applying one creates a deployment
+  with `trigger: "promote"`, the source's image by digest and its `build_id`.
+- **Public repositories.** A git service without an installation matches PRs
+  of its repository too, within the workspace that claimed the delivering
+  installation, as push deploys do.
+- **Real-stack e2e** is `e2e/phase3/run-previews.mjs` (its own wrangler
+  port and `.dev.vars.previews`, a fake GitHub on another port). The
+  claim's OAuth step is replaced by an SQL update there; everything else
+  runs as in production.
+- **`max_active` is hard.** Admission counts the running previews and
+  claims the slot in one conditional `UPDATE`, which D1 runs alone.
+- Previews never get TCP proxies or credential rotations: both routes
+  answer 409 in a preview environment.
+
 ## Rollout and compat
 
-- **No protocol change.** The migrations are additive.
+- **Protocol 7** adds `build_job.isolation` (ADR 0014 section 14, see "How PR
+  previews were built"); pull request builds need agents at 7. The
+  migrations are additive.
 - **Existing GitHub Apps** must subscribe to `pull_request`. App owners
   change subscribed events in the App's settings, and installations may
   have to accept. The dashboard detects missing deliveries

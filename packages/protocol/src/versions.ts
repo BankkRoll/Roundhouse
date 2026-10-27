@@ -14,7 +14,7 @@
  * | 4       | ADR 0014   | sealed env and build secrets                             |
  * | 5       | 2          | mesh, volumes, backups, `db_query`, signing-key rollover |
  * | 6       | 3          | jobs, metrics, certificates                              |
- * | 7       | 4          | exec (web shell), image push; edge gateway reserved      |
+ * | 7       | 3, 4       | preview build isolation; exec (web shell), image push    |
  *
  * @module
  */
@@ -39,6 +39,8 @@
  * - Version 6 (Phase 3, ADRs 0008, 0009, 0010): `job_*`, `metrics`,
  *   `cert_*`, wildcard routes, HSTS, `desired_state.ingress`, and the
  *   `managed` TLS mode.
+ * - Version 7 (Phase 3, ADRs 0007 and 0014 section 14): `build_job.isolation`.
+ *   See {@link PREVIEW_BUILDS_PROTOCOL_VERSION}.
  * - Version 7 (Phase 4, ADRs 0011, 0012): `exec_*` (web shell) and
  *   `image_push`/`image_push_result`. The edge gateway (ADR 0011) has no
  *   frames yet: Workers VPC is in beta and needs a live account to design
@@ -134,6 +136,14 @@ export const METRICS_PROTOCOL_VERSION = 6;
  * wildcard route hostnames and route `hsts`.
  */
 export const CERTS_PROTOCOL_VERSION = 6;
+
+/**
+ * First protocol version whose agents build `build_job.isolation: "preview"`
+ * in a separate per-project preview BuildKit daemon and cache (ADR 0014
+ * section 14). A pull request build never goes to an older agent: one
+ * would ignore the field and build in the project's regular daemon.
+ */
+export const PREVIEW_BUILDS_PROTOCOL_VERSION = 7;
 
 /**
  * First protocol version whose agents run web shell sessions (ADR 0012):

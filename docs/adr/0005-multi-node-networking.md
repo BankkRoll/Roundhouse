@@ -780,7 +780,9 @@ additions. Where the build differs from the decision above:
   operator: provisioning a builder server while the workspace already has
   one, and going back to filesystem storage while a workspace has two. A
   hand-joined agent reports its capability itself, so it is never refused,
-  only not designated.
+  only not designated. All of this applies only while the mesh is on: without it each
+  node runs only what its own builder built, so several builders (a
+  dedicated fork builder for PR previews, ADR 0007) keep working.
 - **S3 storage** is the `registry_storage` instance setting
   (`GET/PUT/DELETE /v1/instance/registry-storage`, instance admins, fresh
   session) with both secrets sealed and write-only, re-wrapped by key

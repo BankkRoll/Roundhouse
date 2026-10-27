@@ -36,8 +36,8 @@ const crumbLink =
 
 /**
  * Breadcrumbs inside a project: project, environment switcher and service. The
- * environment menu lists every environment of the project; Phase 1 creates only
- * production, so it usually has one entry.
+ * environment menu lists every environment of the project, pull request previews
+ * included.
  */
 function ProjectCrumbs({
   workspaceId,
@@ -107,7 +107,7 @@ function ProjectCrumbs({
               ))}
             </DropdownMenuRadioGroup>
             <p className="px-2 pt-1 pb-2 text-xs text-subtle-foreground">
-              Staging and preview environments arrive in a later phase.
+              Pull request previews appear here while their pull request is open.
             </p>
           </DropdownMenuContent>
         </DropdownMenu>

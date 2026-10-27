@@ -14,6 +14,7 @@
  */
 import { createDb } from "@roundhouse/db";
 import type { Env } from "../env";
+import { startPreviewAction } from "../workflows/preview";
 import { claimDueBackups } from "./backups/schedule";
 import { claimDueCertificates, syncCertificates } from "./certificates/schedule";
 import { claimCloudflareDeletions } from "./cloudflare/runtime";
@@ -21,7 +22,10 @@ import { claimDueCronRuns } from "./cron/schedule";
 import { refreshAllNodes, refreshNodes } from "./desired-state";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
 import { runSaasTick } from "./domains/saas";
+import { reapRetiredEnvironments } from "./environments";
 import { progressRotations } from "./mesh";
+import { configuredOrigin } from "./origin";
+import { runPreviewTick } from "./previews/engine";
 import { expireLostShellSessions } from "./shell";
 import { claimMigrationCleanups } from "./volume-migrations";
 import { claimVolumeDeletions } from "./volumes";
@@ -82,6 +86,24 @@ export const MINUTE_CLAIMERS: readonly MinuteClaimer[] = [
     // servers change, the fallback origin until active, the daily IP ranges.
     name: "saas",
     run: (env, now) => runSaasTick(env, now, () => refreshAllNodes(env, createDb(env.DB))),
+  },
+  {
+    // ADR 0007: expire idle previews and admit queued ones as slots free up.
+    name: "previews",
+    run: (env, now) =>
+      runPreviewTick(env, createDb(env.DB), now, (previewId, action) =>
+        startPreviewAction(env, {
+          kind: "action",
+          preview_id: previewId,
+          origin: configuredOrigin(env) ?? "",
+          action,
+        }),
+      ),
+  },
+  {
+    // After volume deletions, which free torn-down preview environments to go.
+    name: "retired_environments",
+    run: (env) => reapRetiredEnvironments(env, createDb(env.DB)),
   },
   { name: "lost_shell_sessions", run: expireLostShellSessions },
   { name: "cloudflare_deletions", run: claimCloudflareDeletions },

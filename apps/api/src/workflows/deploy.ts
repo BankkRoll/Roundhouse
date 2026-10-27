@@ -5,7 +5,7 @@
  *
  * Steps:
  * 1. `snapshot`: load the deployment and its exact config version; resolve
- *    the image (image source, rollback) or the commit to build (git).
+ *    the image (image source, rollback, promotion) or the commit to build (git).
  * 2. `resolve-variables`: resolve the service's variables, references and
  *    built-ins with `resolveServiceEnvironment` (the same resolver the
  *    variables API uses, so the two cannot disagree) and freeze them on the
@@ -62,6 +62,7 @@ import {
   environments,
   nodes,
   placements,
+  previewEnvironments,
   projects,
   serviceConfigs,
   services,
@@ -72,6 +73,7 @@ import {
   buildCacheKey,
   buildSecretsAad,
   localImageRepository,
+  PREVIEW_BUILDS_PROTOCOL_VERSION,
   REGISTRY_LISTEN,
   SEALED_ENV_PROTOCOL_VERSION,
   type SealedBox,
@@ -95,7 +97,7 @@ import {
   secretDerivedVariables,
   serviceProvider,
 } from "@roundhouse/shared";
-import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import type { Env } from "../env";
 import { recordAudit } from "../lib/audit";
 import {
@@ -136,6 +138,10 @@ import {
   mintRepoToken,
 } from "../lib/github";
 import { effectiveStatus } from "../lib/nodes";
+import { configuredOrigin } from "../lib/origin";
+import { previewGitServices } from "../lib/previews/events";
+import { syncPreviewFeedback } from "../lib/previews/github";
+import { loadPreviewSettings } from "../lib/previews/settings";
 import { buildCandidates } from "../lib/registry";
 import { resolveServiceEnvironment } from "../lib/resolve-env";
 import { environmentNodeIds, schedulerSnapshot } from "../lib/scheduling";
@@ -273,6 +279,21 @@ interface Plan {
     commitSha: string;
     commitMessage: string | null;
     commitAuthor: string | null;
+    /**
+     * What the builder fetches if the commit isn't served by SHA: the branch,
+     * or `refs/pull/<n>/head` for a PR head, which may live only in a fork.
+     */
+    fetchRef: string;
+  } | null;
+  /** Set in a pull request preview environment (ADR 0007, ADR 0014 section 14). */
+  preview: {
+    id: string;
+    /** Fork code: built only on its own builder nodes, never with a secret. */
+    untrusted: boolean;
+    /** Secrets were withheld from the preview, build secrets included. */
+    withheld: boolean;
+    /** Builder nodes fork builds may use. */
+    buildNodeSelector: Record<string, string>;
   } | null;
   /** `deploy.pre_deploy_command` and its run's time limit, when the config has one. */
   preDeploy: { command: string; timeoutS: number } | null;
@@ -358,6 +379,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
           this.commitStatus(params, plan, "success", "Deployed"),
         );
       }
+      await this.previewFeedback(step, params, plan);
       return { kind: "stop", status: "active" };
     }
 
@@ -405,6 +427,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     }
     // Only once the node replicas are healthy and active does traffic leave Cloudflare.
     await switchBackFromCloudflare({ env: this.env, step, plan });
+    await this.previewFeedback(step, params, plan);
     return { kind: "stop", status: "active" };
   }
 
@@ -637,6 +660,18 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     if (d.status !== "queued") return { kind: "stop", status: d.status };
     if (service.deletedAt || project.deletedAt) return fail("The service was deleted");
     if (!config) return fail(`Config version ${d.configVersion} no longer exists`);
+    if (environment.retiredAt) return fail("The environment was torn down");
+    const [preview] = environment.previewId
+      ? await db
+          .select()
+          .from(previewEnvironments)
+          .where(eq(previewEnvironments.id, environment.previewId))
+          .limit(1)
+      : [];
+    const previewSettings = preview ? await loadPreviewSettings(db, project.id) : undefined;
+    if (environment.previewId && (!preview || !previewSettings)) {
+      return fail("The pull request preview no longer exists");
+    }
 
     const plan: Plan = {
       deploymentId: d.id,
@@ -653,6 +688,15 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       image: d.image,
       registryNodeId: null,
       git: null,
+      preview:
+        preview && previewSettings
+          ? {
+              id: preview.id,
+              untrusted: preview.isFork,
+              withheld: preview.withheld,
+              buildNodeSelector: previewSettings.buildNodeSelector,
+            }
+          : null,
       preDeploy: config.deploy.pre_deploy_command
         ? {
             command: config.deploy.pre_deploy_command,
@@ -668,11 +712,43 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       }
       return { kind: "ok", plan };
     }
+    if (d.trigger === "promote") {
+      // ADR 0007: the promoted image runs as built, never rebuilt here.
+      if (!d.image) return fail("The promoted deployment has no image");
+      if (d.image.startsWith(`${REGISTRY_LISTEN}/`)) {
+        const build = d.buildId
+          ? await db.query.builds.findFirst({ where: eq(builds.id, d.buildId) })
+          : undefined;
+        if (!build?.nodeId) return fail("The promoted image's build is gone");
+        plan.registryNodeId = build.nodeId;
+      }
+      return { kind: "ok", plan };
+    }
     if (config.source.type === "image")
       return { kind: "ok", plan: { ...plan, image: config.source.image } };
 
     const source = config.source;
     let sha = params.commit?.sha ?? null;
+    let fetchRef = source.branch;
+    if (preview && previewSettings) {
+      const atHead = (
+        await previewGitServices(
+          db,
+          project.id,
+          previewSettings.baseEnvironmentId,
+          previewSettings.services ?? null,
+        )
+      ).some((t) => t.serviceId === service.id);
+      if (atHead) {
+        sha ??= preview.headSha;
+        fetchRef = `refs/pull/${preview.prNumber}/head`;
+        // SECURITY: fork code is built only at the exact commit someone with
+        // write access approved, whoever started this deployment.
+        if (preview.isFork && sha !== preview.approvedSha) {
+          return fail("This fork commit has not been approved for a preview");
+        }
+      }
+    }
     if (!sha) {
       try {
         const token = await this.repoToken(
@@ -697,6 +773,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       commitSha: sha,
       commitMessage: params.commit?.message ?? null,
       commitAuthor: params.commit?.author ?? null,
+      fetchRef,
     };
     return { kind: "ok", plan };
   }
@@ -876,6 +953,13 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
           args[k] = value;
         }
       }
+      if (plan.preview?.withheld) {
+        // SECURITY (ADR 0007 "Secrets", ADR 0014 section 14): a preview that
+        // withholds secrets builds with empty placeholders for every build
+        // secret and secret build arg, even one set in the preview by hand.
+        for (const k of Object.keys(secrets)) secrets[k] = "";
+        for (const name of secretArgs) if (Object.hasOwn(args, name)) args[name] = "";
+      }
       const checkedSecrets = SealedBuildSecretsSchema.safeParse({ secrets });
       if (!checkedSecrets.success) {
         return fail(`The build secrets are too large: ${checkedSecrets.error.issues[0]?.message}`);
@@ -914,12 +998,15 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     // With filesystem registry storage only the workspace's designated
     // builder builds, so every image lives in the one registry the other
     // nodes pull through over the mesh (ADR 0005).
-    const candidates = (await buildCandidates(db, plan.workspaceId)).filter(runsSealedWorkloads);
-    if (!candidates.length) {
+    const online = (await buildCandidates(db, plan.workspaceId)).filter(runsSealedWorkloads);
+    if (!online.length) {
       return fail(
         `No online builder node: one needs the builder capability, agent protocol ${SEALED_ENV_PROTOCOL_VERSION} or later and a registered encryption key. Without S3 registry storage only the workspace's first builder builds.`,
       );
     }
+    const picked = await this.builderCandidates(db, plan, online);
+    if (picked.kind === "fail") return picked;
+    const candidates = picked.nodes;
     // Reusing the last builder keeps BuildKit's layer cache warm.
     const [previous] = await db
       .select({ nodeId: builds.nodeId })
@@ -943,6 +1030,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         status: "queued",
         nodeId: node.id,
         imageRepository: localImageRepository(plan.projectId, plan.serviceId),
+        untrusted: plan.preview?.untrusted ?? false,
       }),
       db.update(deployments).set({ buildId }).where(eq(deployments.id, plan.deploymentId)),
     ]);
@@ -965,6 +1053,77 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       },
     );
     return { kind: "ok", buildId, nodeId: node.id };
+  }
+
+  /**
+   * Narrows the online builders to those this build may use (ADR 0014
+   * section 14):
+   * - Pull request builds need agents that build them in a separate preview
+   *   BuildKit daemon (`PREVIEW_BUILDS_PROTOCOL_VERSION`).
+   * - Fork code builds only on nodes matching the project's
+   *   `build_node_selector` that never built anything else of the project.
+   * - Every other build of the project avoids nodes that ran its fork code,
+   *   and nodes the selector reserves for it while fork previews are on.
+   */
+  private async builderCandidates(
+    db: Db,
+    plan: Plan,
+    online: (typeof nodes.$inferSelect)[],
+  ): Promise<{ kind: "ok"; nodes: (typeof nodes.$inferSelect)[] } | Failure> {
+    let pool = online;
+    if (plan.preview) {
+      pool = pool.filter((n) => n.protocolVersion >= PREVIEW_BUILDS_PROTOCOL_VERSION);
+      if (!pool.length) {
+        return fail(
+          `No builder node can build pull requests: one needs agent protocol ${PREVIEW_BUILDS_PROTOCOL_VERSION} or later`,
+        );
+      }
+    }
+    const builtBy = async (untrusted: boolean) =>
+      new Set(
+        (
+          await db
+            .selectDistinct({ nodeId: builds.nodeId })
+            .from(builds)
+            .innerJoin(services, eq(services.id, builds.serviceId))
+            .where(
+              and(
+                eq(services.projectId, plan.projectId),
+                eq(builds.untrusted, untrusted),
+                isNotNull(builds.nodeId),
+              ),
+            )
+        ).map((r) => r.nodeId!),
+      );
+    const matches = (labels: Record<string, string> | null, selector: Record<string, string>) =>
+      Object.entries(selector).every(([k, v]) => labels?.[k] === v);
+    if (plan.preview?.untrusted) {
+      const selector = plan.preview.buildNodeSelector;
+      if (!Object.keys(selector).length) {
+        return fail("Fork previews need a build node selector naming builder nodes of their own");
+      }
+      const trusted = await builtBy(false);
+      pool = pool.filter((n) => matches(n.labels, selector) && !trusted.has(n.id));
+      if (!pool.length) {
+        return fail(
+          "No builder node for fork previews: one must match the build node selector and must never have built this project's other environments",
+        );
+      }
+      return { kind: "ok", nodes: pool };
+    }
+    const tainted = await builtBy(true);
+    const settings = await loadPreviewSettings(db, plan.projectId);
+    const reserved =
+      settings?.forkPolicy === "approval" && Object.keys(settings.buildNodeSelector).length
+        ? settings.buildNodeSelector
+        : null;
+    pool = pool.filter((n) => !tainted.has(n.id) && !(reserved && matches(n.labels, reserved)));
+    if (!pool.length) {
+      return fail(
+        "No builder node: the online ones are reserved for this project's fork previews or have built fork code",
+      );
+    }
+    return { kind: "ok", nodes: pool };
   }
 
   private async sendBuildJob(
@@ -1007,7 +1166,8 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       this.ref(plan),
     );
     let buildSecretsSealed: SealedBox | undefined;
-    if (Object.keys(inputs.secrets).length) {
+    // SECURITY: fork code gets no build secret at all, not even an empty one.
+    if (Object.keys(inputs.secrets).length && !plan.preview?.untrusted) {
       // SECURITY: secrets reach the build only inside a box the builder alone can open.
       const nodeKey = node?.encryptionPublicKey;
       if (!nodeKey) return fail("The builder node has no encryption key for build secrets");
@@ -1042,7 +1202,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         type: "git",
         url: git.repoUrl,
         commit_sha: git.commitSha,
-        ref: git.branch,
+        ref: git.fetchRef,
         ...(token ? { token } : {}),
       },
       builder,
@@ -1054,7 +1214,12 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       ...(secretArgs.length ? { secret_build_args: secretArgs } : {}),
       ...(buildSecretsSealed ? { build_secrets_sealed: buildSecretsSealed } : {}),
       image_repository: localImageRepository(plan.projectId, plan.serviceId),
-      cache_key: buildCacheKey(plan.projectId, plan.serviceId),
+      ...(plan.preview ? { isolation: "preview" as const } : {}),
+      cache_key: buildCacheKey(
+        plan.projectId,
+        plan.serviceId,
+        plan.preview ? "preview" : undefined,
+      ),
       timeout_s: BUILD_TIMEOUT_S,
     });
     disposeRpc(result);
@@ -1062,6 +1227,9 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
       return fail(
         "The builder's agent is too old for secret build args; upgrade it, or unmark the args",
       );
+    }
+    if (!result.sent && result.reason === "preview_builds_unsupported") {
+      return fail("The builder's agent is too old to build pull requests; upgrade it");
     }
     if (!result.sent) {
       // Thrown so the step retries: the builder may be mid-reconnect.
@@ -1499,6 +1667,7 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         this.commitStatus(params, plan, "failure", failure.reason),
       );
     }
+    if (plan) await this.previewFeedback(step, params, plan);
     return { status, reason: failure.reason };
   }
 
@@ -1553,6 +1722,23 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     });
   }
 
+  /**
+   * Brings a preview's PR comment and commit status up to date once one of
+   * its deployments settled. Best effort, like the commit status.
+   */
+  private async previewFeedback(step: WorkflowStep, params: DeployParams, plan: Plan) {
+    const preview = plan.preview;
+    if (!preview) return;
+    await step.do("preview-feedback", NETWORK_STEP, () =>
+      syncPreviewFeedback(
+        this.env,
+        this.lifecycle().db,
+        preview.id,
+        configuredOrigin(this.env) ?? params.origin,
+      ),
+    );
+  }
+
   /** Best-effort GitHub commit status; never fails the deployment. */
   private async commitStatus(
     params: DeployParams,
@@ -1562,7 +1748,8 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
   ): Promise<boolean> {
     const git = plan.git;
     const fullName = git ? githubFullName(git.repoUrl) : null;
-    if (!git || !fullName || !git.installationRef) return false;
+    // A preview reports one aggregated status of its own, without failure reasons.
+    if (!git || !fullName || !git.installationRef || plan.preview) return false;
     try {
       const { db } = this.lifecycle();
       const token = await this.repoToken(db, plan.workspaceId, git.installationRef, git.repoUrl, {

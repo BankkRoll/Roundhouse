@@ -204,6 +204,10 @@ func TestWireTypesMatchSchemas(t *testing.T) {
 		"MeshNode":                  MeshNode{},
 		"MeshPeerView":              MeshPeerView{},
 		"MeshPair":                  MeshPair{},
+		"NodeLabels":                NodeLabelsInput{},
+		"Preview":                   Preview{},
+		"PreviewService":            PreviewService{},
+		"ApprovePreview":            ApprovePreviewInput{},
 		"ShellTargets":              ShellTargets{},
 		"ShellTarget":               ShellTarget{},
 		"ServiceCloudflareStatus":   CloudflareStatus{},
@@ -310,7 +314,8 @@ func TestQueryParamsExist(t *testing.T) {
 		{RouteCredentialRotations, "environment_id"},
 		{RouteCronState, "environment_id"}, {RouteListCronRuns, "environment_id"}, {RouteListCronRuns, "cursor"},
 		{RouteListCronRuns, "limit"}, {RouteListCronRuns, "status"}, {RouteCronRunLogs, "cursor"}, {RouteCronRunLogs, "limit"},
-		{RouteCronPreview, "schedule"}, {RouteCronPreview, "timezone"}, {RouteCronPreview, "count"}} {
+		{RouteCronPreview, "schedule"}, {RouteCronPreview, "timezone"}, {RouteCronPreview, "count"},
+		{RouteListPreviews, "status"}} {
 		op := doc.Paths[c.route.Path][strings.ToLower(c.route.Method)]
 		if !slices.Contains(op.Parameters, param{In: "query", Name: c.param}) {
 			t.Errorf("%s: no query parameter %q", c.route, c.param)
@@ -451,6 +456,7 @@ func TestDataEnumsMatchAPI(t *testing.T) {
 		{"CredentialRotation", "status", RotationStatuses},
 		{"CronRun", "status", CronRunStatuses},
 		{"CronRun", "trigger", CronRunTriggers},
+		{"Preview", "status", PreviewStatuses},
 	} {
 		s := doc.Components.Schemas[c.schema]
 		if s == nil || s.Properties[c.prop] == nil {

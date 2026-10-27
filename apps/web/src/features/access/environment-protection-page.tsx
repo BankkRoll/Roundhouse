@@ -31,6 +31,7 @@ import {
   usePutProtection,
   useTeams,
 } from "../../queries/access";
+import { EnvironmentLifecycle } from "../environments/environment-lifecycle";
 import { ProjectSettingsFrame } from "../projects/project-settings-frame";
 import { useProjectEnvironment } from "../projects/use-project-environment";
 import { OPERATION_COPY, RULE_ROLES_FOR } from "./roles";
@@ -507,7 +508,7 @@ export function EnvironmentProtectionPage({
       workspaceId={workspaceId}
       projectId={projectId}
       title="Environments"
-      description="Protect environments so only the right people can change what runs there."
+      description="Create, compare, promote and delete environments, and protect them so only the right people can change what runs there."
       actions={
         environments.length > 1 ? (
           <div className="flex items-center gap-2">
@@ -537,6 +538,15 @@ export function EnvironmentProtectionPage({
         ) : null
       }
     >
+      {project.data ? (
+        <div className="mb-10">
+          <EnvironmentLifecycle
+            workspaceId={workspaceId}
+            projectId={projectId}
+            environments={project.data.environments}
+          />
+        </div>
+      ) : null}
       {!environment || protection.isPending || projectDirectory.isPending ? (
         <Skeleton className="h-64" />
       ) : protection.isError || projectDirectory.isError ? (

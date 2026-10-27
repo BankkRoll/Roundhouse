@@ -232,7 +232,7 @@ func (a *App) rootCommand() *cobra.Command {
 	add("auth", a.loginCmd(), a.logoutCmd(), a.whoamiCmd())
 	add("project", a.initCmd(), a.linkCmd(), a.unlinkCmd(), a.statusCmd(), a.openCmd())
 	add("deploy", a.deployCmd(), a.logsCmd(), a.metricsCmd(), a.rollbackCmd(), a.cancelCmd(), a.upCmd(), a.changesCmd())
-	add("manage", a.varsCmd(), a.runCmd(), a.projectsCmd(), a.templatesCmd(), a.servicesCmd(), a.domainCmd(), a.serversCmd(), a.tokensCmd(), a.shellCmd(), a.runtimeCmd(), a.dbCmd(), a.cronCmd())
+	add("manage", a.varsCmd(), a.runCmd(), a.projectsCmd(), a.templatesCmd(), a.servicesCmd(), a.domainCmd(), a.serversCmd(), a.tokensCmd(), a.shellCmd(), a.runtimeCmd(), a.dbCmd(), a.cronCmd(), a.previewsCmd(), a.envCmd())
 	root.AddCommand(a.versionCmd())
 	return root
 }

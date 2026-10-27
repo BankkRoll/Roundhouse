@@ -23,9 +23,18 @@ import type {
   VariableTier,
 } from "@roundhouse/shared";
 import { sql } from "drizzle-orm";
-import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+  type AnySQLiteColumn,
+  check,
+  index,
+  integer,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 import { users } from "./auth";
 import { id, json, timestamp, timestamps } from "./columns";
+import { previewEnvironments } from "./previews";
 import { workspaces } from "./workspaces";
 
 /**
@@ -117,6 +126,16 @@ export const environments = sqliteTable(
      * environment runs on one.
      */
     netTag: integer("net_tag"),
+    /** The pull request preview this environment was created for (ADR 0007). */
+    previewId: text("preview_id").references((): AnySQLiteColumn => previewEnvironments.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * Set when a preview environment is torn down. The row stays, hidden,
+     * until its volumes are deleted after their grace period, because
+     * deleting it would cascade to the volume rows the deletion needs.
+     */
+    retiredAt: timestamp("retired_at"),
     ...timestamps,
   },
   (t) => [
@@ -236,6 +255,12 @@ export const variables = sqliteTable(
      * environment variable, so `docker inspect` doesn't show it.
      */
     mountAsFile: integer("mount_as_file", { mode: "boolean" }).notNull().default(false),
+    /**
+     * A placeholder in a preview: the base environment's value was secret or
+     * derived from one, so the preview got an empty value instead (ADR 0007).
+     * Cleared when someone writes a value.
+     */
+    withheld: integer("withheld", { mode: "boolean" }).notNull().default(false),
     /** Bumped on every write, for optimistic concurrency; part of the v2 AAD. */
     version: integer("version").notNull().default(1),
     ...timestamps,
