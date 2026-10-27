@@ -15,17 +15,21 @@ UMask=0077
 
 # Runs as root so it owns its files and can open /var/run/docker.sock
 # (root:docker 0660) as the socket's owner. Docker API calls run in the
-# daemon, and every file it touches is root-owned. Its only capabilities
-# are CAP_NET_ADMIN and CAP_NET_RAW, for the iptables rules in DOCKER-USER
-# that keep containers away from the cloud metadata endpoint. On builder
+# daemon, and every file it touches is root-owned. Its capabilities are
+# CAP_NET_ADMIN and CAP_NET_RAW, for the iptables rules in DOCKER-USER
+# that keep containers away from the cloud metadata endpoint and for the
+# mesh (wg0, rh-dns0 and its nftables table), and CAP_NET_BIND_SERVICE for
+# the private DNS on port 53 of the mesh address. On builder
 # nodes it also runs git and railpack, which inherit this sandbox; their
 # checkouts live in the state directory and are removed after each build.
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
 StateDirectory=roundhouse
 StateDirectoryMode=0700
 # /run/roundhouse/secrets holds mount_as_file values on the tmpfs, bind-
 # mounted into running containers, so it must outlive an agent restart.
-RuntimeDirectory=roundhouse
+# /run/wireguard holds the UAPI socket of userspace WireGuard (wg0 when the
+# kernel module is missing).
+RuntimeDirectory=roundhouse wireguard
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 # The agent records the control plane's key id in its config after the

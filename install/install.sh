@@ -45,8 +45,8 @@
 #
 # Firewall: Roundhouse needs no inbound port for its control traffic (the agent
 # dials out). Allow inbound TCP 80 and 443 (and UDP 443 for HTTP/3) for
-# ingress, and keep everything else closed. If ufw is active, the installer
-# adds those rules itself.
+# ingress, UDP 51820 between nodes for the mesh, and keep everything else
+# closed. If ufw is active, the installer adds those rules itself.
 #
 # Safe to re-run: packages already present are kept, the binary and systemd
 # unit are replaced, and an already-joined host is not re-registered.
@@ -115,6 +115,16 @@ REGISTRY_IMAGE="registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9
 BUILD_BRIDGE=roundhouse-bk0
 REGISTRY_PROXY_PORT=5001
 
+# The mesh (ADR 0005): WireGuard's UDP port, the sysctl and module files the
+# installer writes, and the mark Docker must accept on its nftables backend
+# (the control plane's accept_fwmark).
+MESH_PORT=51820
+MESH_SUPERNET=10.200.0.0/16
+MESH_SYSCTL=/etc/sysctl.d/60-roundhouse.conf
+MESH_MODULES=/etc/modules-load.d/roundhouse.conf
+MESH_FWMARK=0x2000000/0x2000000
+DOCKER_DAEMON_JSON=/etc/docker/daemon.json
+
 # Where AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and
 # later), rootless BuildKit can start only under this profile, which grants
 # it `userns` and nothing else; the agent uses it once it is loaded. Its
@@ -138,6 +148,7 @@ BUILDER=0
 URL="$CONTROL_PLANE_URL"
 WORK_DIR=""
 JOINED_THIS_RUN=0
+DOCKER_INSTALLED_THIS_RUN=0
 OS_ID=""
 OS_VER=""
 OS_CODENAME=""
@@ -509,8 +520,10 @@ join_control_plane() {
 install_packages() {
 	log "installing node dependencies"
 	apt_update
-	# gpg verifies the Caddy repository key; git fetches sources on builders.
-	apt_install wireguard-tools git ca-certificates gpg
+	# gpg verifies the Caddy repository key; git fetches sources on builders;
+	# wireguard-tools and nftables serve the mesh (wg for diagnostics, nft for
+	# the isolation table the agent applies).
+	apt_install wireguard-tools nftables git ca-certificates gpg
 
 	if command -v docker >/dev/null; then
 		log "Docker already installed ($(docker --version 2>/dev/null || echo unknown version))"
@@ -523,6 +536,7 @@ install_packages() {
 			"$(dpkg --print-architecture)" "$OS_ID" "$OS_CODENAME" >/etc/apt/sources.list.d/docker.list
 		apt_update
 		apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+		DOCKER_INSTALLED_THIS_RUN=1
 	fi
 	systemctl enable --now docker >/dev/null
 
@@ -731,21 +745,96 @@ prepull_builder_images() {
 	done
 }
 
-# configure_firewall opens ingress when ufw is active, and otherwise says
-# what to open. Nothing else needs to be reachable from outside.
+# configure_mesh_host prepares the host for the WireGuard mesh (ADR 0005):
+# IPv4 forwarding, which Docker's nftables backend no longer turns on itself
+# and the agent's sandbox can't set; the wireguard and dummy modules, which
+# the sandbox can't load; and, where Docker uses its nftables firewall
+# backend, the daemon setting that lets the mesh's marked packets past
+# Docker's forward drops. On the iptables backend the agent adds its own
+# DOCKER-USER rule instead. The mesh stays off until the operator enables it,
+# so every step only warns on failure.
+configure_mesh_host() {
+	log "preparing the host for the mesh (IPv4 forwarding, wireguard and dummy modules)"
+	install -m 0755 -d "$(dirname "$MESH_SYSCTL")" "$(dirname "$MESH_MODULES")"
+	printf '# Written by the Roundhouse installer: the mesh routes between Docker\n# bridges and wg0.\nnet.ipv4.ip_forward=1\n' >"$MESH_SYSCTL"
+	sysctl -q -p "$MESH_SYSCTL" >/dev/null 2>&1 || warn "could not apply ${MESH_SYSCTL} now; it applies at the next boot"
+	printf 'wireguard\ndummy\n' >"$MESH_MODULES"
+	if command -v modprobe >/dev/null; then
+		modprobe -a wireguard dummy 2>/dev/null ||
+			warn "could not load the wireguard and dummy modules; the agent falls back to userspace WireGuard"
+	fi
+
+	local backend
+	backend="$(docker info --format '{{if .FirewallBackend}}{{.FirewallBackend.Driver}}{{end}}' 2>/dev/null || true)"
+	case "$backend" in
+	*nftables*) ;;
+	*) return 0 ;;
+	esac
+	if [ -f "$DOCKER_DAEMON_JSON" ] && grep -q '"bridge-accept-fwmark"' "$DOCKER_DAEMON_JSON"; then
+		return 0
+	fi
+	local fix="add \"bridge-accept-fwmark\": \"${MESH_FWMARK}\" to ${DOCKER_DAEMON_JSON} and restart Docker"
+	if [ "$DOCKER_INSTALLED_THIS_RUN" != 1 ]; then
+		# NOTE: restarting an existing Docker restarts every container on
+		# it, so on a host that already ran Docker this is left to the
+		# operator, at a time of their choosing.
+		warn "Docker uses its nftables firewall backend: before enabling the mesh, ${fix}"
+		return 0
+	fi
+	add_daemon_fwmark || {
+		warn "could not update ${DOCKER_DAEMON_JSON}; before enabling the mesh, ${fix}"
+		return 0
+	}
+	log "Docker uses its nftables firewall backend: set bridge-accept-fwmark in ${DOCKER_DAEMON_JSON} and restarting Docker"
+	systemctl restart docker >/dev/null
+}
+
+# add_daemon_fwmark adds bridge-accept-fwmark to daemon.json, keeping the
+# other settings, and puts the old file back if dockerd rejects the result.
+add_daemon_fwmark() {
+	local entry="\"bridge-accept-fwmark\": \"${MESH_FWMARK}\""
+	local backup="${DOCKER_DAEMON_JSON}.roundhouse-bak"
+	install -m 0755 -d "$(dirname "$DOCKER_DAEMON_JSON")"
+	if [ ! -s "$DOCKER_DAEMON_JSON" ] || ! grep -q '[^[:space:]{}]' "$DOCKER_DAEMON_JSON"; then
+		printf '{\n  %s\n}\n' "$entry" >"$DOCKER_DAEMON_JSON"
+		return 0
+	fi
+	cp -p "$DOCKER_DAEMON_JSON" "$backup"
+	# The file's first "{" opens the top-level object, which is not empty
+	# (checked above), so the new key goes first, followed by a comma.
+	if ! sed -i "0,/{/s|{|{\n  ${entry},|" "$DOCKER_DAEMON_JSON" ||
+		{ command -v dockerd >/dev/null && ! dockerd --validate --config-file "$DOCKER_DAEMON_JSON" >/dev/null 2>&1; }; then
+		mv -f "$backup" "$DOCKER_DAEMON_JSON"
+		return 1
+	fi
+	rm -f "$backup"
+}
+
+# configure_firewall opens ingress and the mesh's WireGuard port when ufw is
+# active, and otherwise says what to open. Nothing else needs to be
+# reachable from outside.
 configure_firewall() {
 	if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
-		log "ufw is active: allowing inbound 80/tcp, 443/tcp and 443/udp for ingress"
+		log "ufw is active: allowing inbound 80/tcp, 443/tcp and 443/udp for ingress and ${MESH_PORT}/udp for the mesh"
 		ufw allow 80/tcp >/dev/null
 		ufw allow 443/tcp >/dev/null
 		ufw allow 443/udp >/dev/null
+		ufw allow "${MESH_PORT}/udp" comment 'roundhouse mesh' >/dev/null
+		# Containers resolve through the node's private DNS on its mesh
+		# address (on rh-dns0); the agent drops it from wg0 and answers only
+		# its own containers.
+		ufw allow proto udp to "$MESH_SUPERNET" port 53 comment 'roundhouse private dns' >/dev/null
+		ufw allow proto tcp to "$MESH_SUPERNET" port 53 comment 'roundhouse private dns' >/dev/null
 		if [ "$BUILDER" = 1 ]; then
 			# BuildKit's container pushes through the agent's per-build
 			# registry proxy on the build network's gateway.
 			ufw allow in on "$BUILD_BRIDGE" to any port "$REGISTRY_PROXY_PORT" proto tcp >/dev/null
+			# Other nodes pull builds from the registry's mesh listener; the
+			# agent's table admits only node addresses.
+			ufw allow in on wg0 to any port 5000 proto tcp comment 'roundhouse registry over the mesh' >/dev/null
 		fi
 	else
-		log "firewall: allow inbound 80/tcp and 443/tcp (443/udp for HTTP/3) for ingress; Roundhouse needs no other inbound port"
+		log "firewall: allow inbound 80/tcp and 443/tcp (443/udp for HTTP/3) for ingress and ${MESH_PORT}/udp for the mesh between nodes; Roundhouse needs no other inbound port"
 	fi
 }
 
@@ -772,17 +861,21 @@ UMask=0077
 
 # Runs as root so it owns its files and can open /var/run/docker.sock
 # (root:docker 0660) as the socket's owner. Docker API calls run in the
-# daemon, and every file it touches is root-owned. Its only capabilities
-# are CAP_NET_ADMIN and CAP_NET_RAW, for the iptables rules in DOCKER-USER
-# that keep containers away from the cloud metadata endpoint. On builder
+# daemon, and every file it touches is root-owned. Its capabilities are
+# CAP_NET_ADMIN and CAP_NET_RAW, for the iptables rules in DOCKER-USER
+# that keep containers away from the cloud metadata endpoint and for the
+# mesh (wg0, rh-dns0 and its nftables table), and CAP_NET_BIND_SERVICE for
+# the private DNS on port 53 of the mesh address. On builder
 # nodes it also runs git and railpack, which inherit this sandbox; their
 # checkouts live in the state directory and are removed after each build.
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
 StateDirectory=roundhouse
 StateDirectoryMode=0700
 # /run/roundhouse/secrets holds mount_as_file values on the tmpfs, bind-
 # mounted into running containers, so it must outlive an agent restart.
-RuntimeDirectory=roundhouse
+# /run/wireguard holds the UAPI socket of userspace WireGuard (wg0 when the
+# kernel module is missing).
+RuntimeDirectory=roundhouse wireguard
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 # The agent records the control plane's key id in its config after the
@@ -844,6 +937,7 @@ main() {
 	install_agent
 	join_control_plane
 	install_packages
+	configure_mesh_host
 	configure_firewall
 	install_service
 

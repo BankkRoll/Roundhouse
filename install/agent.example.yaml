@@ -62,3 +62,13 @@ insecure: false
 # default one) and writable under the unit's ReadWritePaths.
 # ingress:
 #   certs_dir: /var/lib/roundhouse-certs
+
+# The WireGuard mesh between nodes (UDP listen_port must be reachable from the
+# other nodes). Optional; the defaults are shown. mode: auto uses the kernel
+# module and falls back to embedded wireguard-go; kernel or userspace forces
+# one; off keeps this node out of the mesh. Set endpoint ("host:port") only
+# when other nodes reach this one through a port forward.
+# mesh:
+#   mode: auto
+#   listen_port: 51820
+#   endpoint: node1.example.com:51820

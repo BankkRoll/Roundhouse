@@ -158,6 +158,33 @@ fi
 command -v git >/dev/null || fail "git not installed"
 [ -s /etc/ssl/certs/ca-certificates.crt ] || fail "ca-certificates not installed"
 
+log "assertions: mesh host"
+command -v nft >/dev/null || fail "nftables not installed"
+command -v wg >/dev/null || fail "wireguard-tools not installed"
+grep -qx 'net.ipv4.ip_forward=1' /etc/sysctl.d/60-roundhouse.conf || fail "ip_forward sysctl not written"
+grep -qx 'wireguard' /etc/modules-load.d/roundhouse.conf || fail "wireguard module not listed for boot"
+[ ! -e /etc/docker/daemon.json ] || fail "daemon.json written for Docker's iptables backend"
+(
+	# Docker's nftables backend needs bridge-accept-fwmark; the merge must
+	# keep every other setting and produce valid JSON.
+	# shellcheck source=/dev/null
+	ROUNDHOUSE_INSTALL_SOURCE_ONLY=1 . /tmp/install.sh
+	DOCKER_DAEMON_JSON=/tmp/daemon-merge.json
+	printf '{\n  "firewall-backend": "nftables",\n  "log-driver": "json-file"\n}\n' >"$DOCKER_DAEMON_JSON"
+	add_daemon_fwmark || fail "add_daemon_fwmark failed on an existing daemon.json"
+	DOCKER_DAEMON_JSON=/tmp/daemon-empty.json
+	printf '{ }\n' >"$DOCKER_DAEMON_JSON"
+	add_daemon_fwmark || fail "add_daemon_fwmark failed on an empty daemon.json"
+)
+python3 - <<'EOF2'
+import json
+merged = json.load(open("/tmp/daemon-merge.json"))
+assert merged == {"bridge-accept-fwmark": "0x2000000/0x2000000", "firewall-backend": "nftables", "log-driver": "json-file"}, merged
+empty = json.load(open("/tmp/daemon-empty.json"))
+assert empty == {"bridge-accept-fwmark": "0x2000000/0x2000000"}, empty
+print("daemon.json merge OK")
+EOF2
+
 log "assertions: Caddy"
 command -v caddy >/dev/null || fail "caddy not installed"
 caddy version
