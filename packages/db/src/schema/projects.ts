@@ -109,9 +109,18 @@ export const environments = sqliteTable(
      * applies it (ADR 0006). Off by default; project admins opt in.
      */
     requireApproval: integer("require_approval", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Small integer unique across the install that keys the environment's
+     * nftables sets on meshed nodes (ADR 0005); assigned the first time the
+     * environment runs on one.
+     */
+    netTag: integer("net_tag"),
     ...timestamps,
   },
-  (t) => [uniqueIndex("environments_project_slug_uq").on(t.projectId, t.slug)],
+  (t) => [
+    uniqueIndex("environments_project_slug_uq").on(t.projectId, t.slug),
+    uniqueIndex("environments_net_tag_uq").on(t.netTag).where(sql`${t.netTag} IS NOT NULL`),
+  ],
 );
 
 /** Something that runs: an app, a database, or a cron job. */

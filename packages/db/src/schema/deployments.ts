@@ -5,6 +5,7 @@
  *
  * @module
  */
+
 import type { WorkloadState } from "@roundhouse/protocol";
 import type {
   BuildStatus,
@@ -20,6 +21,7 @@ import type {
   DomainType,
   DomainVerificationStatus,
 } from "@roundhouse/shared";
+import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
   index,
@@ -165,11 +167,19 @@ export const placements = sqliteTable(
     containerId: text("container_id"),
     state: text("state").$type<WorkloadState>().notNull().default("pending"),
     lastStatusAt: timestamp("last_status_at"),
+    /**
+     * The replica's mesh IP in its node's /24 (ADR 0005), NATed 1:1 to its
+     * bridge IP; cleared once the deployment stops being live.
+     */
+    meshIp: text("mesh_ip"),
     ...timestamps,
   },
   (t) => [
     uniqueIndex("placements_deployment_replica_uq").on(t.deploymentId, t.replica),
     index("placements_node_idx").on(t.nodeId),
+    uniqueIndex("placements_node_mesh_ip_uq")
+      .on(t.nodeId, t.meshIp)
+      .where(sql`${t.meshIp} IS NOT NULL`),
   ],
 );
 

@@ -5,7 +5,8 @@
  */
 import type { Capabilities } from "@roundhouse/protocol";
 import type { NodeStatus } from "@roundhouse/shared";
-import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { users } from "./auth";
 import { id, json, timestamp, timestamps } from "./columns";
 import { workspaces } from "./workspaces";
@@ -39,8 +40,43 @@ export const nodes = sqliteTable(
       .notNull()
       .$defaultFn(() => ({})),
     publicIp: text("public_ip"),
+    /** The node's mesh address (`wg0`, its `.1`); set when it joins the mesh. */
     wgIp: text("wg_ip"),
+    /** Current WireGuard public key, base64, from `hello.mesh`; the private key never leaves the node. */
     wgPubkey: text("wg_pubkey"),
+    /**
+     * The node's /24 in the mesh supernet (1–254, ADR 0005), unique among
+     * live nodes; `null` until it joins the mesh.
+     */
+    meshIndex: integer("mesh_index"),
+    /** The key a rotation moves to, from `mesh_key`; peers use it from then on. */
+    wgPubkeyNext: text("wg_pubkey_next"),
+    /** Epoch of {@link nodes.wgPubkey}; 0 for the key the node joined with. */
+    wgKeyEpoch: integer("wg_key_epoch").notNull().default(0),
+    /** Epoch of {@link nodes.wgPubkeyNext}. */
+    wgKeyNextEpoch: integer("wg_key_next_epoch"),
+    wgKeyRotatedAt: timestamp("wg_key_rotated_at"),
+    /** A rotation was asked for (operator or the 90-day schedule) and hasn't finished. */
+    meshRotateRequestedAt: timestamp("mesh_rotate_requested_at"),
+    /** Desired-state generation of the peers' frames carrying the new key. */
+    meshRotateGeneration: integer("mesh_rotate_generation"),
+    /** When the peers were sent the new key; activation follows within 60 s. */
+    meshRotateAnnouncedAt: timestamp("mesh_rotate_announced_at"),
+    /** Epoch the node is told to swap to (`desired_state.mesh.activate_epoch`). */
+    meshActivateEpoch: integer("mesh_activate_epoch"),
+    meshMode: text("mesh_mode").$type<"kernel" | "userspace" | "unavailable">(),
+    meshNat: text("mesh_nat").$type<"public" | "nat">(),
+    /** Where peers reach the node (`host:port`), `null` behind NAT; see `lib/mesh.ts`. */
+    meshEndpoint: text("mesh_endpoint"),
+    /** Agent config `mesh.endpoint`. */
+    meshEndpointOverride: text("mesh_endpoint_override"),
+    meshListenPort: integer("mesh_listen_port"),
+    meshDockerFirewall: text("mesh_docker_firewall").$type<"iptables" | "nftables">(),
+    meshAcceptFwmark: integer("mesh_accept_fwmark", { mode: "boolean" }),
+    /** `mesh_status.ready` as last reported; the scheduler spans environments only over ready nodes. */
+    meshReady: integer("mesh_ready", { mode: "boolean" }).notNull().default(false),
+    meshError: text("mesh_error"),
+    meshStatusAt: timestamp("mesh_status_at"),
     /** Agent's Ed25519 identity key from join, base64. */
     identityPublicKey: text("identity_public_key").notNull(),
     /**
@@ -88,8 +124,57 @@ export const nodes = sqliteTable(
     ...timestamps,
     deletedAt: timestamp("deleted_at"),
   },
-  (t) => [index("nodes_workspace_idx").on(t.workspaceId)],
+  (t) => [
+    index("nodes_workspace_idx").on(t.workspaceId),
+    uniqueIndex("nodes_mesh_index_uq")
+      .on(t.meshIndex)
+      .where(sql`${t.meshIndex} IS NOT NULL AND ${t.deletedAt} IS NULL`),
+  ],
 );
+
+/** How two meshed nodes reach each other (ADR 0005, "Pair paths"). */
+export type MeshPath = "direct" | "relayed" | "down";
+
+/** One side of a pair's tunnel as that node last reported it in `mesh_status`. */
+export interface MeshPairSide {
+  nodeId: string;
+  endpoint: string | null;
+  lastHandshakeAt: number | null;
+  rxBytes: number;
+  txBytes: number;
+  reportedAt: number;
+}
+
+/**
+ * The WireGuard preshared key of a pair of nodes, sealed under the KEK with
+ * AAD `mesh-psk:<pair_key>`. Rotated whenever either node's key rotates.
+ */
+export const meshPsks = sqliteTable("mesh_psks", {
+  /** `<lower node id>|<higher node id>`. */
+  pairKey: text("pair_key").primaryKey(),
+  pskSealed: json<unknown>("psk_sealed").notNull(),
+  ...timestamps,
+});
+
+/** The path the control plane chose for a pair, and its health. */
+export const meshPaths = sqliteTable("mesh_paths", {
+  /** `<lower node id>|<higher node id>`. */
+  pairKey: text("pair_key").primaryKey(),
+  path: text("path").$type<MeshPath>().notNull(),
+  relayNodeId: text("relay_node_id").references(() => nodes.id, { onDelete: "set null" }),
+  /** When the pair was last configured on this path; a direct path gets 120 s to handshake. */
+  configuredAt: timestamp("configured_at").notNull(),
+  lastHandshakeAt: timestamp("last_handshake_at"),
+  /** When the pair last went direct; a relayed fallback tries direct again after 30 min. */
+  lastDirectAttemptAt: timestamp("last_direct_attempt_at"),
+  /**
+   * Each side's latest report for the tunnel, by node ID. Each side's report
+   * is written with `json_set`, so the two nodes' Durable Objects never
+   * overwrite each other's.
+   */
+  sides: json<Record<string, MeshPairSide>>("sides"),
+  ...timestamps,
+});
 
 /** Single-use token that lets a new machine join a workspace. Only the hash is stored. */
 export const nodeJoinTokens = sqliteTable(
