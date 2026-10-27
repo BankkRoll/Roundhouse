@@ -92,7 +92,9 @@ describe("database service pages", () => {
       (v) => v.owner_id === DB && v.key === "POSTGRES_PASSWORD",
     )!.value;
     expect(document.body.textContent).not.toContain(secret);
-    expect(within(section).getByText(/Changing them isn't supported yet/)).toBeInTheDocument();
+    expect(
+      within(section).getByRole("button", { name: "Rotate credentials…" }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -177,6 +179,7 @@ describe("backups tab", () => {
     const table = await screen.findByRole("table", { name: "Backups" });
     await user.click(within(table).getAllByRole("button", { name: "Restore" })[0]!);
     const dialog = await screen.findByRole("dialog", { name: "Restore postgres?" });
+    await user.click(within(dialog).getByRole("radio", { name: /postgres, in place/ }));
     const confirm = within(dialog).getByRole("button", { name: "Restore in place" });
     expect(confirm).toBeDisabled();
     await user.type(within(dialog).getByLabelText(/to confirm/), "postgres");

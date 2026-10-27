@@ -3,9 +3,9 @@
  *
  * Two sources define the API's routes, and both are read from the API source:
  * - the mounted routers (`apps/api/src/routes/*.ts`), through their OpenAPI registries;
- * - `PHASE1_ROUTES` in `apps/api/src/contracts.ts`, the deploy pipeline's route
- *   definitions. They are checked directly, so the Phase 1 mocks are held to the
- *   contract before (and regardless of whether) their API handlers are mounted.
+ * - `PHASE1_ROUTES` and `CREDENTIAL_ROUTES` in `apps/api/src/contracts.ts`, route
+ *   definitions checked directly, so their mocks are held to the contract before (and
+ *   regardless of whether) their API handlers are mounted.
  *
  * Both carry each route's statuses and zod response schemas, the same schemas that
  * generate `/v1/openapi.json`. Each scenario below drives a mock handler into a success
@@ -27,7 +27,7 @@ import {
   type Role,
 } from "@roundhouse/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PHASE1_ROUTES } from "../../../api/src/contracts";
+import { CREDENTIAL_ROUTES, PHASE1_ROUTES } from "../../../api/src/contracts";
 import { RealtimeServerMessageSchema } from "../../../api/src/schemas";
 import { ACCESS_SEED } from "./access-db";
 import { requireApprovalIn } from "./changes-handlers";
@@ -122,7 +122,9 @@ async function loadApiRoutes(): Promise<ApiRoute[]> {
       config: { method, path, ...rest },
     });
   };
-  for (const route of Object.values(PHASE1_ROUTES)) add(route as unknown as RouteConfig);
+  for (const route of [...Object.values(PHASE1_ROUTES), ...Object.values(CREDENTIAL_ROUTES)]) {
+    add(route as unknown as RouteConfig);
+  }
   for (const module of modules) {
     for (const router of Object.values(module)) {
       const registry = (
@@ -3306,10 +3308,6 @@ describe("MSW mocks match the API contract", () => {
       const good = DATA_SEED.scheduledBackup;
       expect((await restore(good, { mode: "elsewhere", confirm: "x" })).status).toBe(400);
       expect((await restore(good, { ...inPlace, confirm: "web" })).status).toBe(400);
-      expect(await restore(good, { ...inPlace, mode: "new_service" })).toMatchObject({
-        status: 501,
-        body: { error: { code: "restore_mode_unsupported" } },
-      });
       expect((await restore(DATA_SEED.failedBackup, inPlace)).status).toBe(409);
       expect((await restore("bak_nope", inPlace)).status).toBe(404);
       as("member");
@@ -3336,6 +3334,341 @@ describe("MSW mocks match the API contract", () => {
       as(null);
       expect((await read()).status).toBe(401);
       expect((await restore(good, inPlace)).status).toBe(401);
+    });
+  });
+
+  it("restores into a new service: default slug, chosen slug, dumps only", async () => {
+    await fresh(async () => {
+      const restore = (backupId: string, body: Record<string, unknown>) =>
+        call("POST", `/v1/backups/${backupId}/restore`, body);
+      const copy = { mode: "new_service", confirm: DATA_SEED.databaseSlug };
+      const good = DATA_SEED.scheduledBackup;
+      expect((await restore(good, { ...copy, slug: "Not A Slug" })).status).toBe(400);
+      expect((await restore(good, { ...copy, target_environment_id: "env_nope" })).status).toBe(
+        404,
+      );
+      expect((await restore(DATA_SEED.failedBackup, copy)).status).toBe(409);
+      const backup = db.data.backups.find((row) => row.id === good)!;
+      backup.method = "snapshot";
+      expect(await restore(good, copy)).toMatchObject({
+        status: 422,
+        body: { error: { code: "restore_mode_unsupported" } },
+      });
+      backup.method = "dump";
+      as("member");
+      expect((await restore(good, copy)).status).toBe(403);
+      as("owner");
+      db.data.knobs.reauthRequired = true;
+      expect(await restore(good, copy)).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.data.knobs.reauthRequired = false;
+      const storage = db.data.storage;
+      db.data.storage = null;
+      expect((await restore(good, copy)).status).toBe(409);
+      db.data.storage = storage;
+
+      const started = await restore(good, copy);
+      expect(started).toMatchObject({
+        status: 202,
+        body: {
+          mode: "new_service",
+          status: "queued",
+          safety_backup_id: null,
+          target_environment_id: SEED.production,
+        },
+      });
+      const { id, target_service_id } = started.body as { id: string; target_service_id: string };
+      const created = db.deploy.services.find((row) => row.id === target_service_id)!;
+      expect(created).toMatchObject({
+        kind: "database",
+        slug: expect.stringMatching(/^postgres-restore-\d{8}$/),
+        database: { engine: "postgres", version: "18" },
+      });
+      expect(db.data.volumes.some((row) => row.service_id === created.id)).toBe(true);
+      const named = await restore(good, { ...copy, slug: "pg-copy" });
+      expect(named.status).toBe(202);
+      expect(
+        db.deploy.services.find(
+          (row) => row.id === (named.body as { target_service_id: string }).target_service_id,
+        )?.slug,
+      ).toBe("pg-copy");
+      expect((await call("GET", `/v1/restores/${id}`)).body).toMatchObject({ status: "running" });
+      expect((await call("GET", `/v1/restores/${id}`)).body).toMatchObject({
+        status: "succeeded",
+        target_service_id,
+      });
+      as(null);
+      expect((await restore(good, copy)).status).toBe(401);
+    });
+  });
+
+  it("volume moves: targets, typed slug, fresh session, phases to done or rolled back", async () => {
+    await fresh(async () => {
+      db.nodes.push({
+        ...makeNode({ id: "node_nbg1", name: "nbg-1", hostname: "nbg-1.example.com" }),
+        workspace_id: WORKSPACE_ID,
+      });
+      const vol = `/v1/volumes/${DATA_SEED.volume}`;
+      const targets = await call("GET", `${vol}/migration-targets`);
+      expect(targets).toMatchObject({
+        status: 200,
+        body: { source_node_id: "node_hel1", estimated_downtime_ms: expect.any(Number) },
+      });
+      expect((targets.body as { targets: unknown[] }).targets).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            node_id: "node_hel1",
+            eligible: false,
+            reason: "It already holds the volume",
+          }),
+          expect.objectContaining({ node_id: "node_fsn1", eligible: false }),
+          expect.objectContaining({ node_id: "node_nbg1", eligible: true, reason: null }),
+        ]),
+      );
+      expect((await call("GET", "/v1/volumes/vol_nope/migration-targets")).status).toBe(404);
+
+      const migrate = (body: Record<string, unknown>) => call("POST", `${vol}/migrate`, body);
+      const good = { target_node_id: "node_nbg1", confirm: DATA_SEED.databaseSlug };
+      expect((await migrate({ target_node_id: "node_nbg1" })).status).toBe(400);
+      expect((await migrate({ ...good, confirm: "web" })).status).toBe(400);
+      expect(await migrate({ ...good, target_node_id: "node_fsn1" })).toMatchObject({
+        status: 422,
+        body: { error: { code: "migration_target_ineligible" } },
+      });
+      expect((await migrate({ ...good, target_node_id: "node_nope" })).status).toBe(404);
+      expect((await call("POST", "/v1/volumes/vol_nope/migrate", good)).status).toBe(404);
+      as("viewer");
+      expect((await migrate(good)).status).toBe(403);
+      as("owner");
+      db.data.knobs.reauthRequired = true;
+      expect(await migrate(good)).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.data.knobs.reauthRequired = false;
+      const storage = db.data.storage;
+      db.data.storage = null;
+      expect((await migrate(good)).status).toBe(409);
+      db.data.storage = storage;
+
+      const started = await migrate(good);
+      expect(started).toMatchObject({
+        status: 202,
+        body: {
+          status: "queued",
+          phase: "queued",
+          source_node_id: "node_hel1",
+          target_node_id: "node_nbg1",
+        },
+      });
+      const id = (started.body as { id: string }).id;
+      const volume = `/v1/services/${DATA_SEED.database}/volume?environment_id=${SEED.production}`;
+      expect((await call("GET", volume)).body).toMatchObject({ status: "migrating" });
+      expect((await migrate(good)).status).toBe(409);
+      const read = async () => (await call("GET", `/v1/volume-migrations/${id}`)).body;
+      for (const phase of ["preparing_target", "stopping", "copying_out", "copying_in"]) {
+        expect(await read()).toMatchObject({ status: "running", phase });
+      }
+      expect(await read()).toMatchObject({ phase: "starting", backup_id: expect.any(String) });
+      expect(await read()).toMatchObject({
+        status: "succeeded",
+        phase: "done",
+        cleanup_after: expect.any(Number),
+      });
+      expect((await call("GET", volume)).body).toMatchObject({
+        status: "ready",
+        node_id: "node_nbg1",
+        node_name: "nbg-1",
+      });
+
+      db.data.knobs.failMigrations = true;
+      const back = await migrate({ ...good, target_node_id: "node_hel1" });
+      expect(back.status).toBe(202);
+      const backId = (back.body as { id: string }).id;
+      const readBack = async () => (await call("GET", `/v1/volume-migrations/${backId}`)).body;
+      for (const phase of ["preparing_target", "stopping", "copying_out", "rolling_back"]) {
+        expect(await readBack()).toMatchObject({ phase });
+      }
+      expect(await readBack()).toMatchObject({ status: "failed", error: expect.any(String) });
+      expect((await call("GET", volume)).body).toMatchObject({
+        status: "ready",
+        node_id: "node_nbg1",
+      });
+      expect((await call("GET", `${vol}/migrations`)).body).toMatchObject({
+        migrations: [
+          { id: backId, status: "failed" },
+          { id, status: "succeeded" },
+        ],
+      });
+      expect((await call("GET", "/v1/volumes/vol_nope/migrations")).status).toBe(404);
+      expect((await call("GET", "/v1/volume-migrations/mig_nope")).status).toBe(404);
+      as(null);
+      expect((await call("GET", `${vol}/migration-targets`)).status).toBe(401);
+      expect((await call("GET", `${vol}/migrations`)).status).toBe(401);
+      expect((await call("GET", `/v1/volume-migrations/${id}`)).status).toBe(401);
+      expect((await migrate(good)).status).toBe(401);
+    });
+  });
+
+  it("TCP proxies: allowlist checks, acknowledgement, status, fresh session, removal", async () => {
+    await fresh(async () => {
+      const path = `/v1/services/${DATA_SEED.database}/tcp-proxies`;
+      const env = `environment_id=${SEED.production}`;
+      const put = (body: Record<string, unknown>, service = path) =>
+        call("PUT", service, { environment_id: SEED.production, ...body });
+      expect((await call("GET", `${path}?${env}`)).status).toBe(404);
+      expect((await call("GET", `${path}?environment_id=env_nope`)).status).toBe(404);
+      expect((await put({ allowed_cidrs: [] })).status).toBe(400);
+      expect(await put({ allowed_cidrs: ["not-an-address", "10.0.0.1"] })).toMatchObject({
+        status: 422,
+        body: {
+          error: {
+            code: "invalid_request",
+            details: [{ field: "allowed_cidrs", message: "not-an-address" }],
+          },
+        },
+      });
+      expect(await put({ allowed_cidrs: ["0.0.0.0/0"] })).toMatchObject({
+        status: 422,
+        body: { error: { code: "confirmation_required" } },
+      });
+      expect(
+        (await put({ allowed_cidrs: ["10.0.0.1"] }, `/v1/services/${SEED.api}/tcp-proxies`)).status,
+      ).toBe(422);
+      as("viewer");
+      expect((await put({ allowed_cidrs: ["10.0.0.1"] })).status).toBe(403);
+      as("owner");
+      db.data.knobs.reauthRequired = true;
+      expect(await put({ allowed_cidrs: ["10.0.0.1"] })).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.data.knobs.reauthRequired = false;
+
+      const enabled = await put({ allowed_cidrs: ["203.0.113.7", "10.1.2.3/8", "2001:DB8::/48"] });
+      expect(enabled).toMatchObject({
+        status: 200,
+        body: {
+          status: "active",
+          host: "hel-1.example.com",
+          allowed_cidrs: ["203.0.113.7/32", "10.0.0.0/8", "2001:db8::/48"],
+          open_to_all: false,
+          container_port: 5432,
+        },
+      });
+      const port = (enabled.body as { public_port: number }).public_port;
+      expect(await put({ allowed_cidrs: ["::/0"], acknowledge_open: true })).toMatchObject({
+        status: 200,
+        body: { allowed_cidrs: ["::/0"], open_to_all: true, public_port: port },
+      });
+      db.data.knobs.tcpProxyUnsupported = true;
+      expect((await call("GET", `${path}?${env}`)).body).toMatchObject({ status: "unsupported" });
+      expect(await put({ allowed_cidrs: ["10.0.0.1"] })).toMatchObject({
+        status: 409,
+        body: { error: { code: "tcp_proxy_unsupported" } },
+      });
+      db.data.knobs.tcpProxyUnsupported = false;
+      for (const row of db.deploy.deployments) {
+        if (row.service_id === DATA_SEED.database) row.status = "removed";
+      }
+      expect((await call("GET", `${path}?${env}`)).body).toMatchObject({
+        status: "pending",
+        host: null,
+        node_id: null,
+      });
+
+      as("viewer");
+      expect((await call("GET", `${path}?${env}`)).status).toBe(200);
+      expect((await call("DELETE", `${path}?${env}`)).status).toBe(403);
+      as("owner");
+      expect((await call("DELETE", `${path}?environment_id=env_nope`)).status).toBe(404);
+      expect((await call("DELETE", `${path}?${env}`)).status).toBe(204);
+      expect((await call("DELETE", `${path}?${env}`)).status).toBe(404);
+      as(null);
+      expect((await call("GET", `${path}?${env}`)).status).toBe(401);
+      expect((await put({ allowed_cidrs: ["10.0.0.1"] })).status).toBe(401);
+      expect((await call("DELETE", `${path}?${env}`)).status).toBe(401);
+    });
+  });
+
+  it("credential rotations: principals per engine, interrupted then finished", async () => {
+    await fresh(async () => {
+      const svc = `/v1/services/${DATA_SEED.database}/database`;
+      const list = `${svc}/credential-rotations?environment_id=${SEED.production}`;
+      const rotate = (body: Record<string, unknown> = {}, path = `${svc}/rotate-credentials`) =>
+        call("POST", path, {
+          environment_id: SEED.production,
+          confirm: DATA_SEED.databaseSlug,
+          ...body,
+        });
+      expect(await call("GET", list)).toMatchObject({ status: 200, body: { rotations: [] } });
+      expect(
+        (await call("GET", `${svc}/credential-rotations?environment_id=env_nope`)).status,
+      ).toBe(404);
+      expect((await rotate({ confirm: "web" })).status).toBe(400);
+      expect((await rotate({ principals: ["root"] })).status).toBe(400);
+      expect((await rotate({ principals: ["app"] })).status).toBe(422);
+      expect((await rotate({ environment_id: "env_nope" })).status).toBe(404);
+      expect((await rotate({}, "/v1/services/svc_nope/database/rotate-credentials")).status).toBe(
+        404,
+      );
+      expect(
+        (await rotate({ confirm: "web" }, `/v1/services/${SEED.web}/database/rotate-credentials`))
+          .status,
+      ).toBe(409);
+      as("member");
+      expect((await rotate()).status).toBe(403);
+      as("owner");
+      db.data.knobs.reauthRequired = true;
+      expect(await rotate()).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.data.knobs.reauthRequired = false;
+      db.data.knobs.offline.add(DATA_SEED.database);
+      expect((await rotate()).status).toBe(503);
+      db.data.knobs.offline.clear();
+
+      db.data.knobs.interruptRotation = true;
+      expect(await rotate()).toMatchObject({
+        status: 504,
+        body: { error: { code: "query_timeout" } },
+      });
+      expect((await call("GET", list)).body).toMatchObject({
+        rotations: [
+          { status: "running", principals: ["readonly", "admin"], applied: ["readonly"] },
+        ],
+      });
+      const finished = await rotate({ principals: ["admin"] });
+      expect(finished).toMatchObject({
+        status: 200,
+        body: {
+          status: "succeeded",
+          principals: ["readonly", "admin"],
+          applied: ["readonly", "admin"],
+          change_set_id: expect.any(String),
+          error: null,
+        },
+      });
+      expect((finished.body as { deployment_ids: string[] }).deployment_ids.length).toBeGreaterThan(
+        0,
+      );
+      expect((await rotate({ principals: ["admin"] })).body).toMatchObject({
+        status: "succeeded",
+        principals: ["admin"],
+      });
+      expect((await call("GET", list)).body).toMatchObject({
+        rotations: [{ principals: ["admin"] }, { id: (finished.body as { id: string }).id }],
+      });
+      for (const row of db.deploy.deployments) {
+        if (row.service_id === DATA_SEED.database) row.status = "removed";
+      }
+      expect((await rotate()).status).toBe(409);
+      as(null);
+      expect((await rotate()).status).toBe(401);
+      expect((await call("GET", list)).status).toBe(401);
     });
   });
 

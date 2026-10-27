@@ -8,14 +8,17 @@
  *
  * @module
  */
-import type { VolumeQuotaMode } from "@roundhouse/protocol";
+import type { VolumeQuotaMode, VolumeState } from "@roundhouse/protocol";
 import type {
   BackupMethodName,
   BackupStatusName,
   BackupTrigger,
+  CredentialRotationStatus,
+  DatabasePrincipal,
   RestoreMode,
   RestoreStatusName,
   ServiceDatabaseEngine,
+  VolumeMigrationPhase,
   VolumeStatusName,
 } from "@roundhouse/shared";
 import { sql } from "drizzle-orm";
@@ -29,9 +32,11 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 import { users } from "./auth";
+import { changeSets } from "./changes";
 import { id, json, timestamp, timestamps } from "./columns";
+import { deployments } from "./deployments";
 import { nodes } from "./nodes";
-import { environments, projects, services } from "./projects";
+import { environments, projects, type SealedValue, services } from "./projects";
 
 /** A service's persistent storage in one environment, held by one node. */
 export const volumes = sqliteTable(
@@ -214,7 +219,11 @@ export const restores = sqliteTable(
   ],
 );
 
-/** One move of a volume to another node through object storage. */
+/**
+ * One move of a volume to another node through object storage. The volume
+ * keeps its ID on both nodes: the target holds it from the start of the
+ * copy, the source until its copy is deleted after the grace period.
+ */
 export const volumeMigrations = sqliteTable(
   "volume_migrations",
   {
@@ -226,15 +235,122 @@ export const volumeMigrations = sqliteTable(
     targetNodeId: text("target_node_id").references(() => nodes.id, { onDelete: "set null" }),
     /** The quiesced snapshot that carries the data. */
     backupId: text("backup_id").references(() => backups.id, { onDelete: "set null" }),
-    /** The volume created on the target node. */
+    /** Unused: the volume keeps its ID on the target node. */
     targetVolumeId: text("target_volume_id").references((): AnySQLiteColumn => volumes.id, {
       onDelete: "set null",
     }),
     status: text("status").$type<RestoreStatusName>().notNull().default("queued"),
+    /** Where a running migration is; see `VOLUME_MIGRATION_PHASES`. */
+    phase: text("phase").$type<VolumeMigrationPhase>().notNull().default("queued"),
+    /** The volume's status before the move, restored on rollback. */
+    priorStatus: text("prior_status").$type<VolumeStatusName>(),
+    /** The target node's last report of the volume while the copy runs. */
+    targetState: text("target_state").$type<VolumeState>(),
+    copiedBytes: integer("copied_bytes"),
+    /** When the target answered `volume_copy_in`; with `copy_error` on failure. */
+    copyFinishedAt: timestamp("copy_finished_at"),
+    copyError: text("copy_error"),
+    /** The redeploy on the target node. */
+    deploymentId: text("deployment_id").references(() => deployments.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * The node left holding a copy nobody uses: the source after a move, the
+     * target after a rollback. `volume_delete` goes to it after `cleanup_after`.
+     */
+    cleanupNodeId: text("cleanup_node_id").references(() => nodes.id, { onDelete: "set null" }),
+    cleanupAfter: timestamp("cleanup_after"),
+    cleanupSentAt: timestamp("cleanup_sent_at"),
+    /** When that node reported the copy deleted. */
+    cleanedAt: timestamp("cleaned_at"),
+    error: text("error"),
+    requestedBy: text("requested_by").references(() => users.id, { onDelete: "set null" }),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    ...timestamps,
+  },
+  (t) => [
+    index("volume_migrations_volume_idx").on(t.volumeId),
+    uniqueIndex("volume_migrations_active_uq")
+      .on(t.volumeId)
+      .where(sql`status IN ('queued', 'running')`),
+    index("volume_migrations_target_idx").on(t.targetNodeId, t.status),
+    index("volume_migrations_cleanup_idx").on(t.cleanedAt, t.cleanupAfter),
+  ],
+);
+
+/**
+ * A published TCP port of a single-replica service in one environment (ADR
+ * 0004, "TCP proxy"). Public ports are unique across the instance, so a
+ * service keeps its port wherever it is placed.
+ */
+export const tcpProxies = sqliteTable(
+  "tcp_proxies",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    serviceId: text("service_id")
+      .notNull()
+      .references(() => services.id, { onDelete: "cascade" }),
+    environmentId: text("environment_id")
+      .notNull()
+      .references(() => environments.id, { onDelete: "cascade" }),
+    containerPort: integer("container_port").notNull(),
+    publicPort: integer("public_port").notNull(),
+    /** Sources the node admits; never empty. */
+    allowedCidrs: json<string[]>("allowed_cidrs").notNull(),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("tcp_proxies_svc_env_uq").on(t.serviceId, t.environmentId),
+    uniqueIndex("tcp_proxies_public_port_uq").on(t.publicPort),
+  ],
+);
+
+/**
+ * One rotation of a database's credentials. While it runs, the new
+ * passwords are kept sealed under the project DEK (AAD
+ * `credential-rotation:<id>`), so a rotation interrupted after the engine
+ * accepted them can still be finished; they are cleared when it ends.
+ */
+export const credentialRotations = sqliteTable(
+  "credential_rotations",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    serviceId: text("service_id")
+      .notNull()
+      .references(() => services.id, { onDelete: "cascade" }),
+    environmentId: text("environment_id")
+      .notNull()
+      .references(() => environments.id, { onDelete: "cascade" }),
+    status: text("status").$type<CredentialRotationStatus>().notNull().default("running"),
+    /** Principals asked for, in the order they are changed. */
+    principals: json<DatabasePrincipal[]>("principals").notNull(),
+    /** Principals whose password the engine has accepted. */
+    applied: json<DatabasePrincipal[]>("applied")
+      .notNull()
+      .$defaultFn(() => []),
+    /** Sealed JSON `{principal: password}`; `NULL` once the rotation ends. */
+    secretsSealed: json<SealedValue>("secrets_sealed"),
+    /** `affected` redeploys every service using the credentials; `none` leaves them. */
+    deploy: text("deploy").$type<"affected" | "none">().notNull(),
+    changeSetId: text("change_set_id").references(() => changeSets.id, { onDelete: "set null" }),
+    deploymentIds: json<string[]>("deployment_ids"),
     error: text("error"),
     requestedBy: text("requested_by").references(() => users.id, { onDelete: "set null" }),
     finishedAt: timestamp("finished_at"),
     ...timestamps,
   },
-  (t) => [index("volume_migrations_volume_idx").on(t.volumeId)],
+  (t) => [
+    uniqueIndex("credential_rotations_running_uq")
+      .on(t.serviceId, t.environmentId)
+      .where(sql`status = 'running'`),
+    index("credential_rotations_svc_env_idx").on(t.serviceId, t.environmentId, t.id),
+  ],
 );

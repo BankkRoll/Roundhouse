@@ -102,8 +102,9 @@ type VolumesConfig struct {
 	// Root is the volumes root; empty means /var/lib/roundhouse/volumes on
 	// Linux and a "volumes" directory in the data directory elsewhere.
 	Root string `yaml:"root,omitempty"`
-	// Quota is how volume sizes are enforced: auto, xfs, ext4, loop or none;
-	// empty means auto.
+	// Quota is how volume sizes are enforced: auto, loop or none; empty
+	// means auto. xfs and ext4 are refused (ADR 0004, "Why not project
+	// quotas").
 	Quota string `yaml:"quota,omitempty"`
 }
 

@@ -62,7 +62,13 @@ import { ApiError, type ErrorCode, notFound } from "../errors";
 import { mergeConfig, slugFor, specOf } from "../projects";
 import type { Caller } from "../scope";
 import { assertValidReferences, openVariable, projectKey, type VariableTarget } from "../variables";
-import { assertSingleReplica, singleReplicaError, type VolumeRow, volumeOf } from "../volumes";
+import {
+  assertNotMoving,
+  assertSingleReplica,
+  singleReplicaError,
+  type VolumeRow,
+  volumeOf,
+} from "../volumes";
 import { fingerprintOf, sealStagedValue } from "./secrets";
 import {
   bumpRevision,
@@ -507,6 +513,7 @@ async function prepare(
       const svc = await liveService(db, project.id, input.service);
       const current = await currentVolume(db, svc.id, environment.id);
       if (current?.status === "pending_deletion") throw volumeScheduledForDeletion();
+      if (current) await assertNotMoving(db, current);
       if (current) {
         if (input.mount_path !== undefined && input.mount_path !== current.mountPath) {
           throw new ApiError(
@@ -556,6 +563,7 @@ async function prepare(
         if (current) throw volumeScheduledForDeletion();
         throw notFound("Volume");
       }
+      await assertNotMoving(db, current);
       return { op, base: { volume: volumeBase(current) }, diff: volumeDiff(current, null) };
     }
 

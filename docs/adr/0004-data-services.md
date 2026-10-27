@@ -113,12 +113,8 @@ Notes:
   The password is then visible to processes inside the container only.
 - **The images apply credential variables only on first initialisation.**
   The dashboard locks them, and changing them goes through
-  `POST /v1/services/{id}/database/rotate-credentials`. That route runs
-  `ALTER ROLE` / `ALTER USER` / `db.changeUserPassword` / `ACL SETUSER`
-  through the query channel with the current admin credential. It then
-  writes the new values as variables in a change set, and applies it with
-  `deploy: "affected"`, which redeploys every service that references
-  them.
+  `POST /v1/services/{id}/database/rotate-credentials` (see
+  "Credential rotation" below).
 - **Read-only principal** (`roundhouse_ro`). It is created the first time
   the service is healthy, through the query channel
   (`op: provision_readonly`, below), and is idempotent:
@@ -217,19 +213,43 @@ restore and migration output. It is stored in R2 and indexed in
   else to the image's numeric `User` if it has one, else left as root. The
   official database images start as root and chown it themselves.
 
-**Quota enforcement** (agent config `volumes.quota: auto | xfs | ext4 | loop | none`):
+**Quota enforcement** (agent config `volumes.quota: auto | loop | none`;
+`xfs` and `ext4` are reserved and refused at start, see below):
 
-| Mode           | When `auto` picks it                                          | Mechanism                                                                                                                                                             |
-| -------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `xfs_project`  | the volumes root is on XFS mounted with `prjquota`            | `quotactl(Q_XSETQLIM)` with project ID = a per-volume counter persisted in `<data-dir>/volumes.json`; resize is a new limit                                           |
-| `ext4_project` | the root is on ext4 with the `project` feature and `prjquota` | `FS_IOC_FSSETXATTR` (`chattr -p ID +P`) and `quotactl(Q_SETQUOTA, PRJQUOTA)`                                                                                          |
-| `loop`         | otherwise, when `/dev/loop-control` exists                    | sparse image `<root>/images/<volume_id>.img`, `mkfs.ext4 -m 0`, mounted `loop,noatime,nodev,nosuid`; grow online with `truncate`, `LOOP_SET_CAPACITY` and `resize2fs` |
-| `none`         | none of the above (e.g. Docker Desktop)                       | no enforcement; usage is still reported, and the dashboard shows "quota not enforced"                                                                                 |
+| Mode           | When `auto` picks it            | Mechanism                                                                                                                                                             |
+| -------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `loop`         | when `/dev/loop-control` exists | sparse image `<root>/images/<volume_id>.img`, `mkfs.ext4 -m 0`, mounted `loop,noatime,nodev,nosuid`; grow online with `truncate`, `LOOP_SET_CAPACITY` and `resize2fs` |
+| `none`         | otherwise (e.g. Docker Desktop) | no enforcement; usage is still reported, and the dashboard shows "quota not enforced"                                                                                 |
+| `xfs_project`  | never (not implemented)         | would be `quotactl(Q_XSETQLIM)` on a project ID per volume                                                                                                            |
+| `ext4_project` | never (not implemented)         | would be `FS_IOC_FSSETXATTR` (`chattr -p ID +P`) and `quotactl(Q_SETQUOTA, PRJQUOTA)`                                                                                 |
 
-**Choice.** `loop` is the effective default on common cloud images: ext4
-root, no project feature. It is the only mode that enforces a hard limit
-on any host filesystem without remounting `/`. The project-quota modes
-are preferred when present, because they have no loop or fsck overhead.
+**Choice.** `loop` is the default wherever loop devices exist, whatever
+the host filesystem. It is the only mode whose limit holds against the
+workload itself: the volume is its own filesystem, so nothing inside the
+container can write past its end.
+
+**Why not project quotas** (amendment, 2026-10-27). The first draft
+preferred XFS and ext4 project quotas when present, for their lower
+overhead. They are not a hard limit against the container:
+- A file's project ID is an inode attribute that its owner may change
+  with `FS_IOC_FSSETXATTR` (`chattr -p`). The kernel refuses that only
+  to a caller outside the initial user namespace, and Docker runs
+  containers in the initial user namespace unless `userns-remap` is on.
+- The database images run as root, or as the user that owns every file
+  in the data directory. Either can move its files to project 0, which
+  has no limit, and then fill the host filesystem, the one that also
+  holds Docker, the agent's state and every other volume.
+- Docker's default seccomp profile allows `ioctl` with any request.
+
+Enforcing project quotas safely would need every volume workload to run
+with a seccomp profile that refuses `ioctl(FS_IOC_FSSETXATTR)` (and its
+`FS_IOC_SETFLAGS` sibling that clears `+P` inheritance), or under user
+namespace remapping, plus a CI host with an XFS `prjquota` or ext4
+`project,quota` filesystem to prove the escape is closed. Neither exists
+yet, so the agent refuses `volumes.quota: xfs` and `ext4` with that
+explanation, and `auto` never picks them. Revisit when both do.
+
+**Resizing.**
 - Shrinking is refused (`422 volume_shrink_unsupported`).
 - Growing applies online in every mode.
 - The agent mounts every `loop` volume at start, before reconciling any
@@ -454,6 +474,31 @@ uploads after 1 day.
   named `<slug>-restore-<yyyymmdd>` in the target environment, applies
   it, waits until healthy, then restores into it. The original is not
   touched. This is the default in the dashboard.
+  Amended 2026-10-27:
+  - It also needs `variables:manage` and `deployments:create` in the
+    target environment (the change set writes credentials and deploys),
+    and a fresh session like every restore.
+  - Only a `dump` qualifies (422 `restore_mode_unsupported` otherwise).
+    A snapshot is the source's data directory, passwords included, which
+    the new service's fresh credentials would not match.
+  - The workflow polls until the new service's latest deployment is
+    `active` and its volume `ready` (at most 15 minutes; a failed
+    deployment fails the restore), then sends the `restore_job`.
+  - A dump of a whole Postgres instance (the globals entry) or MongoDB
+    deployment (`admin.system.users`) carries its principals'
+    passwords. The agent restores them and then puts the target's own
+    back from its container's environment: Postgres runs `ALTER ROLE`
+    for the superuser and `roundhouse_ro` with statement and duration
+    logging off for that session; MongoDB restores the dump's users and
+    roles into side collections and merges them with
+    `_mergeAuthzCollections`, keeping the target's `root` and
+    `roundhouse_ro`. MySQL dumps never carry the `mysql` schema, and a
+    Redis RDB holds no ACL users. So a new service keeps the credentials
+    it was created with, and an in-place restore keeps the current ones.
+  - An in-place `snapshot` restore of a database is refused (409) when its
+    credentials were rotated after the snapshot: the data directory would
+    bring back passwords no variable holds, and nothing could sign in to
+    change them.
 - **`target_node_id`**: used with `in_place` to recover a service whose
   node is gone (0005, offline handling). It creates a new volume on the
   target node, marks the old one `abandoned`, repoints the service,
@@ -504,6 +549,36 @@ and leaves a backup behind:
 Downtime equals copy-out plus copy-in time. The dashboard estimates it
 from `used_bytes` and the last backup's throughput before the operator
 confirms. Any failure before step 5 restarts the service on the source.
+
+**As built** (amendment, 2026-10-27):
+- The route also needs `deployments:create` (the move redeploys), a fresh
+  session, and `confirm` equal to the service slug. `GET
+  /v1/volumes/{id}/migration-targets` lists every node of the workspace
+  with why it can't take the volume (offline, too old, no encryption key,
+  no Docker, missing selector label, no quota report, `none` quota for an
+  enforced volume, no `tcp_proxy` capability while the service publishes
+  a port, still deleting an earlier copy, not enough unallocated disk)
+  and the downtime estimate.
+- The volume keeps its ID on both nodes. Step 4's volume is created on the
+  target first, while the service still runs on the source
+  (`volume_migrations.phase`: `preparing_target` → `stopping` →
+  `copying_out` → `copying_in` → `starting` → `done`), so the
+  downtime is only the copy.
+- The copy-out's part URLs are sealed to the source and the copy-in's
+  download URL and age identity to the target (`restore` box, AAD bound
+  to the node and the migration ID). The target checks the object's
+  SHA-256 and size before it decrypts or writes anything.
+- While a volume moves, resize and delete are refused (409), and a deploy
+  fails while it is `migrating`.
+- A failure before the repin rolls back: the volume returns to its prior
+  status on the source, the service starts there again, and the target's
+  partial copy is scheduled for deletion. A failure after it leaves the
+  service on the target, where the data is, and reports why.
+- The node left with an unused copy (the source after a move, the target
+  after a rollback) gets `volume_delete` from the minute tick 72 hours
+  later, never while the volume lives there or is moving there again. The
+  migration's snapshot backup is deleted at the same time, not after 7
+  days.
 
 ### Data browser and query runner
 
@@ -573,10 +648,17 @@ available as a staged op.
   sets `ports[].publish`. That changes the spec hash, so the container is
   recreated: a database restarts once.
 - Docker publishes the port (kernel DNAT), so connections survive agent
-  restarts. The agent's `inet roundhouse` table (0005) holds a forward
-  rule at priority `filter - 1` that drops any source outside
-  `allowed_cidrs`. That drop is final, so the allowlist holds whatever
-  Docker accepts.
+  restarts. The agent keeps a `ROUNDHOUSE-PUBLISH` chain in the filter
+  table of iptables (and ip6tables for ports on `::`), jumped to first
+  from `DOCKER-USER` for DNATed connections and from `INPUT` (`! -i lo`)
+  for docker-proxy. Per port, it `RETURN`s each allowed CIDR, then `DROP`s
+  every other packet whose conntrack original destination port is the
+  host port, in the original direction only. The chain is replaced
+  atomically with `iptables-restore --noflush`. A port's rules are in
+  place before its container is created or started, and stay (drop only)
+  while any container still publishes it. A node that cannot install them
+  does not advertise `capabilities.tcp_proxy` and refuses published
+  ports.
 - `allowed_cidrs` must be non-empty. `0.0.0.0/0` is accepted, but only
   explicitly, and the dashboard then warns that the connection is not
   encrypted end to end unless the client and engine negotiate TLS.
@@ -597,17 +679,102 @@ CREATE UNIQUE INDEX tcp_proxies_node_port_uq ON tcp_proxies(node_id, public_port
 ALTER TABLE nodes ADD COLUMN public_hostname TEXT;
 ```
 
+**As built** (amendment, 2026-10-27):
+- The table has `project_id` and `created_by` and no `node_id`: public
+  ports are unique across the instance (`tcp_proxies_public_port_uq`), so
+  a service keeps its port wherever it is placed, and the host is read
+  from the node running the replica (or holding the volume).
+- `PUT` needs a fresh session (`DELETE` does not); for a database it also
+  needs `variables:manage`. `GET` returns the proxy with its `host` and
+  `status`: `active`, `pending` (not running yet) or `unsupported` (the
+  agent does not advertise `capabilities.tcp_proxy`; `PUT` answers 409
+  `tcp_proxy_unsupported` then).
+- The control plane puts `ports[].publish` and `publish_allowed_cidrs`
+  only in the desired state of a node that advertises
+  `capabilities.tcp_proxy`; any other node gets the workload without
+  them.
+- Sources may be IPv4 or IPv6 (a bare address is a /32 or /128; host
+  bits are cleared; an IPv4-mapped block is refused because it would
+  admit nobody). `host_ip` is `"0.0.0.0"` (IPv4 only) unless the
+  allowlist has an IPv6 source; then it is `"::"`, dual stack: the agent
+  binds the port on both `0.0.0.0` and `::` and enforces the allowlist
+  in both iptables and ip6tables, refusing to publish when the IPv6
+  rules cannot be installed. IPv4 blocks admit only IPv4 sources and
+  IPv6 blocks only IPv6 sources; a family with no admitted block drops
+  every source of that family. Docker's own ip6tables support is
+  optional: without it, docker-proxy serves IPv6 and the `INPUT` jump
+  covers it.
+- `ROUNDHOUSE_TCP_PROXY_DOMAIN` and `ROUNDHOUSE_TCP_PROXY_PORT` exist
+  only for a service that publishes a port; the domain is empty until it
+  is placed. `DATABASE_PUBLIC_URL` is not part of the template, since
+  without a proxy its references would not resolve and every deploy
+  would fail. Publishing a database writes it as a `secret`,
+  reference-valued variable (its admin URL, MySQL's application user, at
+  the proxy's host and port); unpublishing deletes it unless it was
+  edited. Other services pick it up when they next deploy.
+- Publishing limits the service to one replica, and the replica rule
+  answers 422 `volume_requires_single_replica` for it too.
+
+### Credential rotation
+
+Added 2026-10-27. `POST /v1/services/{id}/database/rotate-credentials`
+takes `{ environment_id, principals?, confirm }`, `confirm` equal to the
+service slug. Principals are the template's: `readonly` (`roundhouse_ro`),
+`app` (MySQL's `MYSQL_USER` only) and `admin`; all of them by default.
+It needs `data:write`, `variables:manage` and `deployments:create` in the
+environment (the original table named `variables:reveal`, which ADR 0014
+removed), and a fresh session.
+
+One call runs the rotation:
+1. **Claim or start.** The service's `running` row in
+   `credential_rotations` is resumed when its lease (`updated_at`, two
+   minutes) has expired, and a second call within it gets 409. Otherwise
+   a row is inserted (a partial unique index allows one running rotation
+   per service and environment) with a fresh 43-character password per
+   principal, sealed under the project DEK with AAD
+   `credential-rotation:<id>`.
+2. **Set.** For each principal not yet `applied`, in template order
+   (read-only, application user, admin last, because every change
+   connects as the admin): a `set_password` op (0015) through the query
+   channel, in `write` mode, as the current admin. The new password
+   travels only in the `db-credential` box. The agent uses a SCRAM
+   verifier on Postgres, `ALTER USER` on MySQL, `updateUser` on MongoDB,
+   and `CONFIG SET requirepass` (admin) or `ACL SETUSER … resetpass` on
+   Redis, and refuses any user but the admin, `roundhouse_ro` and the
+   container's `MYSQL_USER`. A refused admin change is retried connecting
+   with the new password, in case an earlier call's change landed
+   unanswered. A read-only user not provisioned yet only gets its
+   variable changed.
+3. **Store.** The applied passwords become `secret` variables through a
+   change set applied with `deploy: "affected"`. That always redeploys the
+   database itself: a restore and a Redis restart take the passwords from
+   its container's environment, so it must match the engine.
+4. **Finish.** The sealed passwords are cleared. The row ends `succeeded`,
+   or `failed` when the engine refused a change, after storing whatever it
+   did accept. An unanswered query (timeout, node offline) or a failed
+   store leaves it `running` with the lease released, so the next call
+   finishes it with the same passwords.
+
+Audit `database.credentials_rotated` or
+`database.credentials_rotation_failed` with the rotation, the principals
+and the change set, never a value. `GET
+/v1/services/{id}/database/credential-rotations?environment_id=` lists
+recent rotations (`services:read`).
+
 ### Routes, RBAC, audit
 
 | Method and path                                                     | RBAC action                                                 | Audit                                      |
 | ------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------ |
 | `POST /v1/projects/{projectId}/databases`                           | `services:manage`, `variables:manage`, `deployments:create` | via 0006 apply                             |
-| `POST /v1/services/{serviceId}/database/rotate-credentials`         | `variables:reveal`, `deployments:create`                    | `database.credentials_rotated`             |
+| `POST /v1/services/{serviceId}/database/rotate-credentials`         | `data:write`, `variables:manage`, `deployments:create`      | `database.credentials_rotated`             |
+| `GET /v1/services/{serviceId}/database/credential-rotations`        | `services:read`                                             | none                                       |
 | `GET /v1/services/{serviceId}/volume?environment_id=`               | `services:read`                                             | none                                       |
 | `PATCH /v1/volumes/{volumeId}` `{size_mb}`                          | `services:manage`                                           | `volume.resized`                           |
 | `DELETE /v1/volumes/{volumeId}`                                     | `services:manage`                                           | `volume.deleted`                           |
 | `POST /v1/volumes/{volumeId}/undelete`                              | `services:manage`                                           | `volume.undeleted`                         |
-| `POST /v1/volumes/{volumeId}/migrate`                               | `services:manage`                                           | `volume.migration_started`                 |
+| `GET /v1/volumes/{volumeId}/migration-targets`                      | `services:read`                                             | none                                       |
+| `POST /v1/volumes/{volumeId}/migrate`                               | `services:manage`, `deployments:create`                     | `volume.migration_started`                 |
+| `GET /v1/volumes/{volumeId}/migrations`                             | `services:read`                                             | none                                       |
 | `GET /v1/volume-migrations/{migrationId}`                           | `services:read`                                             | none                                       |
 | `GET`, `PUT /v1/services/{serviceId}/backup-policy?environment_id=` | `services:read` / `backups:manage`                          | `backup.policy_updated`                    |
 | `GET /v1/services/{serviceId}/backups?environment_id=`              | `services:read`                                             | none                                       |
@@ -620,6 +787,7 @@ ALTER TABLE nodes ADD COLUMN public_hostname TEXT;
 | `GET /v1/restores/{restoreId}`                                      | `services:read`                                             | none                                       |
 | `GET /v1/services/{serviceId}/database/schema?environment_id=`      | `data:read`                                                 | `database.browser_opened`                  |
 | `POST /v1/services/{serviceId}/database/query`                      | `data:read` (`data:write` for `mode: write`)                | `database.query_executed` (raw)            |
+| `GET /v1/services/{serviceId}/tcp-proxies`                          | `services:read`                                             | none                                       |
 | `PUT`, `DELETE /v1/services/{serviceId}/tcp-proxies`                | `services:manage`                                           | `tcp_proxy.enabled` / `tcp_proxy.disabled` |
 
 New RBAC actions:
@@ -674,7 +842,11 @@ New ID prefixes: `vol`, `bak`, `bpl`, `rst`, `mig`, `tcp`.
   never auto-deleted, never mounted twice, and never deleted without a
   signed `volume_delete` issued 72 h after a soft delete.
 - The TCP proxy requires an explicit allowlist, which the agent enforces
-  with a final nftables drop.
+  with a final iptables and ip6tables drop installed before the port is
+  published; a node that can't never gets a published port.
+- Moving a volume, publishing a port, rotating credentials and every
+  restore need a fresh session (0014), and the first three a typed slug
+  or an explicit allowlist.
 
 ## Testing strategy
 

@@ -5,7 +5,8 @@
 //
 // Responsibilities:
 //   - list namespaces, list tables, describe, page rows, run raw statements,
-//     and provision the read-only principal (roundhouse_ro);
+//     provision the read-only principal (roundhouse_ro), and set a
+//     template principal's password (credential rotation);
 //   - enforce read-only mode beyond the principal: read-only transactions
 //     with server-side timeouts on SQL, a command and stage allowlist on
 //     MongoDB, a command allowlist with capped counts on Redis, and a single
@@ -34,6 +35,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -75,6 +77,9 @@ type Target struct {
 	// default MySQL schema, the default MongoDB database, or a Redis DB
 	// index. Empty picks the engine's default.
 	Database string
+	// AppUser is the application principal from the container's
+	// environment (MYSQL_USER), which set_password may also change.
+	AppUser string
 }
 
 // Credential is the principal a query connects as.
@@ -83,6 +88,9 @@ type Credential struct {
 	// ReadonlyPassword is the password provision_readonly sets for
 	// roundhouse_ro. Only that op reads it.
 	ReadonlyPassword string
+	// NewPassword is the password set_password sets. Only that op reads
+	// it.
+	NewPassword string
 }
 
 // Options tunes a [Runner]. The zero value is usable.
@@ -193,6 +201,11 @@ func (r *Runner) run(ctx context.Context, t Target, cred Credential, q *protocol
 	if req.op.Type == protocol.DBOpProvisionReadonly && !req.write {
 		return nil, usageError("provision_readonly runs as the admin")
 	}
+	if req.op.Type == protocol.DBOpSetPassword {
+		if err := checkSetPassword(req); err != nil {
+			return nil, err
+		}
+	}
 
 	select {
 	case r.slots <- struct{}{}:
@@ -217,6 +230,41 @@ func (r *Runner) run(ctx context.Context, t Target, cred Credential, q *protocol
 		return runRedis(ctx, req)
 	}
 	return nil, usageError("unsupported engine")
+}
+
+// newPasswordRE mirrors the protocol's rule for a new password: a charset
+// that needs no quoting in SQL literals, ACL rules or URLs.
+var newPasswordRE = regexp.MustCompile(`^[A-Za-z0-9._~-]{16,256}$`)
+
+// checkSetPassword refuses a set_password that does not run as the admin,
+// lacks an acceptable new password, or names a principal other than the
+// admin, roundhouse_ro or the container's application user.
+//
+// SECURITY: the control plane only rotates the template's principals; the
+// agent holds it to that whatever user a frame names.
+func checkSetPassword(req *request) error {
+	if !req.write {
+		return usageError("set_password runs as the admin")
+	}
+	if !newPasswordRE.MatchString(req.cred.NewPassword) {
+		return usageError("set_password needs a new password of 16 to 256 URL-safe characters")
+	}
+	switch user := req.op.User; {
+	case user == "":
+		return usageError("set_password needs a user")
+	case user == req.cred.Username, user == ReadonlyUser:
+	case req.target.Engine == EngineMySQL && req.target.AppUser != "" && user == req.target.AppUser:
+	default:
+		return usageError(fmt.Sprintf("set_password changes only the admin, %s or the application user, not %q", ReadonlyUser, user))
+	}
+	return nil
+}
+
+// passwordSet is the result of a successful set_password.
+func passwordSet(req *request) *resultSet {
+	set := newResultSet(req.maxRows, req.maxBytes)
+	set.notice("password set for " + req.op.User)
+	return set
 }
 
 // usageError is a message about the request itself, shown as is.
@@ -266,7 +314,7 @@ func errorMessage(err error, q *protocol.DBQuery) string {
 // none is known to include the password, but nothing derived from it may
 // leave the node.
 func scrub(s string, cred Credential) string {
-	for _, secret := range []string{cred.Password, cred.ReadonlyPassword} {
+	for _, secret := range []string{cred.Password, cred.ReadonlyPassword, cred.NewPassword} {
 		if len(secret) >= minScrubbedSecretSize {
 			s = strings.ReplaceAll(s, secret, "[redacted]")
 		}

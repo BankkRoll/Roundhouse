@@ -215,9 +215,66 @@ func TestBackupsRestore(t *testing.T) {
 		t.Errorf("body = %v", body)
 	}
 
-	r = h.expect(exitcode.Unavailable, "", "db", "backups", "restore", manual, "--mode", "new_service", "--confirm", "db")
-	contains(t, r.stderr, "Restoring into a new service isn't available yet")
-	contains(t, r.stderr, "hint: restore in place instead: --mode in_place")
+	h.expect(exitcode.Usage, "", "db", "backups", "restore", manual, "--mode", "in_place", "--slug", "copy", "--confirm", "db")
+	h.expect(exitcode.Usage, "", "db", "backups", "restore", manual, "--mode", "in_place", "--environment", "staging", "--confirm", "db")
+}
+
+func TestBackupsRestoreNewService(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	_, _, manual := seedBackups(h)
+
+	r := h.expect(exitcode.InputRequired, "", "db", "backups", "restore", manual, "--mode", "new_service")
+	contains(t, r.stderr, "pass --confirm db")
+	r = h.expect(exitcode.NotFound, "", "db", "backups", "restore", manual, "--mode", "new_service", "--environment", "qa", "--confirm", "db")
+	contains(t, r.stderr, `no environment "qa"`)
+
+	r = h.interactive("db\n", "db", "backups", "restore", manual, "--mode", "new_service")
+	if r.code != 0 {
+		t.Fatalf("restore: exit %d, %s", r.code, r.stderr)
+	}
+	contains(t, r.stderr, "This restores backup "+manual+" of Postgres from 2026-10-22 11:50 UTC into a new database in production. Postgres is not touched.")
+	contains(t, r.stdout, "of "+manual+" into a new database Postgres restore 2026-10-22 (db-restore-20261022) in production")
+	contains(t, r.stdout, "Postgres is not touched.")
+	notContains(t, r.stdout, "Safety backup")
+	body := lastBody(t, h, api.RouteRestoreBackup.String())
+	if body["mode"] != "new_service" || body["confirm"] != "db" || body["slug"] != nil || body["target_environment_id"] != nil {
+		t.Errorf("body = %v", body)
+	}
+	rst := h.fake.Restores()[0]
+	if rst.TargetServiceID == nil || *rst.TargetServiceID == apitest.DBServiceID || rst.SafetyBackupID != nil {
+		t.Errorf("restore = %+v", rst)
+	}
+
+	h.fake.OnGetRestore(func(x *api.Restore) { x.Status = "succeeded" })
+	r = h.ok("", "db", "backups", "restore", manual, "--mode", "new_service", "--slug", "db-copy", "--environment", "staging", "--confirm", "db", "--wait")
+	contains(t, r.stdout, "into a new database Postgres restore 2026-10-22 (db-copy) in staging")
+	contains(t, r.stdout, "succeeded into Postgres restore 2026-10-22 (db-copy)")
+	contains(t, r.stdout, "roundhouse vars set 'DATABASE_URL=${{db-copy.DATABASE_URL}}' --service <app>")
+	body = lastBody(t, h, api.RouteRestoreBackup.String())
+	if body["slug"] != "db-copy" || body["target_environment_id"] != apitest.StagingID {
+		t.Errorf("body = %v", body)
+	}
+
+	r = h.ok("", "db", "backups", "restore", manual, "--mode", "new_service", "--slug", "db-copy-2", "--confirm", "db", "--json")
+	var out api.Restore
+	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.Mode != "new_service" || out.TargetServiceID == nil {
+		t.Errorf("--json = %s", r.stdout)
+	}
+	r = h.expect(exitcode.Conflict, "", "db", "backups", "restore", manual, "--mode", "new_service", "--slug", "db-copy", "--confirm", "db")
+	contains(t, r.stderr, "db-copy already exists")
+}
+
+func TestBackupsRestoreNewServiceSnapshot(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	snap := h.fake.AddBackup(api.Backup{ServiceID: apitest.APIServiceID, EnvironmentID: apitest.ProductionID, Method: "snapshot"}, dumpPayload)
+	r := h.expect(exitcode.Invalid, "", "db", "backups", "restore", snap, "--mode", "new_service", "--confirm", "api")
+	contains(t, r.stderr, "Only a database backup can be restored into a new service")
+	contains(t, r.stderr, "hint: a snapshot restores in place only: --mode in_place")
+	if n := len(h.fake.Restores()); n != 0 {
+		t.Fatalf("%d restores started", n)
+	}
 }
 
 func TestBackupsRestoreWait(t *testing.T) {

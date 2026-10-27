@@ -50,6 +50,10 @@ type HostConfig struct {
 	Init      *bool  `json:"Init,omitempty"`
 	// Mounts are volume (and other) mounts, beside Binds.
 	Mounts []Mount `json:"Mounts,omitempty"`
+	// Privileged grants every capability and host device. The agent never
+	// sets it for workloads; integration tests use it for netfilter and
+	// filesystem checks.
+	Privileged bool `json:"Privileged,omitempty"`
 }
 
 // Mount types.

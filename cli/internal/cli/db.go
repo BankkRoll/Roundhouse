@@ -64,7 +64,7 @@ func (a *App) dbCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "db",
 		Aliases: []string{"database", "databases"},
-		Short:   "Add, inspect, query and back up database services",
+		Short:   "Add, inspect, query, back up and operate database services",
 		Long: `Work with the project's database services: PostgreSQL, MySQL, Valkey (or
 Redis) and MongoDB, each with a volume, generated credentials and backups.
 
@@ -75,11 +75,14 @@ DATABASE_URL=${{postgres.DATABASE_URL}}, and no command prints them.`,
 		Example: `  roundhouse db create --engine postgres
   roundhouse db list
   roundhouse db query "SELECT count(*) FROM users"
-  roundhouse db backups run --wait`,
+  roundhouse db backups run --wait
+  roundhouse db volume move --to edge-2 --wait
+  roundhouse db tcp-proxy enable --allow 203.0.113.7
+  roundhouse db rotate-credentials`,
 		Args: noArgs,
 	}
 	cmd.AddCommand(a.dbCreateCmd(), a.dbListCmd(), a.dbInfoCmd(), a.dbQueryCmd(), a.dbTablesCmd(),
-		a.dbVolumeCmd(), a.dbBackupsCmd(), a.dbConnectCmd())
+		a.dbVolumeCmd(), a.dbBackupsCmd(), a.dbTCPProxyCmd(), a.dbRotateCredentialsCmd(), a.dbRotationsCmd(), a.dbConnectCmd())
 	return cmd
 }
 
@@ -838,10 +841,11 @@ func (a *App) dbVolumeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "volume",
 		Aliases: []string{"vol"},
-		Short:   "Show, grow, delete or undelete a database's volume",
+		Short:   "Show, grow, move, delete or undelete a database's volume",
 		Long: `Show the volume of a database (or of --service) in the environment: its
-size, usage, server and quota. Subcommands grow it, delete it (its data is
-removed after 72 hours) and undelete it within that window.`,
+size, usage, server and quota. Subcommands grow it, move it to another
+server, list its moves, delete it (its data is removed after 72 hours) and
+undelete it within that window.`,
 		Example: `  roundhouse db volume
   roundhouse db volume resize --size-mb 20480
   roundhouse db volume delete --environment staging --yes`,
@@ -864,7 +868,7 @@ removed after 72 hours) and undelete it within that window.`,
 		},
 	}
 	f.register(cmd, true)
-	cmd.AddCommand(a.dbVolumeResizeCmd(), a.dbVolumeDeleteCmd(), a.dbVolumeUndeleteCmd())
+	cmd.AddCommand(a.dbVolumeResizeCmd(), a.dbVolumeDeleteCmd(), a.dbVolumeUndeleteCmd(), a.dbVolumeMoveCmd(), a.dbVolumeMigrationsCmd())
 	return cmd
 }
 

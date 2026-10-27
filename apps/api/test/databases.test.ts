@@ -18,6 +18,7 @@ import {
 import { ACTIONS, AUDIT_ACTIONS, VOLUME_DELETE_GRACE_MS } from "@roundhouse/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  CREDENTIAL_ROUTES,
   DATABASE_ROUTES,
   PHASE1_ROUTES,
   POLICY_KEY,
@@ -107,7 +108,7 @@ function desiredWith(agent: FakeWorkloadAgent, deploymentId: string) {
 }
 
 describe("database contracts", () => {
-  const routes = Object.entries(DATABASE_ROUTES) as [
+  const routes = Object.entries({ ...DATABASE_ROUTES, ...CREDENTIAL_ROUTES }) as [
     string,
     RouteConfig & { [POLICY_KEY]: RoutePolicy },
   ][];
@@ -131,7 +132,26 @@ describe("database contracts", () => {
       openapi: "3.1.0",
       info: { title: "t", version: "0" },
     });
-    expect(Object.keys(doc.paths ?? {})).toHaveLength(4);
+    expect(Object.keys(doc.paths ?? {}).sort()).toEqual([
+      "/v1/projects/{projectId}/databases",
+      "/v1/services/{serviceId}/database/credential-rotations",
+      "/v1/services/{serviceId}/database/rotate-credentials",
+      "/v1/services/{serviceId}/tcp-proxies",
+      "/v1/services/{serviceId}/volume",
+      "/v1/volume-migrations/{migrationId}",
+      "/v1/volumes/{volumeId}",
+      "/v1/volumes/{volumeId}/migrate",
+      "/v1/volumes/{volumeId}/migration-targets",
+      "/v1/volumes/{volumeId}/migrations",
+      "/v1/volumes/{volumeId}/undelete",
+    ]);
+  });
+
+  it("needs a fresh session for every move of data or exposure, not for turning the proxy off", () => {
+    const fresh = routes.filter(([, r]) => policyOf(r).reauth).map(([n]) => n);
+    expect(fresh.sort()).toEqual(["migrateVolume", "putTcpProxy", "rotateDatabaseCredentials"]);
+    expect(policyOf(CREDENTIAL_ROUTES.rotateDatabaseCredentials).action).toBe("data:write");
+    expect(policyOf(CREDENTIAL_ROUTES.listCredentialRotations).action).toBe("services:read");
   });
 
   it("maps node reports onto control statuses without overriding control-owned ones", () => {

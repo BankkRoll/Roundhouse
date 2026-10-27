@@ -144,6 +144,12 @@ type BackupDecryptionKey struct {
 // RestoreBackupInput is the body of POST /v1/backups/{backupId}/restore.
 type RestoreBackupInput struct {
 	Mode string `json:"mode"`
+	// TargetEnvironmentID is where a new_service restore creates the
+	// service; the backup's environment when empty.
+	TargetEnvironmentID string `json:"target_environment_id,omitempty"`
+	// Slug is the new service's slug for a new_service restore; the server
+	// picks <slug>-restore-<yyyymmdd> when empty.
+	Slug string `json:"slug,omitempty"`
 	// Confirm must equal the backed-up service's slug.
 	Confirm          string `json:"confirm"`
 	SkipSafetyBackup bool   `json:"skip_safety_backup,omitempty"`
@@ -210,7 +216,9 @@ func (c *Client) BackupDecryptionKey(ctx context.Context, backupID string) (*Bac
 	return fetch[BackupDecryptionKey](ctx, c, RouteBackupKey, nil, nil, backupID)
 }
 
-// RestoreBackup starts restoring a backup. It needs a fresh session.
+// RestoreBackup starts restoring a backup. It needs a fresh session. 422
+// restore_mode_unsupported refuses a new_service restore of a snapshot
+// backup of a service that is not a database.
 func (c *Client) RestoreBackup(ctx context.Context, backupID string, in RestoreBackupInput) (*Restore, error) {
 	return fetch[Restore](ctx, c, RouteRestoreBackup, nil, in, backupID)
 }

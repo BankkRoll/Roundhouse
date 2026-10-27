@@ -37,7 +37,8 @@ type wantSpec struct {
 	protocol.WorkloadSpec
 	// generation is the desired-state generation the spec arrived in.
 	generation int64
-	// hostPorts publishes ports on the host; system workloads only.
+	// hostPorts publishes ports on the host: a system workload's own, or a
+	// service workload's ports[].publish.
 	hostPorts map[string][]docker.PortBinding
 	// binds are host bind mounts; system workloads only.
 	binds []string

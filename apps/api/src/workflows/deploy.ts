@@ -1124,6 +1124,9 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
     if (volume && config.deploy.replicas > 1) {
       return fail("A service with a volume runs at most one replica");
     }
+    if (volume?.status === "migrating") {
+      return fail("The volume is moving to another node; deploy again once the move ends");
+    }
 
     const { nodes: schedulerNodes } = await schedulerSnapshot(db, {
       workspaceId: plan.workspaceId,

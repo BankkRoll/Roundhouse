@@ -87,6 +87,12 @@
             },
             "ingress": {
               "type": "boolean"
+            },
+            "tcp_proxy": {
+              "type": "boolean"
+            },
+            "db_set_password": {
+              "type": "boolean"
             }
           },
           "required": [
