@@ -782,6 +782,51 @@ describe("consent", () => {
   });
 });
 
+describe("two-factor requirement", () => {
+  it("refuses tools that change something for an OAuth client whose user hasn't enrolled", async () => {
+    const { owner, workspaceId } = await install();
+    const project = await createProject(owner, workspaceId, { name: "Storefront" });
+    const admin = await addMember(owner, workspaceId, "admin@example.com", "admin");
+    const tokens = await tokensFor(admin, workspaceId, [
+      "workspace:read",
+      "projects:read",
+      "variables:read",
+      "variables:manage",
+    ]);
+    // Enrollment lapses after consent, as when an admin resets someone's 2FA.
+    await env.DB.prepare("UPDATE users SET two_factor_enabled = 0 WHERE email = ?")
+      .bind("admin@example.com")
+      .run();
+    const agent = new Client({ name: "agent-smith", version: "1.0.0" });
+    await agent.connect(
+      new StreamableHTTPClientTransport(new URL(RESOURCE), {
+        fetch: toWorker,
+        requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } },
+      }),
+    );
+    const refused = await agent.callTool({
+      name: "set_variables",
+      arguments: {
+        project_id: project.id,
+        environment_id: project.environments[0]!.id,
+        set: [{ key: "LOG_LEVEL", value: "debug" }],
+      },
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.structuredContent).toMatchObject({
+      error: { status: 403, code: "two_factor_required" },
+    });
+    const written = await env.DB.prepare("SELECT count(*) AS n FROM variables WHERE key = ?")
+      .bind("LOG_LEVEL")
+      .first<{ n: number }>();
+    expect(written?.n).toBe(0);
+
+    const read = await agent.callTool({ name: "list_projects", arguments: {} });
+    expect(read.isError).not.toBe(true);
+    await agent.close();
+  });
+});
+
 describe("access follows the user's current role", () => {
   it("narrows a demoted user's client and cuts off a removed one", async () => {
     const { owner, workspaceId } = await install();
