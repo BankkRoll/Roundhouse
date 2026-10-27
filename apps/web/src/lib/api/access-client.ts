@@ -12,6 +12,7 @@ import type {
   EnvironmentProtection,
   ProjectAccess,
   ProjectAccessGrant,
+  ProjectDirectory,
   PutEnvironmentProtectionBody,
   PutProjectGrantBody,
   Team,
@@ -148,6 +149,18 @@ export const accessApi = {
    */
   deleteProjectGrant: (projectId: string, grantId: string) =>
     request<void>("DELETE", `/v1/projects/${seg(projectId)}/access/${seg(grantId)}`),
+
+  /**
+   * Reads the names and avatars behind a project's access settings: its members and
+   * whoever its grants and protection rules name. Needs only `projects:read`; emails
+   * come back only for callers who may list the workspace's members.
+   *
+   * @param projectId - Project id.
+   * @param signal - Abort signal.
+   * @returns The directory.
+   */
+  getProjectDirectory: (projectId: string, signal?: AbortSignal) =>
+    request<ProjectDirectory>("GET", `/v1/projects/${seg(projectId)}/directory`, { signal }),
 
   /**
    * Reads an environment's protection and effective rules.

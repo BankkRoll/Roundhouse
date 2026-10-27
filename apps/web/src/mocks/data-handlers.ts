@@ -531,6 +531,98 @@ function ineligibility(node: (typeof db.nodes)[number], volume: Volume): string 
   return null;
 }
 
+/** Volume statuses a recovery replaces, as in `lib/backups/recovery.ts`. */
+const RECOVERABLE: readonly Volume["status"][] = ["pending", "ready", "degraded", "error"];
+
+/**
+ * Mirrors `startVolumeRecovery`: an `in_place` restore onto another node because the
+ * volume's node is lost. The old volume is abandoned and an empty one is pinned to the
+ * target; the restore then advances like any other.
+ */
+function recoverVolume(
+  found: Extract<ReturnType<typeof backupAccess>, { ok: true }>,
+  targetNodeId: string,
+): Response {
+  const { backup, project, guard } = found;
+  if (
+    !can(guard.membership.role, "services:manage") ||
+    !can(guard.membership.role, "deployments:create")
+  ) {
+    return apiError(
+      403,
+      "forbidden",
+      "Recovering onto another server replaces the volume and redeploys: it needs services:manage and deployments:create",
+    );
+  }
+  const volume = volumeOf(backup.service_id, backup.environment_id);
+  if (!volume?.node_id) {
+    return conflict("The service has no placed volume in this environment; deploy it instead");
+  }
+  if (!RECOVERABLE.includes(volume.status)) {
+    return conflict(`The volume is ${volume.status.replace(/_/g, " ")}; it can't be recovered`);
+  }
+  const source = nodeById(volume.node_id);
+  if (source && source.status !== "offline") {
+    return conflict(
+      `The volume's server ${source.name} is ${source.status}; recovery is for a lost server. Move the volume instead, which keeps every write`,
+    );
+  }
+  const target = db.nodes.find(
+    (row) => row.id === targetNodeId && row.workspace_id === project.workspace_id,
+  );
+  if (!target) return notFound("Node");
+  const reason = ineligibility(target, volume);
+  if (reason) return apiError(422, "migration_target_ineligible", `${target.name}: ${reason}`);
+  const now = Date.now();
+  touch(volume, { status: "abandoned" });
+  const fresh: Volume = {
+    ...volume,
+    id: nextId("vol"),
+    node_id: target.id,
+    node_name: target.name,
+    status: "pending",
+    quota_mode: null,
+    used_bytes: null,
+    message: null,
+    reported_at: null,
+    delete_after: null,
+    created_at: now,
+    updated_at: now,
+  };
+  db.data.volumes.push(fresh);
+  const restore: Restore = {
+    id: nextId("rst"),
+    backup_id: backup.id,
+    mode: "in_place",
+    target_service_id: backup.service_id,
+    target_environment_id: backup.environment_id,
+    safety_backup_id: null,
+    target_node_id: target.id,
+    status: "queued",
+    error: null,
+    requested_by: guard.user.id,
+    started_at: null,
+    finished_at: null,
+    created_at: now,
+  };
+  db.data.restores.push(restore);
+  audit(project.workspace_id, guard.user.id, "restore.started", "restore", restore.id, {
+    project_id: project.id,
+    backup_id: backup.id,
+    mode: "in_place",
+    service_id: backup.service_id,
+    environment_id: backup.environment_id,
+    safety_backup_id: null,
+    recovery: {
+      lost_node_id: volume.node_id,
+      target_node_id: target.id,
+      abandoned_volume_id: volume.id,
+      volume_id: fresh.id,
+    },
+  });
+  return HttpResponse.json(restore, { status: 202 });
+}
+
 function migrationTargetsOf(volume: Volume, workspaceId: string): MigrationTargets {
   const bytes = volume.used_bytes ?? volume.size_mb * MiB;
   return {
@@ -936,6 +1028,7 @@ interface RestoreInput {
   slug?: string;
   confirm: string;
   skip_safety_backup?: boolean;
+  target_node_id?: string;
 }
 
 interface StorageInput {
@@ -1775,6 +1868,9 @@ export const dataHandlers = [
     if (body.confirm !== service.slug) {
       return invalid("confirm must equal the service's slug");
     }
+    if (body.target_node_id !== undefined && body.mode !== "in_place") {
+      return invalid("target_node_id applies to in_place restores only");
+    }
     if (body.mode === "new_service") {
       const target = environmentOf(project.id, body.target_environment_id ?? backup.environment_id);
       if (!target) return notFound("Environment");
@@ -1820,6 +1916,7 @@ export const dataHandlers = [
         target_service_id: added.service.id,
         target_environment_id: target.id,
         safety_backup_id: null,
+        target_node_id: null,
         status: "queued",
         error: null,
         requested_by: found.guard.user.id,
@@ -1851,6 +1948,9 @@ export const dataHandlers = [
         (row.status === "queued" || row.status === "running"),
     );
     if (busy) return conflict(`Restore ${busy.id} is already running for this service`);
+    if (body.target_node_id !== undefined) {
+      return recoverVolume(found, body.target_node_id);
+    }
     const safety = body.skip_safety_backup
       ? null
       : newBackup(service, backup.environment_id, {
@@ -1865,6 +1965,7 @@ export const dataHandlers = [
       target_service_id: backup.service_id,
       target_environment_id: backup.environment_id,
       safety_backup_id: safety?.id ?? null,
+      target_node_id: null,
       status: "queued",
       error: null,
       requested_by: found.guard.user.id,

@@ -471,6 +471,68 @@ export const accessHandlers = [
     return HttpResponse.json(toTeamDetail(team));
   }),
 
+  http.get(mswPath("getProjectDirectory"), async ({ request, params }) => {
+    const input = await validateRoute(ACCESS_ROUTES.getProjectDirectory, request, params);
+    if (!input.ok) return input.response;
+    const user = currentUser();
+    if (!user) return unauthorized();
+    const projectId = input.params.projectId ?? "";
+    const found = requireProject(user, projectId, "projects:read");
+    if (!found.ok) return found.response;
+    const { workspaceId } = found;
+    const withEmails = found.access.can("members:read");
+    const settings = settingsOf(workspaceId);
+    const grants = db.access.grants.filter((row) => row.project_id === projectId);
+    const grantedTeams = new Set(grants.flatMap((g) => (g.team_id ? [g.team_id] : [])));
+    const ruleUsers = new Set<string>();
+    const ruleTeams = new Set<string>();
+    for (const env of db.deploy.environments.filter((row) => row.project_id === projectId)) {
+      const rules = db.access.rules[env.id];
+      for (const op of PROTECTED_OPERATIONS) {
+        for (const id of rules?.[op].userIds ?? []) ruleUsers.add(id);
+        for (const id of rules?.[op].teamIds ?? []) ruleTeams.add(id);
+      }
+    }
+    const implied = (role: string) =>
+      role === "owner" || role === "admin"
+        ? true
+        : role === "member"
+          ? settings.member_default_project_role !== "none"
+          : settings.viewer_default_project_role !== "none";
+    const users = db.memberships
+      .filter((row) => row.workspace_id === workspaceId)
+      .flatMap((membership) => {
+        const member = db.users.find((row) => row.id === membership.user_id);
+        if (!member) return [];
+        const projectMember =
+          implied(membership.role) ||
+          grants.some((g) => g.user_id === member.id) ||
+          db.access.teamMembers.some(
+            (row) => row.user_id === member.id && grantedTeams.has(row.team_id),
+          );
+        if (!projectMember && !ruleUsers.has(member.id)) return [];
+        return [
+          {
+            id: member.id,
+            name: member.name,
+            image: member.image,
+            email: withEmails ? member.email : null,
+            project_member: projectMember,
+          },
+        ];
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const teams = db.access.teams
+      .filter(
+        (team) =>
+          team.workspace_id === workspaceId &&
+          (grantedTeams.has(team.id) || ruleTeams.has(team.id)),
+      )
+      .map((team) => ({ id: team.id, name: team.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return HttpResponse.json({ users, teams });
+  }),
+
   http.get(mswPath("getProjectAccess"), async ({ request, params }) => {
     const input = await validateRoute(ACCESS_ROUTES.getProjectAccess, request, params);
     if (!input.ok) return input.response;

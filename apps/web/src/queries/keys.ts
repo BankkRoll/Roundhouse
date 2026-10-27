@@ -34,6 +34,7 @@ export const queryKeys = {
     ["workspaces", workspaceId, "templates", templateId] as const,
   project: (projectId: string) => ["projects", projectId] as const,
   projectAccess: (projectId: string) => ["projects", projectId, "access"] as const,
+  projectDirectory: (projectId: string) => ["projects", projectId, "directory"] as const,
   team: (teamId: string) => ["teams", teamId] as const,
   protection: (environmentId: string) => ["environments", environmentId, "protection"] as const,
   /** Every summary of a project, whatever the environment; prefix of {@link projectSummary}. */

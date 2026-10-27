@@ -456,6 +456,15 @@ describe("MSW mocks match the API contract", () => {
       expect(
         await call("POST", `${WS}/invites`, { email: "CARA@example.com", role: "viewer" }),
       ).toMatchObject({ status: 409, body: { error: { code: "conflict" } } });
+      db.sessionStale = true;
+      expect(
+        await call("POST", `${WS}/invites`, { email: "frank@example.com", role: "viewer" }),
+      ).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required", details: [{ code: "session_stale" }] } },
+      });
+      expect((await call("GET", `${WS}/invites`)).status).toBe(200);
+      db.sessionStale = false;
       expect(
         await call("POST", `${WS}/invites`, { email: "Frank@Example.com", role: "viewer" }),
       ).toMatchObject({ status: 201, body: { invite: { email: "frank@example.com" } } });
@@ -533,6 +542,12 @@ describe("MSW mocks match the API contract", () => {
       expect(expires_at - before).toBeLessThanOrEqual(JOIN_TOKEN_TTL_MS + 1000);
       expect(install_command).toMatch(/\| sudo bash -s -- --token njt_/);
       expect((await call("POST", `${OTHER_WS}/nodes/join-tokens`)).status).toBe(404);
+      db.sessionStale = true;
+      expect(await call("POST", `${WS}/nodes/join-tokens`)).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.sessionStale = false;
 
       as("member");
       expect((await call("POST", `${WS}/nodes/join-tokens`)).status).toBe(403);
@@ -1071,6 +1086,97 @@ describe("MSW mocks match the API contract", () => {
       as(null);
       expect((await call("GET", `${V}${env}`)).status).toBe(401);
       expect((await call("PUT", `${V}${env}`, { set: [] })).status).toBe(401);
+    });
+  });
+
+  it("variables: build-time and file flags, flags-only writes and build refusals", async () => {
+    await fresh(async () => {
+      const V = `/v1/services/${SEED.web}/variables?environment_id=${SEED.production}`;
+      const row = (key: string) =>
+        db.deploy.variables.find((v) => v.owner_id === SEED.web && v.key === key);
+      const before = { ...row("SESSION_SECRET")! };
+
+      const flagsOnly = await call("PUT", V, {
+        set: [{ key: "SESSION_SECRET", available_at_build: true, mount_as_file: true }],
+      });
+      expect(flagsOnly.status).toBe(200);
+      expect(
+        (flagsOnly.body as { variables: { key: string }[] }).variables.find(
+          (v) => v.key === "SESSION_SECRET",
+        ),
+      ).toMatchObject({
+        tier: "secret",
+        value: null,
+        available_at_build: true,
+        mount_as_file: true,
+        version: before.version + 1,
+      });
+      expect(row("SESSION_SECRET")).toMatchObject({ value: before.value, tier: "secret" });
+      expect((await call("GET", V)).body as { variables: { key: string }[] }).toMatchObject({
+        variables: expect.arrayContaining([
+          expect.objectContaining({ key: "SESSION_SECRET", available_at_build: true }),
+        ]),
+      });
+      expect(
+        (await call("PUT", V, { set: [{ key: "SESSION_SECRET", mount_as_file: false }] })).status,
+      ).toBe(200);
+      expect(row("SESSION_SECRET")).toMatchObject({
+        available_at_build: true,
+        mount_as_file: false,
+      });
+
+      expect(
+        await call("PUT", V, { set: [{ key: "NOPE", available_at_build: true }] }),
+      ).toMatchObject({ status: 400, body: { error: { code: "value_required" } } });
+      expect(
+        await call("PUT", V, { set: [{ key: "PATH", value: "/bin", available_at_build: true }] }),
+      ).toMatchObject({
+        status: 400,
+        body: {
+          error: { code: "invalid_request", details: [{ field: "PATH", code: "reserved_name" }] },
+        },
+      });
+      expect(row("PATH")).toBeUndefined();
+
+      expect(
+        await call("PUT", V, {
+          set: [{ key: "DB_ARG", value: `\${{DATABASE_URL}}`, available_at_build: true }],
+        }),
+      ).toMatchObject({
+        status: 400,
+        body: {
+          error: {
+            code: "build_arg_secret",
+            details: [
+              {
+                field: "DB_ARG",
+                message: expect.stringContaining("RUN --mount=type=secret,id=DB_ARG"),
+              },
+            ],
+          },
+        },
+      });
+      expect(
+        await call("PUT", V, {
+          set: [
+            {
+              key: "DB_ARG",
+              value: `\${{DATABASE_URL}}`,
+              available_at_build: true,
+              tier: "secret",
+            },
+          ],
+          confirm_write_only: true,
+        }),
+      ).toMatchObject({ status: 200 });
+      expect(
+        (await call("PUT", V, { set: [{ key: "NODE_ENV", available_at_build: true }] })).status,
+      ).toBe(200);
+      expect(
+        await call("PUT", V, {
+          set: [{ key: "DB_ARG", tier: "plain", value: `\${{DATABASE_URL}}` }],
+        }),
+      ).toMatchObject({ status: 400, body: { error: { code: "build_arg_secret" } } });
     });
   });
 
@@ -3306,6 +3412,56 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
+  it("recovery: in place onto another node once the volume's node is lost", async () => {
+    await fresh(async () => {
+      db.nodes.push({
+        ...makeNode({ id: "node_nbg1", name: "nbg-1", hostname: "nbg-1.example.com" }),
+        workspace_id: WORKSPACE_ID,
+      });
+      const recover = (body: Record<string, unknown> = {}) =>
+        call("POST", `/v1/backups/${DATA_SEED.scheduledBackup}/restore`, {
+          mode: "in_place",
+          confirm: DATA_SEED.databaseSlug,
+          target_node_id: "node_nbg1",
+          ...body,
+        });
+      expect(await recover()).toMatchObject({
+        status: 409,
+        body: { error: { message: expect.stringMatching(/Move the volume instead/) } },
+      });
+      expect((await recover({ mode: "new_service" })).status).toBe(400);
+      const home = db.nodes.find((n) => n.id === "node_hel1")!;
+      home.status = "offline";
+      expect((await recover({ target_node_id: "node_nope" })).status).toBe(404);
+      expect(await recover({ target_node_id: "node_fsn1" })).toMatchObject({
+        status: 422,
+        body: { error: { code: "migration_target_ineligible" } },
+      });
+      as("member");
+      expect((await recover()).status).toBe(403);
+      as("owner");
+      db.data.knobs.reauthRequired = true;
+      expect((await recover()).status).toBe(403);
+      db.data.knobs.reauthRequired = false;
+
+      const started = await recover();
+      expect(started).toMatchObject({
+        status: 202,
+        body: { mode: "in_place", target_node_id: "node_nbg1", safety_backup_id: null },
+      });
+      expect(db.data.volumes.find((v) => v.id === DATA_SEED.volume)?.status).toBe("abandoned");
+      const volume = await call(
+        "GET",
+        `/v1/services/${DATA_SEED.database}/volume?environment_id=${SEED.production}`,
+      );
+      expect(volume.body).toMatchObject({ node_id: "node_nbg1", status: "pending" });
+      expect(db.audit.at(-1)).toMatchObject({
+        action: "restore.started",
+        metadata: { recovery: { lost_node_id: "node_hel1", target_node_id: "node_nbg1" } },
+      });
+    });
+  });
+
   it("volume moves: targets, typed slug, fresh session, phases to done or rolled back", async () => {
     await fresh(async () => {
       db.nodes.push({
@@ -3886,6 +4042,32 @@ describe("MSW mocks match the API contract", () => {
         (await call("PUT", protection, { protected: true, require_approval: "yes" })).status,
       ).toBe(400);
 
+      const directory = `/v1/projects/${SEED.project}/directory`;
+      const named = await call("GET", directory);
+      expect(named.status).toBe(200);
+      const listed = named.body as {
+        users: { id: string; email: string | null; project_member: boolean }[];
+        teams: { id: string; name: string }[];
+      };
+      expect(listed.teams).toEqual([{ id: teamId, name: "Operations" }]);
+      expect(listed.users.find((u) => u.id === USERS.member.id)).toMatchObject({
+        email: USERS.member.email,
+        project_member: true,
+      });
+      expect((await call("GET", "/v1/projects/prj_nope/directory")).status).toBe(404);
+
+      as("member");
+      expect(
+        ((await call("GET", directory)).body as { users: { email: string | null }[] }).users.every(
+          (u) => u.email !== null,
+        ),
+      ).toBe(true);
+      as("viewer");
+      expect(
+        ((await call("GET", directory)).body as { users: { email: string | null }[] }).users.every(
+          (u) => u.email === null,
+        ),
+      ).toBe(true);
       as("member");
       expect((await call("GET", access)).status).toBe(403);
       const selfGrant = { principal: { type: "user", id: USERS.member.id }, role: "developer" };
@@ -3902,6 +4084,10 @@ describe("MSW mocks match the API contract", () => {
       db.access.grants = [];
       expect((await call("GET", protection)).status).toBe(404);
       expect((await call("GET", access)).status).toBe(404);
+      expect((await call("GET", directory)).status).toBe(404);
+      as(null);
+      expect((await call("GET", directory)).status).toBe(401);
+      as("viewer");
 
       as("owner");
       const regrant = await call("PUT", access, selfGrant);

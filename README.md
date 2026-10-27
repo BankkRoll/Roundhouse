@@ -105,6 +105,9 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 - **Rotating `MASTER_KEY`** signs everyone out. Keep the old key in
   `MASTER_KEYS_PREVIOUS` until the key rotation has finished; two-factor
   secrets are re-encrypted under the new key with everything else.
+- **Signing-key compromise**: if the control plane's signing key may have
+  leaked, every node must re-join; follow
+  [docs/runbooks/emergency-rejoin.md](docs/runbooks/emergency-rejoin.md).
 
 ## Templates
 
@@ -156,7 +159,7 @@ Development settings live in `apps/api/.dev.vars`, created from
 | `packages/shared`   | Constants, IDs, roles                  |
 | `packages/ui`       | Dashboard design system                |
 | `e2e`               | End-to-end tests                       |
-| `docs`              | Configuration reference, ADRs          |
+| `docs`              | Configuration, ADRs, runbooks          |
 | `infra`             | Release signing                        |
 
 [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) ·

@@ -1,9 +1,11 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { ACCESS_SEED } from "../../mocks/access-db";
 import { db, signInAs, USERS } from "../../mocks/db";
 import { PROJECT_PATH, SEED, servicePath } from "../../test/phase1";
 import { renderApp } from "../../test/render";
+import { LockedButton } from "./environment-gate";
 
 const production = () => db.deploy.environments.find((row) => row.id === SEED.production)!;
 
@@ -85,5 +87,46 @@ describe("protected environments where people act", () => {
       name: "Environment: production (protected). Switch environment",
     });
     expect(within(trigger).getByText("production")).toBeInTheDocument();
+  });
+});
+
+describe("LockedButton", () => {
+  const reason = "production is protected: only project admins can deploy here.";
+  // NOTE: While open, Radix also references the bubble, whose text is aria-hidden; the
+  // empty reference leaves a trailing space in the computed description, nothing more.
+  const announcedOnce = /^production is protected: only project admins can deploy here\.\s*$/;
+
+  /** Renders a locked Deploy and returns the focusable wrapper that carries the reason. */
+  function renderLocked() {
+    const user = userEvent.setup();
+    render(<LockedButton reason={reason}>Deploy</LockedButton>);
+    const button = screen.getByRole("button", { name: "Deploy" });
+    return { user, button, wrapper: button.parentElement! };
+  }
+
+  it("describes itself with the reason exactly once while the tooltip is closed", () => {
+    const { button, wrapper } = renderLocked();
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleName("Deploy");
+    expect(wrapper).toHaveAccessibleDescription(reason);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("shows the reason on hover and still announces it once", async () => {
+    const { user, button, wrapper } = renderLocked();
+    await user.hover(wrapper);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent(reason);
+    expect(wrapper).toHaveAccessibleDescription(announcedOnce);
+    expect(button).toHaveAccessibleName("Deploy");
+  });
+
+  it("shows the reason on keyboard focus and still announces it once", async () => {
+    const { user, wrapper } = renderLocked();
+    await user.tab();
+    expect(wrapper).toHaveFocus();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(reason);
+    expect(wrapper.getAttribute("aria-describedby")?.split(" ")).toHaveLength(2);
+    expect(wrapper).toHaveAccessibleDescription(announcedOnce);
   });
 });

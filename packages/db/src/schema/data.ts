@@ -206,6 +206,11 @@ export const restores = sqliteTable(
      * `NULL` until the job is sent.
      */
     nodeId: text("node_id").references(() => nodes.id, { onDelete: "set null" }),
+    /**
+     * Set when an `in_place` restore recovers a volume whose node was lost
+     * (ADR 0004 `target_node_id`): the node the new volume was created on.
+     */
+    targetNodeId: text("target_node_id").references(() => nodes.id, { onDelete: "set null" }),
     status: text("status").$type<RestoreStatusName>().notNull().default("queued"),
     error: text("error"),
     requestedBy: text("requested_by").references(() => users.id, { onDelete: "set null" }),

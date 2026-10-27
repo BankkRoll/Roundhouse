@@ -419,6 +419,76 @@ describe("environment protection", () => {
   });
 });
 
+describe("project directory", () => {
+  interface DirectoryBody {
+    users: { id: string; name: string; email: string | null; project_member: boolean }[];
+    teams: { id: string; name: string }[];
+  }
+
+  it("names project members and rule principals to project readers, emails only with members:read", async () => {
+    const { owner, workspaceId } = await install();
+    const p = await createProject(owner, workspaceId);
+    const prod = await productionOf(owner, p.id);
+    await owner.request(`/v1/workspaces/${workspaceId}/access-settings`, {
+      method: "PATCH",
+      json: { viewer_default_project_role: "none" },
+    });
+    const vee = await addMember(owner, workspaceId, "vee@example.com", "viewer");
+    const outsider = await addMember(owner, workspaceId, "out@example.com", "viewer");
+    await addMember(owner, workspaceId, "mia@example.com", "member");
+    await addMember(owner, workspaceId, "tee@example.com", "viewer");
+    await addMember(owner, workspaceId, "nobody@example.com", "viewer");
+    const v = await memberOf(owner, workspaceId, "vee@example.com");
+    const o = await memberOf(owner, workspaceId, "out@example.com");
+    const m = await memberOf(owner, workspaceId, "mia@example.com");
+    const t = await memberOf(owner, workspaceId, "tee@example.com");
+    const team = await owner.json<{ id: string }>(`/v1/workspaces/${workspaceId}/teams`, {
+      method: "POST",
+      json: { name: "Ops", user_ids: [t.user_id] },
+    });
+    await owner.json(`/v1/workspaces/${workspaceId}/teams`, {
+      method: "POST",
+      json: { name: "Unrelated" },
+    });
+    const grant = (principal: { type: string; id: string }, role: string) =>
+      owner.request(`/v1/projects/${p.id}/access`, { method: "PUT", json: { principal, role } });
+    expect((await grant({ type: "user", id: v.user_id }, "project_admin")).status).toBe(200);
+    expect((await grant({ type: "team", id: team.body.id }, "viewer")).status).toBe(200);
+    const rule = { roles: [], user_ids: [m.user_id, o.user_id], team_ids: [team.body.id] };
+    expect(
+      (
+        await owner.request(`/v1/environments/${prod.id}/protection`, {
+          method: "PUT",
+          json: { protected: true, rules: { deploy: rule } },
+        })
+      ).status,
+    ).toBe(200);
+
+    // A workspace viewer made project admin can't list the workspace's members...
+    expect((await vee.request(`/v1/workspaces/${workspaceId}/members`)).status).toBe(403);
+    // ...but can put names to the IDs in the rules.
+    const path = `/v1/projects/${p.id}/directory`;
+    const seen = await vee.json<DirectoryBody>(path);
+    expect(seen.status).toBe(200);
+    const user = (id: string) => seen.body.users.find((u) => u.id === id);
+    expect(user(v.user_id)).toMatchObject({ name: "vee", project_member: true });
+    expect(user(m.user_id)).toMatchObject({ name: "mia", project_member: true });
+    expect(user(t.user_id)).toMatchObject({ name: "tee", project_member: true });
+    expect(user(o.user_id)).toMatchObject({ name: "out", project_member: false });
+    expect(seen.body.users.map((u) => u.name)).not.toContain("nobody");
+    expect(seen.body.users).toHaveLength(5);
+    expect(seen.body.users.every((u) => u.email === null)).toBe(true);
+    expect(JSON.stringify(seen.body)).not.toContain("@example.com");
+    expect(seen.body.teams).toEqual([{ id: team.body.id, name: "Ops" }]);
+
+    const asOwner = await owner.json<DirectoryBody>(path);
+    expect(asOwner.body.users.find((u) => u.id === v.user_id)?.email).toBe("vee@example.com");
+
+    // No role on the project: it doesn't exist for them.
+    expect((await outsider.request(path)).status).toBe(404);
+  });
+});
+
 describe("effective access", () => {
   it("reports actions per workspace and project, and what protection denies", async () => {
     const { owner, workspaceId } = await install();

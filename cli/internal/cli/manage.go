@@ -177,8 +177,10 @@ workspace; it installs the agent and joins on first boot. Without --plan or
 --region the provider's recommended offer is used. The command waits until
 the server joins unless --no-wait is given. Connect a provider in the
 dashboard first (Servers → Add server → Cloud provider): the CLI never
-handles provider tokens. Provisioning needs a recent "roundhouse login";
-API tokens cannot provision.`,
+handles provider tokens.
+
+Both need a recent "roundhouse login": a join token admits a machine to the
+workspace, so API tokens can neither create one nor provision.`,
 		Example: `  roundhouse servers add
   roundhouse servers add --workspace acme --json | jq -r .install_command
   roundhouse servers add --provider hetzner
@@ -209,7 +211,7 @@ API tokens cannot provision.`,
 			}
 			tok, err := sess.client.CreateJoinToken(ctx, ws.ID)
 			if err != nil {
-				return err
+				return a.reauthHint(err, "creating a join token")
 			}
 			if a.jsonOut {
 				return a.printJSON(tok)

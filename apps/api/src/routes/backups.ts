@@ -10,7 +10,9 @@
  *   project's age identity (fresh session); both audited without values.
  * - Restores: `confirm` must equal the service slug and the session must be
  *   fresh; `in_place` takes a `pre_restore` safety backup first unless
- *   skipped, then runs `RestoreWorkflow`.
+ *   skipped, then runs `RestoreWorkflow`. With `target_node_id` it
+ *   recovers a lost node's volume onto another node instead
+ *   (`../lib/backups/recovery`).
  * - Storage: instance admins set the bucket from a browser session; the
  *   credentials are checked with a `HeadObject` before they are stored.
  *
@@ -61,6 +63,7 @@ import {
   startBackupWorkflow,
 } from "../lib/backups/backups";
 import { loadBackupIdentity } from "../lib/backups/keys";
+import { startVolumeRecovery } from "../lib/backups/recovery";
 import { type RestoreRow, restoreServiceSlug, startRestoreWorkflow } from "../lib/backups/restores";
 import { nextBackupSlot } from "../lib/backups/schedule";
 import {
@@ -122,6 +125,7 @@ function toApiRestore(r: RestoreRow) {
     target_service_id: r.targetServiceId,
     target_environment_id: r.targetEnvironmentId,
     safety_backup_id: r.safetyBackupId,
+    target_node_id: r.targetNodeId,
     status: r.status,
     error: r.error,
     requested_by: r.requestedBy,
@@ -568,6 +572,13 @@ export const backupRoutes = createRouter()
     if (body.confirm !== service.slug) {
       throw new ApiError(400, "invalid_request", "confirm must equal the service's slug");
     }
+    if (body.target_node_id !== undefined && body.mode !== "in_place") {
+      throw new ApiError(
+        400,
+        "invalid_request",
+        "target_node_id applies to in_place restores only",
+      );
+    }
     if (body.mode === "new_service") {
       const restore = await startNewServiceRestore(c, { backup, service, project, body });
       return c.json(toApiRestore(restore), 202);
@@ -612,6 +623,18 @@ export const backupRoutes = createRouter()
       )
       .limit(1);
     if (busy) throw conflict(`Restore ${busy.id} is already running for this service`);
+
+    if (body.target_node_id !== undefined) {
+      const restore = await startVolumeRecovery(c, {
+        backup,
+        service,
+        project,
+        caller,
+        targetNodeId: body.target_node_id,
+      });
+      await startRestoreWorkflow(c.env, restore.id);
+      return c.json(toApiRestore(restore), 202);
+    }
 
     const safety = body.skip_safety_backup
       ? null

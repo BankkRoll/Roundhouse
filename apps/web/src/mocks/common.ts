@@ -52,11 +52,12 @@ export function currentUser(): DbUser | null {
 
 /**
  * Mirrors the API's fresh-session guard: 403 `reauth_required` (with the
- * `session_stale` hint) while {@link db}.sessionStale is set.
+ * `session_stale` hint) while {@link db}.sessionStale is set; 401 when signed out.
  *
  * @returns The refusal, or `null` when the session is fresh.
  */
 export function requireFreshSession(): Response | null {
+  if (!currentUser()) return unauthorized();
   if (!db.sessionStale) return null;
   return apiError(403, "reauth_required", "Confirm your password to continue", [
     {

@@ -83,6 +83,8 @@ describe("routes that need a fresh session", () => {
         "DELETE /v1/projects/{projectId}/access/{grantId}",
         "PUT /v1/environments/{environmentId}/protection",
         "GET /v1/shell-sessions/{sessionId}/recording",
+        "POST /v1/workspaces/{workspaceId}/invites",
+        "POST /v1/workspaces/{workspaceId}/nodes/join-tokens",
       ]),
     );
   });
@@ -188,6 +190,48 @@ describe("member role changes and removals", () => {
       method: "DELETE",
     });
     expect(leave.status).toBe(204);
+  });
+});
+
+describe("invites and join tokens", () => {
+  it("need a fresh session to create, and leave listing and revoking alone", async () => {
+    const { owner, userId, workspaceId } = await install();
+    await makeStale(userId);
+    const invite = await owner.json<ErrorResponse>(`/v1/workspaces/${workspaceId}/invites`, {
+      method: "POST",
+      json: { email: "nell@example.com", role: "member" },
+    });
+    expect(invite.status).toBe(403);
+    expect(invite.body.error.code).toBe("reauth_required");
+    const join = await owner.json<ErrorResponse>(
+      `/v1/workspaces/${workspaceId}/nodes/join-tokens`,
+      { method: "POST" },
+    );
+    expect(join.status).toBe(403);
+    expect(join.body.error.code).toBe("reauth_required");
+    const minted = await env.DB.prepare(
+      "SELECT (SELECT count(*) FROM invites) AS invites, (SELECT count(*) FROM node_join_tokens) AS tokens",
+    ).first<{ invites: number; tokens: number }>();
+    expect(minted).toEqual({ invites: 0, tokens: 0 });
+    expect((await owner.request(`/v1/workspaces/${workspaceId}/invites`)).status).toBe(200);
+
+    await owner.request("/v1/auth/reauth", { method: "POST", json: await credentials() });
+    const created = await owner.json<{ invite: { id: string } }>(
+      `/v1/workspaces/${workspaceId}/invites`,
+      { method: "POST", json: { email: "nell@example.com", role: "member" } },
+    );
+    expect(created.status).toBe(201);
+    expect(
+      (await owner.request(`/v1/workspaces/${workspaceId}/nodes/join-tokens`, { method: "POST" }))
+        .status,
+    ).toBe(201);
+
+    await makeStale(userId);
+    const revoked = await owner.request(
+      `/v1/workspaces/${workspaceId}/invites/${created.body.invite.id}`,
+      { method: "DELETE" },
+    );
+    expect(revoked.status).toBe(204);
   });
 });
 

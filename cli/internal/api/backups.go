@@ -153,6 +153,11 @@ type RestoreBackupInput struct {
 	// Confirm must equal the backed-up service's slug.
 	Confirm          string `json:"confirm"`
 	SkipSafetyBackup bool   `json:"skip_safety_backup,omitempty"`
+	// TargetNodeID recovers an in_place restore onto this server because
+	// the volume's server is lost (offline or removed): a new volume is
+	// created there, the service redeployed onto it, and the backup
+	// restored. No safety backup is taken.
+	TargetNodeID string `json:"target_node_id,omitempty"`
 }
 
 // Restore is a restore of a backup.
@@ -163,12 +168,14 @@ type Restore struct {
 	TargetServiceID     *string `json:"target_service_id"`
 	TargetEnvironmentID *string `json:"target_environment_id"`
 	SafetyBackupID      *string `json:"safety_backup_id"`
-	Status              string  `json:"status"`
-	Error               *string `json:"error"`
-	RequestedBy         *string `json:"requested_by"`
-	StartedAt           *int64  `json:"started_at"`
-	FinishedAt          *int64  `json:"finished_at"`
-	CreatedAt           int64   `json:"created_at"`
+	// TargetNodeID is the server a recovery restored onto; nil otherwise.
+	TargetNodeID *string `json:"target_node_id"`
+	Status       string  `json:"status"`
+	Error        *string `json:"error"`
+	RequestedBy  *string `json:"requested_by"`
+	StartedAt    *int64  `json:"started_at"`
+	FinishedAt   *int64  `json:"finished_at"`
+	CreatedAt    int64   `json:"created_at"`
 }
 
 // BackupPolicy returns a service's backup policy in an environment.

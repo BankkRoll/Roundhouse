@@ -102,6 +102,8 @@ export const DEPLOYMENT_TRIGGERS = [
   "template",
   "change_set",
   "migration",
+  /** Redeploy onto a new node after its volume was recovered there from a backup. */
+  "recovery",
 ] as const;
 
 /** What started a deployment; see {@link DEPLOYMENT_TRIGGERS}. */
