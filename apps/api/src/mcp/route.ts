@@ -36,6 +36,7 @@ import {
   createRouter,
   currentPrincipal,
   originOf,
+  requirePrincipal,
   type TokenIdentity,
 } from "../context";
 import { bearerSecret } from "../lib/api-tokens";
@@ -192,8 +193,11 @@ function register(server: McpServer, c: AppContext, token: TokenIdentity, tool: 
       let isError = false;
       try {
         if (!tool.annotations.readOnlyHint) {
-          const principal = await currentPrincipal(c);
-          if (principal) await requireEnrolledIfRequired(c, principal.user.id);
+          // SECURITY: Fails closed. API tokens and OAuth access tokens both
+          // install their user as the principal in `authenticate`, so the
+          // gate applies to the person whichever way the agent signed in.
+          const principal = await requirePrincipal(c);
+          await requireEnrolledIfRequired(c, principal.user.id);
         }
         body = await tool.run({ c, token, tool: tool.name }, input);
       } catch (err) {

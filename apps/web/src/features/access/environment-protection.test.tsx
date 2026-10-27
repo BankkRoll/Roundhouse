@@ -1,8 +1,10 @@
 import type { Role } from "@roundhouse/shared";
 import { screen, waitFor, within } from "@testing-library/react";
+import { http } from "msw";
 import { describe, expect, it } from "vitest";
 import { ACCESS_SEED } from "../../mocks/access-db";
-import { db, PASSWORD, signInAs, USERS } from "../../mocks/db";
+import { db, PASSWORD, signInAs, USERS, WORKSPACE_ID } from "../../mocks/db";
+import { server } from "../../mocks/server";
 import { PROJECT_PATH, SEED } from "../../test/phase1";
 import { renderApp } from "../../test/render";
 
@@ -109,5 +111,78 @@ describe("environment protection", () => {
     expect(
       screen.queryByRole("button", { name: /^Add (person|team) to the/ }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("names in protection rules", () => {
+  function protectWithPeople() {
+    production().protected = true;
+    db.access.rules[SEED.production] = {
+      deploy: {
+        roles: [],
+        userIds: [USERS.member.id, "usr_gone"],
+        teamIds: [ACCESS_SEED.platformTeam],
+      },
+      config: { roles: ["developer"], userIds: [], teamIds: [] },
+      variables: { roles: [], userIds: [], teamIds: [] },
+    };
+  }
+
+  it("shows a workspace viewer made project admin names, never ids or emails", async () => {
+    protectWithPeople();
+    db.access.grants.push({
+      id: "pag_dan",
+      project_id: SEED.project,
+      principal_type: "user",
+      user_id: USERS.viewer.id,
+      team_id: null,
+      role: "project_admin",
+      created_by: USERS.owner.id,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    });
+    let listedMembers = false;
+    server.use(
+      http.get("*/v1/workspaces/:ws/members", () => {
+        listedMembers = true;
+        return undefined;
+      }),
+    );
+    const { user } = renderAs("viewer");
+    const deploy = await screen.findByRole("group", { name: "Deploy rule" });
+    expect(
+      screen.getByText(
+        /Project admins, Cara Mel, Former member and team Platform can deploy to production/,
+      ),
+    ).toBeInTheDocument();
+    const people = within(deploy).getByRole("list", { name: "People in the deploy rule" });
+    expect(people).toHaveTextContent("Cara Mel");
+    expect(people).not.toHaveTextContent(USERS.member.id);
+    expect(people).not.toHaveTextContent("usr_gone");
+    expect(document.body).not.toHaveTextContent(USERS.member.email);
+
+    await user.selectOptions(within(deploy).getByLabelText("People"), USERS.admin.id);
+    await user.click(within(deploy).getByRole("button", { name: "Add person to the deploy rule" }));
+    expect(
+      within(deploy).getByRole("button", { name: "Remove Bob Builder from the deploy rule" }),
+    ).toBeInTheDocument();
+    expect(listedMembers).toBe(false);
+  });
+
+  it("offers only people with a role on the project", async () => {
+    protectWithPeople();
+    db.access.settings[WORKSPACE_ID] = {
+      member_default_project_role: "developer",
+      viewer_default_project_role: "none",
+    };
+    renderAs("owner");
+    const deploy = await screen.findByRole("group", { name: "Deploy rule" });
+    const picker = within(deploy).getByLabelText("People");
+    const offered = within(picker)
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    expect(offered).toContain("Bob Builder");
+    expect(offered).not.toContain("Dan Viewer");
+    expect(offered).not.toContain("Cara Mel");
   });
 });

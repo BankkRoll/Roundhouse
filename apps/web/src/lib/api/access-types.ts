@@ -13,6 +13,7 @@ import type {
   getEffectiveAccess,
   getEnvironmentProtection,
   getProjectAccess,
+  getProjectDirectory,
   getTeam,
   getWorkspaceAccessSettings,
   listTeams,
@@ -47,6 +48,11 @@ export type ProjectAccessGrant = ProjectAccess["grants"][number];
 export type GrantPrincipal = ProjectAccessGrant["principal"];
 /** `PUT /v1/projects/{id}/access` body. */
 export type PutProjectGrantBody = BodyOf<typeof putProjectGrant>;
+
+/** Names behind the user and team IDs a project's access settings use. */
+export type ProjectDirectory = ResponseOf<typeof getProjectDirectory, 200>;
+/** A person in a {@link ProjectDirectory}. */
+export type DirectoryUser = ProjectDirectory["users"][number];
 
 /** Protection of one environment and its effective rules. */
 export type EnvironmentProtection = ResponseOf<typeof getEnvironmentProtection, 200>;

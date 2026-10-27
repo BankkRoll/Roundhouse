@@ -3007,6 +3007,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "target_node_id": {
+          "name": "target_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "status": {
           "name": "status",
           "type": "text",
@@ -3133,6 +3140,19 @@
           "tableTo": "nodes",
           "columnsFrom": [
             "node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "restores_target_node_id_nodes_id_fk": {
+          "name": "restores_target_node_id_nodes_id_fk",
+          "tableFrom": "restores",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "target_node_id"
           ],
           "columnsTo": [
             "id"

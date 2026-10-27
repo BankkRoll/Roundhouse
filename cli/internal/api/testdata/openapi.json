@@ -3631,7 +3631,8 @@
               "api",
               "template",
               "change_set",
-              "migration"
+              "migration",
+              "recovery"
             ],
             "type": "string"
           },
@@ -3780,6 +3781,54 @@
         },
         "required": [
           "path"
+        ],
+        "type": "object"
+      },
+      "DirectoryTeam": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "DirectoryUser": {
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_member": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "image",
+          "email",
+          "project_member"
         ],
         "type": "object"
       },
@@ -6794,6 +6843,27 @@
           }
         ]
       },
+      "ProjectDirectory": {
+        "properties": {
+          "teams": {
+            "items": {
+              "$ref": "#/components/schemas/DirectoryTeam"
+            },
+            "type": "array"
+          },
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/DirectoryUser"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "users",
+          "teams"
+        ],
+        "type": "object"
+      },
       "ProjectRole": {
         "enum": [
           "project_admin",
@@ -7559,6 +7629,12 @@
               "null"
             ]
           },
+          "target_node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "target_service_id": {
             "type": [
               "string",
@@ -7573,6 +7649,7 @@
           "target_service_id",
           "target_environment_id",
           "safety_backup_id",
+          "target_node_id",
           "status",
           "error",
           "requested_by",
@@ -7607,6 +7684,11 @@
             "type": "string"
           },
           "target_environment_id": {
+            "type": "string"
+          },
+          "target_node_id": {
+            "maxLength": 64,
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -18779,6 +18861,79 @@
         }
       }
     },
+    "/v1/projects/{projectId}/directory": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectDirectory"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get the names behind a project's access settings",
+        "tags": [
+          "access"
+        ],
+        "x-roundhouse-policy": {
+          "action": "projects:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
     "/v1/projects/{projectId}/edges": {
       "post": {
         "parameters": [
@@ -25621,6 +25776,7 @@
         ]
       },
       "post": {
+        "description": "Needs a fresh session (403 `reauth_required`); API tokens can't create invites.",
         "parameters": [
           {
             "in": "path",
@@ -25740,7 +25896,15 @@
         "summary": "Invite someone by email",
         "tags": [
           "invites"
-        ]
+        ],
+        "x-roundhouse-policy": {
+          "action": "members:manage",
+          "audit": [
+            "invite.created"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
       }
     },
     "/v1/workspaces/{workspaceId}/invites/{inviteId}": {
@@ -26422,6 +26586,7 @@
     },
     "/v1/workspaces/{workspaceId}/nodes/join-tokens": {
       "post": {
+        "description": "Needs a fresh session (403 `reauth_required`); API tokens can't create join tokens.",
         "parameters": [
           {
             "in": "path",
@@ -26503,7 +26668,15 @@
         "summary": "Create a single-use join token and install command",
         "tags": [
           "nodes"
-        ]
+        ],
+        "x-roundhouse-policy": {
+          "action": "nodes:manage",
+          "audit": [
+            "node.join_token_created"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
       }
     },
     "/v1/workspaces/{workspaceId}/nodes/provision": {

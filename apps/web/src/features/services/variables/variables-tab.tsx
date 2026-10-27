@@ -41,6 +41,8 @@ import type { ServicePageProps } from "../service-layout";
 import { BulkPasteDialog } from "./bulk-paste-dialog";
 import { ReferenceInput } from "./reference-input";
 import {
+  type BuildContext,
+  buildTimeRefusal,
   draftSize,
   EMPTY_DRAFT,
   errorsFromDetails,
@@ -48,10 +50,12 @@ import {
   lockedTier,
   mapApiError,
   mergeRows,
+  normalizeChange,
   type PutConsent,
   type ReferenceCatalog,
   referenceErrors,
   stageDelete,
+  stageFlags,
   stageSet,
   toPutBody,
   unstage,
@@ -86,11 +90,19 @@ function ErrorSpans({ value }: { value: string }) {
 }
 
 /** An error on a saved row, with the offending span of the value marked when known. */
-function SpanError({ error, value }: { error: FieldError; value: string | undefined }) {
+function SpanError({
+  error,
+  value,
+  id,
+}: {
+  error: FieldError;
+  value: string | undefined;
+  id?: string;
+}) {
   const { start, end } = error;
   const span = value !== undefined && start !== undefined && end !== undefined && end >= start;
   return (
-    <div role="alert" className="mt-0.5 grid gap-0.5 text-xs text-danger">
+    <div id={id} role="alert" className="mt-0.5 grid gap-0.5 text-xs text-danger">
       <p>
         {error.message}
         {start !== undefined && end !== undefined ? (
@@ -127,12 +139,65 @@ interface EditorState {
   key: string;
   value: string;
   isSecret: boolean;
+  availableAtBuild: boolean;
+  mountAsFile: boolean;
   isNew: boolean;
+}
+
+/** What the build-time switch does for a tier, with the name the Dockerfile uses. */
+function buildHelp(key: string, isSecret: boolean): string {
+  return isSecret
+    ? `Passed to builds as a BuildKit secret: read it with RUN --mount=type=secret,id=${key}. It is never baked into image layers, and fork and PR preview builds don't get it.`
+    : "Passed to builds as a build arg, which is recorded in the image, so it can't reference a secret.";
+}
+
+function fileHelp(key: string): string {
+  return `Delivered as a read-only file at /run/secrets/${key} instead of an environment variable, so it doesn't show in docker inspect. No ${key}_FILE variable is injected; add a plain ${key}_FILE=/run/secrets/${key} if your image wants one.`;
+}
+
+/** A delivery flag's switch with a visible label, as in the editor and on each row. */
+function FlagSwitch({
+  label,
+  name,
+  checked,
+  disabled,
+  describedBy,
+  invalid,
+  onCheckedChange,
+}: {
+  label: string;
+  /** Accessible name, when the visible label alone is ambiguous (one per row). */
+  name?: string;
+  checked: boolean;
+  disabled: boolean;
+  describedBy: readonly (string | null | false | undefined)[];
+  invalid?: boolean;
+  onCheckedChange: (next: boolean) => void;
+}) {
+  const id = useId();
+  const description = describedBy.filter(Boolean).join(" ");
+  return (
+    <div className="flex h-8 items-center gap-1.5">
+      <Switch
+        id={id}
+        checked={checked}
+        disabled={disabled}
+        aria-label={name}
+        aria-describedby={description || undefined}
+        aria-invalid={invalid ? true : undefined}
+        onCheckedChange={onCheckedChange}
+      />
+      <Label htmlFor={id} className="text-xs text-muted-foreground">
+        {label}
+      </Label>
+    </div>
+  );
 }
 
 function RowEditor({
   editor,
   catalog,
+  buildRefusalFor,
   onNamespace,
   onChange,
   onDone,
@@ -141,6 +206,8 @@ function RowEditor({
 }: {
   editor: EditorState;
   catalog: ReferenceCatalog;
+  /** Why the API would refuse build-time for this key, value and tier, if it would. */
+  buildRefusalFor: (key: string, value: string | null, isSecret: boolean) => string | null;
   onNamespace: (slug: string) => void;
   onChange: (editor: EditorState) => void;
   onDone: () => void;
@@ -150,6 +217,9 @@ function RowEditor({
   const keyId = useId();
   const valueId = useId();
   const secretId = useId();
+  const buildHelpId = useId();
+  const fileHelpId = useId();
+  const buildRefusalId = useId();
   // NOTE: Syntax errors appear once the field is left or submitted, not while a
   // reference is still being typed (an unfinished `${{api` is not a mistake yet).
   const [checked, setChecked] = useState(false);
@@ -161,6 +231,13 @@ function RowEditor({
     ? locked.reason === "public_prefix"
       ? `${locked.publicPrefix?.prefix ?? "These"} variables ship to the browser, so they can't be secret.`
       : "Looks like a credential, so it is always stored as a write-only secret."
+    : null;
+  const name = editor.key.trim() || "KEY";
+  // A saved secret's value is unknown here; an empty field keeps it, so there is nothing
+  // to check its references against.
+  const keepsSecret = !editor.isNew && editor.isSecret && editor.value === "";
+  const buildRefusal = editor.key.trim()
+    ? buildRefusalFor(editor.key.trim(), keepsSecret ? null : editor.value, isSecret)
     : null;
 
   function submit(event: FormEvent) {
@@ -235,14 +312,52 @@ function RowEditor({
           {hint}
         </p>
       ) : null}
+      <fieldset className="grid gap-3 border-t border-border/70 pt-3 sm:grid-cols-2 md:col-span-3">
+        <legend className="sr-only">Delivery</legend>
+        <div className="grid content-start gap-0.5">
+          <FlagSwitch
+            label="Available at build"
+            checked={editor.availableAtBuild}
+            disabled={buildRefusal !== null && !editor.availableAtBuild}
+            describedBy={[buildHelpId, buildRefusal && buildRefusalId]}
+            invalid={buildRefusal !== null && editor.availableAtBuild}
+            onCheckedChange={(next) => onChange({ ...editor, availableAtBuild: next })}
+          />
+          <p id={buildHelpId} className="text-xs text-muted-foreground">
+            {buildHelp(name, isSecret)} Off by default.
+          </p>
+          {buildRefusal ? (
+            <p
+              id={buildRefusalId}
+              className={`text-xs ${editor.availableAtBuild ? "text-danger" : "text-muted-foreground"}`}
+            >
+              {buildRefusal}
+            </p>
+          ) : null}
+        </div>
+        <div className="grid content-start gap-0.5">
+          <FlagSwitch
+            label="Mount as file"
+            checked={editor.mountAsFile}
+            disabled={false}
+            describedBy={[fileHelpId]}
+            onCheckedChange={(next) => onChange({ ...editor, mountAsFile: next })}
+          />
+          <p id={fileHelpId} className="text-xs text-muted-foreground">
+            {fileHelp(name)}
+          </p>
+        </div>
+      </fieldset>
     </form>
   );
 }
 
 /**
  * A service's variables: a table editor with write-only secrets (ADR 0014: they can be
- * replaced, never read back), bulk `.env` paste, `${{` reference autocomplete, and staged
- * changes saved together as one new version, then a prompt to deploy.
+ * replaced, never read back), bulk `.env` paste, `${{` reference autocomplete, per-variable
+ * build-time and mount-as-file switches (flag toggles are sent without a value, so they
+ * work on secrets), and staged changes saved together as one new version, then a prompt
+ * to deploy.
  *
  * @param props - Workspace, project and service ids.
  * @returns The tab.
@@ -270,6 +385,13 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
     keys: string[];
     consent: PutConsent;
   } | null>(null);
+  const lockedId = useId();
+  const rowIdBase = useId();
+  const buildHelpId = useId();
+  const fileHelpId = useId();
+  // Protection refuses here, but the role could flip flags elsewhere: show them disabled
+  // with the reason. A role that can never manage variables gets read-only badges.
+  const flagSwitches = canManage || lockedReason !== null;
 
   const others = useMemo(
     () => (project.data?.services ?? []).filter((entry) => entry.id !== serviceId),
@@ -313,12 +435,34 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
   );
   const pending = draftSize(draft);
 
+  const buildContext = useMemo<BuildContext>(
+    () => ({ slug: service?.slug ?? "", shared: shared.data ?? [] }),
+    [service?.slug, shared.data],
+  );
+  const buildRefusalFor = useCallback(
+    (key: string, value: string | null, isSecret: boolean) =>
+      buildTimeRefusal(key, { value, isSecret }, rows, buildContext),
+    [rows, buildContext],
+  );
+  const savedVariable = (key: string) => variables.data?.find((v) => v.key === key);
+
+  function toggleFlag(
+    row: VariableRow,
+    flags: { availableAtBuild?: boolean; mountAsFile?: boolean },
+  ) {
+    setDraft((current) => stageFlags(current, row.key, savedVariable(row.key), flags));
+    setFieldErrors(({ [row.key]: _fixed, ...rest }) => rest);
+    setSavedPrompt(false);
+  }
+
   function startEdit(row: VariableRow) {
     setKeyError(null);
     setEditor({
       key: row.key,
       value: row.value ?? "",
       isSecret: row.isSecret,
+      availableAtBuild: row.availableAtBuild,
+      mountAsFile: row.mountAsFile,
       isNew: false,
     });
   }
@@ -334,29 +478,29 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
       setKeyError(`${key} already exists; edit it instead.`);
       return;
     }
-    const untouchedSecret =
-      !editor.isNew &&
-      editor.value === "" &&
-      savedKeys.has(key) &&
-      !draft.set.has(key) &&
-      rows.find((row) => row.key === key)?.value === null;
-    if (untouchedSecret) {
-      // The saved secret is unknown here, so a blank field means "keep it" and it can't
-      // be unmasked without typing the value again.
-      if (editor.isSecret) {
-        setEditor(null);
-      } else {
-        setKeyError("Enter the value again to store it unmasked.");
-      }
+    const saved = editor.isNew ? undefined : savedVariable(key);
+    // A value the caller can't read (a secret, always) shows as an empty field, so empty
+    // means "keep it"; an unchanged readable value is kept too. Either way only the tier
+    // and flags are sent, which is how a write-only secret's flags change.
+    const keepsValue =
+      saved !== undefined &&
+      draft.set.get(key)?.value === undefined &&
+      (saved.value === null ? editor.value === "" : editor.value === saved.value);
+    if (keepsValue && saved.tier === "secret" && !editor.isSecret) {
+      setKeyError("Enter the value again to store it unmasked.");
       return;
     }
-    const locked = lockedTier(key, editor.value);
-    setDraft((current) =>
-      stageSet(current, key, {
-        value: editor.value,
+    const locked = keepsValue ? null : lockedTier(key, editor.value);
+    const change = normalizeChange(
+      {
+        ...(keepsValue ? {} : { value: editor.value }),
         isSecret: locked ? locked.tier === "secret" : editor.isSecret,
-      }),
+        availableAtBuild: editor.availableAtBuild,
+        mountAsFile: editor.mountAsFile,
+      },
+      saved,
     );
+    setDraft((current) => (change ? stageSet(current, key, change) : unstage(current, key)));
     setFieldErrors(({ [key]: _fixed, ...rest }) => rest);
     setSavedPrompt(false);
     setEditor(null);
@@ -364,9 +508,11 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
 
   function onSave(consent: PutConsent = {}) {
     if (!environment) return;
-    const invalid = [...draft.set].find(([, staged]) => referenceErrors(staged.value).length > 0);
+    const invalid = [...draft.set].find(
+      ([, staged]) => referenceErrors(staged.value ?? "").length > 0,
+    );
     if (invalid) {
-      const syntax = referenceErrors(invalid[1].value)[0]!;
+      const syntax = referenceErrors(invalid[1].value ?? "")[0]!;
       setFieldErrors({
         [invalid[0]]: {
           key: invalid[0],
@@ -454,6 +600,7 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
       <RowEditor
         editor={editor}
         catalog={catalog}
+        buildRefusalFor={buildRefusalFor}
         onNamespace={onNamespace}
         onChange={(next) => {
           setEditor(next);
@@ -467,7 +614,14 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
 
   return (
     <section aria-label="Variables" className="grid gap-4">
-      {lockedReason ? <LockedNote reason={lockedReason} /> : null}
+      {lockedReason ? (
+        <>
+          <LockedNote reason={lockedReason} />
+          <span id={lockedId} className="sr-only">
+            {lockedReason}
+          </span>
+        </>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           {rows.length} {rows.length === 1 ? "variable" : "variables"} in{" "}
@@ -485,7 +639,14 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
               variant="primary"
               onClick={() => {
                 setKeyError(null);
-                setEditor({ key: "", value: "", isSecret: false, isNew: true });
+                setEditor({
+                  key: "",
+                  value: "",
+                  isSecret: false,
+                  availableAtBuild: false,
+                  mountAsFile: false,
+                  isNew: true,
+                });
               }}
             >
               <PlusIcon />
@@ -494,6 +655,26 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
           </div>
         ) : null}
       </div>
+      <dl className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2 sm:gap-4">
+        <div>
+          <dt className="inline font-medium text-foreground">Build</dt>{" "}
+          <dd id={buildHelpId} className="inline">
+            Also passed to builds: plain values as build args, secrets as BuildKit secrets read with{" "}
+            <code className="font-mono">RUN --mount=type=secret,id=KEY</code>, never baked into
+            layers. Off by default; fork and PR preview builds never get build-time secrets.
+          </dd>
+        </div>
+        <div>
+          <dt className="inline font-medium text-foreground">File</dt>{" "}
+          <dd id={fileHelpId} className="inline">
+            Delivered as a read-only file at <code className="font-mono">/run/secrets/KEY</code>{" "}
+            instead of an environment variable, so it doesn't show in{" "}
+            <code className="font-mono">docker inspect</code>. No{" "}
+            <code className="font-mono">KEY_FILE</code> is injected; add a plain{" "}
+            <code className="font-mono">KEY_FILE=/run/secrets/KEY</code> if your image wants one.
+          </dd>
+        </div>
+      </dl>
 
       {savedPrompt && pending === 0 ? (
         <div
@@ -537,16 +718,23 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
               const plain = row.value ?? undefined;
               const masked = plain === undefined;
               const error = fieldErrors[row.key] ?? null;
+              const errorId = `${rowIdBase}-${row.key}-error`;
+              const buildError = error?.field === "available_at_build";
+              const refusal = flagSwitches
+                ? buildRefusalFor(row.key, row.value, row.isSecret)
+                : null;
+              const refusalId = `${rowIdBase}-${row.key}-build`;
+              const deleted = row.change === "deleted";
               return (
                 <li key={row.key} className="border-b border-border/70 last:border-0">
                   {editorFor(row.key) ?? (
                     <div
-                      className="grid items-center gap-x-4 gap-y-1 py-2.5 md:grid-cols-[14rem_minmax(0,1fr)_auto]"
+                      className="grid items-center gap-x-4 gap-y-1 py-2.5 md:grid-cols-[14rem_minmax(0,1fr)_auto_auto]"
                       data-change={row.change}
                     >
                       <div className="flex min-w-0 items-center gap-2">
                         <span
-                          className={`truncate font-mono text-xs ${row.change === "deleted" ? "text-subtle-foreground line-through" : "text-foreground"}`}
+                          className={`truncate font-mono text-xs ${deleted ? "text-subtle-foreground line-through" : "text-foreground"}`}
                         >
                           {row.key}
                         </span>
@@ -557,6 +745,12 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
                               Withheld from preview
                             </Badge>
                           </Tooltip>
+                        ) : null}
+                        {!flagSwitches && row.availableAtBuild ? (
+                          <Badge title="Also passed to builds">build</Badge>
+                        ) : null}
+                        {!flagSwitches && row.mountAsFile ? (
+                          <Badge title={`Mounted at /run/secrets/${row.key}`}>file</Badge>
                         ) : null}
                         {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
                       </div>
@@ -581,8 +775,50 @@ export function VariablesTab({ workspaceId, projectId, serviceId }: ServicePageP
                             plain || <span className="italic">empty</span>
                           )}
                         </span>
-                        {error ? <SpanError error={error} value={plain} /> : null}
+                        {error ? <SpanError id={errorId} error={error} value={plain} /> : null}
+                        {refusal && !buildError ? (
+                          <p
+                            id={refusalId}
+                            className={
+                              row.availableAtBuild ? "mt-0.5 text-xs text-warning" : "sr-only"
+                            }
+                          >
+                            {refusal}
+                          </p>
+                        ) : null}
                       </div>
+                      {flagSwitches ? (
+                        <div className="flex items-center gap-3">
+                          <FlagSwitch
+                            label="Build"
+                            name={`Available at build: ${row.key}`}
+                            checked={row.availableAtBuild}
+                            disabled={
+                              !canManage || deleted || (refusal !== null && !row.availableAtBuild)
+                            }
+                            describedBy={[
+                              buildHelpId,
+                              lockedReason && lockedId,
+                              buildError && errorId,
+                              refusal && !buildError && refusalId,
+                            ]}
+                            invalid={buildError}
+                            onCheckedChange={(next) => toggleFlag(row, { availableAtBuild: next })}
+                          />
+                          <FlagSwitch
+                            label="File"
+                            name={`Mount as file: ${row.key}`}
+                            checked={row.mountAsFile}
+                            disabled={!canManage || deleted}
+                            describedBy={[
+                              fileHelpId,
+                              lockedReason && lockedId,
+                              error?.field === "mount_as_file" && errorId,
+                            ]}
+                            onCheckedChange={(next) => toggleFlag(row, { mountAsFile: next })}
+                          />
+                        </div>
+                      ) : null}
                       <div className="flex items-center justify-end gap-0.5">
                         {!masked && plain ? (
                           <Button

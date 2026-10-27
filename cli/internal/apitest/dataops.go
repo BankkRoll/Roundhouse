@@ -477,3 +477,55 @@ func (f *Fake) listCredentialRotations(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, out)
 }
+
+// -----------------------------------------------------------------------------
+// Volume recovery
+// -----------------------------------------------------------------------------
+
+// SetNodeStatus sets a server's status, e.g. "offline" for a lost one.
+func (f *Fake) SetNodeStatus(nodeID, status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.nodes {
+		if f.nodes[i].ID == nodeID {
+			f.nodes[i].Status = status
+		}
+	}
+}
+
+// recoverVolume mirrors startVolumeRecovery: the volume's server must be
+// lost (offline or removed) and the target eligible; the old volume is
+// abandoned and a pending one is created on the target. It answers the
+// refusal itself and reports whether the recovery started. Must hold f.mu.
+func (f *Fake) recoverVolume(w http.ResponseWriter, s *api.Service, b *api.Backup, targetNodeID string) bool {
+	d := f.dataState()
+	var v *api.Volume
+	for _, x := range d.volumes {
+		if x.ServiceID == s.ID && x.EnvironmentID == b.EnvironmentID && x.Status != "abandoned" && x.Status != "deleted" {
+			v = x
+		}
+	}
+	if v == nil || v.NodeID == nil {
+		apiError(w, http.StatusConflict, "conflict", "The service has no placed volume in this environment; deploy it instead")
+		return false
+	}
+	if i := slices.IndexFunc(f.nodes, func(n api.Node) bool { return n.ID == *v.NodeID }); i >= 0 && f.nodes[i].Status != "offline" {
+		apiError(w, http.StatusConflict, "conflict", "The volume's server "+f.nodes[i].Name+" is "+f.nodes[i].Status+"; recovery is for a lost server. Move the volume instead, which keeps every write")
+		return false
+	}
+	i := slices.IndexFunc(f.targetsOf(v), func(t api.MigrationTarget) bool { return t.NodeID == targetNodeID })
+	if i < 0 {
+		apiError(w, http.StatusNotFound, "not_found", "Node not found")
+		return false
+	}
+	if t := f.targetsOf(v)[i]; !t.Eligible {
+		apiError(w, http.StatusUnprocessableEntity, "migration_target_ineligible", t.Name+": "+*t.Reason)
+		return false
+	}
+	v.Status, v.UpdatedAt = "abandoned", Now
+	nv := *v
+	nv.ID, nv.NodeID, nv.NodeName, nv.Status = f.nextID("vol"), &targetNodeID, nil, api.VolumePending
+	nv.UsedBytes, nv.QuotaMode, nv.ReportedAt, nv.CreatedAt = nil, nil, nil, Now
+	d.volumes = append(d.volumes, &nv)
+	return true
+}

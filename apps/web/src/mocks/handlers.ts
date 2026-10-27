@@ -506,6 +506,9 @@ const phase0Handlers = [
   }),
 
   http.post("*/v1/workspaces/:workspaceId/invites", async ({ params, request }) => {
+    // Like the API, the fresh-session guard runs before validation and access checks.
+    const stale = requireFreshSession();
+    if (stale) return stale;
     const body = await readJson(request);
     const parsed = parseFields(body, { email: { max: 254, email: true } });
     if (!parsed.ok) return parsed.response;
@@ -675,6 +678,8 @@ const phase0Handlers = [
   }),
 
   http.post("*/v1/workspaces/:workspaceId/nodes/join-tokens", ({ params, request }) => {
+    const stale = requireFreshSession();
+    if (stale) return stale;
     const workspaceId = String(params.workspaceId);
     const access = requireWorkspace(workspaceId, "nodes:manage");
     if (!access.ok) return access.response;

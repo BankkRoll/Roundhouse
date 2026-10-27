@@ -8,7 +8,10 @@
  *    `running`. A `new_service` restore first waits, polling every
  *    {@link TARGET_POLL}, until the database the route added is deployed
  *    and healthy, for at most {@link NEW_SERVICE_READY_TIMEOUT_MS}; a
- *    failed deployment fails the restore.
+ *    failed deployment fails the restore. A recovery (an `in_place`
+ *    restore with `target_node_id`) waits the same way for the redeploy
+ *    onto the new node and its empty volume, and is refused if the volume
+ *    has since moved off that node.
  * 2. When the route took a safety backup (`trigger: pre_restore`), wait for
  *    it; its failure fails the restore before anything is touched.
  * 3. `send-job`: presign a one-hour `GET` of the object, unseal the
@@ -129,7 +132,7 @@ export class RestoreWorkflow extends WorkflowEntrypoint<Env, RestoreParams> {
   private async pipeline(step: WorkflowStep, restoreId: string): Promise<Verdict> {
     const mode = await step.do("mode", DB_STEP, () => this.modeOf(restoreId));
     if (mode.kind !== "ok") return mode;
-    if (mode.mode === "new_service") {
+    if (mode.mode === "new_service" || mode.recovery) {
       const readyBy = await step.do(
         "target-deadline",
         async () => Date.now() + NEW_SERVICE_READY_TIMEOUT_MS,
@@ -141,7 +144,11 @@ export class RestoreWorkflow extends WorkflowEntrypoint<Env, RestoreParams> {
         if (ready.kind === "ok") break;
         if (ready.kind !== "pending") return ready;
         if (Date.now() > readyBy) {
-          return fail("target_not_ready: the new database didn't become healthy in time");
+          return fail(
+            mode.recovery
+              ? "target_not_ready: the service didn't become healthy on the new server in time"
+              : "target_not_ready: the new database didn't become healthy in time",
+          );
         }
         await step.sleep(`target-wait-${i}`, TARGET_POLL);
       }
@@ -203,14 +210,16 @@ export class RestoreWorkflow extends WorkflowEntrypoint<Env, RestoreParams> {
   // Steps
   // ---------------------------------------------------------------------------
 
-  private async modeOf(restoreId: string): Promise<Verdict<{ mode: "in_place" | "new_service" }>> {
+  private async modeOf(
+    restoreId: string,
+  ): Promise<Verdict<{ mode: "in_place" | "new_service"; recovery: boolean }>> {
     const [row] = await this.db()
-      .select({ mode: restores.mode, status: restores.status })
+      .select({ mode: restores.mode, status: restores.status, targetNodeId: restores.targetNodeId })
       .from(restores)
       .where(eq(restores.id, restoreId))
       .limit(1);
     if (!row || (row.status !== "queued" && row.status !== "running")) return { kind: "stop" };
-    return { kind: "ok", mode: row.mode };
+    return { kind: "ok", mode: row.mode, recovery: row.targetNodeId !== null };
   }
 
   /**
@@ -283,6 +292,9 @@ export class RestoreWorkflow extends WorkflowEntrypoint<Env, RestoreParams> {
       backup.method,
     );
     if (!found.ok) return fail(DATA_TARGET_MESSAGES[found.reason]);
+    if (restore.targetNodeId && found.target.nodeId !== restore.targetNodeId) {
+      return fail("volume_changed: the recovered volume moved off its new server meanwhile");
+    }
     const now = new Date();
     const claimed = await db
       .update(restores)

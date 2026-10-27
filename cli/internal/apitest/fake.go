@@ -1610,7 +1610,14 @@ func (f *Fake) listNodes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// joinToken mints the canned token. Like the API, it needs a fresh session:
+// API tokens and a stale session (see [Fake.SetSessionStale]) get 403
+// reauth_required.
 func (f *Fake) joinToken(w http.ResponseWriter, r *http.Request) {
+	if callerOf(r).token != nil || f.dataState().staleSession {
+		apiError(w, http.StatusForbidden, "reauth_required", "Confirm your password to continue")
+		return
+	}
 	if f.workspace(w, r) {
 		writeJSON(w, http.StatusCreated, api.JoinToken{Token: JoinToken, ExpiresAt: Now + 3600000, InstallCommand: InstallScript})
 	}

@@ -869,7 +869,7 @@ undelete it within that window.`,
 		},
 	}
 	f.register(cmd, true)
-	cmd.AddCommand(a.dbVolumeResizeCmd(), a.dbVolumeDeleteCmd(), a.dbVolumeUndeleteCmd(), a.dbVolumeMoveCmd(), a.dbVolumeMigrationsCmd())
+	cmd.AddCommand(a.dbVolumeResizeCmd(), a.dbVolumeDeleteCmd(), a.dbVolumeUndeleteCmd(), a.dbVolumeMoveCmd(), a.dbVolumeRecoverCmd(), a.dbVolumeMigrationsCmd())
 	return cmd
 }
 

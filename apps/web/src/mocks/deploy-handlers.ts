@@ -31,12 +31,14 @@ import {
   freeSlug,
   generatedHostname,
   isProjectAction,
+  isReservedBuildName,
   parseReferences,
   presenceColor,
   REALTIME_CLOSE_CODES,
   RESERVED_SERVICE_SLUGS,
   ROLLBACK_SOURCE_STATUSES,
   resolveVariables,
+  SHARED_NAMESPACE,
   scheduleError,
   scopesBeyondRole,
   secretBuildArgsValid,
@@ -391,7 +393,7 @@ function listVariables(scope: DbVariable["scope"], ownerId: string, environmentI
  * `confirm_write_only`, in that order.
  */
 function decideTiers(
-  set: { key: string; value?: string; tier?: DbVariable["tier"] }[],
+  set: { key: string; value?: string; tier?: DbVariable["tier"]; available_at_build?: boolean }[],
   existing: DbVariable[],
   acknowledged: readonly string[],
   confirmed: boolean,
@@ -439,6 +441,30 @@ function decideTiers(
       response: apiError(400, problem.code, `${problem.field}: ${problem.message}`, problems),
     };
   }
+  const reserved = set
+    .filter(
+      (entry) =>
+        (entry.available_at_build ??
+          existing.find((row) => row.key === entry.key)?.available_at_build ??
+          false) &&
+        isReservedBuildName(entry.key),
+    )
+    .map((entry) => entry.key);
+  if (reserved.length) {
+    return {
+      ok: false,
+      response: apiError(
+        400,
+        "invalid_request",
+        reservedBuildMessage(reserved.join(", ")),
+        reserved.map((key) => ({
+          field: key,
+          code: "reserved_name",
+          message: reservedBuildMessage(key),
+        })),
+      ),
+    };
+  }
   if (needAck.length) {
     return {
       ok: false,
@@ -470,6 +496,76 @@ function decideTiers(
     };
   }
   return { ok: true, tiers };
+}
+
+const reservedBuildMessage = (name: string) =>
+  `${name} is reserved for the builder's own environment and can't be passed to a build`;
+
+/**
+ * Mirrors the API's `assertPlainAtBuild`: a plain build-time variable whose resolution
+ * would reach a secret once the write lands is refused with `build_arg_secret`, because
+ * build args end up in the image.
+ */
+function buildArgSecretRefusal(
+  scope: DbVariable["scope"],
+  ownerId: string,
+  projectId: string,
+  environmentId: string,
+  planned: readonly { key: string; value: string; tier: DbVariable["tier"]; build: boolean }[],
+  remove: readonly string[],
+): Response | null {
+  const candidates = planned.filter(
+    (p) => p.tier === "plain" && p.build && parseReferences(p.value).references.length > 0,
+  );
+  if (!candidates.length) return null;
+  const raw = (rows: DbVariable[]) => Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const secretKeys = (rows: DbVariable[]) =>
+    rows.filter((row) => row.tier === "secret").map((row) => row.key);
+  const services: Record<string, Record<string, string>> = {};
+  const secretServiceKeys: Record<string, string[]> = {};
+  let namespace = SHARED_NAMESPACE;
+  for (const entry of db.deploy.services) {
+    if (entry.project_id !== projectId || entry.deleted) continue;
+    const rows = variablesOf("service", entry.id, environmentId);
+    services[entry.slug] = raw(rows);
+    secretServiceKeys[entry.slug] = secretKeys(rows);
+    if (scope === "service" && entry.id === ownerId) namespace = entry.slug;
+  }
+  const sharedRows = variablesOf("shared", projectId, environmentId);
+  let shared = raw(sharedRows);
+  let secretSharedKeys = secretKeys(sharedRows);
+  const values = { ...(scope === "shared" ? shared : (services[namespace] ?? {})) };
+  const secrets = new Set(
+    scope === "shared" ? secretSharedKeys : (secretServiceKeys[namespace] ?? []),
+  );
+  for (const key of remove) {
+    delete values[key];
+    secrets.delete(key);
+  }
+  for (const p of planned) {
+    values[p.key] = p.value;
+    if (p.tier === "secret") secrets.add(p.key);
+    else secrets.delete(p.key);
+  }
+  if (scope === "shared") {
+    shared = values;
+    secretSharedKeys = [...secrets];
+  } else {
+    services[namespace] = values;
+    secretServiceKeys[namespace] = [...secrets];
+  }
+  const taint = secretDerivedVariables({ services, shared, secretServiceKeys, secretSharedKeys });
+  const tainted = new Set(scope === "shared" ? taint.shared : (taint.services[namespace] ?? []));
+  const refused = candidates.map((p) => p.key).filter((key) => tainted.has(key));
+  if (!refused.length) return null;
+  const message = (name: string) =>
+    `${name} references a secret; make it a secret variable with available_at_build and read it with RUN --mount=type=secret,id=${name}`;
+  return apiError(
+    400,
+    "build_arg_secret",
+    message(refused.join(", ")),
+    refused.map((key) => ({ field: key, code: "build_arg_secret", message: message(key) })),
+  );
 }
 
 function byNewest(a: { created_at: number; id: string }, b: { created_at: number; id: string }) {
@@ -1562,6 +1658,24 @@ export const deployHandlers = [
           input.body.confirm_write_only === true,
         );
         if (!decided.ok) return decided.response;
+        const priorRows = variablesOf(scope, ownerId, environment.id);
+        const buildRefusal = buildArgSecretRefusal(
+          scope,
+          ownerId,
+          found.projectId,
+          environment.id,
+          set.map((entry) => {
+            const prior = priorRows.find((row) => row.key === entry.key);
+            return {
+              key: entry.key,
+              value: entry.value ?? prior?.value ?? "",
+              tier: decided.tiers.get(entry.key)?.tier ?? prior?.tier ?? "plain",
+              build: entry.available_at_build ?? prior?.available_at_build ?? false,
+            };
+          }),
+          remove,
+        );
+        if (buildRefusal) return buildRefusal;
         const now = Date.now();
         for (const entry of set) {
           const existing = variablesOf(scope, ownerId, environment.id).find(

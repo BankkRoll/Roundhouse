@@ -827,7 +827,8 @@ deliberate operation:
 - **A suspected key compromise is not a rollover.** An attacker holding the
   old key could announce their own "successor". So emergency replacement
   needs every node to re-join: a new join token, and the operator runs
-  `install.sh --rejoin`. This is documented in the runbook, and the
+  `install.sh --rejoin`. This is documented in the
+  [runbook](../runbooks/emergency-rejoin.md), and the
   dashboard flags nodes still pinned to a retired kid.
 - `GET /v1/instance/signing-keys` reports the current kid, the announced kids
   and, per node, which kids it has pinned.

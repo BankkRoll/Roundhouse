@@ -8,6 +8,7 @@ import { createRoute, z } from "@hono/zod-openapi";
 import { nodes } from "@roundhouse/db";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { clientIp, createRouter, originOf, requireWorkspace } from "../context";
+import { defineRoute, session } from "../contracts/policy";
 import { recordAudit } from "../lib/audit";
 import { notFound } from "../lib/errors";
 import { mintJoinToken } from "../lib/join-tokens";
@@ -57,21 +58,29 @@ const remove = createRoute({
   responses: { 204: { description: "Removed" }, ...errors(401, 403, 404, 409, 429, 502) },
 });
 
-const createJoinToken = createRoute({
-  method: "post",
-  path: "/v1/workspaces/{workspaceId}/nodes/join-tokens",
-  tags: ["nodes"],
-  summary: "Create a single-use join token and install command",
-  security: sessionAuth,
-  request: { params: WorkspaceParams },
-  responses: {
-    201: json(
-      z.object({ token: z.string(), expires_at: Millis, install_command: z.string() }),
-      "Created",
-    ),
-    ...errors(401, 403, 404),
+// SECURITY: A join token lets a machine into the workspace, where it can be
+// handed workloads and their secrets, so minting one needs a fresh session
+// (ADR 0014 "Fresh sessions"); the router enforces it.
+const createJoinToken = defineRoute(
+  session("nodes:manage", ["node.join_token_created"], { reauth: true }),
+  {
+    method: "post",
+    path: "/v1/workspaces/{workspaceId}/nodes/join-tokens",
+    tags: ["nodes"],
+    summary: "Create a single-use join token and install command",
+    description:
+      "Needs a fresh session (403 `reauth_required`); API tokens can't create join tokens.",
+    security: sessionAuth,
+    request: { params: WorkspaceParams },
+    responses: {
+      201: json(
+        z.object({ token: z.string(), expires_at: Millis, install_command: z.string() }),
+        "Created",
+      ),
+      ...errors(401, 403, 404),
+    },
   },
-});
+);
 
 /** Lowercase label keys like Kubernetes' name part: letters, digits, `-`, `_`, `.`, `/`. */
 const LabelKey = z

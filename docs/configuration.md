@@ -19,6 +19,8 @@ to exist before the dashboard can start, plus development knobs.
 - [CI and releases](#ci-and-releases)
 - [What must never be committed](#what-must-never-be-committed)
 
+Runbooks: [emergency re-join after a signing-key compromise](runbooks/emergency-rejoin.md).
+
 ## Control plane
 
 The control plane is a Cloudflare Worker (`apps/api`). Its settings are
