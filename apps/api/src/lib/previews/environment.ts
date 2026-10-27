@@ -29,6 +29,7 @@ import {
   clampPreviewConfig,
   classifyVariable,
   DEFAULT_DATABASE_VOLUME_MB,
+  type DeploymentStatus,
   databaseVersion,
   decideVariableTier,
   LIVE_VOLUME_STATUSES,
@@ -431,19 +432,7 @@ export async function teardownPreviewEnvironment(
         inArray(deployments.status, [...CANCELLABLE_DEPLOYMENT_STATUSES, "active", "crashed"]),
       ),
     );
-  for (const d of live) {
-    try {
-      if (CANCELLABLE_DEPLOYMENT_STATUSES.includes(d.status)) {
-        await cancelDeployment(ctx, projectId, d.id, "The preview was torn down");
-      } else {
-        await transitionDeployment(ctx, projectId, d.id, "removed", {
-          reason: "The preview was torn down",
-        });
-      }
-    } catch (err) {
-      if (!(err instanceof IllegalTransitionError)) throw err;
-    }
-  }
+  for (const d of live) await stopDeployment(ctx, projectId, d.id, d.status);
   const holders = await db
     .update(volumes)
     .set({
@@ -485,6 +474,40 @@ export async function teardownPreviewEnvironment(
   );
   const nodes = new Set([...replicaNodes, ...holders.flatMap((h) => (h.nodeId ? [h.nodeId] : []))]);
   if (nodes.size) await refreshNodes(ctx.env, db, [...nodes]);
+}
+
+/**
+ * Stops one deployment of a torn-down preview: cancels it while in flight,
+ * removes it once live. A rollout can finish between reading its status and
+ * acting on it, so an illegal transition re-reads and tries again.
+ */
+async function stopDeployment(
+  ctx: LifecycleContext,
+  projectId: string,
+  deploymentId: string,
+  status: DeploymentStatus,
+): Promise<void> {
+  let current: DeploymentStatus | undefined = status;
+  for (let attempt = 0; attempt < 3 && current; attempt++) {
+    try {
+      if (CANCELLABLE_DEPLOYMENT_STATUSES.includes(current)) {
+        await cancelDeployment(ctx, projectId, deploymentId, "The preview was torn down");
+      } else if (current === "active" || current === "crashed") {
+        await transitionDeployment(ctx, projectId, deploymentId, "removed", {
+          reason: "The preview was torn down",
+        });
+      }
+      return;
+    } catch (err) {
+      if (!(err instanceof IllegalTransitionError)) throw err;
+      const [row] = await ctx.db
+        .select({ status: deployments.status })
+        .from(deployments)
+        .where(eq(deployments.id, deploymentId))
+        .limit(1);
+      current = row?.status;
+    }
+  }
 }
 
 /** Environments one tick reaps at most. */
