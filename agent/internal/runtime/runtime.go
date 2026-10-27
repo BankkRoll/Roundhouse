@@ -325,7 +325,7 @@ func (r *Runtime) Apply(ds *protocol.DesiredState) bool {
 		}
 		if reason == "" && r.opts.OpenEnv != nil {
 			if err := r.opts.OpenEnv(ds.Generation, w); err != nil {
-				reason = envFailure(err)
+				reason = EnvFailure(err)
 			}
 		}
 		if reason != "" {
@@ -1070,35 +1070,46 @@ func (r *Runtime) createContainer(ctx context.Context, s *wantSpec) error {
 	return nil
 }
 
-// ensureImage makes s.Image available locally. A digest reference that is
+func (r *Runtime) ensureImage(ctx context.Context, s *wantSpec) error {
+	return EnsureImage(ctx, r.d, &s.WorkloadSpec, r.log)
+}
+
+// ImagePuller is the part of the engine API [EnsureImage] uses.
+type ImagePuller interface {
+	InspectImage(ctx context.Context, ref string) (docker.Image, error)
+	PullImage(ctx context.Context, ref string, auth *docker.AuthConfig) error
+}
+
+// EnsureImage makes w.Image available locally. A digest reference that is
 // already present is never re-pulled; a tag is pulled so a moved tag is
 // picked up, falling back to the local copy if the registry is unreachable.
+// registry_auth is only ever sent to the registry the image names.
 //
 // SECURITY: a workload with registry_auth is always pulled, never run from
 // the local cache, so the registry checks its credentials every time: a
 // private image cached for one project must not start for another project
 // that names it without access (ADR 0014 H2).
-func (r *Runtime) ensureImage(ctx context.Context, s *wantSpec) error {
-	ref := docker.ParseReference(s.Image)
-	private := s.RegistryAuth != nil
-	_, inspectErr := r.d.InspectImage(ctx, s.Image)
+func EnsureImage(ctx context.Context, d ImagePuller, w *protocol.WorkloadSpec, log *slog.Logger) error {
+	ref := docker.ParseReference(w.Image)
+	private := w.RegistryAuth != nil
+	_, inspectErr := d.InspectImage(ctx, w.Image)
 	if inspectErr == nil && ref.Digest != "" && !private {
 		return nil
 	}
-	auth, ok := pullAuth(s)
+	auth, ok := pullAuth(w)
 	if !ok {
-		r.log.Warn("registry_auth does not match the image's registry; pulling anonymously",
-			"workload_id", s.ID, "image_registry", ref.Domain, "auth_server", s.RegistryAuth.Server)
+		log.Warn("registry_auth does not match the image's registry; pulling anonymously",
+			"workload_id", w.ID, "image_registry", ref.Domain, "auth_server", w.RegistryAuth.Server)
 	}
-	err := r.d.PullImage(ctx, s.Image, auth)
+	err := d.PullImage(ctx, w.Image, auth)
 	if err == nil {
 		return nil
 	}
 	if inspectErr == nil && !private {
-		r.log.Warn("pull failed; using the local copy", "workload_id", s.ID, "image", s.Image, "err", err)
+		log.Warn("pull failed; using the local copy", "workload_id", w.ID, "image", w.Image, "err", err)
 		return nil
 	}
-	return fmt.Errorf("pull %s: %w", s.Image, err)
+	return fmt.Errorf("pull %s: %w", w.Image, err)
 }
 
 // startAsync (re)starts a stopped container. Caller holds r.mu.
@@ -1231,6 +1242,31 @@ func (r *Runtime) ensureNetworks(ctx context.Context, specs []*wantSpec) {
 		r.networks[s.Network] = true
 		r.mu.Unlock()
 	}
+}
+
+// EnsureNetwork makes sure w's environment network exists, labelled and
+// bridged as the runtime creates it, and has been handed to
+// [Options.OnNetwork], before a container outside the reconciler (a job)
+// joins it. A network the runtime believes exists is checked again, since
+// its garbage collection may have removed it after the last job left.
+// w must already be admitted: its network is created as given.
+func (r *Runtime) EnsureNetwork(ctx context.Context, w *protocol.WorkloadSpec) error {
+	r.mu.Lock()
+	known := r.networks[w.Network]
+	r.mu.Unlock()
+	if known {
+		_, err := r.d.InspectNetwork(ctx, w.Network)
+		if err == nil || !docker.IsNotFound(err) {
+			return err
+		}
+	}
+	if err := r.ensureNetwork(ctx, &wantSpec{WorkloadSpec: *w}); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.networks[w.Network] = true
+	r.mu.Unlock()
+	return nil
 }
 
 // ensureNetwork creates s's network if it is missing, then hands it to
