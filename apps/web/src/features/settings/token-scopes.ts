@@ -20,7 +20,7 @@ export const SCOPE_LABELS: Record<ApiTokenScope, string> = {
   "members:manage": "Invite, change and remove members",
   "tokens:manage": "Create and revoke API tokens",
   "nodes:read": "See servers",
-  "nodes:manage": "Add and remove servers",
+  "nodes:manage": "Add, remove, drain and resume servers",
   "audit:read": "Read the audit log",
   "projects:create": "Create projects",
   "github:manage": "Claim and release GitHub installations",
