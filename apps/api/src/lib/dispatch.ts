@@ -19,9 +19,9 @@ import { claimDueBackups } from "./backups/schedule";
 import { claimDueCertificates, syncCertificates } from "./certificates/schedule";
 import { claimDueCronRuns } from "./cron/schedule";
 import { DOMAIN_CHECK_CRON, runDomainChecks } from "./domains/check";
+import { reapRetiredEnvironments } from "./environments";
 import { configuredOrigin } from "./origin";
 import { runPreviewTick } from "./previews/engine";
-import { reapRetiredEnvironments } from "./previews/environment";
 import { claimMigrationCleanups } from "./volume-migrations";
 import { claimVolumeDeletions } from "./volumes";
 

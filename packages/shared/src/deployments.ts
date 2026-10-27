@@ -104,6 +104,8 @@ export const DEPLOYMENT_TRIGGERS = [
   "migration",
   /** Redeploy onto a new node after its volume was recovered there from a backup. */
   "recovery",
+  /** Runs another environment's image, unchanged (ADR 0007, "Promote"). */
+  "promote",
 ] as const;
 
 /** What started a deployment; see {@link DEPLOYMENT_TRIGGERS}. */

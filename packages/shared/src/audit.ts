@@ -146,6 +146,10 @@ export const AUDIT_ACTIONS = [
   "preview.closed",
   "preview.deleted",
   "node.labels_updated",
+  "environment.created",
+  "environment.cloned",
+  "environment.deleted",
+  "environment.promote_proposed",
 ] as const;
 
 /** An audited action name. */

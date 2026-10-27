@@ -65,10 +65,11 @@ export const STAGED_CHANGE_STATUSES = ["pending", "conflicted", "applied"] as co
 export type StagedChangeStatus = (typeof STAGED_CHANGE_STATUSES)[number];
 
 /**
- * Op types that can be staged today. ADR 0006 also lists `tcp_proxy.set`,
- * `backup_policy.set` and `deployment.promote`; each lands with the feature
- * that owns it (0004, 0007) by adding a member here, a branch to the union
- * below, and an apply step in the API.
+ * Op types that can be staged today. ADR 0006 also lists `tcp_proxy.set` and
+ * `backup_policy.set`; each lands with the feature that owns it (0004) by
+ * adding a member here, a branch to the union below, and an apply step in
+ * the API. `deployment.promote` (ADR 0007) is only ever written by the
+ * promote route, never staged by a client.
  */
 export const STAGED_OP_TYPES = [
   "service.create",
@@ -81,6 +82,7 @@ export const STAGED_OP_TYPES = [
   "volume.delete",
   "domain.add",
   "domain.remove",
+  "deployment.promote",
 ] as const;
 
 /** A staged op's type; see {@link STAGED_OP_TYPES}. */
@@ -279,6 +281,22 @@ export interface DomainRemoveOp {
   service: string;
 }
 
+/**
+ * Deploys, in the set's environment, the exact image another environment's
+ * active deployment runs (ADR 0007, "Promote"): no rebuild, with the target's
+ * config after the apply.
+ */
+export interface DeploymentPromoteOp {
+  type: "deployment.promote";
+  service_id: string;
+  /** An active deployment of the same service in another environment of the project. */
+  from_deployment_id: string;
+  /** Its environment, for the review. */
+  from_environment_id: string;
+  /** Its image, pinned by digest, for the review. */
+  image: string;
+}
+
 /** One operation of a change set. */
 export type StagedOp =
   | ServiceCreateOp
@@ -290,7 +308,8 @@ export type StagedOp =
   | VolumeSetOp
   | VolumeDeleteOp
   | DomainAddOp
-  | DomainRemoveOp;
+  | DomainRemoveOp
+  | DeploymentPromoteOp;
 
 /**
  * The service an op is about, if any: its ID or `new:<n>` ref.
@@ -304,6 +323,7 @@ export function serviceOfOp(op: StagedOp): string | null {
       return op.ref;
     case "service.update":
     case "service.delete":
+    case "deployment.promote":
       return op.service_id;
     case "config.patch":
       return op.service;
@@ -346,20 +366,24 @@ export function targetKeyOf(op: StagedOp): string {
     case "domain.add":
     case "domain.remove":
       return `domain:${op.hostname}`;
+    case "deployment.promote":
+      return `promote:${op.service_id}`;
   }
 }
 
 /**
  * The RBAC action applying an op needs (ADR 0006 "Operations"). Apply checks
  * it against the target environment, so protection rules apply. Volumes and
- * domains are `services:manage`, as on their direct routes.
+ * domains are `services:manage`, as on their direct routes; a promotion is a
+ * deploy.
  *
  * @param op - A staged op.
- * @returns `services:manage` or `variables:manage`.
+ * @returns `services:manage`, `variables:manage` or `deployments:create`.
  */
 export function opAction(
   op: StagedOp,
-): Extract<ProjectAction, "services:manage" | "variables:manage"> {
+): Extract<ProjectAction, "services:manage" | "variables:manage" | "deployments:create"> {
+  if (op.type === "deployment.promote") return "deployments:create";
   return op.type === "variable.set" || op.type === "variable.delete"
     ? "variables:manage"
     : "services:manage";
@@ -397,6 +421,8 @@ export function describeOp(op: StagedOp, serviceName: (ref: string) => string = 
       return `add domain ${op.hostname} to ${serviceName(op.service)}`;
     case "domain.remove":
       return `remove domain ${op.hostname} from ${serviceName(op.service)}`;
+    case "deployment.promote":
+      return `promote ${serviceName(op.service_id)} image ${op.image.slice(op.image.indexOf("@") + 1, op.image.indexOf("@") + 20)}`;
   }
 }
 

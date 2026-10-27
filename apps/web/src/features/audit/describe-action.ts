@@ -156,6 +156,10 @@ const VERBS: Record<AuditAction, string> = {
   "preview.expired": "expired the preview for",
   "preview.closed": "closed the preview for",
   "preview.deleted": "tore down the preview for",
+  "environment.created": "created the environment",
+  "environment.cloned": "cloned into the environment",
+  "environment.deleted": "deleted the environment",
+  "environment.promote_proposed": "proposed a promotion into",
 };
 
 /**
@@ -197,7 +201,15 @@ const TARGETS: Partial<Record<AuditAction, (metadata: Metadata) => string | null
   "preview.expired": pullRequestOf,
   "preview.closed": pullRequestOf,
   "preview.deleted": pullRequestOf,
+  "environment.created": environmentOf,
+  "environment.cloned": environmentOf,
+  "environment.deleted": environmentOf,
+  "environment.promote_proposed": environmentOf,
 };
+
+function environmentOf(metadata: Metadata): string | null {
+  return stringField(metadata, "environment");
+}
 
 function isKnownAction(action: string): action is AuditAction {
   return Object.hasOwn(VERBS, action);

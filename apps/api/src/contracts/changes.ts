@@ -175,6 +175,19 @@ const DomainRemoveOp = DomainRemoveInputOp.extend({
 });
 
 /**
+ * Deploys another environment's exact image (ADR 0007, "Promote"). Only the
+ * promote route writes it; clients can't stage it.
+ */
+const DeploymentPromoteOp = z.object({
+  type: z.literal("deployment.promote"),
+  service_id: z.string(),
+  from_deployment_id: z.string(),
+  from_environment_id: z.string(),
+  /** The image by digest. */
+  image: z.string(),
+});
+
+/**
  * An op as a client stages it. `variable.set` carries the plaintext value,
  * sealed by the server on arrival.
  */
@@ -242,6 +255,7 @@ export const StagedOpSchema = z
     VolumeDeleteOp,
     DomainAddOp,
     DomainRemoveOp,
+    DeploymentPromoteOp,
   ])
   .openapi("StagedOp");
 
