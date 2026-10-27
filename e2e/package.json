@@ -7,7 +7,8 @@
   "scripts": {
     "smoke": "node agent-smoke.mjs",
     "test:browser": "playwright test",
-    "test:phase1": "node phase1/run.mjs"
+    "test:phase1": "node phase1/run.mjs",
+    "test:mesh": "node phase3/mesh/run.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
