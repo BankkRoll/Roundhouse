@@ -2747,6 +2747,214 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "credential_rotations": {
+      "name": "credential_rotations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "environment_id": {
+          "name": "environment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'running'"
+        },
+        "principals": {
+          "name": "principals",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "applied": {
+          "name": "applied",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "secrets_sealed": {
+          "name": "secrets_sealed",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "deploy": {
+          "name": "deploy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "change_set_id": {
+          "name": "change_set_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "deployment_ids": {
+          "name": "deployment_ids",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "requested_by": {
+          "name": "requested_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "credential_rotations_running_uq": {
+          "name": "credential_rotations_running_uq",
+          "columns": [
+            "service_id",
+            "environment_id"
+          ],
+          "isUnique": true,
+          "where": "status = 'running'"
+        },
+        "credential_rotations_svc_env_idx": {
+          "name": "credential_rotations_svc_env_idx",
+          "columns": [
+            "service_id",
+            "environment_id",
+            "id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "credential_rotations_project_id_projects_id_fk": {
+          "name": "credential_rotations_project_id_projects_id_fk",
+          "tableFrom": "credential_rotations",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "credential_rotations_service_id_services_id_fk": {
+          "name": "credential_rotations_service_id_services_id_fk",
+          "tableFrom": "credential_rotations",
+          "tableTo": "services",
+          "columnsFrom": [
+            "service_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "credential_rotations_environment_id_environments_id_fk": {
+          "name": "credential_rotations_environment_id_environments_id_fk",
+          "tableFrom": "credential_rotations",
+          "tableTo": "environments",
+          "columnsFrom": [
+            "environment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "credential_rotations_change_set_id_change_sets_id_fk": {
+          "name": "credential_rotations_change_set_id_change_sets_id_fk",
+          "tableFrom": "credential_rotations",
+          "tableTo": "change_sets",
+          "columnsFrom": [
+            "change_set_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "credential_rotations_requested_by_users_id_fk": {
+          "name": "credential_rotations_requested_by_users_id_fk",
+          "tableFrom": "credential_rotations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "requested_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "restores": {
       "name": "restores",
       "columns": {
@@ -2950,6 +3158,155 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "tcp_proxies": {
+      "name": "tcp_proxies",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "environment_id": {
+          "name": "environment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "container_port": {
+          "name": "container_port",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "public_port": {
+          "name": "public_port",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "allowed_cidrs": {
+          "name": "allowed_cidrs",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "tcp_proxies_svc_env_uq": {
+          "name": "tcp_proxies_svc_env_uq",
+          "columns": [
+            "service_id",
+            "environment_id"
+          ],
+          "isUnique": true
+        },
+        "tcp_proxies_public_port_uq": {
+          "name": "tcp_proxies_public_port_uq",
+          "columns": [
+            "public_port"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "tcp_proxies_project_id_projects_id_fk": {
+          "name": "tcp_proxies_project_id_projects_id_fk",
+          "tableFrom": "tcp_proxies",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "tcp_proxies_service_id_services_id_fk": {
+          "name": "tcp_proxies_service_id_services_id_fk",
+          "tableFrom": "tcp_proxies",
+          "tableTo": "services",
+          "columnsFrom": [
+            "service_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "tcp_proxies_environment_id_environments_id_fk": {
+          "name": "tcp_proxies_environment_id_environments_id_fk",
+          "tableFrom": "tcp_proxies",
+          "tableTo": "environments",
+          "columnsFrom": [
+            "environment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "tcp_proxies_created_by_users_id_fk": {
+          "name": "tcp_proxies_created_by_users_id_fk",
+          "tableFrom": "tcp_proxies",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "volume_migrations": {
       "name": "volume_migrations",
       "columns": {
@@ -3003,6 +3360,84 @@
           "autoincrement": false,
           "default": "'queued'"
         },
+        "phase": {
+          "name": "phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'queued'"
+        },
+        "prior_status": {
+          "name": "prior_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "target_state": {
+          "name": "target_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "copied_bytes": {
+          "name": "copied_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "copy_finished_at": {
+          "name": "copy_finished_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "copy_error": {
+          "name": "copy_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "deployment_id": {
+          "name": "deployment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cleanup_node_id": {
+          "name": "cleanup_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cleanup_after": {
+          "name": "cleanup_after",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cleanup_sent_at": {
+          "name": "cleanup_sent_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cleaned_at": {
+          "name": "cleaned_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "error": {
           "name": "error",
           "type": "text",
@@ -3013,6 +3448,13 @@
         "requested_by": {
           "name": "requested_by",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -3044,6 +3486,30 @@
           "name": "volume_migrations_volume_idx",
           "columns": [
             "volume_id"
+          ],
+          "isUnique": false
+        },
+        "volume_migrations_active_uq": {
+          "name": "volume_migrations_active_uq",
+          "columns": [
+            "volume_id"
+          ],
+          "isUnique": true,
+          "where": "status IN ('queued', 'running')"
+        },
+        "volume_migrations_target_idx": {
+          "name": "volume_migrations_target_idx",
+          "columns": [
+            "target_node_id",
+            "status"
+          ],
+          "isUnique": false
+        },
+        "volume_migrations_cleanup_idx": {
+          "name": "volume_migrations_cleanup_idx",
+          "columns": [
+            "cleaned_at",
+            "cleanup_after"
           ],
           "isUnique": false
         }
@@ -3107,6 +3573,32 @@
           "tableTo": "volumes",
           "columnsFrom": [
             "target_volume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "volume_migrations_deployment_id_deployments_id_fk": {
+          "name": "volume_migrations_deployment_id_deployments_id_fk",
+          "tableFrom": "volume_migrations",
+          "tableTo": "deployments",
+          "columnsFrom": [
+            "deployment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "volume_migrations_cleanup_node_id_nodes_id_fk": {
+          "name": "volume_migrations_cleanup_node_id_nodes_id_fk",
+          "tableFrom": "volume_migrations",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "cleanup_node_id"
           ],
           "columnsTo": [
             "id"
@@ -5230,6 +5722,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "public_hostname": {
+          "name": "public_hostname",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "wg_ip": {
           "name": "wg_ip",
           "type": "text",
@@ -5274,6 +5773,13 @@
         },
         "pinned_signing_kids": {
           "name": "pinned_signing_kids",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "volume_quota": {
+          "name": "volume_quota",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
