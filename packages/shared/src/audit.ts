@@ -118,6 +118,10 @@ export const AUDIT_ACTIONS = [
   "key.rollover_scheduled",
   "key.rollover_completed",
   "key.rollover_cancelled",
+  "cron.run_triggered",
+  "cron.run_cancelled",
+  "cron.paused",
+  "cron.resumed",
 ] as const;
 
 /** An audited action name. */
