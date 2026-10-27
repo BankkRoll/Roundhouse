@@ -171,7 +171,8 @@ export function fakeGithub(): FakeGithub {
 
 function route(fake: FakeGithub, method: string, url: URL, body: unknown): Response {
   const p = url.pathname;
-  let m: RegExpExecArray | null;
+  const at = (re: RegExp) => re.exec(p) ?? undefined;
+  let m: RegExpExecArray | undefined;
   if (method === "POST" && /^\/app\/installations\/\d+\/access_tokens$/.test(p)) {
     return json({ token: FAKE_INSTALLATION_TOKEN, expires_at: "2026-10-27T14:00:00Z" }, 201);
   }
@@ -187,12 +188,14 @@ function route(fake: FakeGithub, method: string, url: URL, body: unknown): Respo
       })),
     });
   }
-  if ((m = /^\/repos\/([^/]+\/[^/]+)\/statuses\/([a-f0-9]+)$/.exec(p)) && method === "POST") {
+  m = at(/^\/repos\/([^/]+\/[^/]+)\/statuses\/([a-f0-9]+)$/);
+  if (m && method === "POST") {
     const b = body as { state: string; context: string; description: string; target_url: string };
     fake.statuses.push({ repo: m[1]!, sha: m[2]!, ...b });
     return json({ id: fake.statuses.length, state: b.state, context: b.context }, 201);
   }
-  if ((m = /^\/repos\/([^/]+\/[^/]+)\/collaborators\/([^/]+)\/permission$/.exec(p))) {
+  m = at(/^\/repos\/([^/]+\/[^/]+)\/collaborators\/([^/]+)\/permission$/);
+  if (m) {
     const permission = fake.permissions.get(decodeURIComponent(m[2]!));
     if (!permission) return json({ message: "Not Found" }, 404);
     return json({
@@ -201,7 +204,8 @@ function route(fake: FakeGithub, method: string, url: URL, body: unknown): Respo
       user: { login: decodeURIComponent(m[2]!) },
     });
   }
-  if ((m = /^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments$/.exec(p))) {
+  m = at(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments$/);
+  if (m) {
     const k = `${m[1]}#${m[2]}`;
     const list = fake.comments.get(k) ?? [];
     if (method === "GET") {
@@ -219,7 +223,8 @@ function route(fake: FakeGithub, method: string, url: URL, body: unknown): Respo
       return json(c, 201);
     }
   }
-  if ((m = /^\/repos\/([^/]+\/[^/]+)\/issues\/comments\/(\d+)$/.exec(p)) && method === "PATCH") {
+  m = at(/^\/repos\/([^/]+\/[^/]+)\/issues\/comments\/(\d+)$/);
+  if (m && method === "PATCH") {
     for (const list of fake.comments.values()) {
       const c = list.find((x) => x.id === Number(m![2]));
       if (c) {
@@ -229,17 +234,16 @@ function route(fake: FakeGithub, method: string, url: URL, body: unknown): Respo
     }
     return json({ message: "Not Found" }, 404);
   }
-  if ((m = /^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/labels$/.exec(p)) && method === "POST") {
+  m = at(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/labels$/);
+  if (m && method === "POST") {
     const k = `${m[1]}#${m[2]}`;
     const set = fake.labels.get(k) ?? new Set<string>();
     for (const l of (body as { labels: string[] }).labels) set.add(l);
     fake.labels.set(k, set);
     return json([...set].map((name) => ({ name })));
   }
-  if (
-    (m = /^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/labels\/(.+)$/.exec(p)) &&
-    method === "DELETE"
-  ) {
+  m = at(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/labels\/(.+)$/);
+  if (m && method === "DELETE") {
     const set = fake.labels.get(`${m[1]}#${m[2]}`);
     const name = decodeURIComponent(m[3]!);
     if (!set?.has(name)) return json({ message: "Label does not exist" }, 404);

@@ -1043,7 +1043,9 @@ describe("teardown and limits", () => {
       expect(closed.environment_id).toBeNull();
       await settlePreviews();
       const rows = await deploymentsIn(envId);
-      expect(rows.filter((r) => !["removed", "cancelled", "failed"].includes(r.status))).toEqual([]);
+      expect(rows.filter((r) => !["removed", "cancelled", "failed"].includes(r.status))).toEqual(
+        [],
+      );
       const volumes = await env.DB.prepare(
         "SELECT status, delete_after FROM volumes WHERE environment_id = ?",
       )
@@ -1083,6 +1085,31 @@ describe("teardown and limits", () => {
       const back = await previewWhere(s, (p) => p.status === "active" && p.environment_id !== null);
       expect(back.environment_id).not.toBe(envId);
       expect(back.environment_slug).toBe("pr-7");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "never publishes a preview's ports or rotates its minted credentials",
+    async () => {
+      const s = await stage();
+      await deliver("pull_request", pr());
+      const p = await previewWhere(s, (x) => x.status === "active");
+      const envId = p.environment_id!;
+      const proxy = await s.owner.json(`/v1/services/${s.dbId}/tcp-proxies`, {
+        method: "PUT",
+        json: { environment_id: envId, allowed_cidrs: ["203.0.113.0/24"] },
+      });
+      expect(proxy.status).toBe(409);
+      const rotate = await s.owner.json(`/v1/services/${s.dbId}/database/rotate-credentials`, {
+        method: "POST",
+        json: { environment_id: envId, confirm: "db" },
+      });
+      expect(rotate.status).toBe(409);
+      const rows = await env.DB.prepare("SELECT count(*) AS n FROM tcp_proxies").first<{
+        n: number;
+      }>();
+      expect(rows?.n).toBe(0);
     },
     TEST_TIMEOUT_MS,
   );
