@@ -22,6 +22,7 @@ import {
 import { MAX_WORKLOADS_PER_NODE } from "@roundhouse/protocol";
 import {
   LIVE_VOLUME_STATUSES,
+  mongoKernelRefusal,
   PLACED_CRON_RUN_STATUSES,
   type ResourcesConfig,
   type SchedulerNode,
@@ -175,6 +176,7 @@ export async function schedulerSnapshot(
       allocatedDiskMb: quotaOf.get(n.id) ?? 0,
       meshReady: isMeshed(n, mesh) && n.meshReady,
       zone: n.labels[ZONE_LABEL] ?? null,
+      kernel: n.kernel,
     };
   });
   return { nodes: schedulerNodes, rows: new Map(workspaceNodes.map((n) => [n.id, n])) };
@@ -208,4 +210,21 @@ export async function builderOfDeployment(db: Db, deploymentId: string): Promise
     id = row.rollbackOf;
   }
   return null;
+}
+
+/**
+ * The refusal sentence for a placement that failed on the kernel filter,
+ * naming the kernel of the first node (by ID) it refused.
+ *
+ * @param rejected - `ScheduleResult.rejected` of the failed placement.
+ * @param candidates - The nodes the placement was offered.
+ * @returns The sentence, or `null` when no node was refused for its kernel.
+ */
+export function kernelRefusalOf(
+  rejected: readonly { nodeId: string; reason: string }[],
+  candidates: readonly SchedulerNode[],
+): string | null {
+  const refused = rejected.find((r) => r.reason === "kernel_incompatible");
+  const kernel = refused && candidates.find((n) => n.id === refused.nodeId)?.kernel;
+  return kernel ? mongoKernelRefusal(kernel) : null;
 }

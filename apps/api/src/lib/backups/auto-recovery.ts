@@ -218,6 +218,7 @@ export async function pickRecoveryTarget(
       environmentNodeIds: (
         await environmentNodeIds(db, volume.environmentId, volume.serviceId)
       ).filter((id) => id !== input.lostNodeId),
+      avoidRseqAffectedKernels: ctx.kernelSensitive,
     },
     snapshot.filter((n) => eligible.has(n.id)),
   );

@@ -87,6 +87,7 @@ import {
   type BuildConfig,
   canTransition,
   type DeploymentStatus,
+  isKernelSensitiveDatabase,
   isTerminalCronRunStatus,
   newId,
   ROLLOUT_TIMEOUT_MS,
@@ -144,7 +145,7 @@ import { syncPreviewFeedback } from "../lib/previews/github";
 import { loadPreviewSettings } from "../lib/previews/settings";
 import { buildCandidates } from "../lib/registry";
 import { resolveServiceEnvironment } from "../lib/resolve-env";
-import { environmentNodeIds, schedulerSnapshot } from "../lib/scheduling";
+import { environmentNodeIds, kernelRefusalOf, schedulerSnapshot } from "../lib/scheduling";
 import { loadEnvironmentVariables, projectKey } from "../lib/variables";
 import { ensureVolume, type VolumeRow } from "../lib/volumes";
 import {
@@ -1360,6 +1361,10 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         requiresRegistry: image.startsWith(`${REGISTRY_LISTEN}/`),
         // An environment spans nodes only over a ready mesh (ADR 0005).
         environmentNodeIds: await environmentNodeIds(db, plan.environmentId, plan.serviceId),
+        avoidRseqAffectedKernels: isKernelSensitiveDatabase(
+          service.databaseEngine,
+          service.databaseVersion,
+        ),
         ...(volume
           ? {
               minProtocolVersion: VOLUMES_PROTOCOL_VERSION,
@@ -1375,7 +1380,10 @@ export class DeployWorkflow extends WorkflowEntrypoint<Env, DeployParams> {
         result.reason === "no_nodes"
           ? `No nodes run agent protocol ${SEALED_ENV_PROTOCOL_VERSION} or later with a registered encryption key`
           : `Could not place replica ${result.replica}: ${result.reason.replace(/_/g, " ")}`;
-      if (
+      const kernel = kernelRefusalOf(result.rejected, schedulerNodes);
+      if (kernel) {
+        reason = `Could not place replica ${result.replica}: ${kernel}`;
+      } else if (
         volume?.nodeId &&
         (result.reason === "pinned_elsewhere" || result.reason === "no_nodes")
       ) {

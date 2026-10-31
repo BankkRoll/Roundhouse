@@ -132,6 +132,7 @@ describe("migration targets", () => {
       allocatedMb: new Map([["node_b", 8 * 1024]]),
       hasTcpProxy: false,
       cleaningUp: new Set<string>(),
+      kernelSensitive: false,
       now,
     };
     expect(targetIneligibility(node, ctx)).toMatch(/unallocated/);
@@ -152,6 +153,15 @@ describe("migration targets", () => {
         cleaningUp: new Set(["node_b"]),
       }),
     ).toMatch(/still deleting/);
+    const affected = { ...node, kernel: "7.0.0-14-generic" };
+    const fits = { ...ctx, allocatedMb: new Map() };
+    expect(targetIneligibility(affected, fits)).toBeNull();
+    expect(targetIneligibility(affected, { ...fits, kernelSensitive: true })).toMatch(
+      /kernel 7.0.0-14-generic can't run MongoDB 8.0/,
+    );
+    expect(
+      targetIneligibility({ ...node, kernel: "7.0.14" }, { ...fits, kernelSensitive: true }),
+    ).toBeNull();
   });
 });
 

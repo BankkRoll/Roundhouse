@@ -35,6 +35,7 @@ import {
   placements,
   projects,
   serviceConfigs,
+  services,
   tcpProxies,
   volumeMigrations,
   volumes,
@@ -45,7 +46,13 @@ import {
   VOLUMES_PROTOCOL_VERSION,
   type VolumeStatusReport,
 } from "@roundhouse/protocol";
-import { LIVE_VOLUME_STATUSES, newId, type VolumeStatusName } from "@roundhouse/shared";
+import {
+  isKernelSensitiveDatabase,
+  isMongoRseqAffectedKernel,
+  LIVE_VOLUME_STATUSES,
+  newId,
+  type VolumeStatusName,
+} from "@roundhouse/shared";
 import { and, desc, eq, inArray, isNotNull, isNull, lte, ne, or } from "drizzle-orm";
 import type { Env } from "../env";
 import { auditInsert } from "./audit";
@@ -94,6 +101,8 @@ export interface EligibilityContext {
   hasTcpProxy: boolean;
   /** Nodes deleting an old copy of this volume right now. */
   cleaningUp: ReadonlySet<string>;
+  /** The service runs MongoDB 8.0+, which can't start on kernels 6.19 to 7.0.13. */
+  kernelSensitive: boolean;
   now: number;
 }
 
@@ -123,6 +132,9 @@ export function targetIneligibility(node: NodeRow, ctx: EligibilityContext): str
   }
   if (ctx.hasTcpProxy && !enforcesTcpProxy(node)) {
     return "Its agent can't enforce the service's TCP proxy allowlist";
+  }
+  if (ctx.kernelSensitive && isMongoRseqAffectedKernel(node.kernel)) {
+    return `Its Linux kernel ${node.kernel} can't run MongoDB 8.0 and later (6.19 to 7.0.13); upgrade it to 7.0.14 or later`;
   }
   if (ctx.cleaningUp.has(node.id)) {
     return "It is still deleting an earlier copy of this volume; try again shortly";
@@ -207,6 +219,11 @@ export async function eligibilityContext(
         isNull(volumeMigrations.cleanedAt),
       ),
     );
+  const [service] = await db
+    .select({ engine: services.databaseEngine, version: services.databaseVersion })
+    .from(services)
+    .where(eq(services.id, volume.serviceId))
+    .limit(1);
   const [proxy] = await db
     .select({ id: tcpProxies.id })
     .from(tcpProxies)
@@ -224,6 +241,7 @@ export async function eligibilityContext(
     allocatedMb,
     hasTcpProxy: proxy !== undefined,
     cleaningUp: new Set(cleaning.flatMap((r) => (r.nodeId ? [r.nodeId] : []))),
+    kernelSensitive: isKernelSensitiveDatabase(service?.engine, service?.version),
     now,
   };
 }

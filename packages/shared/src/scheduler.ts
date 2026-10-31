@@ -8,8 +8,14 @@
  * available, node selector matches, the environment may span to the node
  * (its nodes and this one are all on a ready mesh, ADR 0005), the node can
  * pull the image (git-built images), volume disk fits, memory fits, CPU
- * fits. Memory is never overcommitted; CPU limits may add up to
+ * fits, the node's kernel can run the workload (MongoDB 8.0+, see
+ * `./kernel`). Memory is never overcommitted; CPU limits may add up to
  * {@link CPU_OVERCOMMIT_RATIO} times a node's cores.
+ *
+ * The kernel filter runs last on purpose: the failure reason is the
+ * deepest filter reached, so a node that would otherwise fit reports its
+ * kernel, which only an operator can fix, rather than a capacity shortfall
+ * on some other node.
  *
  * Scoring, for each replica in turn: one point per replica of the same
  * service on the node plus half a point per same-service replica in the
@@ -19,6 +25,7 @@
  * @module
  */
 import type { NodeStatus } from "./constants";
+import { isMongoRseqAffectedKernel } from "./kernel";
 
 /** CPU limits on a node may add up to this many times its cores. */
 export const CPU_OVERCOMMIT_RATIO = 2;
@@ -74,6 +81,8 @@ export interface SchedulerNode {
   meshReady?: boolean;
   /** The {@link ZONE_LABEL} label; `null` or absent for no zone. */
   zone?: string | null;
+  /** `hello.kernel` (`uname -r`); `null` or absent when not reported. */
+  kernel?: string | null;
 }
 
 /** What to place. */
@@ -103,6 +112,11 @@ export interface ScheduleRequest {
   environmentNodeIds?: readonly string[];
   /** Nodes that may not take the replica: the one being drained or replaced. */
   excludeNodeIds?: readonly string[];
+  /**
+   * The replica runs MongoDB 8.0 or later, which can't start on kernels
+   * 6.19 to 7.0.13 (`isMongoRseqAffectedKernel`).
+   */
+  avoidRseqAffectedKernels?: boolean;
 }
 
 /** One replica's node. */
@@ -125,6 +139,7 @@ export const SCHEDULE_FAILURE_REASONS = [
   "insufficient_disk",
   "insufficient_memory",
   "insufficient_cpu",
+  "kernel_incompatible",
 ] as const;
 
 /** Why scheduling failed; see {@link SCHEDULE_FAILURE_REASONS}. */
@@ -186,6 +201,9 @@ function rejection(
   }
   if (alloc.mem + req.memoryMb > node.memoryMb) return "insufficient_memory";
   if (alloc.cpu + req.cpuMillis > node.cpuMillis * CPU_OVERCOMMIT_RATIO) return "insufficient_cpu";
+  if (req.avoidRseqAffectedKernels && isMongoRseqAffectedKernel(node.kernel)) {
+    return "kernel_incompatible";
+  }
   return null;
 }
 

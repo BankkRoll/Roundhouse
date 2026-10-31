@@ -220,7 +220,7 @@ export class DrainWorkflow extends WorkflowEntrypoint<Env, DrainParams> {
         targets.add(placed.nodeId);
       } else {
         m.state = "failed";
-        m.error = `No other server can take it: ${placed.reason.replace(/_/g, " ")}`;
+        m.error = `No other server can take it: ${placed.message ?? placed.reason.replace(/_/g, " ")}`;
       }
     }
     if (!(await this.save(drainId, { moves }))) return false;

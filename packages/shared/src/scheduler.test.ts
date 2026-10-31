@@ -464,3 +464,58 @@ describe("schedule while draining and across zones (ADR 0005)", () => {
     }
   });
 });
+
+describe("schedule with kernel-sensitive workloads (SERVER-121912)", () => {
+  const mongo = { avoidRseqAffectedKernels: true } as const;
+
+  it("refuses MongoDB 8.0+ on a kernel from 6.19 to 7.0.13", () => {
+    expect(schedule(request(mongo), [node("a", { kernel: "7.0.0-14-generic" })])).toEqual({
+      ok: false,
+      reason: "kernel_incompatible",
+      replica: 0,
+      rejected: [{ nodeId: "a", reason: "kernel_incompatible" }],
+    });
+  });
+
+  it("falls back to a node with an unaffected kernel", () => {
+    const result = schedule(request(mongo), [
+      // Busier, so packing alone would have picked it.
+      node("a", { kernel: "6.19.2-arch1-1", allocatedMemoryMb: 4096 }),
+      node("b", { kernel: "6.8.0-45-generic" }),
+    ]);
+    expect(result).toEqual({ ok: true, placements: [{ replica: 0, nodeId: "b" }] });
+  });
+
+  it("places on fixed, older and unreported kernels", () => {
+    for (const kernel of ["7.0.14", "6.18.9", "6.8.0-45-generic", null, undefined, "garbage"]) {
+      expect(schedule(request(mongo), [node("a", { kernel })]).ok).toBe(true);
+    }
+  });
+
+  it("leaves other workloads alone", () => {
+    expect(schedule(request(), [node("a", { kernel: "7.0.0-14-generic" })]).ok).toBe(true);
+  });
+
+  it("reports the kernel over capacity elsewhere, since only an operator can fix it", () => {
+    const result = schedule(request(mongo), [
+      node("a", { kernel: "7.0.0-14-generic" }),
+      node("b", { allocatedMemoryMb: 8000 }),
+    ]);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "kernel_incompatible",
+      rejected: [
+        { nodeId: "a", reason: "kernel_incompatible" },
+        { nodeId: "b", reason: "insufficient_memory" },
+      ],
+    });
+  });
+
+  it("checks the pinned node's kernel too", () => {
+    const result = schedule(request({ ...mongo, pinnedNodeId: "a" }), [
+      node("a", { kernel: "7.0.5" }),
+      node("b"),
+    ]);
+    expect(result).toMatchObject({ ok: false, reason: "kernel_incompatible" });
+  });
+});

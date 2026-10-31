@@ -38,6 +38,7 @@ import {
 } from "@roundhouse/db";
 import { REGISTRY_LISTEN } from "@roundhouse/protocol";
 import {
+  isKernelSensitiveDatabase,
   newId,
   type ScheduleFailureReason,
   type ServiceHealthReason,
@@ -47,7 +48,12 @@ import { and, eq, inArray, isNull, notInArray } from "drizzle-orm";
 import { recordAudit } from "./audit";
 import { type RefreshEnv, refreshNodes } from "./desired-state";
 import { publish } from "./realtime";
-import { builderOfDeployment, environmentNodeIds, schedulerSnapshot } from "./scheduling";
+import {
+  builderOfDeployment,
+  environmentNodeIds,
+  kernelRefusalOf,
+  schedulerSnapshot,
+} from "./scheduling";
 import { toApiService } from "./serialize";
 
 /** Bindings that publish health changes to project rooms. */
@@ -131,7 +137,12 @@ export async function replicasOnNode(db: Db, nodeId: string): Promise<MovableRep
 /** Outcome of {@link placeReplacement}. */
 export type Replacement =
   | { ok: true; nodeId: string; workloadId: string }
-  | { ok: false; reason: ScheduleFailureReason | "gone" };
+  | {
+      ok: false;
+      reason: ScheduleFailureReason | "gone";
+      /** A sentence for the operator when the reason alone isn't actionable. */
+      message?: string;
+    };
 
 /**
  * Schedules one replica on another node and inserts its placement. The
@@ -149,7 +160,13 @@ export async function placeReplacement(
   vacated: string,
 ): Promise<Replacement> {
   const [row] = await db
-    .select({ deployment: deployments, config: serviceConfigs, workspaceId: projects.workspaceId })
+    .select({
+      deployment: deployments,
+      config: serviceConfigs,
+      workspaceId: projects.workspaceId,
+      databaseEngine: services.databaseEngine,
+      databaseVersion: services.databaseVersion,
+    })
     .from(deployments)
     .innerJoin(services, eq(services.id, deployments.serviceId))
     .innerJoin(projects, eq(projects.id, services.projectId))
@@ -182,10 +199,14 @@ export async function placeReplacement(
       environmentNodeIds: (await environmentNodeIds(db, d.environmentId, d.serviceId)).filter(
         (id) => id !== vacated,
       ),
+      avoidRseqAffectedKernels: isKernelSensitiveDatabase(row.databaseEngine, row.databaseVersion),
     },
     candidates,
   );
-  if (!result.ok) return { ok: false, reason: result.reason };
+  if (!result.ok) {
+    const message = kernelRefusalOf(result.rejected, candidates);
+    return { ok: false, reason: result.reason, ...(message ? { message } : {}) };
+  }
   const nodeId = result.placements[0]!.nodeId;
   const workloadId = newId("workload");
   await db.insert(placements).values({
