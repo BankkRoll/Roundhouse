@@ -12,19 +12,12 @@ and what "done" means. Design background is in [docs/adr](docs/adr).
 ## Needs live verification
 
 These are covered by tests against fakes only:
-
 - Cloudflare Containers (the README says "Preview").
 - Cloudflare for SaaS custom hostnames.
 - Point-in-time restore against a real R2 bucket: the agent's integration
   test archives WAL to a fake S3 endpoint and restores real Postgres 18 from
   it; the upload and fetch URLs the control plane signs have not been used
   against R2 itself.
-
-## Decisions to confirm
-
-- ADR 0012 now lets MCP drain and resume servers (not add or remove them).
-  Revert the `drain_node` and `resume_node` tools if MCP should never touch
-  servers.
 
 ## Not built
 
