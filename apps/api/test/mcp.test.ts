@@ -342,6 +342,9 @@ describe("tools/list", () => {
       "resume_node",
       "list_databases",
       "list_backups",
+      "get_pitr_status",
+      "get_recovery_policy",
+      "list_abandoned_copies",
       "get_metrics",
       "list_cron_runs",
       "list_previews",
@@ -363,6 +366,9 @@ describe("tools/list", () => {
       "list_variables",
       "list_changes",
       "list_domains",
+      "get_pitr_status",
+      "get_recovery_policy",
+      "list_abandoned_copies",
     ]) {
       expect(byName.get(name)!.annotations?.readOnlyHint).toBe(true);
     }
@@ -1147,6 +1153,159 @@ describe("data tools", () => {
     });
     expect(res.body.error.status).toBe(404);
     expect(MCP_TOOLS.some((t) => /query|sql/.test(t.name))).toBe(false);
+    await client.close();
+  });
+});
+
+describe("recovery tools", () => {
+  const RECOVERY_TOOLS = ["get_pitr_status", "get_recovery_policy", "list_abandoned_copies"];
+
+  /** A Postgres service with a restorable window, a recovery policy and an abandoned copy. */
+  async function recoveryStage() {
+    const installed = await install();
+    const { owner, workspaceId } = installed;
+    const joined = await joinNode(owner, workspaceId);
+    const project = await createProject(owner, workspaceId);
+    const envId = project.environments.find((e) => e.kind === "production")!.id;
+    const created = await owner.json<{ service: { id: string }; volumes: { id: string }[] }>(
+      `/v1/projects/${project.id}/databases`,
+      { method: "POST", json: { environment_id: envId, engine: "postgres", deploy: false } },
+    );
+    expect(created.status).toBe(201);
+    const serviceId = created.body.service.id;
+    const volumeId = created.body.volumes[0]!.id;
+    const now = Date.now();
+    const run = (sql: string, ...binds: unknown[]) =>
+      env.DB.prepare(sql)
+        .bind(...binds)
+        .run();
+    await run(
+      `INSERT INTO wal_streams (id, project_id, service_id, environment_id, volume_id, status, segment_count, bytes_stored, created_at, updated_at)
+       VALUES ('wal_mcp', ?, ?, ?, ?, 'active', 2, 20, ?, ?)`,
+      project.id,
+      serviceId,
+      envId,
+      volumeId,
+      now,
+      now,
+    );
+    await run(
+      `INSERT INTO backups (id, project_id, service_id, environment_id, volume_id, trigger, method,
+         engine, status, object_key, upload_id, sha256, bytes_stored, wal_stream_id, wal_start,
+         finished_at, created_at, updated_at)
+       VALUES ('bak_base', ?, ?, ?, ?, 'schedule', 'base', 'postgres', 'succeeded',
+         'backups/secret-object-key', 'upload-secret', ?, 10, 'wal_mcp', '000000010000000000000002', ?, ?, ?)`,
+      project.id,
+      serviceId,
+      envId,
+      volumeId,
+      "a".repeat(64),
+      now - 3 * 3600_000,
+      now - 3 * 3600_000,
+      now - 3 * 3600_000,
+    );
+    for (const [name, at] of [
+      ["000000010000000000000002", now - 2 * 3600_000],
+      ["000000010000000000000003", now - 3600_000],
+    ] as const) {
+      await run(
+        `INSERT INTO wal_segments (stream_id, name, size_raw, size_stored, sha256, archived_at, created_at)
+         VALUES ('wal_mcp', ?, 16777216, 10, ?, ?, ?)`,
+        name,
+        "b".repeat(64),
+        at,
+        now,
+      );
+    }
+    await run(
+      `INSERT INTO recovery_policies (id, project_id, service_id, environment_id, enabled, grace_minutes, enabled_by, status, message, created_at, updated_at)
+       VALUES ('rcp_mcp', ?, ?, ?, 1, 15, ?, 'watching', 'hel-1 is offline', ?, ?)`,
+      project.id,
+      serviceId,
+      envId,
+      installed.userId,
+      now,
+      now,
+    );
+    await run(
+      `INSERT INTO volumes (id, project_id, environment_id, service_id, mount_path, size_mb, node_id, status, used_bytes, abandoned_at, delete_after, created_at, updated_at)
+       VALUES ('vol_old', ?, ?, ?, '/var/lib/postgresql', 1024, ?, 'abandoned', 4096, ?, ?, ?, ?)`,
+      project.id,
+      envId,
+      serviceId,
+      joined.node_id,
+      now,
+      now + 72 * 3600_000,
+      now,
+      now,
+    );
+    return { ...installed, project, envId, serviceId };
+  }
+
+  it("answer exactly what the REST reads answer, read-only and without object keys", async () => {
+    const s = await recoveryStage();
+    const rest = async (path: string) =>
+      (await s.owner.json(`/v1/services/${s.serviceId}/${path}?environment_id=${s.envId}`)).body;
+    const client = await connect(await mint(s.owner, s.workspaceId, API_TOKEN_PRESETS.read));
+
+    const pitr = await tool<{ windows: { from: number; to: number }[] }>(
+      client,
+      "get_pitr_status",
+      { service_id: s.serviceId, environment_id: s.envId },
+    );
+    expect(pitr.isError).toBe(false);
+    expect(pitr.body).toEqual(await rest("pitr"));
+    expect(pitr.body.windows).toHaveLength(1);
+    expect(pitr.text).not.toMatch(/secret-object-key|upload-secret|aaaaaaaa/);
+
+    const policy = await tool(client, "get_recovery_policy", { service_id: s.serviceId });
+    expect(policy.body).toEqual(await rest("recovery-policy"));
+    expect(policy.body).toMatchObject({ enabled: true, status: "watching", grace_minutes: 15 });
+
+    const copies = await tool<{ environment_id: string; copies: unknown[] }>(
+      client,
+      "list_abandoned_copies",
+      { service_id: s.serviceId },
+    );
+    expect(copies.body).toEqual({
+      environment_id: s.envId,
+      ...((await rest("volume/abandoned-copies")) as object),
+    });
+    expect(copies.body.copies).toEqual([
+      // No restore filled a replacement yet, so the copy is kept.
+      expect.objectContaining({ volume_id: "vol_old", state: "kept" }),
+    ]);
+    for (const name of RECOVERY_TOOLS) {
+      expect(MCP_TOOLS.find((t) => t.name === name)!.scopes).toEqual(["services:read"]);
+    }
+    await client.close();
+  });
+
+  it("need services:read, and see nothing of another workspace", async () => {
+    const s = await recoveryStage();
+    const narrow = await mint(s.owner, s.workspaceId, ["nodes:read"]);
+    for (const name of RECOVERY_TOOLS) {
+      const res = await rpc(callBody(name, { service_id: s.serviceId }), {
+        authorization: `Bearer ${narrow}`,
+      });
+      expect(res.status).toBe(403);
+      expect(res.headers.get("www-authenticate")).toContain('scope="services:read"');
+    }
+
+    // The same owner's token, minted in another workspace, can't reach this service.
+    const elsewhere = await s.owner.json<{ id: string }>("/v1/workspaces", {
+      method: "POST",
+      json: { name: "Elsewhere" },
+    });
+    const client = await connect(await mint(s.owner, elsewhere.body.id, API_TOKEN_PRESETS.read));
+    for (const name of RECOVERY_TOOLS) {
+      const res = await tool<{ error: { status: number } }>(client, name, {
+        service_id: s.serviceId,
+      });
+      expect(res.isError).toBe(true);
+      expect(res.body.error.status).toBe(404);
+      expect(res.text).not.toContain("vol_old");
+    }
     await client.close();
   });
 });

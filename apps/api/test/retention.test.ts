@@ -143,8 +143,13 @@ describe("expired records", () => {
       userId,
       at(-0.01),
     );
-    // The owner's real session from install() expires in a week: kept.
-    await ins("UPDATE sessions SET expires_at = ? WHERE id <> 'ses_old'", at(6));
+    // The owner's real session from install() expires in a week: kept. Its
+    // expiry follows the wall clock, since /v1/me below checks it against
+    // the real time, not NOW.
+    await ins(
+      "UPDATE sessions SET expires_at = ? WHERE id <> 'ses_old'",
+      Math.max(at(6), Date.now() + 6 * DAY),
+    );
     await ins(
       "INSERT INTO verifications (id, identifier, value, expires_at, created_at, updated_at) VALUES ('ver_old', 'x', 'y', ?, 0, 0), ('ver_live', 'x', 'z', ?, 0, 0)",
       at(-1),

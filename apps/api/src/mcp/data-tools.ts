@@ -1,10 +1,12 @@
 /**
- * Read-only MCP tools for data services and metrics (ADR 0004, 0008):
- * `list_databases`, `list_backups` and `get_metrics`.
+ * Read-only MCP tools for data services, recovery and metrics (ADR 0004,
+ * 0008): `list_databases`, `list_backups`, `get_pitr_status`,
+ * `get_recovery_policy`, `list_abandoned_copies` and `get_metrics`.
  *
  * Each checks the same action as the matching REST read (`services:read`)
- * through the same scope loaders, so a token sees exactly what it could
- * over REST.
+ * through the same scope loaders, and the recovery tools build their answer
+ * with the REST routes' own functions, so a token sees exactly what it
+ * could over REST.
  *
  * SECURITY: nothing here runs a query or returns a credential, a presigned
  * URL, an object key or a backup key. Database access stays in the
@@ -23,7 +25,17 @@ import {
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import type { AppContext } from "../context";
-import { getServiceMetrics, getServiceVolume, policyOf } from "../contracts";
+import {
+  getPitrStatus,
+  getRecoveryPolicy,
+  getServiceMetrics,
+  getServiceVolume,
+  listAbandonedCopies,
+  policyOf,
+} from "../contracts";
+import { abandonedCopies } from "../lib/abandoned-volumes";
+import { recoveryPolicyView } from "../lib/backups/auto-recovery";
+import { pitrStatus } from "../lib/backups/pitr";
 import { ApiError, notFound } from "../lib/errors";
 import { InvalidMetricsQuery } from "../lib/metrics/query";
 import { alignRange, serviceSeries } from "../lib/metrics/series";
@@ -261,5 +273,89 @@ const getMetricsTool: McpTool = {
   },
 };
 
-/** The data and metrics tools, in `tools/list` order. */
-export const DATA_TOOLS: readonly McpTool[] = [listDatabasesTool, listBackupsTool, getMetricsTool];
+/**
+ * Authorizes a recovery read as its REST route does: the route's action on
+ * the service in the environment (production by default).
+ */
+async function recoveryScope(
+  c: AppContext,
+  route: Parameters<typeof policyOf>[0],
+  input: { service_id: string; environment_id?: string },
+) {
+  const { service, project } = await serviceScope(
+    c,
+    input.service_id,
+    policyOf(route).action!,
+    input.environment_id,
+  );
+  const environment = await environmentFor(c, project.id, input.environment_id);
+  return { service, environment };
+}
+
+const RecoveryInput = z.object({
+  service_id: Id("Service"),
+  environment_id: EnvironmentId.optional(),
+});
+
+const getPitrStatusTool: McpTool = {
+  name: "get_pitr_status",
+  title: "Get point-in-time recovery",
+  description:
+    "Returns a Postgres service's point-in-time recovery in one environment: whether it is on, " +
+    "why it can't run, the WAL stream archiving now, the time ranges a restore can target " +
+    "(unix ms, `to` exclusive) and the base backup count. Read-only; restoring stays in the dashboard.",
+  input: RecoveryInput,
+  scopes: [scopeOf(getPitrStatus)],
+  annotations: READ,
+  async run({ c }, raw) {
+    const input = raw as z.infer<typeof RecoveryInput>;
+    const { service, environment } = await recoveryScope(c, getPitrStatus, input);
+    return { ...(await pitrStatus(c.get("db"), service, environment.id)) };
+  },
+};
+
+const getRecoveryPolicyTool: McpTool = {
+  name: "get_recovery_policy",
+  title: "Get automatic recovery",
+  description:
+    "Returns a service's automatic recovery policy in one environment (the defaults when none " +
+    "is saved): whether it is on, the grace period, whose access it runs with, and its status " +
+    "(idle, watching, recovering, recovered, failed or blocked) with the reason.",
+  input: RecoveryInput,
+  scopes: [scopeOf(getRecoveryPolicy)],
+  annotations: READ,
+  async run({ c }, raw) {
+    const input = raw as z.infer<typeof RecoveryInput>;
+    const { service, environment } = await recoveryScope(c, getRecoveryPolicy, input);
+    return { ...(await recoveryPolicyView(c.get("db"), service.id, environment.id)) };
+  },
+};
+
+const listAbandonedCopiesTool: McpTool = {
+  name: "list_abandoned_copies",
+  title: "List abandoned volume copies",
+  description:
+    "Lists the copies of a service's volume that recoveries left on lost servers, newest first, " +
+    "with where each cleanup stands (waiting_for_server, scheduled, kept, deleting, deleted) and why.",
+  input: RecoveryInput,
+  scopes: [scopeOf(listAbandonedCopies)],
+  annotations: READ,
+  async run({ c }, raw) {
+    const input = raw as z.infer<typeof RecoveryInput>;
+    const { service, environment } = await recoveryScope(c, listAbandonedCopies, input);
+    return {
+      environment_id: environment.id,
+      copies: await abandonedCopies(c.get("db"), service.id, environment.id),
+    };
+  },
+};
+
+/** The data, recovery and metrics tools, in `tools/list` order. */
+export const DATA_TOOLS: readonly McpTool[] = [
+  listDatabasesTool,
+  listBackupsTool,
+  getPitrStatusTool,
+  getRecoveryPolicyTool,
+  listAbandonedCopiesTool,
+  getMetricsTool,
+];

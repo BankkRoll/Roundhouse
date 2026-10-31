@@ -67,7 +67,7 @@ import {
 } from "../contracts";
 import { ageRecipientOf } from "../lib/age";
 import { auditInsert } from "../lib/audit";
-import { toApiRecoveryPolicy } from "../lib/backups/auto-recovery";
+import { recoveryPolicyView, toApiRecoveryPolicy } from "../lib/backups/auto-recovery";
 import {
   type BackupRow,
   backupMethodFor,
@@ -77,9 +77,9 @@ import {
 } from "../lib/backups/backups";
 import { loadBackupIdentity } from "../lib/backups/keys";
 import {
-  activeWalStream,
   ensureWalStream,
   pitrIneligibility,
+  pitrStatus,
   pitrWindows,
   planPitrRestore,
   requestBaseBackup,
@@ -839,46 +839,7 @@ export const backupRoutes = createRouter()
       environment_id,
     );
     const env = await environmentOf(c, project.id, environment_id);
-    const db = c.get("db");
-    const [policy] = await db
-      .select({ pitr: backupPolicies.pitr })
-      .from(backupPolicies)
-      .where(and(eq(backupPolicies.serviceId, serviceId), eq(backupPolicies.environmentId, env.id)))
-      .limit(1);
-    const stream = await activeWalStream(db, serviceId, env.id);
-    const [bases] = await db
-      .select({ n: sql<number>`count(*)` })
-      .from(backups)
-      .where(
-        and(
-          eq(backups.serviceId, serviceId),
-          eq(backups.environmentId, env.id),
-          eq(backups.method, "base"),
-          eq(backups.status, "succeeded"),
-        ),
-      );
-    return c.json(
-      {
-        service_id: serviceId,
-        environment_id: env.id,
-        enabled: policy?.pitr ?? false,
-        unavailable_reason: await pitrIneligibility(db, service, env.id),
-        stream: stream
-          ? {
-              id: stream.id,
-              status: stream.status,
-              segment_count: stream.segmentCount,
-              bytes_stored: stream.bytesStored,
-              first_archived_at: ms(stream.firstArchivedAt),
-              last_archived_at: ms(stream.lastArchivedAt),
-              created_at: +stream.createdAt,
-            }
-          : null,
-        windows: await pitrWindows(db, serviceId, env.id),
-        base_backups: Number(bases?.n ?? 0),
-      },
-      200,
-    );
+    return c.json(await pitrStatus(c.get("db"), service, env.id), 200);
   })
   .openapi(restorePitr, async (c) => {
     const { serviceId } = c.req.valid("param");
@@ -931,18 +892,7 @@ export const backupRoutes = createRouter()
       environment_id,
     );
     const env = await environmentOf(c, project.id, environment_id);
-    const [policy] = await c
-      .get("db")
-      .select()
-      .from(recoveryPolicies)
-      .where(
-        and(eq(recoveryPolicies.serviceId, serviceId), eq(recoveryPolicies.environmentId, env.id)),
-      )
-      .limit(1);
-    return c.json(
-      toApiRecoveryPolicy(policy, serviceId, env.id, DEFAULT_RECOVERY_GRACE_MINUTES),
-      200,
-    );
+    return c.json(await recoveryPolicyView(c.get("db"), serviceId, env.id), 200);
   })
   .openapi(putRecoveryPolicy, async (c) => {
     const { serviceId } = c.req.valid("param");

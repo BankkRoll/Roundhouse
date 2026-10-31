@@ -530,18 +530,82 @@ uploads after 1 day.
     Server row when its node is lost, restoring the latest succeeded
     backup; the CLI has `roundhouse db volume recover --to SERVER
     [--backup ID]`.
-  - **Not built yet:**
-    - The abandoned copy is never deleted. If the lost node comes back,
-      its desired state no longer lists the volume or the replica, so
-      nothing runs on it, but the agent keeps the data and reports the
-      volume orphaned (it deletes data only for a signed `volume_delete`).
-      Deleting it
-      needs a `volume_delete` for an `abandoned` volume once its node
-      reconnects, like a migration's cleanup.
-    - Recovery is manual. Nothing notices a lost node and recovers its
-      volumes; 0005's offline handling only reports the node.
-    - Only the latest backup's data comes back: there is no point-in-time
-      recovery (no WAL or binlog shipping).
+  - **Follow-ups, as built** (amendment, 2026-10-31; migration `0024`,
+    protocol version 8):
+    - **Abandoned copies** (`lib/abandoned-volumes.ts`). A recovery stamps
+      the old volume with `abandoned_at` and a `delete_after` 72 hours
+      later. The minute tick sends the existing signed `volume_delete` to
+      the old server only once it is reachable again, the grace period is
+      over, the service's live volume is `ready` (or `degraded`) on
+      another server, a restore into it has succeeded, and no restore of
+      the service runs; until then the copy may hold the only data. An
+      unconfirmed or refused delete is resent every 10 minutes; the agent
+      refuses on its own a volume its desired state lists or a container
+      mounts. A node's report counts only for copies pinned to it, and a
+      live volume never changes status from one. The first request and
+      the confirmation are audited (`volume.copy_cleanup_requested`,
+      `volume.copy_deleted`) as the system, and
+      `GET /v1/services/{id}/volume/abandoned-copies` shows each copy's
+      state (`waiting_for_server`, `scheduled`, `kept`, `deleting`,
+      `deleted`) with the reason.
+    - **Automatic recovery** (`lib/backups/auto-recovery.ts`). An opt-in
+      `recovery_policies` row per service and environment, off by default,
+      with a grace period of 5 minutes to 7 days (30 by default). Saving
+      one enabled needs a fresh session and everything a manual recovery
+      needs (`backups:restore`, `services:manage`, `deployments:create`
+      in the environment). Past the grace period the tick re-checks the
+      enabler's current access with `resolveAccess`, picks the newest
+      succeeded backup and a target the scheduler accepts, and runs the
+      same `beginVolumeRecovery` a person would, with
+      `restores.trigger = automatic`, audited as the system
+      (`recovery.triggered`, with `enabled_by`). A server that is draining
+      or in `maintenance` is an operator's decision: it never counts as
+      lost and is never a target. When the tick can't start a recovery
+      the policy is `blocked` with the reason and one `recovery.blocked`
+      entry per new reason. Only project admins hold `backups:restore`,
+      and protection rules never narrow a project admin (0014), so in
+      practice a policy is blocked by its enabler losing that role, the
+      membership or the account, not by protection rules.
+    - **Point-in-time recovery, Postgres only** (`lib/backups/pitr.ts`).
+      The backup policy's `pitr` makes scheduled backups `base` backups
+      (`pg_basebackup`, reporting the first WAL segment they need as
+      `wal_start`) and has the volume's node archive WAL into one
+      `active` stream per service and environment: the database restarts
+      once with `archive_mode=on`, `archive_timeout=60` and an
+      `archive_command` that spools each finished file on the volume, and
+      the agent ships the spool with `wal_archive` / `wal_archive_ack`
+      (zstd, then age to the project's backup recipient). Upload URLs and
+      a restore's download URLs (`wal_fetch_request` / `wal_fetch`)
+      travel sealed to the node, bound to the stream or restore, in frames
+      that expire within 60 s; a node's report counts only for a stream of
+      a volume pinned to it. `GET /v1/services/{id}/pitr` returns the
+      restorable windows: from each base backup's end to the last WAL
+      segment that follows it without a gap, merged.
+      `POST /v1/services/{id}/pitr/restore` takes a `target_time`, the
+      restore modes and `confirm`, needs a fresh session like every
+      restore, and plans the newest base backup before the target with
+      WAL through the first segment finished after it (422
+      `pitr_target_unavailable` when nothing covers the time, 400 for a
+      future time). The agent replays into a server with no network and
+      `recovery_target_time`. An in-place base restore, a new volume, or
+      turning `pitr` off retires the stream (kept for restores), and the
+      next one starts with a fresh base backup. Retention keeps WAL from
+      the oldest kept base backup of each stream, so backup retention
+      bounds how far back a restore reaches; a stream with no base left
+      is deleted with its files.
+    - **Limits.** MySQL binlog point-in-time recovery is not built: a
+      MySQL database restores only to a backup. Valkey/Redis and MongoDB
+      have no point-in-time recovery: it is not supported. Segment
+      arithmetic assumes the default 16 MiB `wal_segment_size`, which the
+      templates never change.
+    - **Deviations from the plan.** PITR is turned on through the backup
+      policy's `pitr` flag rather than a setting of its own, since its
+      base backups follow the policy's schedule and retention. Automatic
+      recovery notifies through the policy's status and the audit log
+      only; there is no email or webhook. A point-in-time restore may go
+      into a new service: a base backup carries the source's passwords,
+      but the agent puts the new service's own back once it has
+      recovered, as for a dump.
 
 ```sql
 CREATE TABLE restores (

@@ -109,10 +109,12 @@ the first deploy; there are no IDs to copy.
 | `METRICS`                   | Analytics Engine | Metrics dataset (`roundhouse_metrics`); optional, absent in development |
 
 Two cron triggers run in the same Worker: hourly retention (`17 * * * *`),
-which also applies backup retention, and a minute tick that seals the audit
-chain, checks custom domains, starts certificate orders and renewals (managed
-TLS), starts scheduled backups, sends volume deletions past their grace
-period, expires idle PR previews, admits queued ones, removes torn-down
+which also applies backup retention and the WAL retention that follows it,
+and a minute tick that seals the audit chain, checks custom domains, starts
+certificate orders and renewals (managed TLS), starts scheduled backups,
+starts WAL streams and their first base backups, sends volume deletions past
+their grace period (abandoned copies included), runs automatic recoveries
+past their grace period, expires idle PR previews, admits queued ones, removes torn-down
 preview environments once their volumes are gone, moves mesh key rotations
 along and, in Cloudflare for SaaS mode, keeps the origin records, the
 fallback origin and Cloudflare's IP ranges current.
@@ -183,6 +185,33 @@ Settings → Platform → Registry holds where builds are stored
   secrets are sealed and write-only. Any number of builders, and no mesh
   needed. Images built before the switch stay on the builders' disks:
   redeploy to move a service's image into the bucket.
+
+Each database or volume service has its own data recovery settings
+(ADR 0004), set in the dashboard or through the API, never in the
+environment. No binding, secret or variable is involved: WAL lives in the
+backup storage bucket under `wal/`, encrypted to the project's backup key.
+- **Point-in-time recovery** (`pitr` on the backup policy, Postgres only,
+  off by default). Needs scheduled backups on, the server holding the
+  volume at agent protocol 8, and no custom start command. Scheduled
+  backups then become `pg_basebackup` base backups, and the database
+  restarts once with `archive_mode=on` and `archive_timeout=60`, so the
+  newest restorable point trails by about a minute. WAL is kept from the
+  oldest kept base backup on, so `keep_last` and `max_age_days` decide
+  how far back a restore can reach. Turning it off restarts the database
+  without archiving; what was archived stays restorable until retention
+  removes its base backups. Base backups assume the default 16 MiB
+  `wal_segment_size`.
+- **Automatic recovery** (`/v1/services/{id}/recovery-policy`, off by
+  default). The grace period is 5 minutes to 7 days, 30 minutes by default:
+  how long the volume's server must stay offline before the newest
+  succeeded backup is restored onto another server. A draining server or
+  one in maintenance never counts as lost and is never a target. It runs
+  with the access of whoever last turned it on, re-checked on every tick.
+- **Abandoned copies.** After a recovery, the lost server's copy is
+  deleted 72 hours later at the earliest, and only once that server is
+  back, the replacement volume is ready on another server and a restore
+  into it has succeeded. An unconfirmed deletion is sent again every 10
+  minutes.
 
 A server can be drained (Servers → server → Drain, or
 `POST /v1/workspaces/{ws}/nodes/{id}/drain`): its stateless replicas move

@@ -626,6 +626,84 @@ export async function pitrWindows(
   return merged;
 }
 
+/** A service's point-in-time recovery as the API returns it; see `PitrStatusSchema`. */
+export interface ApiPitrStatus {
+  service_id: string;
+  environment_id: string;
+  enabled: boolean;
+  unavailable_reason: string | null;
+  stream: {
+    id: string;
+    status: WalStreamRow["status"];
+    segment_count: number;
+    bytes_stored: number;
+    first_archived_at: number | null;
+    last_archived_at: number | null;
+    created_at: number;
+  } | null;
+  windows: PitrRange[];
+  base_backups: number;
+}
+
+/**
+ * A service's point-in-time recovery in an environment: whether the backup
+ * policy has it on, why it can't run, the stream archiving now, the
+ * restorable windows and how many base backups there are. Shared by the
+ * REST route and the MCP tool, which check access first.
+ *
+ * @param db - Database client.
+ * @param service - The service.
+ * @param environmentId - The environment.
+ * @returns The `PitrStatus` wire shape.
+ */
+export async function pitrStatus(
+  db: Db,
+  service: { id: string; databaseEngine: string | null },
+  environmentId: string,
+): Promise<ApiPitrStatus> {
+  const [policy] = await db
+    .select({ pitr: backupPolicies.pitr })
+    .from(backupPolicies)
+    .where(
+      and(
+        eq(backupPolicies.serviceId, service.id),
+        eq(backupPolicies.environmentId, environmentId),
+      ),
+    )
+    .limit(1);
+  const stream = await activeWalStream(db, service.id, environmentId);
+  const [bases] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(backups)
+    .where(
+      and(
+        eq(backups.serviceId, service.id),
+        eq(backups.environmentId, environmentId),
+        eq(backups.method, "base"),
+        eq(backups.status, "succeeded"),
+      ),
+    );
+  return {
+    service_id: service.id,
+    environment_id: environmentId,
+    enabled: policy?.pitr ?? false,
+    unavailable_reason: await pitrIneligibility(db, service, environmentId),
+    stream: stream
+      ? {
+          id: stream.id,
+          status: stream.status,
+          segment_count: stream.segmentCount,
+          bytes_stored: stream.bytesStored,
+          first_archived_at: stream.firstArchivedAt ? +stream.firstArchivedAt : null,
+          last_archived_at: stream.lastArchivedAt ? +stream.lastArchivedAt : null,
+          created_at: +stream.createdAt,
+        }
+      : null,
+    windows: await pitrWindows(db, service.id, environmentId),
+    base_backups: Number(bases?.n ?? 0),
+  };
+}
+
 /** A planned point-in-time restore. */
 export interface PitrPlan {
   backup: typeof backups.$inferSelect;
@@ -783,7 +861,7 @@ export async function applyWalRetention(db: Db, s3: S3Config, now = Date.now()):
   let deleted = 0;
   for (const stream of streams) {
     if (deleted >= WAL_DELETE_BATCH) break;
-    const [oldest] = await db
+    const kept = await db
       .select({ walStart: backups.walStart })
       .from(backups)
       .where(
@@ -792,18 +870,22 @@ export async function applyWalRetention(db: Db, s3: S3Config, now = Date.now()):
           eq(backups.method, "base"),
           inArray(backups.status, ["succeeded", "queued", "running"]),
         ),
-      )
-      .orderBy(asc(backups.walStart))
-      .limit(1);
-    if (!oldest && stream.status === "active") continue;
+      );
+    // NOTE: a base still running has no start yet; it begins past all WAL
+    // archived so far, so only the started ones bound what may go.
+    const oldest = kept
+      .map((b) => b.walStart)
+      .filter((s): s is string => s !== null)
+      .sort()[0];
+    if (!oldest && (stream.status === "active" || kept.length)) continue;
     const doomed = await db
       .select({ name: walSegments.name })
       .from(walSegments)
       .where(
         and(
           eq(walSegments.streamId, stream.id),
-          ...(oldest?.walStart
-            ? [lt(walSegments.name, oldest.walStart), sql`${walSegments.name} NOT LIKE '%.history'`]
+          ...(oldest
+            ? [lt(walSegments.name, oldest), sql`${walSegments.name} NOT LIKE '%.history'`]
             : []),
         ),
       )
