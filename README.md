@@ -2,8 +2,10 @@
 
 > [!WARNING]
 > **Roundhouse is under active development and not ready for production.**
-> The schema, API and agent protocol change without notice, and there are no
-> releases yet. Try it, file issues, and watch the repo for the first release.
+> The first preview, [agent 0.1.0](https://github.com/BankkRoll/Roundhouse/releases/tag/agent-v0.1.0)
+> and [CLI 0.1.0](https://github.com/BankkRoll/Roundhouse/releases/tag/cli-v0.1.0),
+> is out for trying. The schema, API and agent protocol may still change
+> between releases. Try it and file issues.
 
 Roundhouse is a source-available, self-hosted platform for deploying applications, similar in spirit to Railway. The control plane runs on your own Cloudflare account; your workloads run on your own Linux servers.
 

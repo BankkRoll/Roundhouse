@@ -1,13 +1,14 @@
 # To do
 
-What is left before the first release. Each item names where the work lives
+What is left after the 0.1.0 preview. Each item names where the work lives
 and what "done" means. Design background is in [docs/adr](docs/adr).
 
-## Release
+## Releases
 
-- No tagged release exists yet. Cut the first CLI and agent release through
-  the `cli-release` and `agent-release` environments, which hold the signing
-  keys. The installers already pin the release public keys.
+- `agent-v0.1.0` and `cli-v0.1.0` are published, signed and verified by the
+  installers. Cut later ones by pushing an `agent-v<x.y.z>` or `cli-v<x.y.z>`
+  tag on `main`; the `agent-release` environment asks for an approval before
+  signing.
 
 ## Needs live verification
 
