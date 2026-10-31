@@ -2,6 +2,110 @@
   "components": {
     "parameters": {},
     "schemas": {
+      "AbandonedCopy": {
+        "properties": {
+          "abandoned_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cleaned_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "delete_after": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "delete_sent_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size_mb": {
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "waiting_for_server",
+              "scheduled",
+              "kept",
+              "deleting",
+              "deleted"
+            ],
+            "type": "string"
+          },
+          "used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "volume_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "volume_id",
+          "node_id",
+          "node_name",
+          "state",
+          "message",
+          "size_mb",
+          "used_bytes",
+          "abandoned_at",
+          "delete_after",
+          "delete_sent_at",
+          "cleaned_at"
+        ],
+        "type": "object"
+      },
+      "AbandonedCopyList": {
+        "properties": {
+          "copies": {
+            "items": {
+              "$ref": "#/components/schemas/AbandonedCopy"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "copies"
+        ],
+        "type": "object"
+      },
       "AcceptInvite": {
         "properties": {
           "name": {
@@ -403,6 +507,8 @@
               "volume.migration_started",
               "volume.migrated",
               "volume.migration_failed",
+              "volume.copy_cleanup_requested",
+              "volume.copy_deleted",
               "tcp_proxy.enabled",
               "tcp_proxy.updated",
               "tcp_proxy.disabled",
@@ -415,6 +521,9 @@
               "restore.started",
               "restore.succeeded",
               "restore.failed",
+              "recovery.policy_updated",
+              "recovery.triggered",
+              "recovery.blocked",
               "key.rollover_scheduled",
               "key.rollover_completed",
               "key.rollover_cancelled",
@@ -572,7 +681,8 @@
           "method": {
             "enum": [
               "dump",
-              "snapshot"
+              "snapshot",
+              "base"
             ],
             "type": "string"
           },
@@ -783,7 +893,8 @@
           "method": {
             "enum": [
               "dump",
-              "snapshot"
+              "snapshot",
+              "base"
             ],
             "type": "string"
           },
@@ -802,6 +913,9 @@
               "type": "integer"
             },
             "type": "array"
+          },
+          "pitr": {
+            "type": "boolean"
           },
           "quiesce": {
             "enum": [
@@ -832,6 +946,7 @@
           "max_age_days",
           "quiesce",
           "databases",
+          "pitr",
           "next_run_at",
           "next_runs"
         ],
@@ -1590,6 +1705,8 @@
               "volume.migration_started",
               "volume.migrated",
               "volume.migration_failed",
+              "volume.copy_cleanup_requested",
+              "volume.copy_deleted",
               "tcp_proxy.enabled",
               "tcp_proxy.updated",
               "tcp_proxy.disabled",
@@ -1602,6 +1719,9 @@
               "restore.started",
               "restore.succeeded",
               "restore.failed",
+              "recovery.policy_updated",
+              "recovery.triggered",
+              "recovery.blocked",
               "key.rollover_scheduled",
               "key.rollover_completed",
               "key.rollover_cancelled",
@@ -7052,6 +7172,162 @@
         ],
         "type": "object"
       },
+      "PitrRange": {
+        "properties": {
+          "from": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          },
+          "to": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "PitrRestore": {
+        "properties": {
+          "confirm": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "in_place",
+              "new_service"
+            ],
+            "type": "string"
+          },
+          "skip_safety_backup": {
+            "type": "boolean"
+          },
+          "slug": {
+            "description": "Suffixed with -2, -3, … when taken or reserved (shared)",
+            "example": "api",
+            "maxLength": 40,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "target_environment_id": {
+            "type": "string"
+          },
+          "target_time": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "environment_id",
+          "target_time",
+          "mode",
+          "confirm"
+        ],
+        "type": "object"
+      },
+      "PitrStatus": {
+        "properties": {
+          "base_backups": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "stream": {
+            "properties": {
+              "bytes_stored": {
+                "type": "integer"
+              },
+              "created_at": {
+                "description": "Unix time in milliseconds",
+                "example": 1767225600000,
+                "type": "integer"
+              },
+              "first_archived_at": {
+                "description": "Unix time in milliseconds",
+                "example": 1767225600000,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "last_archived_at": {
+                "description": "Unix time in milliseconds",
+                "example": 1767225600000,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "segment_count": {
+                "type": "integer"
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "retired",
+                  "deleted"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "segment_count",
+              "bytes_stored",
+              "first_archived_at",
+              "last_archived_at",
+              "created_at"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/PitrRange"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "service_id",
+          "environment_id",
+          "enabled",
+          "unavailable_reason",
+          "stream",
+          "windows",
+          "base_backups"
+        ],
+        "type": "object"
+      },
       "Placement": {
         "properties": {
           "container_id": {
@@ -8224,6 +8500,9 @@
               "null"
             ]
           },
+          "pitr": {
+            "type": "boolean"
+          },
           "quiesce": {
             "enum": [
               "none",
@@ -8436,6 +8715,25 @@
         ],
         "type": "object"
       },
+      "PutRecoveryPolicy": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "grace_minutes": {
+            "maximum": 10080,
+            "minimum": 5,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "environment_id"
+        ],
+        "type": "object"
+      },
       "PutRegistryStorage": {
         "properties": {
           "access_key_id": {
@@ -8602,6 +8900,94 @@
           "change_set",
           "rebased",
           "conflicts"
+        ],
+        "type": "object"
+      },
+      "RecoveryPolicy": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "enabled_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "grace_minutes": {
+            "type": "integer"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lost_node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "restore_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "idle",
+              "watching",
+              "recovering",
+              "recovered",
+              "blocked",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "triggered_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "service_id",
+          "environment_id",
+          "enabled",
+          "grace_minutes",
+          "enabled_by",
+          "status",
+          "message",
+          "lost_node_id",
+          "restore_id",
+          "triggered_at",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -8821,6 +9207,21 @@
               "string",
               "null"
             ]
+          },
+          "target_time": {
+            "description": "Unix time in milliseconds",
+            "example": 1767225600000,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "trigger": {
+            "enum": [
+              "manual",
+              "automatic"
+            ],
+            "type": "string"
           }
         },
         "required": [
@@ -8831,6 +9232,8 @@
           "target_environment_id",
           "safety_backup_id",
           "target_node_id",
+          "trigger",
+          "target_time",
           "status",
           "error",
           "requested_by",
@@ -17448,6 +17851,8 @@
                 "volume.migration_started",
                 "volume.migrated",
                 "volume.migration_failed",
+                "volume.copy_cleanup_requested",
+                "volume.copy_deleted",
                 "tcp_proxy.enabled",
                 "tcp_proxy.updated",
                 "tcp_proxy.disabled",
@@ -17460,6 +17865,9 @@
                 "restore.started",
                 "restore.succeeded",
                 "restore.failed",
+                "recovery.policy_updated",
+                "recovery.triggered",
+                "recovery.blocked",
                 "key.rollover_scheduled",
                 "key.rollover_completed",
                 "key.rollover_cancelled",
@@ -25400,6 +25808,408 @@
         }
       }
     },
+    "/v1/services/{serviceId}/pitr": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PitrStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get point-in-time recovery",
+        "tags": [
+          "backups"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/services/{serviceId}/pitr/restore": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PitrRestore"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Restore"
+                }
+              }
+            },
+            "description": "Started"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Restore to a point in time",
+        "tags": [
+          "backups"
+        ],
+        "x-roundhouse-policy": {
+          "action": "backups:restore",
+          "audit": [
+            "restore.started"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
+    "/v1/services/{serviceId}/recovery-policy": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryPolicy"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Get automatic recovery",
+        "tags": [
+          "backups"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      },
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutRecoveryPolicy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryPolicy"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "Set automatic recovery",
+        "tags": [
+          "backups"
+        ],
+        "x-roundhouse-policy": {
+          "action": "backups:restore",
+          "audit": [
+            "recovery.policy_updated"
+          ],
+          "auth": "session",
+          "reauth": true
+        }
+      }
+    },
     "/v1/services/{serviceId}/shell-targets": {
       "get": {
         "parameters": [
@@ -26127,6 +26937,97 @@
           }
         ],
         "summary": "Get a service's volume",
+        "tags": [
+          "volumes"
+        ],
+        "x-roundhouse-policy": {
+          "action": "services:read",
+          "audit": [],
+          "auth": "session"
+        }
+      }
+    },
+    "/v1/services/{serviceId}/volume/abandoned-copies": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AbandonedCopyList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "api_token": []
+          }
+        ],
+        "summary": "List abandoned volume copies",
         "tags": [
           "volumes"
         ],

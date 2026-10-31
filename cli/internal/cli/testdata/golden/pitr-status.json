@@ -1,0 +1,26 @@
+{
+  "service_id": "svc_db",
+  "environment_id": "env_prod",
+  "enabled": true,
+  "unavailable_reason": null,
+  "stream": {
+    "id": "wal_0009",
+    "status": "active",
+    "segment_count": 2518,
+    "bytes_stored": 42245029888,
+    "first_archived_at": 1792497600000,
+    "last_archived_at": 1792670280000,
+    "created_at": 1792497600000
+  },
+  "windows": [
+    {
+      "from": 1792497600000,
+      "to": 1792562400000
+    },
+    {
+      "from": 1792584000000,
+      "to": 1792670280000
+    }
+  ],
+  "base_backups": 2
+}

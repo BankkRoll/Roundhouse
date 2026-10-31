@@ -27,6 +27,8 @@ type schema struct {
 	Properties map[string]*schema `json:"properties"`
 	Required   []string           `json:"required"`
 	Items      *schema            `json:"items"`
+	Minimum    *float64           `json:"minimum"`
+	Maximum    *float64           `json:"maximum"`
 }
 
 func loadOpenAPI(t *testing.T) *openAPIDoc {
@@ -180,6 +182,13 @@ func TestWireTypesMatchSchemas(t *testing.T) {
 		"BackupDecryptionKey":       BackupDecryptionKey{},
 		"RestoreBackup":             RestoreBackupInput{},
 		"Restore":                   Restore{},
+		"PitrStatus":                PitrStatus{},
+		"PitrRange":                 PitrRange{},
+		"PitrRestore":               PitrRestoreInput{},
+		"RecoveryPolicy":            RecoveryPolicy{},
+		"PutRecoveryPolicy":         PutRecoveryPolicyInput{},
+		"AbandonedCopy":             AbandonedCopy{},
+		"AbandonedCopyList":         AbandonedCopyList{},
 		"MigrateVolume":             MigrateVolumeInput{},
 		"VolumeMigration":           VolumeMigration{},
 		"MigrationTarget":           MigrationTarget{},
@@ -311,6 +320,7 @@ func TestQueryParamsExist(t *testing.T) {
 		{RouteBackupPolicy, "environment_id"}, {RouteListBackups, "environment_id"},
 		{RouteListBackups, "cursor"}, {RouteListBackups, "limit"},
 		{RouteGetTCPProxy, "environment_id"}, {RouteDeleteTCPProxy, "environment_id"},
+		{RoutePitrStatus, "environment_id"}, {RouteRecoveryPolicy, "environment_id"}, {RouteAbandonedCopies, "environment_id"},
 		{RouteCredentialRotations, "environment_id"},
 		{RouteCronState, "environment_id"}, {RouteListCronRuns, "environment_id"}, {RouteListCronRuns, "cursor"},
 		{RouteListCronRuns, "limit"}, {RouteListCronRuns, "status"}, {RouteCronRunLogs, "cursor"}, {RouteCronRunLogs, "limit"},
@@ -450,6 +460,11 @@ func TestDataEnumsMatchAPI(t *testing.T) {
 		{"Volume", "status", VolumeStatuses},
 		{"Backup", "status", BackupStatuses},
 		{"RestoreBackup", "mode", RestoreModes},
+		{"PitrRestore", "mode", RestoreModes},
+		{"Restore", "trigger", RestoreTriggers},
+		{"RecoveryPolicy", "status", RecoveryPolicyStatuses},
+		{"AbandonedCopy", "state", AbandonedCopyStates},
+		{"BackupPolicy", "method", BackupMethods},
 		{"VolumeMigration", "phase", VolumeMigrationPhases},
 		{"VolumeMigration", "status", MigrationStatuses},
 		{"TcpProxy", "status", TCPProxyStatuses},
@@ -491,5 +506,27 @@ func TestMeshEnumsMatchAPI(t *testing.T) {
 		if !slices.Equal(got, c.want) {
 			t.Errorf("%s.%s: CLI = %v\nAPI enum = %v", c.schema, c.prop, c.want, got)
 		}
+	}
+}
+
+// TestRecoveryContractMatchesAPI keeps the WAL stream statuses `db pitr
+// status` renders and the grace bounds `db recovery policy set` checks in
+// step with the API.
+func TestRecoveryContractMatchesAPI(t *testing.T) {
+	doc := loadOpenAPI(t)
+	pitr := doc.Components.Schemas["PitrStatus"]
+	if pitr == nil || pitr.Properties["stream"] == nil || pitr.Properties["stream"].Properties["status"] == nil {
+		t.Fatal("PitrStatus.stream.status missing from the OpenAPI document")
+	}
+	if got := pitr.Properties["stream"].Properties["status"].Enum; !slices.Equal(got, WALStreamStatuses) {
+		t.Errorf("WALStreamStatuses = %v\nAPI enum          = %v", WALStreamStatuses, got)
+	}
+	put := doc.Components.Schemas["PutRecoveryPolicy"]
+	if put == nil || put.Properties["grace_minutes"] == nil {
+		t.Fatal("PutRecoveryPolicy.grace_minutes missing from the OpenAPI document")
+	}
+	g := put.Properties["grace_minutes"]
+	if g.Minimum == nil || *g.Minimum != MinRecoveryGraceMinutes || g.Maximum == nil || *g.Maximum != MaxRecoveryGraceMinutes {
+		t.Errorf("grace_minutes bounds = %v..%v, CLI = %d..%d", g.Minimum, g.Maximum, MinRecoveryGraceMinutes, MaxRecoveryGraceMinutes)
 	}
 }

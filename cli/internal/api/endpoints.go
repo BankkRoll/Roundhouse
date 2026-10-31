@@ -86,6 +86,7 @@ var Routes = []Route{
 	RouteMigrationTargets, RouteMigrateVolume, RouteVolumeMigrations, RouteGetVolumeMigration,
 	RouteGetTCPProxy, RoutePutTCPProxy, RouteDeleteTCPProxy,
 	RouteRotateCredentials, RouteCredentialRotations,
+	RoutePitrStatus, RoutePitrRestore, RouteRecoveryPolicy, RoutePutRecoveryPolicy, RouteAbandonedCopies,
 	RouteCronState, RouteListCronRuns, RouteTriggerCron, RouteGetCronRun, RouteCronRunLogs,
 	RouteCancelCronRun, RoutePauseCron, RouteResumeCron, RouteCronPreview,
 	RouteGetMesh, RouteRotateMeshKey,

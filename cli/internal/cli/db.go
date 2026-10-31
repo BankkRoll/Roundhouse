@@ -76,13 +76,14 @@ DATABASE_URL=${{postgres.DATABASE_URL}}, and no command prints them.`,
   roundhouse db list
   roundhouse db query "SELECT count(*) FROM users"
   roundhouse db backups run --wait
+  roundhouse db pitr restore --to 2026-10-22T11:50:00Z
   roundhouse db volume move --to edge-2 --wait
   roundhouse db tcp-proxy enable --allow 203.0.113.7
   roundhouse db rotate-credentials`,
 		Args: noArgs,
 	}
 	cmd.AddCommand(a.dbCreateCmd(), a.dbListCmd(), a.dbInfoCmd(), a.dbQueryCmd(), a.dbTablesCmd(),
-		a.dbVolumeCmd(), a.dbBackupsCmd(), a.dbTCPProxyCmd(), a.dbRotateCredentialsCmd(), a.dbRotationsCmd(), a.dbConnectCmd())
+		a.dbVolumeCmd(), a.dbBackupsCmd(), a.dbPitrCmd(), a.dbRecoveryCmd(), a.dbTCPProxyCmd(), a.dbRotateCredentialsCmd(), a.dbRotationsCmd(), a.dbConnectCmd())
 	return cmd
 }
 
@@ -846,7 +847,8 @@ func (a *App) dbVolumeCmd() *cobra.Command {
 		Long: `Show the volume of a database (or of --service) in the environment: its
 size, usage, server and quota. Subcommands grow it, move it to another
 server, list its moves, delete it (its data is removed after 72 hours) and
-undelete it within that window.`,
+undelete it within that window. "volume abandoned" lists the copies
+recoveries left on lost servers.`,
 		Example: `  roundhouse db volume
   roundhouse db volume resize --size-mb 20480
   roundhouse db volume delete --environment staging --yes`,
@@ -869,7 +871,7 @@ undelete it within that window.`,
 		},
 	}
 	f.register(cmd, true)
-	cmd.AddCommand(a.dbVolumeResizeCmd(), a.dbVolumeDeleteCmd(), a.dbVolumeUndeleteCmd(), a.dbVolumeMoveCmd(), a.dbVolumeRecoverCmd(), a.dbVolumeMigrationsCmd())
+	cmd.AddCommand(a.dbVolumeResizeCmd(), a.dbVolumeDeleteCmd(), a.dbVolumeUndeleteCmd(), a.dbVolumeMoveCmd(), a.dbVolumeRecoverCmd(), a.dbVolumeMigrationsCmd(), a.dbVolumeAbandonedCmd())
 	return cmd
 }
 

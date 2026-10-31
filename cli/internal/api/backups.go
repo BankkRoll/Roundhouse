@@ -39,6 +39,11 @@ var BackupStatuses = []string{BackupQueued, BackupRunning, BackupSucceeded, Back
 // RestoreModes are the ways a backup can be restored, from RESTORE_MODES.
 var RestoreModes = []string{"in_place", "new_service"}
 
+// BackupMethods are how a backup is taken, from BACKUP_METHOD_NAMES: a database
+// dump, a volume snapshot, or a Postgres base backup for point-in-time
+// recovery.
+var BackupMethods = []string{"dump", "snapshot", "base"}
+
 // Restore modes.
 const (
 	RestoreInPlace    = "in_place"
@@ -105,7 +110,10 @@ type BackupPolicy struct {
 	MaxAgeDays *int     `json:"max_age_days"`
 	Quiesce    string   `json:"quiesce"`
 	Databases  []string `json:"databases"`
-	NextRunAt  *int64   `json:"next_run_at"`
+	// Pitr archives WAL continuously for point-in-time restores; scheduled
+	// backups are then base backups (Method "base").
+	Pitr      bool   `json:"pitr"`
+	NextRunAt *int64 `json:"next_run_at"`
 	// NextRuns are the next few slots, unix ms.
 	NextRuns []int64 `json:"next_runs"`
 }
@@ -120,6 +128,9 @@ type PutBackupPolicyInput struct {
 	// MaxAgeDays is omitted when nil, and sent as null (no age limit) when
 	// it points to nil.
 	MaxAgeDays **int `json:"max_age_days,omitempty"`
+	// Pitr turns point-in-time recovery on or off; on needs scheduled
+	// backups and a Postgres database.
+	Pitr *bool `json:"pitr,omitempty"`
 }
 
 // BackupDownload is a presigned download of a backup's encrypted object.
@@ -170,12 +181,17 @@ type Restore struct {
 	SafetyBackupID      *string `json:"safety_backup_id"`
 	// TargetNodeID is the server a recovery restored onto; nil otherwise.
 	TargetNodeID *string `json:"target_node_id"`
-	Status       string  `json:"status"`
-	Error        *string `json:"error"`
-	RequestedBy  *string `json:"requested_by"`
-	StartedAt    *int64  `json:"started_at"`
-	FinishedAt   *int64  `json:"finished_at"`
-	CreatedAt    int64   `json:"created_at"`
+	// Trigger is manual, or automatic when a recovery policy started it.
+	Trigger string `json:"trigger"`
+	// TargetTime is a point-in-time restore's target, unix ms; nil
+	// restores the backup as taken.
+	TargetTime  *int64  `json:"target_time"`
+	Status      string  `json:"status"`
+	Error       *string `json:"error"`
+	RequestedBy *string `json:"requested_by"`
+	StartedAt   *int64  `json:"started_at"`
+	FinishedAt  *int64  `json:"finished_at"`
+	CreatedAt   int64   `json:"created_at"`
 }
 
 // BackupPolicy returns a service's backup policy in an environment.

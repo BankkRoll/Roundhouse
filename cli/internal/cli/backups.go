@@ -339,6 +339,12 @@ func (a *App) printBackupPolicy(t *target, p *api.BackupPolicy) {
 	} else {
 		row("Max age", "none")
 	}
+	switch {
+	case p.Pitr:
+		row("PITR", pal.Green("on")+"; WAL is archived continuously (`roundhouse db pitr status`)")
+	case t.service.Database != nil && t.service.Database.Engine == "postgres":
+		row("PITR", "off; turn it on with --pitr on")
+	}
 	if len(p.Databases) > 0 {
 		row("Databases", strings.Join(p.Databases, ", "))
 	}
@@ -360,6 +366,7 @@ func (a *App) backupsPolicySetCmd() *cobra.Command {
 	var f targetFlags
 	var schedule string
 	var keepLast, maxAge int
+	var pitr string
 	var noMaxAge, enable, disable bool
 	cmd := &cobra.Command{
 		Use:   "set",
@@ -369,10 +376,16 @@ func (a *App) backupsPolicySetCmd() *cobra.Command {
 --schedule is a five-field cron expression in UTC. After each backup,
 scheduled backups beyond --keep-last (newest kept) and any backup older
 than --max-age-days are deleted; manual backups are exempt from
---keep-last.`,
+--keep-last.
+
+--pitr on archives a Postgres database's WAL continuously so it can be
+restored to any moment (` + "`roundhouse db pitr`" + `); scheduled backups become
+base backups and must stay enabled. --pitr off stops archiving; WAL
+already archived stays restorable until retention drops it.`,
 		Example: `  roundhouse db backups policy set --schedule "0 */6 * * *"
   roundhouse db backups policy set --keep-last 30 --max-age-days 90
   roundhouse db backups policy set --no-max-age
+  roundhouse db backups policy set --pitr on
   roundhouse db backups policy set --disable`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -411,8 +424,23 @@ than --max-age-days are deleted; manual backups are exempt from
 				var none *int
 				in.MaxAgeDays = &none
 			}
-			if in.Enabled == nil && in.Schedule == nil && in.KeepLast == nil && in.MaxAgeDays == nil {
-				return exitcode.New(exitcode.Usage, "nothing to change; pass --schedule, --keep-last, --max-age-days, --no-max-age, --enable or --disable")
+			if fl.Changed("pitr") {
+				switch strings.ToLower(pitr) {
+				case "on", "true":
+					if disable {
+						return exitcode.New(exitcode.Usage, "point-in-time recovery needs scheduled backups: drop --disable or pass --pitr off")
+					}
+					on := true
+					in.Pitr = &on
+				case "off", "false":
+					off := false
+					in.Pitr = &off
+				default:
+					return exitcode.New(exitcode.Usage, "--pitr must be on or off")
+				}
+			}
+			if in.Enabled == nil && in.Schedule == nil && in.KeepLast == nil && in.MaxAgeDays == nil && in.Pitr == nil {
+				return exitcode.New(exitcode.Usage, "nothing to change; pass --schedule, --keep-last, --max-age-days, --no-max-age, --pitr, --enable or --disable")
 			}
 			ctx := cmd.Context()
 			t, err := a.resolveDatabase(ctx, f, true)
@@ -439,6 +467,7 @@ than --max-age-days are deleted; manual backups are exempt from
 	cmd.Flags().BoolVar(&noMaxAge, "no-max-age", false, "keep backups regardless of age")
 	cmd.Flags().BoolVar(&enable, "enable", false, "run scheduled backups")
 	cmd.Flags().BoolVar(&disable, "disable", false, "stop scheduled backups (manual ones still work)")
+	cmd.Flags().StringVar(&pitr, "pitr", "", "on or off: archive WAL for point-in-time restores (Postgres; scheduled backups become base backups)")
 	return cmd
 }
 
