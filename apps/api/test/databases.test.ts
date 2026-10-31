@@ -138,6 +138,7 @@ describe("database contracts", () => {
       "/v1/services/{serviceId}/database/rotate-credentials",
       "/v1/services/{serviceId}/tcp-proxies",
       "/v1/services/{serviceId}/volume",
+      "/v1/services/{serviceId}/volume/abandoned-copies",
       "/v1/volume-migrations/{migrationId}",
       "/v1/volumes/{volumeId}",
       "/v1/volumes/{volumeId}/migrate",
