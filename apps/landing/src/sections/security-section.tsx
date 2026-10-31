@@ -1,342 +1,281 @@
 import { cn } from "@roundhouse/ui";
-import { CheckIcon, ShieldCheckIcon, XIcon } from "lucide-react";
-import { type CSSProperties, useEffect, useId, useState } from "react";
-import { JOIN_TOKEN_MINUTES } from "../content";
+import type { CSSProperties, ReactNode } from "react";
+import { SECURITY_POLICY_URL, SECURITY_REVIEW_URL, SECURITY_URL, sourceUrl } from "../links";
+import { type Defence, type DefenceGroup, defencesIn } from "../model/defences";
+import { buttonClass, ExternalLink, Section } from "../ui";
+import { AdvisoryExplorer } from "./advisory-table";
 import {
-  type DemoEnvelope,
-  demoEnvelope,
-  ENVELOPE_FIXTURE,
-  fixtureVerify,
-  TAMPERED_IMAGE,
-  type VerifyResult,
-  verifyEnvelope,
-} from "../model/envelope";
-import { Section } from "../ui";
+  AgentLogFragment,
+  AuditFragment,
+  HeadersFragment,
+  VariablesFragment,
+} from "./security-fragments";
 
-type Verification =
-  | { state: "checking" }
-  | { state: "done"; result: VerifyResult; simulated: boolean };
+const step = (i: number) => ({ "--i": i }) as CSSProperties;
 
-function useVerification(envelope: DemoEnvelope): Verification {
-  const [verification, setVerification] = useState<Verification>({ state: "checking" });
-  useEffect(() => {
-    let cancelled = false;
-    setVerification({ state: "checking" });
-    const options = {
-      publicKey: ENVELOPE_FIXTURE.publicKey,
-      nodeId: ENVELOPE_FIXTURE.nodeId,
-      now: Date.now(),
-    };
-    verifyEnvelope(envelope, options)
-      .then((result) => ({ result, simulated: false }))
-      // COMPAT: Older browsers lack Ed25519 in WebCrypto; fall back to the known answer.
-      .catch(async () => ({
-        result: await verifyEnvelope(envelope, { ...options, verify: fixtureVerify }),
-        simulated: true,
-      }))
-      .then(({ result, simulated }) => {
-        if (!cancelled) setVerification({ state: "done", result, simulated });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [envelope]);
-  return verification;
-}
+const BLOCK_TITLE = "text-[clamp(28px,2.6vw,38px)] font-semibold leading-[1.08] tracking-[-0.03em]";
 
-const UNTOUCHED = demoEnvelope(false);
-const TAMPERED = demoEnvelope(true);
+const QUIET_LINK =
+  "rounded-sm text-[16px] text-muted-foreground underline decoration-muted-foreground/60 underline-offset-4 outline-none transition-colors hover:text-foreground hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring";
 
-function elide(value: string) {
-  return value.length <= 72 ? value : `${value.slice(0, 24)}…${value.slice(-44)}`;
-}
-
-type CheckState = "pending" | "pass" | "fail" | "skipped";
-
-function Check({ label, state, skipped }: { label: string; state: CheckState; skipped?: string }) {
+/** One defence: what it does, and a link to the code that does it. */
+function DefenceRow({ item, index }: { item: Defence; index: number }) {
   return (
-    <li className="flex items-start gap-2.5">
-      <span
-        aria-hidden="true"
-        className={cn(
-          "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
-          state === "pass" && "border-success bg-success/15 text-success",
-          state === "fail" && "border-danger bg-danger/15 text-danger",
-          (state === "pending" || state === "skipped") && "border-border-strong",
-        )}
-      >
-        {state === "pass" ? <CheckIcon className="size-2.5" strokeWidth={3} /> : null}
-        {state === "fail" ? <XIcon className="size-2.5" strokeWidth={3} /> : null}
-      </span>
-      <span
-        className={cn(
-          state === "skipped" ? "text-muted-foreground line-through" : "text-foreground",
-        )}
-      >
-        {label}
-      </span>
-      <span className="ml-auto shrink-0 text-muted-foreground">
-        {state === "skipped" ? skipped : state === "pending" ? "…" : state}
-      </span>
+    <li
+      id={`defence-${item.id}`}
+      className="grid scroll-mt-28 content-start gap-2"
+      data-reveal
+      style={step(index + 2)}
+    >
+      <h4 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-foreground">
+        {item.title}
+      </h4>
+      <p className="text-[17px] text-foreground">
+        {item.body}{" "}
+        <ExternalLink
+          href={sourceUrl(item.evidence)}
+          className={QUIET_LINK}
+          aria-label={`See the code: ${item.title}`}
+        >
+          See the code
+        </ExternalLink>
+      </p>
     </li>
   );
 }
 
-/**
- * The live thing: a real signed control message (the protocol's test fixture), verified
- * with Ed25519 in the visitor's browser. Tampering with it in transit gets it refused.
- *
- * @returns The fragment.
- */
-export function EnvelopeDemo() {
-  const [tampered, setTampered] = useState(false);
-  const envelope = tampered ? TAMPERED : UNTOUCHED;
-  const verification = useVerification(envelope);
-  const switchId = useId();
-  const result = verification.state === "done" ? verification.result : null;
-  const accepted = result?.ok === true;
-  const image = envelope.payload.match(/"image":"([^"]+)"/)?.[1] ?? "";
-  const [before, after] = envelope.payload.split(image);
-  const signature: CheckState = !result
-    ? "pending"
-    : result.ok || result.reason !== "bad_signature"
-      ? "pass"
-      : "fail";
-  const later: CheckState = !result ? "pending" : result.ok ? "pass" : "skipped";
-
+/** The step-toned field a product picture sits on. */
+function Mount({ children }: { children: ReactNode }) {
   return (
-    <div
-      data-ui
-      className="flex h-full min-w-0 flex-col overflow-hidden rounded-lg bg-background font-sans text-[13px]"
-      data-testid="envelope-demo"
-      data-result={result ? (result.ok ? "accepted" : "rejected") : "checking"}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <span className="text-muted-foreground">control plane → home-nuc</span>
-        <label
-          htmlFor={switchId}
-          className="flex cursor-pointer items-center gap-2.5 text-foreground"
-        >
-          Tamper in transit
-          <button
-            id={switchId}
-            type="button"
-            role="switch"
-            aria-checked={tampered}
-            onClick={() => setTampered((value) => !value)}
-            className={cn(
-              "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-              tampered ? "bg-danger" : "bg-meter-track",
-            )}
-          >
-            <span
-              aria-hidden="true"
-              className={cn(
-                "size-5 rounded-full bg-foreground transition-transform",
-                tampered ? "translate-x-[22px]" : "translate-x-[2px]",
-              )}
-            />
-          </button>
-        </label>
-      </div>
-      <pre className="overflow-x-auto px-4 py-4 font-mono text-[12.5px] leading-[1.75] text-muted-foreground">
-        <code>
-          {"{\n"}
-          {'  "v": 1,\n'}
-          {`  "kid": "${envelope.kid}",\n`}
-          {'  "payload": "'}
-          <span className="whitespace-pre-wrap break-all">
-            {elide(before ?? "")}
-            <span
-              className={cn(
-                "rounded-sm px-0.5",
-                tampered ? "bg-danger/20 text-danger" : "bg-accent-subtle text-accent-text",
-              )}
-            >
-              {image}
-            </span>
-            {after}
-          </span>
-          {'",\n'}
-          {`  "sig": "${envelope.sig.slice(0, 18)}…${envelope.sig.slice(-6)}"\n`}
-          {"}"}
-        </code>
-      </pre>
-      <ol className="grid gap-2 border-t border-border px-4 py-3" aria-label="Agent checks">
-        <Check label="Ed25519 signature over the exact bytes, pinned key" state={signature} />
-        <Check label="Parse the payload" state={later} skipped="never parsed" />
-        <Check
-          label="Right node, not expired, newer generation"
-          state={later}
-          skipped="never reached"
-        />
-      </ol>
-      <div
-        role="status"
-        className={cn(
-          "mt-auto flex items-start gap-3 px-4 py-3",
-          accepted && "bg-success/10",
-          result && !accepted && "lp-shake bg-danger/10",
-        )}
-      >
-        {result ? (
-          accepted ? (
-            <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
-          ) : (
-            <XIcon className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
-          )
-        ) : null}
-        <div className="min-w-0">
-          <p
-            className={cn(
-              "font-mono font-semibold",
-              accepted ? "text-success" : result ? "text-danger" : "text-muted-foreground",
-            )}
-          >
-            {!result
-              ? "Verifying…"
-              : result.ok
-                ? `ACCEPTED · applying generation ${result.generation} (${result.image})`
-                : `REJECTED · ${result.reason} · frame dropped`}
-          </p>
-          <p className="mt-0.5 text-muted-foreground">
-            {result && !result.ok
-              ? `Swapping the image for ${TAMPERED_IMAGE} breaks the signature, so the agent drops the frame before reading it.`
-              : "Verified just now in your browser with WebCrypto, against the protocol's real signed test message."}
-            {verification.state === "done" && verification.simulated
-              ? " (This browser lacks Ed25519, so the known result is shown.)"
-              : ""}
+    <div className="rounded-lg bg-[var(--lp-step)] p-4 sm:p-8 xl:p-12" data-reveal style={step(1)}>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * One group of defences: its heading and one sentence beside a picture from the product,
+ * then each defence in columns underneath.
+ */
+function DefenceGroupBlock({
+  group,
+  title,
+  lead,
+  picture,
+  flip = false,
+  className,
+}: {
+  group: DefenceGroup;
+  title: string;
+  lead: string;
+  picture: ReactNode;
+  /** Put the picture on the left. */
+  flip?: boolean;
+  className?: string;
+}) {
+  const items = defencesIn(group);
+  return (
+    <div className={cn("mt-[calc(var(--lp-space)*1.6)]", className)}>
+      <div className="grid items-center gap-10 lg:grid-cols-12 lg:gap-[var(--lp-gap)]">
+        <div className={cn("lg:col-span-5", flip && "lg:order-2 lg:col-start-8")}>
+          <h3 id={`security-${group}`} className={BLOCK_TITLE} data-reveal>
+            {title}
+          </h3>
+          <p className="lp-lead mt-5 max-w-[36ch] text-foreground" data-reveal style={step(1)}>
+            {lead}
           </p>
         </div>
+        <div
+          className={cn(
+            "lg:col-span-7",
+            flip ? "lg:order-1 lg:col-start-1 lg:row-start-1" : "lg:col-start-6",
+          )}
+        >
+          <Mount>{picture}</Mount>
+        </div>
       </div>
-    </div>
-  );
-}
-
-const CONNECTION = [
-  ["Inbound control port", "none", "ok"],
-  ["Control channel", "wss, dialed by the agent", "ok"],
-  ["Connected for", "4 h 12 min", ""],
-  ["Last heartbeat", "3 s ago", "ok"],
-  ["Pinned signing key", "kid k1", ""],
-  ["Applied generation", "42", ""],
-  ["Join token", "used once, now void", ""],
-] as const;
-
-/**
- * The connection panel for one server, as the dashboard shows it: what is open, who dialed
- * whom, and which signed state it last applied.
- *
- * @returns The fragment.
- */
-function ConnectionFragment() {
-  return (
-    <div
-      data-ui
-      className="flex h-full flex-col overflow-hidden rounded-lg bg-background font-sans text-[13px]"
-    >
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <span className="font-medium text-foreground">home-nuc · connection</span>
-        <span className="inline-flex items-center gap-1.5 text-success">
-          <span aria-hidden="true" className="size-1.5 rounded-full bg-success" />
-          online
-        </span>
-      </div>
-      <dl className="grid flex-1 content-center">
-        {CONNECTION.map(([label, value, tone]) => (
-          <div
-            key={label}
-            className="flex items-baseline justify-between gap-4 border-b border-border px-4 py-2.5 last:border-b-0"
-          >
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className={cn("text-right", tone === "ok" ? "text-success" : "text-foreground")}>
-              {value}
-            </dd>
-          </div>
+      <ul
+        className={cn(
+          "mt-14 grid gap-x-[var(--lp-gap)] gap-y-10 sm:grid-cols-2",
+          items.length % 3 === 0 ? "lg:grid-cols-3" : "xl:grid-cols-4",
+        )}
+      >
+        {items.map((item, index) => (
+          <DefenceRow key={item.id} item={item} index={index} />
         ))}
-      </dl>
+      </ul>
     </div>
   );
 }
 
-const FACTS = [
-  [
-    "No inbound port",
-    "The agent on each server calls out to your control plane. Nothing on the server listens for commands, so it can sit behind NAT.",
-  ],
-  [
-    "Signed commands",
-    "Every command carries an Ed25519 signature. The agent checks it before reading a single field.",
-  ],
-  [
-    `${JOIN_TOKEN_MINUTES}-minute join tokens`,
-    "A join token works once. The server credential it buys is stored only as a hash, and you can revoke it per server.",
-  ],
-  [
-    "Encrypted at rest",
-    "Secrets are sealed with AES-GCM under keys derived from your MASTER_KEY, which only you hold.",
-  ],
-  [
-    "WireGuard between servers",
-    "Private traffic between your servers rides an encrypted mesh, never the open internet.",
-  ],
-  [
-    "Hardened plain Docker",
-    "No Kubernetes to run. Containers start with no new privileges, dropped capabilities and resource limits.",
-  ],
-] as const;
+// A real table: its row rules are part of reading it across.
+const REVIEW_ROW = "border-t border-[var(--lp-step-2)] align-top"; // taste-skill-ignore
+
+/** What the October 2026 review found, as `docs/security/review-2026-10.md` lists it. */
+const REVIEW_FINDINGS: readonly [severity: string, finding: string, status: string][] = [
+  ["Medium", "A developer could copy a protected environment's secrets out of it", "Fixed"],
+  ["Low", "Shell recordings could be watched before turning on two-factor", "Fixed"],
+  ["Low", "An API token could create a child token that outlived it", "Fixed"],
+  ["Low", "A captured command could be replayed before it expired", "Fixed"],
+  ["Low", "The file decryptor accepted malformed headers", "Fixed"],
+  ["Info", "A cipher counter could wrap, though nothing reached it", "Fixed"],
+  ["Info", "A dependency advisory in a tool that never runs in production", "Accepted"],
+  ["Info", "Go dependency scan: nothing reachable", "No action"],
+];
+
+function ReviewTable() {
+  return (
+    <table className="mt-8 w-full text-left text-[16px]">
+      <caption className="sr-only">Findings of the October 2026 security review</caption>
+      <thead className="text-muted-foreground">
+        <tr>
+          <th scope="col" className="py-2 pr-4 font-normal">
+            Severity
+          </th>
+          <th scope="col" className="py-2 pr-4 font-normal">
+            Finding
+          </th>
+          <th scope="col" className="py-2 text-right font-normal">
+            Status
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {REVIEW_FINDINGS.map(([severity, finding, status]) => (
+          <tr key={finding} className={REVIEW_ROW}>
+            <td className="py-3 pr-4 text-muted-foreground">{severity}</td>
+            <th scope="row" className="py-3 pr-4 font-normal text-foreground">
+              {finding}
+            </th>
+            <td
+              className={cn(
+                "py-3 text-right whitespace-nowrap",
+                status === "Fixed" ? "text-success" : "text-muted-foreground",
+              )}
+            >
+              {status}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 /**
- * "Only signed commands run": a board of tiles. The accent tile names the claim,
- * the large tile is the live envelope check, and the rest state the facts behind it.
+ * "Secure by the way it's built": the design choices that keep a self-hosted install
+ * safe, grouped by what they protect, each group with a picture from the product and
+ * each choice with a link to its code; then published advisories from comparable
+ * platforms, filterable by kind of flaw against those choices; then how to report a
+ * vulnerability and what the last review found.
  *
  * @returns The section.
  */
 export function SecuritySection() {
   return (
     <Section id="security" labelledBy="security-title">
-      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <li
-          className="flex min-h-[280px] flex-col justify-between rounded-lg bg-accent p-6 text-accent-foreground sm:col-span-2"
+      <div className="grid gap-6 lg:grid-cols-12 lg:gap-[var(--lp-gap)]">
+        <h2 id="security-title" className="lp-heading lg:col-span-6" data-reveal>
+          Secure by the way it's built
+        </h2>
+        <p
+          className="max-w-[44ch] self-end text-[17px] text-foreground lg:col-span-6"
           data-reveal
+          style={step(1)}
         >
-          <h2 id="security-title" className="lp-heading">
-            Only signed commands run
-          </h2>
-          <p className="mt-6 max-w-[46ch] text-[17px]">
-            Your servers never accept a connection from the control plane. They call it, and they
-            refuse anything it did not sign. Flip the switch below to try.
-          </p>
-        </li>
-        <li
-          className="min-h-[280px] rounded-lg bg-[var(--lp-step)] p-4 sm:col-span-2 sm:p-6"
-          data-reveal
-          style={{ "--i": 1 } as CSSProperties}
-        >
-          <ConnectionFragment />
-        </li>
-        <li
-          className="sm:col-span-2 lg:row-span-2"
-          data-reveal
-          style={{ "--i": 2 } as CSSProperties}
-        >
-          <EnvelopeDemo />
-        </li>
-        {FACTS.map(([title, body], index) => (
-          <li
-            key={title}
-            className={cn(
-              "flex flex-col gap-3 rounded-lg bg-[var(--lp-step)] p-6",
-              index >= 4 && "lg:col-span-2",
-            )}
+          A deploy platform holds the keys to every server and secret you give it. Roundhouse is
+          built so a forged message, a leaked password or a stolen session reaches as little as
+          possible. Each claim below links to the code that makes it true.
+        </p>
+      </div>
+
+      <DefenceGroupBlock
+        group="servers"
+        title="Servers only take signed orders"
+        lead="The agent on each server acts on nothing it can't verify, and here is its own log saying so."
+        picture={<AgentLogFragment />}
+        className="mt-[calc(var(--lp-space)*0.9)]"
+      />
+      <DefenceGroupBlock
+        group="secrets"
+        title="Secrets you can set, not read"
+        lead="Once a secret is saved, only the server that runs or builds your app can use it."
+        picture={<VariablesFragment />}
+        flip
+      />
+      <DefenceGroupBlock
+        group="account"
+        title="Guarded sign-ins, honest history"
+        lead="The people who can change the most have to prove it the most, and their changes land in a record that shows tampering."
+        picture={<AuditFragment />}
+      />
+      <DefenceGroupBlock
+        group="control-plane"
+        title="Less control plane to attack"
+        lead="Your dashboard is a Worker in your own Cloudflare account, strict about what it trusts."
+        picture={<HeadersFragment />}
+        flip
+      />
+
+      <div className="mt-[calc(var(--lp-space)*1.6)]">
+        <div className="grid gap-6 lg:grid-cols-12 lg:gap-[var(--lp-gap)]">
+          <h3 id="security-elsewhere" className="lp-heading lg:col-span-6" data-reveal>
+            What went wrong elsewhere
+          </h3>
+          <p
+            className="max-w-[52ch] self-end text-[17px] text-foreground lg:col-span-6"
             data-reveal
-            style={{ "--i": 3 + index } as CSSProperties}
+            style={step(1)}
           >
-            <h3 className="text-[24px] font-semibold leading-tight tracking-[-0.025em]">{title}</h3>
-            <p className="text-[16px] text-foreground">{body}</p>
-          </li>
-        ))}
-      </ul>
+            Self-hosted deploy platforms control every server they deploy to, so their flaws are
+            serious. These are published advisories for comparable platforms, matched against the
+            choices above.
+          </p>
+        </div>
+        <div className="mt-12">
+          <AdvisoryExplorer />
+        </div>
+      </div>
+
+      <div
+        className={cn(
+          "mt-[calc(var(--lp-space)*1.6)] grid gap-12 lg:grid-cols-12 lg:gap-[var(--lp-gap)]",
+          "rounded-lg bg-[var(--lp-step)] px-5 py-10 sm:p-10 lg:p-14",
+        )}
+      >
+        <div className="lg:col-span-5">
+          <h3 id="security-report" className="lp-heading" data-reveal>
+            Found a hole? Tell us privately
+          </h3>
+          <p className="mt-6 max-w-[42ch] text-[17px] text-foreground" data-reveal style={step(1)}>
+            Report it through GitHub's private advisories, not a public issue. We aim to reply
+            within three business days and to fix critical and high issues within 30 days, and we
+            credit you in the advisory.
+          </p>
+          <div className="mt-8 grid justify-items-start gap-4" data-reveal style={step(2)}>
+            <ExternalLink href={SECURITY_URL} className={buttonClass("primary")}>
+              Report a vulnerability
+            </ExternalLink>
+            <ExternalLink href={SECURITY_POLICY_URL} className={QUIET_LINK}>
+              Read the security policy
+            </ExternalLink>
+          </div>
+        </div>
+        <div className="lg:col-span-6 lg:col-start-7" data-reveal style={step(1)}>
+          <h3 id="security-review" className={BLOCK_TITLE}>
+            Reviewed in the open
+          </h3>
+          <p className="mt-6 max-w-[56ch] text-[17px] text-foreground">
+            In October 2026 the code was read the way an attacker would read it. All eight findings
+            are public with what was done about each, and the encryption code passes the RFC 8439
+            and C2SP test vectors.
+          </p>
+          <ReviewTable />
+          <ExternalLink href={SECURITY_REVIEW_URL} className={cn(QUIET_LINK, "mt-6 inline-block")}>
+            Read the October 2026 review
+          </ExternalLink>
+        </div>
+      </div>
     </Section>
   );
 }
