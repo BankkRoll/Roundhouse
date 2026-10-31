@@ -1,0 +1,4 @@
+Automatic recovery of Postgres in production (defaults; not saved yet)
+  Recovery     off; recover a lost server's volume with `roundhouse db volume recover`
+  Grace        30m offline before recovery starts
+  Status       idle

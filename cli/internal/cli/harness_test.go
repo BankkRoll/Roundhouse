@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"flag"
 	"io"
@@ -33,6 +34,8 @@ type harness struct {
 	tty, ttyColor bool
 	// terminal, when set, is the console `shell` sees.
 	terminal Terminal
+	// zone, when set, replaces testZone as the local time zone.
+	zone *time.Location
 	// stdin, when set, replaces the stdin string passed to a run.
 	stdin io.Reader
 
@@ -75,6 +78,7 @@ func (h *harness) envFor(stdin string, stdout, stderr *bytes.Buffer, interactive
 		Version:      "1.2.3",
 		Commit:       "abc1234",
 		Now:          func() time.Time { return time.UnixMilli(apitest.Now) },
+		Location:     cmp.Or(h.zone, testZone),
 		PollInterval: time.Millisecond,
 		Transport:    h.transport,
 		Terminal:     h.terminal,

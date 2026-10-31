@@ -1,0 +1,10 @@
+Point-in-time recovery of Postgres in production
+  PITR          on
+  WAL archive   active, 2518 segments, 39.3 GiB; last archived 2m ago
+  Base backups  2
+Restorable windows, in PDT then UTC (the end of each is exclusive):
+  1. 2026-10-20 05:00:00 PDT → 2026-10-20 23:00:00 PDT
+     2026-10-20T12:00:00Z → 2026-10-21T06:00:00Z
+  2. 2026-10-21 05:00:00 PDT → 2026-10-22 04:58:00 PDT
+     2026-10-21T12:00:00Z → 2026-10-22T11:58:00Z
+Restore with `roundhouse db pitr restore --to <time>`, e.g. --to 2026-10-22T11:57:59Z

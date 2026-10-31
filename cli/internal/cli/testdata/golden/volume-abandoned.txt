@@ -1,0 +1,6 @@
+VOLUME     SERVER   STATE                USED                  ABANDONED   DELETION
+vol_0004   edge-1   waiting_for_server   1.2 GiB / 5.0 GiB     0s ago      not before 2026-10-25 12:00 UTC
+vol_old2   edge-2   kept                 - / 5.0 GiB           3d ago      not before 2026-10-22 04:00 UTC
+vol_old1   edge-3   deleted              900.0 MiB / 5.0 GiB   4d ago      deleted 22h ago
+note vol_0004: The server is offline; the copy is deleted once it returns
+note vol_old2: A restore of the service is running; the old copy is kept until it ends

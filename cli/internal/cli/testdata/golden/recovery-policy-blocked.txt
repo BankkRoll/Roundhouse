@@ -1,0 +1,6 @@
+Automatic recovery of Postgres in production
+  Recovery     on; recoveries run with the access of usr_ada, checked each time
+  Grace        30m offline before recovery starts
+  Status       blocked: No server can take the volume: every other server is offline
+  Lost server  node_0001
+  Last run     rst_0009, started 2026-10-22 04:55:00 PDT (2026-10-22T11:55:00Z)

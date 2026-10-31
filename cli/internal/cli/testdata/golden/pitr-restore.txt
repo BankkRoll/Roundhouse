@@ -1,0 +1,3 @@
+✓ Started restore rst_0010 of Postgres in production to 2026-10-22 04:50:00 PDT (2026-10-22T11:50:00.25Z), in place
+  Base backup: bak_0008, with the WAL archived after it replayed up to that moment
+  Safety backup: bak_0011

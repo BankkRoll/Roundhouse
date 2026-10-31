@@ -42,6 +42,10 @@ type dataState struct {
 	onGetBackup  func(b *api.Backup)
 	onGetRestore func(r *api.Restore)
 
+	// recovery holds point-in-time recovery, recovery policies and abandoned
+	// copies; see [Fake.recoveryState].
+	recovery *recoveryState
+
 	// ops holds volume migrations, TCP proxies and credential rotations; see
 	// [Fake.opsState].
 	ops *opsState
@@ -291,6 +295,7 @@ func (f *Fake) dataRoutes(mux *http.ServeMux, handlers map[api.Route]guarded) {
 		handlers[r] = g
 	}
 	f.opsRoutes(handlers)
+	f.recoveryRoutes(handlers)
 	mux.HandleFunc("GET /_objects/{backupId}", f.serveObject)
 }
 
@@ -678,6 +683,7 @@ func (f *Fake) putBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		Schedule      *string         `json:"schedule"`
 		KeepLast      *int            `json:"keep_last"`
 		MaxAgeDays    json.RawMessage `json:"max_age_days"`
+		Pitr          *bool           `json:"pitr"`
 	}
 	if decode(r, &in) != nil {
 		apiError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON body")
@@ -704,6 +710,9 @@ func (f *Fake) putBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		pol.Enabled = *in.Enabled
 	}
 	if pol.Enabled && !f.storageConfigured(w) {
+		return
+	}
+	if !f.applyPitr(w, s, in.EnvironmentID, &pol, in.Pitr) {
 		return
 	}
 	if in.Schedule != nil {
@@ -881,6 +890,12 @@ func (f *Fake) restoreBackup(w http.ResponseWriter, r *http.Request) {
 		f.restoreNewService(w, b, s, in)
 		return
 	}
+	f.startInPlaceRestore(w, b, s, in.TargetNodeID, in.SkipSafetyBackup, nil)
+}
+
+// startInPlaceRestore starts an in_place restore (a recovery onto
+// targetNodeID when set) once the request has been checked. Must hold f.mu.
+func (f *Fake) startInPlaceRestore(w http.ResponseWriter, b *api.Backup, s *api.Service, targetNodeID string, skipSafety bool, targetTime *int64) {
 	if b.Status != api.BackupSucceeded {
 		apiError(w, http.StatusConflict, "conflict", "Only a succeeded backup can be restored")
 		return
@@ -895,19 +910,23 @@ func (f *Fake) restoreBackup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	rst := &api.Restore{ID: f.nextID("rst"), BackupID: b.ID, Mode: in.Mode, TargetServiceID: &s.ID, TargetEnvironmentID: &b.EnvironmentID,
-		Status: "queued", RequestedBy: str(f.user.ID), CreatedAt: Now}
-	if in.TargetNodeID != "" {
-		if f.recoverVolume(w, s, b, in.TargetNodeID) {
-			rst.TargetNodeID = &in.TargetNodeID
+	rst := &api.Restore{ID: f.nextID("rst"), BackupID: b.ID, Mode: api.RestoreInPlace, TargetServiceID: &s.ID, TargetEnvironmentID: &b.EnvironmentID, Trigger: "manual",
+		TargetTime: targetTime, Status: "queued", RequestedBy: str(f.user.ID), CreatedAt: Now}
+	if targetNodeID != "" {
+		if f.recoverVolume(w, s, b, targetNodeID) {
+			rst.TargetNodeID = &targetNodeID
 			d.restores = append(d.restores, rst)
 			writeJSON(w, http.StatusAccepted, rst)
 		}
 		return
 	}
-	if !in.SkipSafetyBackup {
+	if !skipSafety {
+		method := b.Method
+		if method == "base" {
+			method = "dump"
+		}
 		safety := &api.Backup{ID: f.nextID("bak"), ProjectID: b.ProjectID, ServiceID: s.ID, EnvironmentID: b.EnvironmentID,
-			Trigger: "pre_restore", Method: b.Method, Status: api.BackupQueued, CreatedAt: Now}
+			Trigger: "pre_restore", Method: method, Status: api.BackupQueued, CreatedAt: Now}
 		d.backups = append(d.backups, safety)
 		rst.SafetyBackupID = &safety.ID
 	}
@@ -931,6 +950,13 @@ func (f *Fake) restoreNewService(w http.ResponseWriter, b *api.Backup, s *api.Se
 		apiError(w, http.StatusUnprocessableEntity, "restore_mode_unsupported", msg)
 		return
 	}
+	f.startNewServiceRestore(w, b, s, engine, in.TargetEnvironmentID, in.Slug, nil)
+}
+
+// startNewServiceRestore adds the new database a new_service restore
+// restores into and starts the restore, once the mode has been checked.
+// Must hold f.mu.
+func (f *Fake) startNewServiceRestore(w http.ResponseWriter, b *api.Backup, s *api.Service, engine, targetEnvID, slugIn string, targetTime *int64) {
 	if b.Status != api.BackupSucceeded {
 		apiError(w, http.StatusConflict, "conflict", "Only a succeeded backup can be restored")
 		return
@@ -939,16 +965,16 @@ func (f *Fake) restoreNewService(w http.ResponseWriter, b *api.Backup, s *api.Se
 		return
 	}
 	p, _ := f.serviceOf(s.ID)
-	envID := cmp.Or(in.TargetEnvironmentID, b.EnvironmentID)
+	envID := cmp.Or(targetEnvID, b.EnvironmentID)
 	if !slices.ContainsFunc(p.Environments, func(e api.Environment) bool { return e.ID == envID }) {
 		apiError(w, http.StatusNotFound, "not_found", "Environment not found")
 		return
 	}
-	slug := cmp.Or(in.Slug, s.Slug+"-restore-"+time.UnixMilli(Now).UTC().Format("20060102"))
+	slug := cmp.Or(slugIn, s.Slug+"-restore-"+time.UnixMilli(Now).UTC().Format("20060102"))
 	taken := func(x string) bool {
 		return slices.ContainsFunc(p.Services, func(y api.Service) bool { return y.Slug == x })
 	}
-	if in.Slug != "" && taken(slug) {
+	if slugIn != "" && taken(slug) {
 		apiError(w, http.StatusConflict, "conflict", "A service with slug "+slug+" already exists")
 		return
 	}
@@ -968,7 +994,7 @@ func (f *Fake) restoreNewService(w http.ResponseWriter, b *api.Backup, s *api.Se
 		f.vars[varKey(svc.ID, e.ID)] = connectionVariables(engine)
 	}
 	rst := &api.Restore{ID: f.nextID("rst"), BackupID: b.ID, Mode: api.RestoreNewService, TargetServiceID: &svc.ID,
-		TargetEnvironmentID: &envID, Status: "queued", RequestedBy: str(f.user.ID), CreatedAt: Now}
+		TargetEnvironmentID: &envID, Trigger: "manual", TargetTime: targetTime, Status: "queued", RequestedBy: str(f.user.ID), CreatedAt: Now}
 	d := f.dataState()
 	d.restores = append(d.restores, rst)
 	writeJSON(w, http.StatusAccepted, rst)

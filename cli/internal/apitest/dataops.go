@@ -522,6 +522,7 @@ func (f *Fake) recoverVolume(w http.ResponseWriter, s *api.Service, b *api.Backu
 		apiError(w, http.StatusUnprocessableEntity, "migration_target_ineligible", t.Name+": "+*t.Reason)
 		return false
 	}
+	f.abandon(v)
 	v.Status, v.UpdatedAt = "abandoned", Now
 	nv := *v
 	nv.ID, nv.NodeID, nv.NodeName, nv.Status = f.nextID("vol"), &targetNodeID, nil, api.VolumePending

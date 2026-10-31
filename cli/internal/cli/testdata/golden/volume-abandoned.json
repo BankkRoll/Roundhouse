@@ -1,0 +1,43 @@
+{
+  "copies": [
+    {
+      "volume_id": "vol_0004",
+      "node_id": "node_0001",
+      "node_name": "edge-1",
+      "state": "waiting_for_server",
+      "message": "The server is offline; the copy is deleted once it returns",
+      "size_mb": 5120,
+      "used_bytes": 1288490188,
+      "abandoned_at": 1792670400000,
+      "delete_after": 1792929600000,
+      "delete_sent_at": null,
+      "cleaned_at": null
+    },
+    {
+      "volume_id": "vol_old2",
+      "node_id": "node_0002",
+      "node_name": "edge-2",
+      "state": "kept",
+      "message": "A restore of the service is running; the old copy is kept until it ends",
+      "size_mb": 5120,
+      "used_bytes": null,
+      "abandoned_at": 1792382400000,
+      "delete_after": 1792641600000,
+      "delete_sent_at": null,
+      "cleaned_at": null
+    },
+    {
+      "volume_id": "vol_old1",
+      "node_id": "node_0003",
+      "node_name": "edge-3",
+      "state": "deleted",
+      "message": "Deleted from edge-3",
+      "size_mb": 5120,
+      "used_bytes": 943718400,
+      "abandoned_at": 1792324800000,
+      "delete_after": 1792584000000,
+      "delete_sent_at": 1792587600000,
+      "cleaned_at": 1792591200000
+    }
+  ]
+}
