@@ -690,7 +690,7 @@ describe("MSW mocks match the API contract", () => {
     });
   });
 
-  it("drain: start, read, resume, and the refusals", async () => {
+  it("drain: start, read, resume (recovering the services it degraded), and the refusals", async () => {
     await fresh(async () => {
       const node = `${WS}/nodes/node_hel1`;
       expect(await call("GET", `${node}/drain`)).toMatchObject({
@@ -706,9 +706,21 @@ describe("MSW mocks match the API contract", () => {
         body: { drain: { node_id: "node_hel1", status: "completed" } },
       });
       expect(await call("GET", node)).toMatchObject({ body: { status: "maintenance" } });
+      Object.assign(db.deploy.services.find((row) => row.id === SEED.web)!, {
+        health: "degraded",
+        health_reason: "node_maintenance",
+        health_node: { id: "node_hel1", name: "hel-1" },
+      });
+      expect(await call("GET", `/v1/services/${SEED.web}`)).toMatchObject({
+        body: { health: "degraded", health_node: { id: "node_hel1" } },
+      });
+      expect((await call("GET", `/v1/projects/${SEED.project}`)).status).toBe(200);
       expect(await call("POST", `${node}/resume`)).toMatchObject({
         status: 200,
         body: { status: "online" },
+      });
+      expect(await call("GET", `/v1/services/${SEED.web}`)).toMatchObject({
+        body: { health: "ok", health_reason: null, health_node: null },
       });
       expect((await call("POST", `${WS}/nodes/node_nope/drain`, {})).status).toBe(404);
       as(null);

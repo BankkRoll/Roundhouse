@@ -58,7 +58,16 @@ async function enroll(user: Client, password = PASSWORD): Promise<Enrolled> {
   const secret = base32Decode(uri.searchParams.get("secret")!);
   let last = totpStep(Date.now()) - 2;
   const code = async () => {
-    last = Math.max(last + 1, totpStep(Date.now()) - 1);
+    let current = totpStep(Date.now());
+    // The previous step leaves the window when the current one ends; a code
+    // for it that is about to expire waits for the next step, as
+    // nextTotpCode in helpers.ts does.
+    const left = (current + 1) * 30_000 - Date.now();
+    if (Math.max(last + 1, current - 1) === current - 1 && left < 3000) {
+      await new Promise((r) => setTimeout(r, left + 50));
+      current = totpStep(Date.now());
+    }
+    last = Math.max(last + 1, current - 1);
     return hotp(secret, last);
   };
   const verified = await user.request("/api/auth/two-factor/verify-totp", {

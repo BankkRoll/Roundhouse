@@ -814,9 +814,36 @@ additions. Where the build differs from the decision above:
 - **Zones.** The zone term counts the node's own replicas too, as the text
   says ("+0.5 per same-service replica in the same zone").
 
+**Dashboard, CLI and MCP**
+- Servers → Network and each server's mesh and drain sections, and the
+  CLI's `servers mesh`, `servers drain` and `servers resume`, read and
+  call the routes above.
+- **`health_node`** on `Service` names the server a degraded service waits
+  on, read back from placements instead of stored: the server holding its
+  `parked` replica (`node_maintenance`), or an `offline` one still holding
+  a replica (`node_offline`); `null` while `ok` or once that server is
+  gone (`lib/service-health.ts`). No migration.
+- **Live health.** `degradeService` and `recoverNodeServices` publish
+  `service.updated` to the project's room, so the dashboard follows a
+  health change without a reload.
+- **Degraded badges** in the service header and on the project canvas's
+  service node read "Degraded" (never colour alone), with the reason and
+  server as a tooltip and as the node's accessible description
+  (`features/services/service-health.tsx`).
+- **MCP** (`apps/api/src/mcp/node-tools.ts`): `get_node_health` and
+  `list_degraded_services` (read-only; replicas and services only in
+  projects the token's user can read), and `drain_node` and
+  `resume_node` (`nodes:manage`). The writes and the REST routes share
+  `startDrain` and `resumeDrainedNode` (`lib/node-lifecycle.ts`): same
+  refusals, the same `force`, and the same audit entries with
+  `via: "mcp"` and the tool name. `drain_node` reports the volume
+  services that block the drain (the same `drainBlockers` the workflow's
+  plan step uses). Like every MCP write they need the two-factor gate
+  (fail closed); the routes need no fresh session, so neither do the
+  tools. This narrows ADR 0012's "never exposed: nodes" to adding and
+  removing servers.
+
 **Not built here**
-- The dashboard parts (Network view, drain buttons and progress, degraded
-  badges) and the CLI belong to the web and CLI work.
 - The relayed-pair and key-rotation integration tests, and the
   `e2e/phase2` real-stack run.
 

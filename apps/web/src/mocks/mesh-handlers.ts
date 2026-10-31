@@ -6,7 +6,8 @@
  * They follow the API's order: 401 without a session, 404 for a non-member, 403 when
  * the role lacks the action, 404 for a missing server, then 409 for a server outside the
  * mesh or while another server of the workspace rotates. There is no agent: a rotation
- * stays in progress until a test clears `rotating` itself.
+ * stays in progress until a test clears `rotating` itself. Resuming a server recovers
+ * the services its forced drain degraded, announced over the realtime socket.
  *
  * @module
  */
@@ -16,6 +17,7 @@ import type { Mesh, MeshNode, NodeDrain } from "../lib/api/mesh-client";
 import type { Node } from "../lib/api/types";
 import { apiError, notFound, recordAudit, requireWorkspace } from "./common";
 import { db, makeNode, WORKSPACE_ID } from "./db";
+import { announceServiceHealth } from "./deploy-handlers";
 import { MESH_SEED_NODES, seededMesh, unjoinedMeshNode } from "./mesh-db";
 
 function mswPath(name: keyof typeof MESH_ROUTES): string {
@@ -156,6 +158,11 @@ export const meshHandlers = [
     const drain = db.mesh.drains[node.id];
     if (drain?.status === "running") drain.status = "cancelled";
     node.status = "online";
+    for (const service of db.deploy.services) {
+      if (service.health_reason === "node_maintenance" && service.health_node?.id === node.id) {
+        announceServiceHealth(service.id, { health: "ok", health_reason: null, health_node: null });
+      }
+    }
     recordAudit({
       workspaceId,
       actorType: "user",

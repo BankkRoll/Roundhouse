@@ -53,14 +53,29 @@ export const tokenRoutes = createRouter()
         `This API token cannot grant scopes it lacks: ${beyondToken.join(", ")}`,
       );
     }
+    const expiresAt =
+      body.expires_in_days === null ? null : Date.now() + body.expires_in_days * DAY_MS;
+    // SECURITY: nor outlive itself: a short-lived token could otherwise
+    // mint a permanent one and keep its access after it expires.
+    const parentExpiry = m.principal.token?.expiresAt ?? null;
+    if (
+      m.principal.token &&
+      parentExpiry !== null &&
+      (expiresAt === null || expiresAt > parentExpiry)
+    ) {
+      throw new ApiError(
+        403,
+        "forbidden",
+        "This API token cannot create a token that outlives it; choose a shorter expiry",
+      );
+    }
     const db = c.get("db");
     const { secret, row } = await issueApiToken({
       workspaceId,
       userId: m.user.id,
       name: body.name,
       scopes: body.scopes,
-      expiresAt:
-        body.expires_in_days === null ? null : new Date(Date.now() + body.expires_in_days * DAY_MS),
+      expiresAt: expiresAt === null ? null : new Date(expiresAt),
     });
     const [[created]] = await db.batch([
       db.insert(apiTokens).values(row).returning(),

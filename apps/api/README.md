@@ -126,27 +126,35 @@ dashboard under Settings → Platform → MCP (`mcp_enabled` in
 `data.code: "mcp_disabled"`) for a JSON-RPC body, else the API's usual error
 body with code `mcp_disabled`.
 
-| Tool                                                            | Scope                  |
-| --------------------------------------------------------------- | ---------------------- |
-| `list_workspaces`                                               | `workspace:read`       |
-| `list_projects`, `get_project`                                  | `projects:read`        |
-| `get_service`, `list_deployments`, `get_deployment`             | `services:read`        |
-| `read_logs` (newest ≤ 500 lines, redacted at ingest)            | `services:read`        |
-| `deploy_service`, `rollback_deployment`, `cancel_deployment`    | `deployments:create`   |
-| `list_variables` (plain values need `variables:read_plain`)     | `variables:read`       |
-| `resolve_variables` (secret-derived keys in `local_keys`)       | `variables:read_plain` |
-| `set_variables` (stages; new secrets need `confirm_write_only`) | `variables:manage`     |
-| `stage_config_change` (stages a config patch)                   | `services:manage`      |
-| `list_changes` (open change sets, value-free diffs)             | `projects:read`        |
-| `apply_changes` (own sets on unprotected environments only)     | `projects:read`        |
-| `list_nodes`                                                    | `nodes:read`           |
+| Tool                                                            | Scope                         |
+| --------------------------------------------------------------- | ----------------------------- |
+| `list_workspaces`                                               | `workspace:read`              |
+| `list_projects`, `get_project`                                  | `projects:read`               |
+| `get_service`, `list_deployments`, `get_deployment`             | `services:read`               |
+| `read_logs` (newest ≤ 500 lines, redacted at ingest)            | `services:read`               |
+| `deploy_service`, `rollback_deployment`, `cancel_deployment`    | `deployments:create`          |
+| `list_variables` (plain values need `variables:read_plain`)     | `variables:read`              |
+| `resolve_variables` (secret-derived keys in `local_keys`)       | `variables:read_plain`        |
+| `set_variables` (stages; new secrets need `confirm_write_only`) | `variables:manage`            |
+| `stage_config_change` (stages a config patch)                   | `services:manage`             |
+| `list_changes` (open change sets, value-free diffs)             | `projects:read`               |
+| `apply_changes` (own sets on unprotected environments only)     | `projects:read`               |
+| `list_nodes`                                                    | `nodes:read`                  |
+| `get_mesh` (private network: readiness, pair paths)             | `nodes:read`                  |
+| `get_node_health` (status, usage, mesh, drain, replicas)        | `nodes:read`, `services:read` |
+| `list_degraded_services` (with the server each waits on)        | `services:read`               |
+| `drain_node` (`force` stops volume services), `resume_node`     | `nodes:manage`                |
 
-There is no tool that reads a secret value, deletes anything, opens a shell or
-manages domains, nodes, tokens or members. A missing scope is answered with
-`403` and `WWW-Authenticate: Bearer error="insufficient_scope", scope="…"`.
-Mutations are audited like their REST routes, with `via: "mcp"` and the tool
-name in the metadata. Variable and config changes are staged into a change
-set the token owns (ADR 0006) and come back with a `review_url`;
+There is no tool that reads a secret value, deletes anything, opens a shell,
+manages domains, tokens or members, or adds or removes servers. Draining and
+resuming a server are the only server writes; they share the REST routes'
+code (`src/lib/node-lifecycle.ts`), and `drain_node` lists the volume
+services that block the drain unless `force` is set. A missing scope is
+answered with `403` and
+`WWW-Authenticate: Bearer error="insufficient_scope", scope="…"`. Mutations
+are audited like their REST routes, with `via: "mcp"` and the tool name in
+the metadata. Variable and config changes are staged into a change set the
+token owns (ADR 0006) and come back with a `review_url`;
 `apply_changes` applies a set only when the same token staged it, the
 environment is not protected and `expected_revision` still matches, and
 answers `awaiting_confirmation` otherwise. Applying re-checks every change
@@ -154,7 +162,8 @@ against the token's scopes and its owner's role.
 
 The `read` token preset covers the read tools; `deploy` adds deploying and
 variable writes. Add `variables:read_plain` for plain values and
-`resolve_variables`.
+`resolve_variables`, and `nodes:manage` (owners and admins) for
+`drain_node` and `resume_node`.
 
 ### Signing in with OAuth
 

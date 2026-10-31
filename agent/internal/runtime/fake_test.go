@@ -32,6 +32,8 @@ type fakeDocker struct {
 	pullErr map[string]error
 	pulls   []pullCall
 	ops     []string
+	// removed records when each container, by name, was removed.
+	removed map[string]time.Time
 }
 
 type fakeContainer struct {
@@ -188,6 +190,10 @@ func (f *fakeDocker) RemoveContainer(_ context.Context, id string) error {
 	for cid, c := range f.containers {
 		if cid == id || c.name == id {
 			f.op("remove %s", c.name)
+			if f.removed == nil {
+				f.removed = map[string]time.Time{}
+			}
+			f.removed[c.name] = time.Now()
 			delete(f.containers, cid)
 		}
 	}
@@ -339,6 +345,8 @@ func (f *fakeDocker) opLog() []string {
 type fakeIngress struct {
 	mu      sync.Mutex
 	configs []ingress.Config
+	// applied holds when each of configs was applied.
+	applied []time.Time
 	f       *fakeDocker
 }
 
@@ -347,6 +355,7 @@ func (i *fakeIngress) Apply(_ context.Context, c ingress.Config) error {
 	defer i.mu.Unlock()
 	if len(i.configs) == 0 || fmt.Sprint(i.configs[len(i.configs)-1].Routes) != fmt.Sprint(c.Routes) {
 		i.configs = append(i.configs, c)
+		i.applied = append(i.applied, time.Now())
 		if i.f != nil {
 			i.f.mu.Lock()
 			i.f.op("routes %v", c.Routes)
@@ -436,4 +445,24 @@ func eventually(t *testing.T, what string, cond func() bool) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// appliedAt returns when the first config matching match was applied.
+func (i *fakeIngress) appliedAt(match func(ingress.Config) bool) (time.Time, bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	for n, c := range i.configs {
+		if match(c) {
+			return i.applied[n], true
+		}
+	}
+	return time.Time{}, false
+}
+
+// removedAt returns when the container named name was removed.
+func (f *fakeDocker) removedAt(name string) (time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	at, ok := f.removed[name]
+	return at, ok
 }

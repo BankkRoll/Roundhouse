@@ -251,7 +251,7 @@ describe("shell recording", () => {
 // -----------------------------------------------------------------------------
 
 describe("shell recording playback", () => {
-  it("needs audit:read, shell:open and a fresh browser session, and is audited", async () => {
+  it("needs audit:read, shell:open, two-factor and a fresh browser session, and is audited", async () => {
     const s = await shellStage();
     const { term, sessionId } = await openedShell(s, s.owner);
     term.ws.send(encoder.encode("typed-secret"));
@@ -304,6 +304,17 @@ describe("shell recording playback", () => {
     await env.DB.prepare("UPDATE sessions SET created_at = ? WHERE user_id = ?")
       .bind(Date.now(), adminUser!.id)
       .run();
+    // Opening the shell needs two-factor authentication, so watching it does too.
+    const setTwoFactor = (on: number) =>
+      env.DB.prepare("UPDATE users SET two_factor_enabled = ? WHERE id = ?")
+        .bind(on, adminUser!.id)
+        .run();
+    await setTwoFactor(0);
+    const unenrolled = await admin.request(path);
+    expect(unenrolled.status).toBe(403);
+    expect(await unenrolled.json()).toMatchObject({ error: { code: "two_factor_required" } });
+    expect(await auditOf("shell.recording_viewed")).toEqual([]);
+    await setTwoFactor(1);
     const res = await admin.request(path);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/^application\/x-asciicast/);

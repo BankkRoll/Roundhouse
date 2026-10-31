@@ -119,6 +119,44 @@ describe("consent screen", () => {
     expect(posted).not.toHaveProperty("scopes");
   });
 
+  it("offers nodes:manage for drain_node and resume_node unticked, and only where the role grants it", async () => {
+    const scopes = ["nodes:read", "nodes:manage"];
+    let posted: Record<string, unknown> | undefined;
+    server.use(
+      http.get("*/v1/oauth/authorization", () =>
+        HttpResponse.json({
+          ...CONSENT,
+          scopes,
+          workspaces: [
+            { ...CONSENT.workspaces[0]!, grantable_scopes: scopes },
+            { ...CONSENT.workspaces[1]!, grantable_scopes: ["nodes:read"] },
+          ],
+        }),
+      ),
+      http.post("*/v1/oauth/authorization", async ({ request }) => {
+        posted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ redirect_to: `${PARAMS.redirect_uri}?code=oac_x&state=s` });
+      }),
+    );
+    const navigate = vi.fn();
+    const { user } = renderWithProviders(
+      <ConsentPage params={{ ...PARAMS, scope: scopes.join(" ") }} navigate={navigate} />,
+    );
+    const permissions = await screen.findByRole("list", { name: "Permissions" });
+    const manage = within(permissions).getByRole("checkbox", {
+      name: /Add, remove, drain and resume servers/,
+    });
+    expect(manage).not.toBeChecked();
+    expect(within(permissions).getByRole("checkbox", { name: /See servers/ })).toBeChecked();
+    await user.selectOptions(screen.getByLabelText("Workspace"), "ws_other");
+    expect(manage).toBeDisabled();
+    await user.selectOptions(screen.getByLabelText("Workspace"), WORKSPACE_ID);
+    await user.click(manage);
+    await user.click(screen.getByRole("button", { name: "Authorize" }));
+    await waitFor(() => expect(navigate).toHaveBeenCalled());
+    expect(posted).toMatchObject({ scopes: ["nodes:read", "nodes:manage"] });
+  });
+
   it("explains a request the API rejects", async () => {
     server.use(
       http.get("*/v1/oauth/authorization", () =>

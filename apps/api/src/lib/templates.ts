@@ -76,7 +76,8 @@ import {
   syncGeneratedDomain,
 } from "./projects";
 import { publish } from "./realtime";
-import { toApiDeployment, toApiEnvironment, toApiProject, toApiService } from "./serialize";
+import { toApiDeployment, toApiEnvironment, toApiProject } from "./serialize";
+import { toApiServices } from "./service-health";
 import { getIngressSettings } from "./settings";
 import { BUILT_IN_TEMPLATES } from "./template-catalogue";
 import {
@@ -866,12 +867,13 @@ export async function createProjectFromTemplate(
     template: { id: template.id, version: template.version },
     project: toApiProject(projectRow),
     environment: toApiEnvironment(env),
-    services: (
+    services: await toApiServices(
+      db,
       await loadServices(
         db,
         p.serviceRows.map((r) => r.id),
-      )
-    ).map(toApiService),
+      ),
+    ),
     deployments: deployed.started,
     deploy_errors: deployed.failed,
     warnings: p.warnings,
@@ -961,8 +963,9 @@ export async function deployTemplateIntoProject(
     db,
     p.serviceRows.map((r) => r.id),
   );
-  for (const s of created) {
-    await publish(c.env, project.id, { type: "service.updated", service: toApiService(s) });
+  const createdApi = await toApiServices(db, created);
+  for (const service of createdApi) {
+    await publish(c.env, project.id, { type: "service.updated", service });
   }
   const deployed = await startDeployments(
     c,
@@ -976,7 +979,7 @@ export async function deployTemplateIntoProject(
     template: { id: template.id, version: template.version },
     project: toApiProject(project),
     environment: toApiEnvironment(environment),
-    services: created.map(toApiService),
+    services: createdApi,
     deployments: deployed.started,
     deploy_errors: deployed.failed,
     warnings: p.warnings,

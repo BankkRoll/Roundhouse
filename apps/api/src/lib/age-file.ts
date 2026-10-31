@@ -38,9 +38,14 @@ function b64(bytes: Uint8Array): string {
   return toBase64(bytes).replace(/=+$/, "");
 }
 
+/** Decodes canonical unpadded base64; non-zero trailing bits are refused, as age does. */
 function unb64(text: string): Uint8Array<ArrayBuffer> {
-  if (!/^[A-Za-z0-9+/]*$/.test(text)) throw new Error("age: invalid base64");
-  return fromBase64(text.padEnd(Math.ceil(text.length / 4) * 4, "="));
+  if (!/^[A-Za-z0-9+/]*$/.test(text) || text.length % 4 === 1) {
+    throw new Error("age: invalid base64");
+  }
+  const bytes = fromBase64(text.padEnd(Math.ceil(text.length / 4) * 4, "="));
+  if (b64(bytes) !== text) throw new Error("age: non-canonical base64");
+  return bytes;
 }
 
 async function hkdf(
@@ -168,35 +173,28 @@ export async function ageDecrypt(identity: string, file: Uint8Array): Promise<Ui
   const jwk = (await crypto.subtle.exportKey("jwk", privateKey)) as JsonWebKey;
   const ours = unb64(jwk.x!.replace(/-/g, "+").replace(/_/g, "/"));
 
-  // The header is text up to and including the `--- <mac>` line.
-  const macLineAt = indexOf(file, encoder.encode("\n--- "));
-  if (macLineAt < 0) throw new Error("age: no header MAC");
-  const macEnd = file.indexOf(0x0a, macLineAt + 5);
-  if (macEnd < 0) throw new Error("age: truncated header");
-  const headerText = decoder.decode(file.subarray(0, macLineAt + 4));
-  const mac = unb64(decoder.decode(file.subarray(macLineAt + 5, macEnd)));
-  const lines = headerText.split("\n");
-  if (lines[0] !== VERSION_LINE) throw new Error("age: unsupported version");
-
+  const header = parseHeader(file);
   let fileKey: Uint8Array | null = null;
-  for (let i = 1; i < lines.length - 1; ) {
-    const args = lines[i]!.split(" ");
-    if (args[0] !== "->") throw new Error("age: malformed stanza");
-    const bodyLines: string[] = [];
-    i++;
-    while (i < lines.length - 1) {
-      const line = lines[i]!;
-      bodyLines.push(line);
-      i++;
-      if (line.length < 64) break;
-    }
-    if (args[1] !== "X25519" || args.length !== 3 || fileKey) continue;
-    const epk = unb64(args[2]!);
-    const body = unb64(bodyLines.join(""));
+  for (const { args, body } of header.stanzas) {
+    if (args[0] !== "X25519") continue;
+    // SECURITY: a malformed X25519 stanza fails the whole file instead of
+    // being skipped, as the age spec requires.
+    if (args.length !== 2) throw new Error("age: bad X25519 stanza");
+    const epk = unb64(args[1]!);
     if (epk.byteLength !== 32 || body.byteLength !== 32) throw new Error("age: bad X25519 stanza");
-    const shared = new Uint8Array(
-      await x25519(await crypto.subtle.importKey("raw", epk, X25519, true, []), privateKey),
-    );
+    if (fileKey) continue;
+    let shared: Uint8Array;
+    try {
+      shared = new Uint8Array(
+        await x25519(await crypto.subtle.importKey("raw", epk, X25519, true, []), privateKey),
+      );
+    } catch {
+      throw new Error("age: invalid X25519 share");
+    }
+    // SECURITY: a low-order share yields an all-zero secret anyone can
+    // compute, which the spec requires rejecting. workerd's deriveBits refuses
+    // some of these itself; this check doesn't depend on that.
+    if (shared.every((b) => b === 0)) throw new Error("age: low-order X25519 share");
     const wrapKey = await hkdf(shared, concat([epk, ours]), X25519_INFO);
     try {
       fileKey = chacha20poly1305Open(wrapKey, new Uint8Array(12), body);
@@ -205,12 +203,12 @@ export async function ageDecrypt(identity: string, file: Uint8Array): Promise<Ui
     }
   }
   if (!fileKey) throw new Error("age: no identity matched");
-  const expected = await headerMac(fileKey, headerText);
-  let diff = expected.byteLength ^ mac.byteLength;
-  for (let i = 0; i < expected.byteLength; i++) diff |= expected[i]! ^ (mac[i] ?? 0);
+  const expected = await headerMac(fileKey, header.macInput);
+  let diff = expected.byteLength ^ header.mac.byteLength;
+  for (let i = 0; i < expected.byteLength; i++) diff |= expected[i]! ^ (header.mac[i] ?? 0);
   if (diff !== 0) throw new Error("age: bad header MAC");
 
-  const payload = file.subarray(macEnd + 1);
+  const payload = file.subarray(header.payloadOffset);
   if (payload.byteLength < 16 + TAG) throw new Error("age: truncated payload");
   const streamKey = await hkdf(fileKey, payload.subarray(0, 16), "payload");
   const sealed = payload.subarray(16);
@@ -221,19 +219,76 @@ export async function ageDecrypt(identity: string, file: Uint8Array): Promise<Ui
     const chunk = sealed.subarray(i * stride, (i + 1) * stride);
     const last = i === chunks - 1;
     if (chunk.byteLength < TAG) throw new Error("age: truncated chunk");
-    const plain = chacha20poly1305Open(streamKey, streamNonce(i, last), chunk);
+    let plain: Uint8Array;
+    try {
+      plain = chacha20poly1305Open(streamKey, streamNonce(i, last), chunk);
+    } catch {
+      throw new Error(`age: payload chunk ${i} failed to authenticate`);
+    }
     if (last && plain.byteLength === 0 && i > 0) throw new Error("age: empty final chunk");
     out.push(plain);
   }
   return concat(out);
 }
 
-function indexOf(haystack: Uint8Array, needle: Uint8Array): number {
-  outer: for (let i = 0; i + needle.byteLength <= haystack.byteLength; i++) {
-    for (let j = 0; j < needle.byteLength; j++) {
-      if (haystack[i + j] !== needle[j]) continue outer;
+interface Stanza {
+  args: string[];
+  body: Uint8Array;
+}
+
+interface Header {
+  stanzas: Stanza[];
+  /** What the header MAC covers: every byte through the `---`. */
+  macInput: string;
+  mac: Uint8Array;
+  payloadOffset: number;
+}
+
+/**
+ * Parses an age v1 header strictly: printable-ASCII lines, stanza arguments
+ * of VCHARs separated by single spaces, bodies of canonical unpadded base64
+ * wrapped at exactly 64 columns and ended by a shorter (possibly empty)
+ * line, then a `--- <mac>` line with a 32-byte MAC.
+ *
+ * SECURITY: a lax parser lets one header be read more than one way; the
+ * C2SP CCTV vectors in `test/age-file.test.ts` pin each of these rules.
+ */
+function parseHeader(file: Uint8Array): Header {
+  let pos = 0;
+  const nextLine = (): { text: string; start: number } => {
+    const nl = file.indexOf(0x0a, pos);
+    if (nl < 0) throw new Error("age: truncated header");
+    for (let i = pos; i < nl; i++) {
+      if (file[i]! < 0x20 || file[i]! > 0x7e) throw new Error("age: invalid header character");
     }
-    return i;
+    const line = { text: decoder.decode(file.subarray(pos, nl)), start: pos };
+    pos = nl + 1;
+    return line;
+  };
+  if (nextLine().text !== VERSION_LINE) throw new Error("age: unsupported version");
+  const stanzas: Stanza[] = [];
+  for (;;) {
+    const { text, start } = nextLine();
+    if (text.startsWith("--- ")) {
+      const mac = unb64(text.slice(4));
+      if (mac.byteLength !== 32) throw new Error("age: bad header MAC");
+      return {
+        stanzas,
+        macInput: decoder.decode(file.subarray(0, start + 3)),
+        mac,
+        payloadOffset: pos,
+      };
+    }
+    if (!text.startsWith("-> ")) throw new Error("age: malformed stanza");
+    const args = text.slice(3).split(" ");
+    if (!args.every((a) => /^[\x21-\x7e]+$/.test(a))) throw new Error("age: malformed stanza");
+    const body: string[] = [];
+    for (;;) {
+      const line = nextLine().text;
+      if (line.length > 64) throw new Error("age: stanza body line too long");
+      body.push(line);
+      if (line.length < 64) break;
+    }
+    stanzas.push({ args, body: unb64(body.join("")) });
   }
-  return -1;
 }

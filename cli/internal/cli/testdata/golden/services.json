@@ -8,6 +8,7 @@
     "icon": null,
     "health": "ok",
     "health_reason": null,
+    "health_node": null,
     "created_at": 1792584000000,
     "updated_at": 1792584000000
   },
@@ -20,6 +21,7 @@
     "icon": null,
     "health": "ok",
     "health_reason": null,
+    "health_node": null,
     "created_at": 1792584000000,
     "updated_at": 1792584000000
   }

@@ -33,7 +33,8 @@ import { conflict, isUniqueViolation, notFound } from "../lib/errors";
 import { insertWithFreeSlug, liveServices, slugFor, tearDownServices } from "../lib/projects";
 import { revalidateProjects } from "../lib/realtime";
 import { environmentOf, projectScope } from "../lib/scope";
-import { toApiEnvironment, toApiProject, toApiService } from "../lib/serialize";
+import { toApiEnvironment, toApiProject } from "../lib/serialize";
+import { toApiServices } from "../lib/service-health";
 import { getIngressSettings } from "../lib/settings";
 import { projectSummaries } from "../lib/summaries";
 import { newProjectKeyRow } from "../lib/variables";
@@ -171,7 +172,7 @@ export const projectRoutes = createRouter()
       {
         ...toApiProject(project),
         environments: envs.map(toApiEnvironment),
-        services: svcs.map(toApiService),
+        services: await toApiServices(db, svcs),
       },
       200,
     );

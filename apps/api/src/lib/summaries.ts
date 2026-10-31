@@ -29,6 +29,7 @@ import {
   toApiProject,
   toApiService,
 } from "./serialize";
+import { healthNodesOf } from "./service-health";
 
 /** What to summarise: one environment of one project, or every project's production. */
 export type SummaryScope =
@@ -123,6 +124,11 @@ export async function projectSummaries(db: Db, scope: SummaryScope, tlsMode: Tls
     domainOf.set(domain.serviceId, { hostname, url });
   }
 
+  const healthNodes = await healthNodesOf(
+    db,
+    serviceRows.map((r) => r.service),
+  );
+
   return projectRows.map((project) => {
     const envs = envRows.filter((r) => r.environment.projectId === project.id);
     const summarised =
@@ -138,7 +144,7 @@ export async function projectSummaries(db: Db, scope: SummaryScope, tlsMode: Tls
         .map(({ service }) => {
           const config = summarised ? configOf.get(service.id) : undefined;
           return {
-            service: toApiService(service),
+            service: toApiService(service, healthNodes.get(service.id) ?? null),
             config_version: config?.version ?? null,
             source: config?.source ?? null,
             domain: (summarised && domainOf.get(service.id)) || null,

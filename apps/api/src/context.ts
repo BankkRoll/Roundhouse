@@ -57,6 +57,8 @@ export interface TokenIdentity {
   /** The only workspace the token can reach. */
   workspaceId: string;
   scopes: readonly Action[];
+  /** Unix ms when it stops working, or `null` for never. */
+  expiresAt?: number | null;
   /** Set for an MCP OAuth access token (only `/mcp` accepts those). */
   oauth?: {
     grantId: string;
@@ -258,7 +260,13 @@ async function tokenPrincipal(c: AppContext, secret: string): Promise<Principal>
     return {
       user: row.user,
       session: null,
-      token: { id: row.id, name: row.name, workspaceId: row.workspaceId, scopes: row.scopes },
+      token: {
+        id: row.id,
+        name: row.name,
+        workspaceId: row.workspaceId,
+        scopes: row.scopes,
+        expiresAt: row.expiresAt,
+      },
     };
   }
   // SECURITY: Secrets carry 256 bits, so this isn't about guessing; it keeps a

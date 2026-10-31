@@ -302,6 +302,14 @@ describe("token and member management by tokens", () => {
       json: { name: "wider", scopes: ["projects:manage"], expires_in_days: 1 },
     });
     expect(wider.status).toBe(403);
+    // The manager expires in 30 days; its children may not outlive it.
+    for (const expires_in_days of [null, 31]) {
+      const longer = await as(manager.secret, `/v1/workspaces/${workspaceId}/tokens`, {
+        method: "POST",
+        json: { name: "longer", scopes: ["projects:read"], expires_in_days },
+      });
+      expect(longer.status, String(expires_in_days)).toBe(403);
+    }
     const audit = await env.DB.prepare(
       "SELECT actor_type, actor_id FROM audit_logs WHERE action = 'token.created' ORDER BY id DESC",
     ).first<{ actor_type: string; actor_id: string }>();

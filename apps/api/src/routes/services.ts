@@ -59,7 +59,8 @@ import {
 } from "../lib/projects";
 import { publish } from "../lib/realtime";
 import { environmentOf, projectScope, serviceScope } from "../lib/scope";
-import { toApiConfig, toApiService } from "../lib/serialize";
+import { toApiConfig } from "../lib/serialize";
+import { toApiServices, toApiServiceWithHealth } from "../lib/service-health";
 import { getIngressSettings } from "../lib/settings";
 import { assertPlainBuildArgs } from "../lib/variables";
 import { assertSingleReplica } from "../lib/volumes";
@@ -86,7 +87,7 @@ export const serviceRoutes = createRouter()
     const { projectId } = c.req.valid("param");
     await projectScope(c, projectId, policyOf(listServices).action!);
     const rows = await liveServices(c.get("db"), projectId);
-    return c.json({ services: rows.map(toApiService) }, 200);
+    return c.json({ services: await toApiServices(c.get("db"), rows) }, 200);
   })
   .openapi(createService, async (c) => {
     const { projectId } = c.req.valid("param");
@@ -159,13 +160,14 @@ export const serviceRoutes = createRouter()
       .from(serviceConfigs)
       .where(eq(serviceConfigs.serviceId, id))
       .orderBy(asc(serviceConfigs.environmentId));
-    await publish(c.env, projectId, { type: "service.updated", service: toApiService(service) });
-    return c.json({ service: toApiService(service), configs: configs.map(toApiConfig) }, 201);
+    const created = await toApiServiceWithHealth(db, service);
+    await publish(c.env, projectId, { type: "service.updated", service: created });
+    return c.json({ service: created, configs: configs.map(toApiConfig) }, 201);
   })
   .openapi(getService, async (c) => {
     const { serviceId } = c.req.valid("param");
     const { service } = await serviceScope(c, serviceId, policyOf(getService).action!);
-    return c.json(toApiService(service), 200);
+    return c.json(await toApiServiceWithHealth(c.get("db"), service), 200);
   })
   .openapi(updateService, async (c) => {
     const { serviceId } = c.req.valid("param");
@@ -303,11 +305,9 @@ export const serviceRoutes = createRouter()
         ip: clientIp(c),
       });
     }
-    await publish(c.env, project.id, { type: "service.updated", service: toApiService(updated) });
-    return c.json(
-      { service: toApiService(updated), config: config ? toApiConfig(config) : null },
-      200,
-    );
+    const apiService = await toApiServiceWithHealth(db, updated);
+    await publish(c.env, project.id, { type: "service.updated", service: apiService });
+    return c.json({ service: apiService, config: config ? toApiConfig(config) : null }, 200);
   })
   .openapi(deleteService, async (c) => {
     const { serviceId } = c.req.valid("param");
@@ -334,7 +334,10 @@ export const serviceRoutes = createRouter()
       metadata: { name: service.name, slug: service.slug, project_id: project.id },
       ip: clientIp(c),
     });
-    await publish(c.env, project.id, { type: "service.updated", service: toApiService(row) });
+    await publish(c.env, project.id, {
+      type: "service.updated",
+      service: await toApiServiceWithHealth(db, row),
+    });
     return c.body(null, 204);
   })
   .openapi(getServiceConfig, async (c) => {

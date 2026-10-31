@@ -13,6 +13,7 @@ import {
 } from "react";
 import type { Canvas, CanvasEdge, CanvasNode } from "../../lib/api/changes-types";
 import type { ServiceView } from "../projects/service-list";
+import { DegradedBadge } from "../services/service-health";
 import { CronNodeSummary } from "./cron-node-summary";
 import {
   autoLayout,
@@ -55,6 +56,11 @@ function nodeBadge(node: CanvasNode): string | null {
   return node.staged === "create" ? "new" : String(node.staged_ops);
 }
 
+/** Whether a node shows the Degraded badge: a live service whose server let it down. */
+function isDegraded(node: CanvasNode, view: ServiceView | undefined): boolean {
+  return node.staged !== "create" && view?.service.health === "degraded";
+}
+
 /** The status words in a node's bottom row. */
 function nodeStatusText(node: CanvasNode, view: ServiceView | undefined): string {
   if (node.staged === "create") return "staged";
@@ -75,7 +81,13 @@ function nodeLabel(
   view: ServiceView | undefined,
   peers: readonly PeerMark[] | undefined,
 ): string {
-  const visible = [node.name, nodeBadge(node), node.slug, nodeStatusText(node, view)]
+  const visible = [
+    node.name,
+    isDegraded(node, view) ? "Degraded" : null,
+    nodeBadge(node),
+    node.slug,
+    nodeStatusText(node, view),
+  ]
     .filter(Boolean)
     .join(" ");
   const staged =
@@ -121,13 +133,18 @@ const ServiceNode = memo(function ServiceNode({
   const status = view?.latest?.status;
   const badge = nodeBadge(node);
   const statusText = nodeStatusText(node, view);
+  const degraded = isDegraded(node, view);
+  const describedBy = [
+    degraded ? `health-${node.id}` : null,
+    node.kind === "cron" ? `cron-summary-${node.id}` : null,
+  ].filter(Boolean);
   return (
     <button
       type="button"
       data-node-id={node.id}
       aria-label={nodeLabel(node, view, peers)}
       aria-pressed={selected}
-      aria-describedby={node.kind === "cron" ? `cron-summary-${node.id}` : undefined}
+      aria-describedby={describedBy.length ? describedBy.join(" ") : undefined}
       onPointerDown={(e) => onPointerDown(node.id, e)}
       onKeyDown={(e) => onKeyDown(node.id, e)}
       onClick={() => onClick(node.id)}
@@ -141,7 +158,11 @@ const ServiceNode = memo(function ServiceNode({
         "absolute top-0 left-0 flex flex-col justify-between rounded-md border bg-surface px-3 py-2.5 text-left shadow-sm outline-none transition-[border-color,box-shadow] select-none",
         "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         movable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-        selected ? "border-accent shadow-accent/20" : "border-border-strong hover:border-input",
+        selected
+          ? "border-accent shadow-accent/20"
+          : degraded
+            ? "border-warning/60 hover:border-warning"
+            : "border-border-strong hover:border-input",
         node.staged === "create" && "border-dashed border-accent/70",
         node.staged === "delete" && "border-dashed border-danger/70 opacity-70",
       )}
@@ -165,6 +186,13 @@ const ServiceNode = memo(function ServiceNode({
         >
           {node.name}
         </span>{" "}
+        {degraded && view ? (
+          <DegradedBadge
+            service={view.service}
+            descriptionId={`health-${node.id}`}
+            className="h-4.5 shrink-0 gap-0.5 px-1 text-[10px]"
+          />
+        ) : null}{" "}
         {badge ? (
           <span
             aria-hidden="true"

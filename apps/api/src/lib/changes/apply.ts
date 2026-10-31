@@ -117,7 +117,7 @@ import {
 } from "../projects";
 import { publish } from "../realtime";
 import { type Caller, projectScope } from "../scope";
-import { toApiService } from "../serialize";
+import { toApiServices } from "../service-health";
 import { getIngressSettings } from "../settings";
 import {
   loadEnvironmentVariables,
@@ -1647,8 +1647,8 @@ async function finish(
       .select()
       .from(services)
       .where(inArray(services.id, [...new Set(touched)]));
-    for (const row of rows) {
-      await publish(ctx.env, project.id, { type: "service.updated", service: toApiService(row) });
+    for (const service of await toApiServices(db, rows)) {
+      await publish(ctx.env, project.id, { type: "service.updated", service });
     }
   }
   await publish(ctx.env, project.id, {

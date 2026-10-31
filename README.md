@@ -24,6 +24,8 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | Databases                       | Postgres, MySQL, Valkey/Redis and MongoDB as services          | Available                                                    |
 | Volumes                         | Persistent storage mounted into a service                      | Available                                                    |
 | Backups                         | Scheduled database backups to R2 in your account               | Available                                                    |
+| Point-in-time restore           | Restore Postgres to any moment in its backup window            | In progress — see [TODO.md](TODO.md)                         |
+| Automatic recovery              | Restore a lost server's databases onto a healthy one           | In progress — see [TODO.md](TODO.md)                         |
 | **Networking**                  |                                                                |                                                              |
 | Private networking              | WireGuard mesh; services reach each other at `.internal` names | Available                                                    |
 | Domains & HTTPS                 | A generated domain or your own, certificates by Caddy          | Available                                                    |
@@ -31,6 +33,7 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | Logs                            | Build and runtime logs, streamed live                          | Available                                                    |
 | Metrics                         | CPU, memory and requests per service                           | Available                                                    |
 | Servers & live usage            | Join a Linux box with one command, watch CPU, RAM and disk     | Available                                                    |
+| Drain & health                  | Move workloads off a server; degraded services are flagged     | Available                                                    |
 | **Developer tools**             |                                                                |                                                              |
 | Project canvas & staged changes | See every service, stage changes, review, deploy               | Available                                                    |
 | Environments                    | Production plus staging or more, each with its own config      | Available                                                    |
@@ -105,6 +108,9 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 - **Rotating `MASTER_KEY`** signs everyone out. Keep the old key in
   `MASTER_KEYS_PREVIOUS` until the key rotation has finished; two-factor
   secrets are re-encrypted under the new key with everything else.
+- **Security review**: the October 2026 review, its fixes and the test-vector
+  evidence for the recording encryption are in
+  [docs/security/review-2026-10.md](docs/security/review-2026-10.md).
 - **Signing-key compromise**: if the control plane's signing key may have
   leaked, every node must re-join; follow
   [docs/runbooks/emergency-rejoin.md](docs/runbooks/emergency-rejoin.md).
@@ -162,7 +168,7 @@ Development settings live in `apps/api/.dev.vars`, created from
 | `docs`              | Configuration, ADRs, runbooks          |
 | `infra`             | Release signing                        |
 
-[CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) ·
+[CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · [TODO.md](TODO.md) ·
 [Code of conduct](CODE_OF_CONDUCT.md)
 
 ## License

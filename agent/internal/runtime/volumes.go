@@ -221,17 +221,23 @@ func (r *Runtime) Hold(ctx context.Context, workloadID, volumeID, reason string)
 		r.poke()
 	})
 	r.poke()
-	for !r.holdSettled(h, since) {
+	for {
+		// NOTE: ctx comes first so a caller that has already given up never
+		// gets a hold, even when the reconciler happened to settle it first.
+		if err := ctx.Err(); err != nil {
+			release()
+			return nil, err
+		}
+		if r.holdSettled(h, since) {
+			return release, nil
+		}
 		t := time.NewTimer(50 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			release()
-			return nil, ctx.Err()
 		case <-t.C:
 		}
 	}
-	return release, nil
 }
 
 // holdSettled reports whether a pass has run since the hold was placed and

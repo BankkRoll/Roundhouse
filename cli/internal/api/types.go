@@ -93,10 +93,19 @@ type Service struct {
 	// HealthReason says why a service is degraded: "node_offline" or
 	// "node_maintenance"; nil while it is ok.
 	HealthReason *string `json:"health_reason"`
+	// HealthNode is the server a degraded service waits on; nil while it is
+	// ok, or once that server is gone.
+	HealthNode *ServiceHealthNode `json:"health_node"`
 	// Database is set for a database service; nil for any other.
 	Database  *ServiceDatabase `json:"database,omitempty"`
 	CreatedAt int64            `json:"created_at"`
 	UpdatedAt int64            `json:"updated_at"`
+}
+
+// ServiceHealthNode names the server a degraded service waits on.
+type ServiceHealthNode struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // ServiceSource says where a service's code comes from: an image, or a git

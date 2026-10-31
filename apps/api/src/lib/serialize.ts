@@ -60,9 +60,14 @@ export function toApiEnvironment(e: Row<typeof environments>) {
 
 /**
  * @param s - Service row.
+ * @param healthNode - The server a degraded service waits on (`./service-health`);
+ *   `null` when healthy or unknown.
  * @returns The `Service` wire shape.
  */
-export function toApiService(s: Row<typeof services>) {
+export function toApiService(
+  s: Row<typeof services>,
+  healthNode: { id: string; name: string } | null,
+) {
   return {
     id: s.id,
     project_id: s.projectId,
@@ -76,6 +81,7 @@ export function toApiService(s: Row<typeof services>) {
         : null,
     health: s.health,
     health_reason: s.healthReason,
+    health_node: s.health === "degraded" ? healthNode : null,
     created_at: +s.createdAt,
     updated_at: +s.updatedAt,
   };

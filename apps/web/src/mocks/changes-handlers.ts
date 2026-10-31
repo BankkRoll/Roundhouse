@@ -975,6 +975,7 @@ function applySet(
         icon: op.icon ?? null,
         health: "ok",
         health_reason: null,
+        health_node: null,
         created_at: now,
         updated_at: now,
       };

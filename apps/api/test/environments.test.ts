@@ -272,6 +272,57 @@ describe("creating and cloning", () => {
   );
 });
 
+describe("cloning a protected environment", () => {
+  it(
+    "copies its secrets only for callers who may deploy there",
+    async () => {
+      const s = await stage();
+      const dev = await addMember(s.owner, s.workspaceId, "dev@example.com", "member");
+      await ok(
+        s.owner.json(`/v1/environments/${s.prodId}/protection`, {
+          method: "PUT",
+          json: {
+            protected: true,
+            rules: { deploy: { roles: [], user_ids: [], team_ids: [] } },
+          },
+        }),
+      );
+      const all = await createEnv(dev, s.projectId, {
+        name: "Exfil",
+        clone: { from_environment_id: s.prodId },
+      });
+      expect(all.status).toBe(403);
+      const legacy = await createEnv(dev, s.projectId, {
+        name: "Exfil legacy",
+        copy_from_environment_id: s.prodId,
+      });
+      expect(legacy.status).toBe(403);
+      const plain = await ok(
+        createEnv(dev, s.projectId, {
+          name: "Plain",
+          clone: { from_environment_id: s.prodId, variables: "non_secret" },
+        }),
+        201,
+      );
+      const promote = (variables: string) =>
+        dev.json(`/v1/environments/${plain.id}/promote`, {
+          method: "POST",
+          json: { from_environment_id: s.prodId, include: { variables } },
+        });
+      expect((await promote("all")).status).toBe(403);
+      expect([201, 409]).toContain((await promote("non_secret")).status);
+      await ok(
+        createEnv(s.owner, s.projectId, {
+          name: "Owner copy",
+          clone: { from_environment_id: s.prodId },
+        }),
+        201,
+      );
+    },
+    TIMEOUT,
+  );
+});
+
 describe("diff", () => {
   it(
     "compares configs and variables, secrets by fingerprint, never showing a value",

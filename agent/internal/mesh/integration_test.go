@@ -374,7 +374,15 @@ func (n *node) provision(ctx context.Context, c *docker.Client, bin []byte, imag
 	if err != nil || code != 0 {
 		return fmt.Errorf("docker load: %d %v %s", code, err, out.String())
 	}
-	if out, code := exec1(ctx, c, n.id, "docker tag "+imageID+" "+workloadImage); code != 0 {
+	// NOTE: An image ID is only meaningful to the engine that issued it. A
+	// classic-store host (the GitHub runner) names busybox by its config
+	// digest, while the node's containerd store names the same load by its
+	// manifest digest, so tag whatever ID the node reports.
+	loaded := loadedImageID(out.String())
+	if loaded == "" {
+		return fmt.Errorf("docker load named no image: %s", out.String())
+	}
+	if out, code := exec1(ctx, c, n.id, "docker tag "+loaded+" "+workloadImage); code != 0 {
 		return fmt.Errorf("docker tag: %s", out)
 	}
 
@@ -872,6 +880,21 @@ func rehash(w protocol.WorkloadSpec) protocol.WorkloadSpec {
 	}
 	w.SpecHash = h
 	return w
+}
+
+// loadedImageID finds the image docker load created in its output: "Loaded
+// image ID: sha256:…" for an untagged archive, or "Loaded image: name:tag".
+func loadedImageID(out string) string {
+	for line := range strings.Lines(out) {
+		line = strings.TrimSpace(line)
+		if id, ok := strings.CutPrefix(line, "Loaded image ID: "); ok {
+			return id
+		}
+		if ref, ok := strings.CutPrefix(line, "Loaded image: "); ok {
+			return ref
+		}
+	}
+	return ""
 }
 
 // pushedDigest finds the manifest digest in docker push's output
