@@ -160,7 +160,9 @@ jobs:
         run: |
           tag="$GITHUB_REF_NAME"
           prerelease=()
-          case "$tag" in *-*) prerelease=(--prerelease) ;; esac
+          # Only a suffix on the version marks a prerelease; the tag's own
+          # "agent-" prefix always contains a hyphen.
+          case "${tag#agent-v}" in *-*) prerelease=(--prerelease) ;; esac
           # Published assets are immutable: a re-run must never swap signed
           # files under an existing tag, so refuse rather than overwrite.
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then

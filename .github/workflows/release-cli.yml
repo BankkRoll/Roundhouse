@@ -227,7 +227,9 @@ jobs:
         run: |
           tag="$GITHUB_REF_NAME"
           flags=()
-          case "$tag" in *-*) flags+=(--prerelease) ;; esac
+          # Only a suffix on the version marks a prerelease; the tag's own
+          # "cli-" prefix always contains a hyphen.
+          case "${tag#cli-v}" in *-*) flags+=(--prerelease) ;; esac
           # Generated notes start from the previous CLI release, not from
           # whichever agent release happens to be newer.
           previous="$(git describe --tags --abbrev=0 --match 'cli-v*' "${GITHUB_SHA}^" 2>/dev/null || true)"
