@@ -1,7 +1,8 @@
 /**
  * Backup queries (ADR 0004): a service's backup policy and backups, restores, downloads,
- * and the instance's backup storage. The backup list polls while a backup or restore is
- * in flight, since their progress isn't pushed over the realtime socket.
+ * point-in-time recovery, automatic recovery and the instance's backup storage. The
+ * backup list polls while a backup or restore is in flight, and the recovery policy while
+ * a server is watched or recovered, since neither is pushed over the realtime socket.
  *
  * @module
  */
@@ -11,6 +12,9 @@ import {
   type BackupPolicyPatch,
   type BackupStorageBody,
   backupsApi,
+  type PitrRestoreBody,
+  type RecoveryPolicy,
+  type RecoveryPolicyPatch,
   type RestoreBody,
 } from "../lib/api/backups-client";
 import { queryKeys } from "./keys";
@@ -26,6 +30,10 @@ export const backupKeys = {
   list: (serviceId: string, environmentId: string) =>
     ["services", serviceId, "backups", environmentId] as const,
   restore: (restoreId: string) => ["restores", restoreId] as const,
+  pitr: (serviceId: string, environmentId: string) =>
+    ["services", serviceId, "pitr", environmentId] as const,
+  recoveryPolicy: (serviceId: string, environmentId: string) =>
+    ["services", serviceId, "recovery-policy", environmentId] as const,
   storage: ["instance", "backup-storage"] as const,
 };
 
@@ -48,7 +56,8 @@ export function useBackupPolicy(serviceId: string, environmentId: string | undef
 }
 
 /**
- * Saves a backup policy and caches the result.
+ * Saves a backup policy, caches the result and refreshes the point-in-time status and
+ * backups it can change.
  *
  * @param serviceId - Service id.
  * @returns A mutation taking the policy patch.
@@ -57,8 +66,16 @@ export function useSaveBackupPolicy(serviceId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: BackupPolicyPatch) => backupsApi.putPolicy(serviceId, body),
-    onSuccess: (policy) =>
-      queryClient.setQueryData(backupKeys.policy(serviceId, policy.environment_id), policy),
+    onSuccess: (policy) => {
+      queryClient.setQueryData(backupKeys.policy(serviceId, policy.environment_id), policy);
+      // NOTE: Turning point-in-time recovery on queues a base backup and starts a stream.
+      void queryClient.invalidateQueries({
+        queryKey: backupKeys.pitr(serviceId, policy.environment_id),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: backupKeys.list(serviceId, policy.environment_id),
+      });
+    },
   });
 }
 
@@ -161,6 +178,91 @@ export function useRestore(restoreId: string | null) {
       (query.state.data.status === "queued" || query.state.data.status === "running")
         ? BACKUP_POLL_MS
         : false,
+  });
+}
+
+/**
+ * A service's point-in-time recovery in an environment: whether it is on, the stream
+ * archiving now and the restorable windows.
+ *
+ * @param serviceId - Service id.
+ * @param environmentId - Environment id; the query waits while it is unknown.
+ * @param enabled - Skip for engines without point-in-time recovery.
+ * @returns The status query.
+ */
+export function usePitrStatus(
+  serviceId: string,
+  environmentId: string | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: backupKeys.pitr(serviceId, environmentId ?? ""),
+    queryFn: ({ signal }) => backupsApi.getPitr(serviceId, environmentId!, signal),
+    enabled: enabled && Boolean(environmentId),
+  });
+}
+
+/**
+ * Restores a database to a point in time, caches the restore and refreshes what it
+ * changes: the backups (an in-place restore queues a safety backup), the restorable
+ * windows (the restore retires the stream) and, for a new service, the project.
+ *
+ * @param serviceId - Service id.
+ * @param environmentId - Environment id.
+ * @param projectId - The service's project.
+ * @returns A mutation taking the restore body.
+ */
+export function useRestorePitr(serviceId: string, environmentId: string, projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PitrRestoreBody) => backupsApi.restorePitr(serviceId, body),
+    onSuccess: (restore) => {
+      queryClient.setQueryData(backupKeys.restore(restore.id), restore);
+      void queryClient.invalidateQueries({ queryKey: backupKeys.list(serviceId, environmentId) });
+      void queryClient.invalidateQueries({ queryKey: backupKeys.pitr(serviceId, environmentId) });
+      if (restore.mode === "new_service") {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.project(projectId) });
+        invalidateProjectSummaries(queryClient, projectId);
+      }
+    },
+  });
+}
+
+/** Statuses in which automatic recovery is acting, so the dashboard re-reads it. */
+const RECOVERY_ACTIVE: readonly RecoveryPolicy["status"][] = ["watching", "recovering"];
+
+/**
+ * A service's automatic recovery in an environment, polled while a lost server is
+ * watched or recovered from.
+ *
+ * @param serviceId - Service id.
+ * @param environmentId - Environment id; the query waits while it is unknown.
+ * @returns The policy query.
+ */
+export function useRecoveryPolicy(serviceId: string, environmentId: string | undefined) {
+  return useQuery({
+    queryKey: backupKeys.recoveryPolicy(serviceId, environmentId ?? ""),
+    queryFn: ({ signal }) => backupsApi.getRecoveryPolicy(serviceId, environmentId!, signal),
+    enabled: Boolean(environmentId),
+    refetchInterval: (query) =>
+      query.state.data && RECOVERY_ACTIVE.includes(query.state.data.status)
+        ? BACKUP_POLL_MS
+        : false,
+  });
+}
+
+/**
+ * Saves a service's automatic recovery and caches the result.
+ *
+ * @param serviceId - Service id.
+ * @returns A mutation taking the policy patch.
+ */
+export function useSaveRecoveryPolicy(serviceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: RecoveryPolicyPatch) => backupsApi.putRecoveryPolicy(serviceId, body),
+    onSuccess: (policy) =>
+      queryClient.setQueryData(backupKeys.recoveryPolicy(serviceId, policy.environment_id), policy),
   });
 }
 

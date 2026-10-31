@@ -33,7 +33,7 @@ import { ACCESS_SEED } from "./access-db";
 import { requireApprovalIn } from "./changes-handlers";
 import { REFUSED_CLOUDFLARE_TOKEN, resetCloudflareMock } from "./cloudflare-handlers";
 import { CRON_SEED } from "./cron-db";
-import { DATA_SEED } from "./data-db";
+import { addPitrHistory, DATA_SEED, PITR_SEED } from "./data-db";
 import {
   db,
   INVITE_TOKEN,
@@ -3685,6 +3685,267 @@ describe("MSW mocks match the API contract", () => {
         action: "restore.started",
         metadata: { recovery: { lost_node_id: "node_hel1", target_node_id: "node_nbg1" } },
       });
+    });
+  });
+
+  it("point-in-time recovery: turning it on, the windows, restoring to a time", async () => {
+    await fresh(async () => {
+      const env = `environment_id=${SEED.production}`;
+      const svc = `/v1/services/${DATA_SEED.database}`;
+      const status = () => call("GET", `${svc}/pitr?${env}`);
+      expect(await status()).toMatchObject({
+        status: 200,
+        body: { enabled: false, unavailable_reason: null, stream: null, windows: [] },
+      });
+      expect((await call("GET", `/v1/services/${SEED.web}/pitr?${env}`)).body).toMatchObject({
+        enabled: false,
+        unavailable_reason: "Point-in-time recovery is available for Postgres databases only",
+      });
+      expect((await call("GET", `${svc}/pitr?environment_id=env_nope`)).status).toBe(404);
+      expect((await call("GET", `/v1/services/svc_nope/pitr?${env}`)).status).toBe(404);
+
+      const put = (body: Record<string, unknown>) =>
+        call("PUT", `${svc}/backup-policy`, { environment_id: SEED.production, ...body });
+      expect(await put({ enabled: false, pitr: true })).toMatchObject({
+        status: 422,
+        body: { error: { message: expect.stringMatching(/needs scheduled backups/) } },
+      });
+      const config = db.deploy.configs.find((row) => row.service_id === DATA_SEED.database)!;
+      config.deploy.start_command = "postgres -c shared_buffers=1GB";
+      expect(await put({ pitr: true })).toMatchObject({
+        status: 409,
+        body: { error: { message: expect.stringMatching(/custom start command/) } },
+      });
+      delete config.deploy.start_command;
+      as("viewer");
+      expect((await put({ pitr: true })).status).toBe(403);
+      as("owner");
+      expect(await put({ pitr: true })).toMatchObject({
+        status: 200,
+        body: { pitr: true, method: "base", enabled: true },
+      });
+      expect((await status()).body).toMatchObject({
+        enabled: true,
+        stream: { status: "active", segment_count: 0, last_archived_at: null },
+        windows: [],
+      });
+      expect(db.data.backups.some((row) => row.method === "base" && row.status === "queued")).toBe(
+        true,
+      );
+      expect(await put({ pitr: false })).toMatchObject({
+        status: 200,
+        body: { pitr: false, method: "dump" },
+      });
+      expect((await status()).body).toMatchObject({ enabled: false, stream: null });
+
+      db.data.walStreams = [];
+      const windows = addPitrHistory(db.data);
+      const live = (await status()).body as {
+        windows: { from: number; to: number }[];
+        base_backups: number;
+        stream: { id: string; status: string };
+      };
+      expect(live).toMatchObject({
+        base_backups: 3,
+        stream: { id: PITR_SEED.stream, status: "active" },
+      });
+      expect(live.windows).toHaveLength(2);
+      expect(live.windows[0]).toEqual(windows[0]);
+      expect(live.windows[1]!.from).toBe(windows[1]!.from);
+
+      const restore = (body: Record<string, unknown>) =>
+        call("POST", `${svc}/pitr/restore`, {
+          environment_id: SEED.production,
+          mode: "in_place",
+          confirm: DATA_SEED.databaseSlug,
+          ...body,
+        });
+      const target = windows[1]!.from + 60 * 60_000;
+      expect((await restore({ target_time: target, mode: "elsewhere" })).status).toBe(400);
+      expect((await restore({ target_time: target, confirm: "web" })).status).toBe(400);
+      expect(await restore({ target_time: Date.now() + 60_000 })).toMatchObject({
+        status: 400,
+        body: { error: { message: "target_time is in the future" } },
+      });
+      expect(await restore({ target_time: windows[0]!.from - 60_000 })).toMatchObject({
+        status: 422,
+        body: { error: { code: "pitr_target_unavailable" } },
+      });
+      expect((await restore({ target_time: target, environment_id: "env_nope" })).status).toBe(404);
+      as("member");
+      expect((await restore({ target_time: target })).status).toBe(403);
+      as("owner");
+      db.sessionStale = true;
+      expect(await restore({ target_time: target })).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required", details: [{ code: "session_stale" }] } },
+      });
+      db.sessionStale = false;
+      const started = await restore({ target_time: target });
+      expect(started).toMatchObject({
+        status: 202,
+        body: {
+          mode: "in_place",
+          backup_id: PITR_SEED.base,
+          target_time: target,
+          status: "queued",
+          safety_backup_id: expect.any(String),
+        },
+      });
+      expect((await restore({ target_time: target })).status).toBe(409);
+      expect((await status()).body).toMatchObject({
+        stream: { status: "active", segment_count: 0 },
+      });
+      const older = await restore({
+        target_time: windows[0]!.from + 1_000,
+        mode: "new_service",
+        slug: "postgres-before",
+      });
+      expect(older).toMatchObject({
+        status: 202,
+        body: { mode: "new_service", backup_id: PITR_SEED.olderBase },
+      });
+      as(null);
+      expect((await status()).status).toBe(401);
+      expect((await restore({ target_time: target })).status).toBe(401);
+    });
+  });
+
+  it("automatic recovery: off by default, a fresh session to change, watch then recover", async () => {
+    await fresh(async () => {
+      const env = `environment_id=${SEED.production}`;
+      const svc = `/v1/services/${DATA_SEED.database}`;
+      const read = () => call("GET", `${svc}/recovery-policy?${env}`);
+      const put = (body: Record<string, unknown>, service = svc) =>
+        call("PUT", `${service}/recovery-policy`, { environment_id: SEED.production, ...body });
+      expect(await read()).toMatchObject({
+        status: 200,
+        body: { id: null, enabled: false, grace_minutes: 30, status: "idle", enabled_by: null },
+      });
+      expect((await call("GET", `${svc}/recovery-policy?environment_id=env_nope`)).status).toBe(
+        404,
+      );
+      expect((await put({ grace_minutes: 4 })).status).toBe(400);
+      expect((await put({ grace_minutes: 10_081 })).status).toBe(400);
+      expect((await put({ enabled: true, environment_id: "env_nope" })).status).toBe(404);
+      as("member");
+      expect((await put({ enabled: true })).status).toBe(403);
+      as("owner");
+      db.sessionStale = true;
+      expect(await put({ enabled: true })).toMatchObject({
+        status: 403,
+        body: { error: { code: "reauth_required" } },
+      });
+      db.sessionStale = false;
+      expect((await put({ enabled: true }, `/v1/services/${SEED.web}`)).status).toBe(409);
+      const storage = db.data.storage;
+      db.data.storage = null;
+      expect(await put({ enabled: true })).toMatchObject({
+        status: 409,
+        body: { error: { code: "backup_storage_not_configured" } },
+      });
+      db.data.storage = storage;
+      expect(await put({ enabled: true, grace_minutes: 10 })).toMatchObject({
+        status: 200,
+        body: { enabled: true, grace_minutes: 10, enabled_by: USERS.owner.id, status: "idle" },
+      });
+      expect(db.audit.at(-1)).toMatchObject({ action: "recovery.policy_updated" });
+
+      const hel = db.nodes.find((n) => n.id === "node_hel1")!;
+      hel.status = "offline";
+      hel.last_heartbeat_at = Date.now();
+      expect((await read()).body).toMatchObject({
+        status: "watching",
+        lost_node_id: "node_hel1",
+        message: expect.stringMatching(/^hel-1 is offline; recovery starts at /),
+      });
+      hel.last_heartbeat_at = Date.now() - 11 * 60_000;
+      expect((await read()).body).toMatchObject({
+        status: "blocked",
+        message: expect.stringMatching(/No other server can take the volume/),
+      });
+      hel.status = "online";
+      expect((await read()).body).toMatchObject({ status: "idle", lost_node_id: null });
+      hel.status = "offline";
+      db.nodes.push({
+        ...makeNode({ id: "node_nbg1", name: "nbg-1", hostname: "nbg-1.example.com" }),
+        workspace_id: WORKSPACE_ID,
+      });
+      const recovering = (await read()).body as { status: string; restore_id: string };
+      expect(recovering).toMatchObject({ status: "recovering", restore_id: expect.any(String) });
+      expect(db.data.restores.at(-1)).toMatchObject({
+        id: recovering.restore_id,
+        trigger: "automatic",
+        target_node_id: "node_nbg1",
+        requested_by: USERS.owner.id,
+      });
+      await call("GET", `/v1/restores/${recovering.restore_id}`);
+      await call("GET", `/v1/restores/${recovering.restore_id}`);
+      expect((await read()).body).toMatchObject({ status: "recovered", message: null });
+      expect(await put({ enabled: false })).toMatchObject({
+        status: 200,
+        body: { enabled: false, status: "idle" },
+      });
+      as(null);
+      expect((await read()).status).toBe(401);
+      expect((await put({ enabled: true })).status).toBe(401);
+    });
+  });
+
+  it("abandoned copies: waiting for the server, kept, scheduled, then deleted", async () => {
+    await fresh(async () => {
+      const env = `environment_id=${SEED.production}`;
+      const list = () =>
+        call("GET", `/v1/services/${DATA_SEED.database}/volume/abandoned-copies?${env}`);
+      expect(await list()).toMatchObject({ status: 200, body: { copies: [] } });
+      expect(
+        (
+          await call(
+            "GET",
+            `/v1/services/${DATA_SEED.database}/volume/abandoned-copies?environment_id=env_nope`,
+          )
+        ).status,
+      ).toBe(404);
+      db.nodes.push({
+        ...makeNode({ id: "node_nbg1", name: "nbg-1", hostname: "nbg-1.example.com" }),
+        workspace_id: WORKSPACE_ID,
+      });
+      const hel = db.nodes.find((n) => n.id === "node_hel1")!;
+      hel.status = "offline";
+      const started = await call("POST", `/v1/backups/${DATA_SEED.scheduledBackup}/restore`, {
+        mode: "in_place",
+        confirm: DATA_SEED.databaseSlug,
+        target_node_id: "node_nbg1",
+      });
+      expect(started.status).toBe(202);
+      const state = async () => ((await list()).body as { copies: { state: string }[] }).copies[0];
+      expect(await state()).toMatchObject({
+        volume_id: DATA_SEED.volume,
+        node_name: "hel-1",
+        state: "waiting_for_server",
+        message: "hel-1 is offline; the copy is deleted once it is back",
+        delete_after: expect.any(Number),
+      });
+      hel.status = "online";
+      expect(await state()).toMatchObject({
+        state: "kept",
+        message: expect.stringMatching(/no ready volume on another server/),
+      });
+      const restoreId = (started.body as { id: string }).id;
+      await call("GET", `/v1/restores/${restoreId}`);
+      await call("GET", `/v1/restores/${restoreId}`);
+      db.data.volumes.find((v) => v.node_id === "node_nbg1")!.status = "ready";
+      expect(await state()).toMatchObject({ state: "scheduled", message: null });
+      db.data.abandonedCopies[0]!.delete_after = Date.now() - 1;
+      expect(await state()).toMatchObject({
+        state: "deleting",
+        delete_sent_at: expect.any(Number),
+      });
+      expect(await state()).toMatchObject({ state: "deleted", cleaned_at: expect.any(Number) });
+      as("viewer");
+      expect((await list()).status).toBe(200);
+      as(null);
+      expect((await list()).status).toBe(401);
     });
   });
 

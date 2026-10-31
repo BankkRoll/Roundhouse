@@ -1,6 +1,7 @@
 /**
  * Data-service tables of the mock database (ADR 0004): volumes and their moves between
- * nodes, backup policies, backups, restores, published TCP ports, credential rotations,
+ * nodes, backup policies, backups, restores, WAL streams, automatic recovery policies,
+ * the copies recoveries left on lost servers, published TCP ports, credential rotations,
  * the instance's backup bucket, each project's backup key, and the rows the data browser
  * reads. Row shapes are the API's own types.
  *
@@ -16,8 +17,9 @@ import {
   databaseImage,
   renderDatabaseService,
   type ServiceDatabaseEngine,
+  type WalStreamStatus,
 } from "@roundhouse/shared";
-import type { Backup, BackupPolicy, Restore } from "../lib/api/backups-client";
+import type { Backup, BackupPolicy, RecoveryPolicy, Restore } from "../lib/api/backups-client";
 import type { CredentialRotation, TcpProxy, Volume, VolumeMigration } from "../lib/api/data-client";
 import type { Service, ServiceConfig } from "../lib/api/deploy-types";
 import type { DbVariable, DeployDb } from "./deploy-db";
@@ -32,6 +34,40 @@ export interface DbBackupStorage {
   region: string;
   access_key_id: string;
   secret_access_key: string;
+}
+
+/**
+ * A WAL stream of a service's volume. The restorable windows are derived from it and the
+ * base backups taken while it ran, as `pitrWindows` does.
+ */
+export interface DbWalStream {
+  id: string;
+  service_id: string;
+  environment_id: string;
+  status: WalStreamStatus;
+  segment_count: number;
+  bytes_stored: number;
+  first_archived_at: number | null;
+  last_archived_at: number | null;
+  created_at: number;
+}
+
+/**
+ * A copy a recovery left on a lost server. Its state (waiting for the server, scheduled,
+ * kept, deleting, deleted) is derived when it is read, as `abandonedCopies` does.
+ */
+export interface DbAbandonedCopy {
+  volume_id: string;
+  service_id: string;
+  environment_id: string;
+  node_id: string | null;
+  node_name: string | null;
+  size_mb: number;
+  used_bytes: number | null;
+  abandoned_at: number;
+  delete_after: number;
+  delete_sent_at: number | null;
+  cleaned_at: number | null;
 }
 
 /** One relation the data browser can page through. */
@@ -49,6 +85,11 @@ export interface DataDb {
   policies: DbBackupPolicy[];
   backups: Backup[];
   restores: Restore[];
+  /** WAL streams of point-in-time recovery. */
+  walStreams: DbWalStream[];
+  /** Automatic recovery policies; the defaults are answered for a service without one. */
+  recoveryPolicies: RecoveryPolicy[];
+  abandonedCopies: DbAbandonedCopy[];
   migrations: VolumeMigration[];
   /** Published ports; `host`, `node_id`, `status` and `open_to_all` are derived when read. */
   tcpProxies: TcpProxy[];
@@ -146,7 +187,7 @@ export function makeVolume(
 }
 
 /**
- * A backup row of the seeded database.
+ * A backup row of the seeded database: a succeeded scheduled dump unless overridden.
  *
  * @param id - Backup id.
  * @param fields - Overrides; `created_at` is required.
@@ -345,6 +386,9 @@ export function seedData(deploy: DeployDb, now = Date.now()): DataDb {
       }),
     ],
     restores: [],
+    walStreams: [],
+    recoveryPolicies: [],
+    abandonedCopies: [],
     migrations: [],
     tcpProxies: [],
     rotations: [],
@@ -411,6 +455,9 @@ export function emptyData(): DataDb {
     policies: [],
     backups: [],
     restores: [],
+    walStreams: [],
+    recoveryPolicies: [],
+    abandonedCopies: [],
     migrations: [],
     tcpProxies: [],
     rotations: [],
@@ -419,4 +466,76 @@ export function emptyData(): DataDb {
     tables: {},
     knobs: emptyKnobs(),
   };
+}
+
+/** Ids of the rows {@link addPitrHistory} adds, for tests. */
+export const PITR_SEED = {
+  olderBase: "bak_postgres_base_1",
+  base: "bak_postgres_base_2",
+  latestBase: "bak_postgres_base_3",
+  retiredStream: "wal_postgres_1",
+  stream: "wal_postgres_2",
+} as const;
+
+const WAL_SEGMENT_BYTES = 16 * MiB;
+
+/**
+ * Turns point-in-time recovery on for the seeded database with a history to restore
+ * from: a stream retired by an earlier restore (the older window) and the active one,
+ * each with base backups, so the status shows two restorable windows.
+ *
+ * @param data - The data-service tables to add to.
+ * @param now - Reference time.
+ * @returns The windows the history makes, oldest first.
+ */
+export function addPitrHistory(data: DataDb, now = Date.now()): { from: number; to: number }[] {
+  const policy = data.policies.find((row) => row.id === DATA_SEED.policy);
+  if (policy) Object.assign(policy, { pitr: true, method: "base" as const });
+  const base = (id: string, finishedAt: number): Backup =>
+    backup(id, {
+      method: "base",
+      created_at: finishedAt - 90_000,
+      started_at: finishedAt - 88_000,
+      finished_at: finishedAt,
+      bytes_raw: 1_310 * MiB,
+      bytes_stored: 402 * MiB,
+    });
+  const olderFrom = now - 5 * DAY;
+  const olderTo = now - 3 * DAY - 4 * HOUR;
+  const from = now - 2 * DAY;
+  const to = now - 20_000;
+  data.backups.push(
+    base(PITR_SEED.olderBase, olderFrom),
+    base(PITR_SEED.base, from),
+    base(PITR_SEED.latestBase, now - 6 * HOUR),
+  );
+  const segments = (span: number) => Math.round(span / (4 * MINUTE));
+  data.walStreams.push(
+    {
+      id: PITR_SEED.retiredStream,
+      service_id: DATA_SEED.database,
+      environment_id: "env_store_prod",
+      status: "retired",
+      segment_count: segments(olderTo - olderFrom),
+      bytes_stored: Math.round(segments(olderTo - olderFrom) * WAL_SEGMENT_BYTES * 0.3),
+      first_archived_at: olderFrom - 60_000,
+      last_archived_at: olderTo,
+      created_at: olderFrom - 2 * MINUTE,
+    },
+    {
+      id: PITR_SEED.stream,
+      service_id: DATA_SEED.database,
+      environment_id: "env_store_prod",
+      status: "active",
+      segment_count: segments(to - from),
+      bytes_stored: Math.round(segments(to - from) * WAL_SEGMENT_BYTES * 0.3),
+      first_archived_at: from - 60_000,
+      last_archived_at: to,
+      created_at: from - 2 * MINUTE,
+    },
+  );
+  return [
+    { from: olderFrom, to: olderTo },
+    { from, to },
+  ];
 }

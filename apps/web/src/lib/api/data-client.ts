@@ -10,12 +10,14 @@
  * @module
  */
 import type {
+  AbandonedCopy,
   BodyOf,
   CreatedDatabase,
   CredentialRotation,
   createDatabase,
   DatabaseQueryResult,
   getDatabaseSchema,
+  listAbandonedCopies,
   listCredentialRotations,
   listVolumeMigrations,
   MigrationTargets,
@@ -30,6 +32,7 @@ import type {
 import { request } from "./client";
 
 export type {
+  AbandonedCopy,
   CreatedDatabase,
   CredentialRotation,
   DatabaseQueryResult,
@@ -47,6 +50,8 @@ export type DatabaseQueryBody = BodyOf<typeof runDatabaseQuery>;
 export type DatabaseQueryOp = DatabaseQueryBody["op"];
 /** `GET /v1/services/{serviceId}/database/schema` response. */
 export type DatabaseSchema = ResponseOf<typeof getDatabaseSchema, 200>;
+/** `GET /v1/services/{serviceId}/volume/abandoned-copies` response. */
+export type AbandonedCopyList = ResponseOf<typeof listAbandonedCopies, 200>;
 /** `GET /v1/volumes/{volumeId}/migrations` response. */
 export type VolumeMigrationList = ResponseOf<typeof listVolumeMigrations, 200>;
 /** `PUT /v1/services/{serviceId}/tcp-proxies` body. */
@@ -83,6 +88,20 @@ export const dataApi = {
    */
   getVolume: (serviceId: string, environmentId: string, signal?: AbortSignal) =>
     request<Volume>("GET", `/v1/services/${seg(serviceId)}/volume`, {
+      query: { environment_id: environmentId },
+      signal,
+    }),
+  /**
+   * Lists the copies recoveries left on lost servers for a service's volume, newest
+   * first, with where each one's cleanup stands.
+   *
+   * @param serviceId - Service id.
+   * @param environmentId - Environment id.
+   * @param signal - Abort signal.
+   * @returns The copies.
+   */
+  listAbandonedCopies: (serviceId: string, environmentId: string, signal?: AbortSignal) =>
+    request<AbandonedCopyList>("GET", `/v1/services/${seg(serviceId)}/volume/abandoned-copies`, {
       query: { environment_id: environmentId },
       signal,
     }),

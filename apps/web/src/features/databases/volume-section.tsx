@@ -28,6 +28,8 @@ import {
 } from "../../queries/databases";
 import { useNodes } from "../../queries/nodes";
 import { useEnvironmentGate } from "../access/environment-gate";
+import { AbandonedCopiesRow } from "./abandoned-copies";
+import { RecoveryPolicyRows } from "./recovery-policy";
 import { MigrationHistory, MigrationProgress, MoveVolumeDialog } from "./volume-migration";
 import { RECOVERABLE, RecoverVolumeDialog, RecoveryStatus } from "./volume-recovery";
 
@@ -147,7 +149,8 @@ export interface VolumeSectionProps {
  * A service's volume in the selected environment, as settings rows: status, usage
  * against its size, a grow-only resize, how the node enforces the quota (with a warning
  * when it doesn't), and the node holding it, with a move to another node, its progress
- * and the recent moves. A deleted volume can be undeleted until its grace period ends.
+ * and the recent moves; then automatic recovery and the copies recoveries left on lost
+ * servers. A deleted volume can be undeleted until its grace period ends.
  *
  * @param props - Workspace, the service and the selected environment.
  * @returns The section.
@@ -335,6 +338,16 @@ export function VolumeSection({ workspaceId, service, environment }: VolumeSecti
             migrations={history.filter((row) => row.id !== progressId)}
             nodeName={nodeName}
           />
+          {environment ? (
+            <RecoveryPolicyRows
+              workspaceId={workspaceId}
+              service={service}
+              environment={environment}
+              serverName={nodeName}
+              holder={data.node_name}
+            />
+          ) : null}
+          <AbandonedCopiesRow serviceId={service.id} environmentId={data.environment_id} />
           {canManage && EDITABLE.includes(data.status) ? (
             <SettingsRow
               label="Delete volume"
