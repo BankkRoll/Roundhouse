@@ -57,6 +57,9 @@ type Env struct {
 	Commit  string
 	// OpenURL opens a URL in a browser.
 	OpenURL func(string) error
+	// Location is the time zone local times are shown in; nil means
+	// time.Local.
+	Location *time.Location
 	// Now returns the current time.
 	Now func() time.Time
 	// PollInterval is how often `deploy --wait` polls the deployment.
@@ -82,6 +85,7 @@ func SystemEnv(version, commit string) Env {
 		Commit:       commit,
 		OpenURL:      browser.Open,
 		Now:          time.Now,
+		Location:     time.Local,
 		PollInterval: 2 * time.Second,
 		Exec:         execChild,
 		Terminal:     systemTerminal{},
