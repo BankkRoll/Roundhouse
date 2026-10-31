@@ -1,3 +1,4 @@
+import { MONGODB_RSEQ_ISSUE_URL } from "@roundhouse/shared";
 import {
   Badge,
   Button,
@@ -28,6 +29,7 @@ import {
 import { usePermissions } from "../../lib/permissions";
 import { useNow } from "../../lib/use-now";
 import { forgetNode, useDeleteNode, useNode } from "../../queries/nodes";
+import { describeServerKernel } from "../databases/kernel-warning";
 import { COST_ESTIMATE_NOTE, formatCostEstimate } from "./cost-estimate";
 import { DrainSection } from "./drain-section";
 import { MeshSection } from "./mesh-section";
@@ -112,6 +114,34 @@ function NodeFacts({ node, now }: { node: Node; now: number }) {
         </span>
       </Fact>
     </dl>
+  );
+}
+
+function KernelWarning({ kernel }: { kernel: string | null }) {
+  const reason = describeServerKernel(kernel);
+  if (!reason) return null;
+  return (
+    <div
+      role="status"
+      className="mt-4 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm"
+    >
+      <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+      <div className="min-w-0">
+        <p className="font-medium text-foreground">MongoDB 8.0+ can't run on this kernel</p>
+        <p className="mt-0.5 text-muted-foreground">
+          {reason}{" "}
+          <a
+            href={MONGODB_RSEQ_ISSUE_URL}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-accent-text underline-offset-4 outline-none hover:underline focus-visible:underline"
+          >
+            SERVER-121912
+            <span className="sr-only"> (opens in a new tab)</span>
+          </a>
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -248,6 +278,7 @@ export function NodeDetailPage({ workspaceId, nodeId }: { workspaceId: string; n
         <section aria-labelledby="details-heading">
           <SectionHeader id="details-heading" title="Details" />
           <NodeFacts node={data} now={now} />
+          <KernelWarning kernel={data.kernel} />
           <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2">
             <h3 className="text-sm text-muted-foreground">Capabilities</h3>
             {data.capabilities ? (

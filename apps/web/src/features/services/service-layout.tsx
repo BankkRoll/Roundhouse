@@ -15,6 +15,7 @@ import { useDeploy } from "../../queries/deployments";
 import { latestDeploymentQueryOptions } from "../../queries/projects";
 import { useDomains, useServiceConfig } from "../../queries/services";
 import { LockedButton, ProtectedBadge, useEnvironmentGate } from "../access/environment-gate";
+import { KernelWarningBadge } from "../databases/kernel-warning";
 import { ProjectPresence } from "../projects/presence";
 import { describeSource } from "../projects/service-list";
 import { findService, useProjectEnvironment } from "../projects/use-project-environment";
@@ -110,6 +111,11 @@ export function ServiceLayout({ workspaceId, projectId, serviceId }: ServicePage
             </h1>
             {latest.data ? <StatusBadge status={latest.data.status} kind="deployment" /> : null}
             <DegradedBadge service={service} />
+            <KernelWarningBadge
+              workspaceId={workspaceId}
+              service={service}
+              environmentId={environment?.id}
+            />
             {gate.protected ? <ProtectedBadge /> : null}
           </div>
           <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground">

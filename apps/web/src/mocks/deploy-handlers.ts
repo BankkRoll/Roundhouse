@@ -30,8 +30,11 @@ import {
   defaultServiceConfig,
   freeSlug,
   generatedHostname,
+  isKernelSensitiveDatabase,
+  isMongoRseqAffectedKernel,
   isProjectAction,
   isReservedBuildName,
+  mongoKernelRefusal,
   parseReferences,
   presenceColor,
   REALTIME_CLOSE_CODES,
@@ -1050,6 +1053,27 @@ async function hmacHex(secret: string, body: string): Promise<string> {
   return [...new Uint8Array(signature)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * The API scheduler's kernel refusal (SERVER-121912): MongoDB 8.0+ never lands on a
+ * kernel from 6.19 to 7.0.13, so it fails when every server it could use runs one. A
+ * placed volume pins the service to its server, as in the API.
+ */
+function kernelRefusal(service: Service, environmentId: string): string | null {
+  if (!isKernelSensitiveDatabase(service.database?.engine, service.database?.version)) {
+    return null;
+  }
+  const pinned = db.data.volumes.find(
+    (v) => v.service_id === service.id && v.environment_id === environmentId,
+  )?.node_id;
+  const workspaceId = liveProject(service.project_id)?.workspace_id;
+  const candidates = db.nodes.filter(
+    (n) => n.workspace_id === workspaceId && n.status === "online" && (!pinned || n.id === pinned),
+  );
+  const affected = candidates.filter((n) => isMongoRseqAffectedKernel(n.kernel));
+  if (!affected.length || affected.length < candidates.length) return null;
+  return `Could not place replica 0: ${mongoKernelRefusal(affected[0]!.kernel!)}`;
+}
+
 function newDeployment(
   service: Service,
   environmentId: string,
@@ -1145,6 +1169,20 @@ export function startDeployment(
     data: null,
     created_at: row.created_at,
   });
+  const refused = kernelRefusal(service, environmentId);
+  if (refused) {
+    row.status = "failed";
+    row.failure_reason = refused;
+    row.finished_at = row.created_at;
+    db.deploy.events.push({
+      id: nextId("dev"),
+      deployment_id: row.id,
+      type: "schedule_failed",
+      message: refused,
+      data: { reason: "kernel_incompatible", replica: 0 },
+      created_at: row.created_at,
+    });
+  }
   return row;
 }
 

@@ -29,6 +29,7 @@ import {
 import { useNodes } from "../../queries/nodes";
 import { useEnvironmentGate } from "../access/environment-gate";
 import { AbandonedCopiesRow } from "./abandoned-copies";
+import { describeServiceKernel } from "./kernel-warning";
 import { RecoveryPolicyRows } from "./recovery-policy";
 import { MigrationHistory, MigrationProgress, MoveVolumeDialog } from "./volume-migration";
 import { RECOVERABLE, RecoverVolumeDialog, RecoveryStatus } from "./volume-recovery";
@@ -187,6 +188,7 @@ export function VolumeSection({ workspaceId, service, environment }: VolumeSecti
     Boolean(data?.node_id) &&
     nodes.isSuccess &&
     (holder === undefined || holder.status === "offline");
+  const kernelWarning = describeServiceKernel(service, holder);
 
   return (
     <SettingsSection
@@ -318,6 +320,17 @@ export function VolumeSection({ workspaceId, service, environment }: VolumeSecti
               ) : null}
             </div>
           </SettingsRow>
+          {kernelWarning ? (
+            <SettingsRow
+              label={
+                <span className="flex items-center gap-1.5">
+                  <TriangleAlertIcon className="size-3.5 text-warning" aria-hidden="true" />
+                  MongoDB can't start on this server
+                </span>
+              }
+              description={kernelWarning}
+            />
+          ) : null}
           {recovery ? (
             <RecoveryStatus
               key={recovery.restoreId}
