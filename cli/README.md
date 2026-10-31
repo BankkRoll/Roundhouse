@@ -212,6 +212,52 @@ never printed or saved. The result is a zstd-compressed RHBK1 archive
 (`packages/protocol/rhbk.md`). `-o -` writes to stdout; an existing file is
 replaced only with `--force`.
 
+### Point-in-time recovery
+
+```sh
+roundhouse db backups policy set --pitr on  # Postgres; scheduled backups become base backups
+roundhouse db pitr status                   # on or off, WAL archive, restorable windows
+roundhouse db pitr restore --to 2026-10-22T11:50:00Z --confirm db --wait
+roundhouse db pitr restore db --to 2026-10-22T04:50:00-07:00 --into-new db-before-migration
+```
+
+With `--pitr on` the database's write-ahead log is archived continuously,
+so a restore can target any moment inside a window that a base backup and
+the WAL after it cover, not only the moment a backup was taken. PITR is
+Postgres-only and needs scheduled backups; `--pitr off` stops archiving.
+
+`pitr status` prints each window in local time and in UTC; the UTC form can
+be passed to `--to` as is, and the end of a window is exclusive. `pitr
+restore --to` takes an RFC 3339 time with a zone and is checked against the
+windows before anything is sent: a time in the future, in a gap or outside
+every window exits 7 and names the nearest restorable point. It restores in
+place (with a safety backup unless `--skip-safety-backup`), or into a new
+database with `--into-new SLUG`, leaving the original untouched. It asks for
+the database's slug (`--confirm` in scripts) and needs a recent sign-in,
+like other restores. If the windows change between the check and the
+restore, the API answers `422 pitr_target_unavailable` (exit 7).
+
+### Automatic recovery and abandoned copies
+
+```sh
+roundhouse db recovery policy               # on or off, grace, what it is doing now
+roundhouse db recovery policy set --enable --grace 30m
+roundhouse db recovery policy set db --disable --environment staging
+roundhouse db volume abandoned              # copies recoveries left on lost servers
+```
+
+Automatic recovery is off by default and set per environment. When on, a
+database whose server stays offline past `--grace` (whole minutes, 5m to
+7d; default 30m) is recovered like `db volume recover`, from the newest
+backup, with the access of whoever last turned the policy on, checked again
+each time. Changing the policy needs a recent sign-in.
+
+A recovery leaves the old copy of the volume on the lost server. `volume
+abandoned` lists each copy with its state (`waiting_for_server`,
+`scheduled`, `kept`, `deleting`, `deleted`) and when it may go: a copy is
+deleted only once its server is back, 72 hours have passed, and the new
+volume is ready on another server with a successful restore into it.
+
 ### Moving volumes, TCP proxies and credential rotation
 
 ```sh
@@ -465,10 +511,13 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 | `servers drain <server> [--force] [--status] [-y]`       | Move replicas off a server; maintenance, safe to reboot   |
 | `servers resume <server>`                                | Take a drained server back into service                   |
 | `db create\|list\|info\|query\|tables`                   | Database services and read-only queries                   |
-| `db volume [resize\|move\|migrations\|delete\|undelete]` | A database's volume; moves it between servers             |
+| `db volume [resize\|move\|recover\|delete\|undelete]`    | A database's volume; move it, or recover a lost server's  |
+| `db volume migrations\|abandoned`                        | Volume moves; copies recoveries left on lost servers      |
 | `db tcp-proxy [show\|enable\|disable]`                   | Publish a database's port behind a source allowlist       |
 | `db rotate-credentials`, `db rotations`                  | Rotate database passwords; redeploy everything using them |
-| `db backups list\|run\|policy\|restore\|download`        | Backups, schedules, restores, decrypted downloads         |
+| `db backups list\|run\|policy\|restore\|download`        | Backups, schedules and PITR, restores, downloads          |
+| `db pitr status\|restore [--to] [--into-new]`            | PITR windows in local time and UTC; restore to a moment   |
+| `db recovery policy [get\|set] [--enable] [--grace]`     | Automatic recovery of a lost server's volume              |
 | `cron status\|runs\|run\|cancel\|logs`                   | Cron services: schedule, run history, run now, output     |
 | `cron set [--schedule] [--timezone] [--retries] …`       | Change a cron service's schedule and run rules            |
 | `cron pause\|resume`, `cron preview <schedule>`          | Pause or resume scheduling; a schedule's next slots       |
