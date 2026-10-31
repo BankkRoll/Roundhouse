@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -263,6 +264,23 @@ func (r *fakeRegistry) has(repo, ref string) (storedManifest, bool) {
 	return m, ok
 }
 
+// hasBlob reports whether the registry stores digest. A cancelled upload's
+// handler can still be storing a blob after the push returned, so reads
+// take the lock like the handlers do.
+func (r *fakeRegistry) hasBlob(digest string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.blobs[digest]
+	return ok
+}
+
+// uploads returns the digests uploaded so far, in order.
+func (r *fakeRegistry) uploads() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.uploaded)
+}
+
 func (r *fakeRegistry) count(prefix string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -493,7 +511,7 @@ func TestImagePushSelectsAMD64FromIndex(t *testing.T) {
 	if !ok || !bytes.Equal(m.body, amd.manifest) || m.mt != mediaOCIManifest {
 		t.Fatalf("target manifest = %q (%s), want the amd64 manifest's exact bytes", m.body, m.mt)
 	}
-	if _, ok := dst.blobs[sha256Digest(arm.layer)]; ok {
+	if dst.hasBlob(sha256Digest(arm.layer)) {
 		t.Error("the arm64 layer was uploaded")
 	}
 	h.assertNoSecret(r)
@@ -527,8 +545,8 @@ func TestImagePushSkipsBlobsTheTargetHas(t *testing.T) {
 	h := newHarness(t, src, nil, dst.host())
 	h.p.PushImage(pushMsg(t, "push_1", "r", sha256Digest(img.manifest), dst.host()+"/acct/app:t1", 60))
 	expectOK(t, h.result(), sha256Digest(img.manifest), int64(len(img.config)))
-	if len(dst.uploaded) != 1 || dst.uploaded[0] != sha256Digest(img.config) {
-		t.Errorf("uploaded = %v, want only the config", dst.uploaded)
+	if up := dst.uploads(); len(up) != 1 || up[0] != sha256Digest(img.config) {
+		t.Errorf("uploaded = %v, want only the config", up)
 	}
 }
 
@@ -541,7 +559,7 @@ func TestImagePushAbortsOnDigestMismatch(t *testing.T) {
 	h := newHarness(t, src, nil, dst.host())
 	h.p.PushImage(pushMsg(t, "push_1", "r", sha256Digest(img.manifest), dst.host()+"/acct/app:t1", 60))
 	expectError(t, h.result(), "push aborted")
-	if _, ok := dst.blobs[sha256Digest(img.layer)]; ok {
+	if dst.hasBlob(sha256Digest(img.layer)) {
 		t.Error("the corrupt layer reached the target")
 	}
 	if _, ok := dst.has("acct/app", "t1"); ok {
