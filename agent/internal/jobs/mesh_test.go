@@ -52,8 +52,12 @@ func (m *fakeMesh) askedTimes() int {
 	return m.asked
 }
 
+// meshRunS is the timeout of the mesh tests' runs: 2 minutes of units, so a
+// slow run never times out and leaves the mesh before the test looks at it.
+const meshRunS = 6000
+
 func meshJob(runID string) *protocol.JobRun {
-	m := jobRun(runID, 60, 1)
+	m := jobRun(runID, meshRunS, 1)
 	m.Workload.MeshIP = "10.200.1.30"
 	m.Workload.PrivateDNS = ptr(true)
 	return m
@@ -106,7 +110,7 @@ func TestJobPrivateDNSWithoutListener(t *testing.T) {
 	mesh := &fakeMesh{}
 	h := newHarness(t, d, t.TempDir(), withMesh(mesh))
 	h.r.Start(meshJob("crn_1"))
-	plain := jobRun("crn_2", 60, 1)
+	plain := jobRun("crn_2", meshRunS, 1)
 	h.r.Start(plain)
 	waitFor(t, "both running", func() bool {
 		return slices.Contains(h.states("crn_1"), protocol.JobRunning) && slices.Contains(h.states("crn_2"), protocol.JobRunning)
@@ -118,7 +122,7 @@ func TestJobPrivateDNSWithoutListener(t *testing.T) {
 	}
 	// Without private_dns the mesh's DNS is never used, even when up.
 	mesh.set("10.200.1.2", false)
-	h.r.Start(jobRun("crn_3", 60, 1))
+	h.r.Start(jobRun("crn_3", meshRunS, 1))
 	waitFor(t, "running", func() bool { return slices.Contains(h.states("crn_3"), protocol.JobRunning) })
 	if c, _ := d.container(ContainerPrefix + "crn_3"); c.spec.HostConfig.DNS != nil {
 		t.Errorf("a run without private_dns got %v", c.spec.HostConfig.DNS)
