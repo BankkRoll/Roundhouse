@@ -380,7 +380,13 @@ func (r *recorder) output(t *testing.T, sessionID string) string {
 // waitFor polls cond until it holds or the test times out.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	waitForWithin(t, what, 10*time.Second, cond)
+}
+
+// waitForWithin is waitFor with a caller-chosen limit.
+func waitForWithin(t *testing.T, what string, limit time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(limit)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
@@ -391,7 +397,12 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 func (r *recorder) waitExit(t *testing.T, sessionID string) *protocol.ExecExit {
 	t.Helper()
-	waitFor(t, "exec_exit of "+sessionID, func() bool { return len(r.exits(sessionID)) > 0 })
+	return r.waitExitWithin(t, sessionID, 10*time.Second)
+}
+
+func (r *recorder) waitExitWithin(t *testing.T, sessionID string, limit time.Duration) *protocol.ExecExit {
+	t.Helper()
+	waitForWithin(t, "exec_exit of "+sessionID, limit, func() bool { return len(r.exits(sessionID)) > 0 })
 	return r.exits(sessionID)[0]
 }
 

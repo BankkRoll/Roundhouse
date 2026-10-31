@@ -154,6 +154,11 @@ func itOpen(t *testing.T, m *Manager, rec *recorder, nodeID, sessionID, workload
 	})
 }
 
+// itExitLimit bounds the wait for a session's exec_exit. Each signal runs a
+// hostPIDDocker sibling container, so a hang-up, the grace and a kill take
+// several seconds on a busy engine, well past waitFor's default.
+const itExitLimit = 60 * time.Second
+
 func itClose(m *Manager, sessionID string) {
 	m.CloseExec(&protocol.ExecClose{Type: protocol.TypeExecClose, ControlHeader: header(), SessionID: sessionID, Reason: protocol.ExecCloseUser})
 }
@@ -187,7 +192,7 @@ func TestShellIntegrationSession(t *testing.T) {
 	}
 
 	itClose(m, "shl_it")
-	if e := rec.waitExit(t, "shl_it"); e.Reason != protocol.ExecExitClosed || e.ExitCode != nil {
+	if e := rec.waitExitWithin(t, "shl_it", itExitLimit); e.Reason != protocol.ExecExitClosed || e.ExitCode != nil {
 		t.Fatalf("exit %+v", e)
 	}
 	if p := processes(t, c, ctr, "sh -l"); p != "" {
@@ -212,7 +217,7 @@ func TestShellIntegrationKillsIgnoredHangup(t *testing.T) {
 	waitFor(t, "the process", func() bool { return processes(t, c, ctr, "sleep 3600") != "" })
 	start := time.Now()
 	itClose(m, "shl_hup")
-	if e := rec.waitExit(t, "shl_hup"); e.Reason != protocol.ExecExitClosed {
+	if e := rec.waitExitWithin(t, "shl_hup", itExitLimit); e.Reason != protocol.ExecExitClosed {
 		t.Fatalf("exit %+v", e)
 	}
 	if p := processes(t, c, ctr, "sleep 3600"); p != "" {
@@ -238,7 +243,7 @@ func TestShellIntegrationWithoutHostPID(t *testing.T) {
 
 	itOpen(t, m, rec, ns, "shl_nopid", "wl_web", nil)
 	itClose(m, "shl_nopid")
-	if e := rec.waitExit(t, "shl_nopid"); e.Reason != protocol.ExecExitClosed {
+	if e := rec.waitExitWithin(t, "shl_nopid", itExitLimit); e.Reason != protocol.ExecExitClosed {
 		t.Fatalf("exit %+v", e)
 	}
 	if len(rec.exits("shl_nopid")) != 1 {
@@ -262,7 +267,7 @@ func TestShellIntegrationRefusals(t *testing.T) {
 		f := openFrame(tc.session, tc.workload)
 		f.NodeID = ns
 		m.OpenExec(f)
-		e := rec.waitExit(t, tc.session)
+		e := rec.waitExitWithin(t, tc.session, itExitLimit)
 		if e.Reason != protocol.ExecExitError || !strings.Contains(e.Message, tc.want) || rec.opened(tc.session) != nil {
 			t.Fatalf("%s: %+v", tc.workload, e)
 		}

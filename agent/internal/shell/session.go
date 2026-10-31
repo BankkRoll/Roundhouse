@@ -404,7 +404,11 @@ func (s *session) stop(ctx context.Context, containerID, execID string) {
 			break
 		}
 	}
-	if _, err := d.SignalExec(sctx, containerID, execID, syscall.SIGKILL); err != nil {
+	// The kill gets its own timeout: a slow hang-up or inspect must not leave
+	// it too little time and the ignored-SIGHUP process running on.
+	kctx, kcancel := context.WithTimeout(context.WithoutCancel(ctx), dockerTimeout)
+	defer kcancel()
+	if _, err := d.SignalExec(kctx, containerID, execID, syscall.SIGKILL); err != nil {
 		s.m.log.Warn("kill shell process", "session_id", s.id, "err", err)
 	}
 }
