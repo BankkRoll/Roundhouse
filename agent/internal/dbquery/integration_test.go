@@ -363,6 +363,7 @@ func testRedis(t *testing.T, c *docker.Client, network string) {
 }
 
 func testMongo(t *testing.T, c *docker.Client, network string) {
+	dockertest.SkipIfMongoKernelAffected(t, c)
 	e := start(t, c, network, dbquery.EngineMongoDB, 27017, docker.ContainerCreate{
 		Image: mongoImage,
 		Env:   []string{"MONGO_INITDB_ROOT_USERNAME=root", "MONGO_INITDB_ROOT_PASSWORD=" + adminPassword},
@@ -544,6 +545,7 @@ func TestSetPassword(t *testing.T) {
 
 	t.Run("mongodb", func(t *testing.T) {
 		t.Parallel()
+		dockertest.SkipIfMongoKernelAffected(t, c)
 		e := start(t, c, network, dbquery.EngineMongoDB, 27017, docker.ContainerCreate{
 			Image: mongoImage,
 			Env:   []string{"MONGO_INITDB_ROOT_USERNAME=root", "MONGO_INITDB_ROOT_PASSWORD=" + adminPassword},

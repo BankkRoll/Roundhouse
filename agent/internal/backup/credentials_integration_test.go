@@ -135,6 +135,7 @@ func (h *pgHarness) mongo(container, user, password, js string) (string, bool) {
 }
 
 func TestIntegrationMongoRestoreKeepsTheTargetsCredentials(t *testing.T) {
+	dockertest.SkipIfMongoKernelAffected(t, dockertest.Client(t))
 	h := newPGHarness(t)
 	src := h.start("wl_src", mongoImage, "MONGO_INITDB_ROOT_USERNAME=root", "MONGO_INITDB_ROOT_PASSWORD="+adminA,
 		"ROUNDHOUSE_RO_PASSWORD="+roA)

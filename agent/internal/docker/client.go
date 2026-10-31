@@ -276,6 +276,8 @@ type Info struct {
 	// DockerRootDir is where the engine keeps images and containers.
 	DockerRootDir string `json:"DockerRootDir"`
 	OSType        string `json:"OSType"`
+	// KernelVersion is the daemon host's `uname -r`.
+	KernelVersion string `json:"KernelVersion"`
 	// FirewallBackend is nil before Docker 28.
 	FirewallBackend *FirewallBackend `json:"FirewallBackend,omitempty"`
 }
