@@ -485,51 +485,51 @@ cookie. `roundhouse whoami` shows which token is in use and its scopes.
 
 ## Commands
 
-| Command                                                  | Purpose                                                   |
-| -------------------------------------------------------- | --------------------------------------------------------- |
-| `login`, `logout`, `whoami`                              | Manage the session of a profile                           |
-| `init`, `link`, `unlink`                                 | Bind the directory to a project, environment and service  |
-| `status`                                                 | Linked project and service, latest deployment, domains    |
-| `open [--dashboard]`                                     | Open the service URL or the dashboard                     |
-| `deploy [--wait]`                                        | Deploy the latest config                                  |
-| `logs [-f] [--build] [--deployment] [--since] [-n]`      | Show and follow logs                                      |
-| `metrics [--range\|--from --to] [-m] [--replicas]`       | Service CPU, memory, network and disk over a range        |
-| `metrics summary`                                        | Every service's current CPU and memory                    |
-| `rollback [deployment]`, `cancel [deployment]`           | Steer deployments                                         |
-| `vars [get\|set\|unset\|import\|export]`                 | Service (or `--shared`) variables                         |
-| `run -- <cmd>`                                           | Run a local command with the service's variables          |
-| `projects list\|create\|delete`                          | Projects; deletes need the typed slug                     |
-| `templates list\|show\|deploy`                           | Built-in templates; deploy as a new project or into one   |
-| `services list\|create\|delete`                          | Services; cron ones need `--schedule`; typed deletes      |
-| `domain [--all]`                                         | The service's domains                                     |
-| `servers list\|add [--provider]`                         | Servers; `add` prints the install command, or provisions  |
-| `servers remove <server> [--keep-server] [-y]`           | Remove a server; deletes a provisioned cloud server too   |
-| `servers cancel <provision-id> [--no-wait]`              | Cancel a provisioning run and delete what it created      |
-| `servers label <server> [key=value ...] [--remove key]`  | Show or change the labels placement selectors match       |
-| `servers metrics <server> [--range] [-m]`                | A server's CPU, memory, disk and load                     |
-| `servers mesh [rotate-key <server> [-y]]`                | The private network between servers; rotate a WG key      |
-| `servers drain <server> [--force] [--status] [-y]`       | Move replicas off a server; maintenance, safe to reboot   |
-| `servers resume <server>`                                | Take a drained server back into service                   |
-| `db create\|list\|info\|query\|tables`                   | Database services and read-only queries                   |
-| `db volume [resize\|move\|recover\|delete\|undelete]`    | A database's volume; move it, or recover a lost server's  |
-| `db volume migrations\|abandoned`                        | Volume moves; copies recoveries left on lost servers      |
-| `db tcp-proxy [show\|enable\|disable]`                   | Publish a database's port behind a source allowlist       |
-| `db rotate-credentials`, `db rotations`                  | Rotate database passwords; redeploy everything using them |
-| `db backups list\|run\|policy\|restore\|download`        | Backups, schedules and PITR, restores, downloads          |
-| `db pitr status\|restore [--to] [--into-new]`            | PITR windows in local time and UTC; restore to a moment   |
-| `db recovery policy [get\|set] [--enable] [--grace]`     | Automatic recovery of a lost server's volume              |
-| `cron status\|runs\|run\|cancel\|logs`                   | Cron services: schedule, run history, run now, output     |
-| `cron set [--schedule] [--timezone] [--retries] …`       | Change a cron service's schedule and run rules            |
-| `cron pause\|resume`, `cron preview <schedule>`          | Pause or resume scheduling; a schedule's next slots       |
-| `previews list [--all]`                                  | The project's pull request previews                       |
-| `previews approve\|redeploy\|destroy <preview>`          | Approve a fork's commit, redeploy, or tear down           |
-| `environments list\|create\|diff`                        | Environments: clone one, compare two (no values shown)    |
-| `environments promote\|delete`                           | Propose a promotion as a change set; delete (typed slug)  |
-| `tokens list\|create\|revoke`                            | Workspace API tokens for CI and scripts                   |
-| `shell [service] [--replica] [-- cmd]`                   | Interactive shell, or a command, in a running replica     |
-| `runtime [service]`, `runtime set nodes\|cloudflare`     | Where a service runs; move it to Cloudflare Containers    |
-| `version`, `completion`                                  | Build info, shell completion                              |
-| `up`, `db connect`                                       | Not available on the control plane yet (exit 10)          |
+| Command                                                 | Purpose                                                   |
+| ------------------------------------------------------- | --------------------------------------------------------- |
+| `login`, `logout`, `whoami`                             | Manage the session of a profile                           |
+| `init`, `link`, `unlink`                                | Bind the directory to a project, environment and service  |
+| `status`                                                | Linked project and service, latest deployment, domains    |
+| `open [--dashboard]`                                    | Open the service URL or the dashboard                     |
+| `deploy [--wait]`                                       | Deploy the latest config                                  |
+| `logs [-f] [--build] [--deployment] [--since] [-n]`     | Show and follow logs                                      |
+| `metrics [--range\|--from --to] [-m] [--replicas]`      | Service CPU, memory, network and disk over a range        |
+| `metrics summary`                                       | Every service's current CPU and memory                    |
+| `rollback [deployment]`, `cancel [deployment]`          | Steer deployments                                         |
+| `vars [get\|set\|unset\|import\|export]`                | Service (or `--shared`) variables                         |
+| `run -- <cmd>`                                          | Run a local command with the service's variables          |
+| `projects list\|create\|delete`                         | Projects; deletes need the typed slug                     |
+| `templates list\|show\|deploy`                          | Built-in templates; deploy as a new project or into one   |
+| `services list\|create\|delete`                         | Services; cron ones need `--schedule`; typed deletes      |
+| `domain [--all]`                                        | The service's domains                                     |
+| `servers list\|add [--provider]`                        | Servers; `add` prints the install command, or provisions  |
+| `servers remove <server> [--keep-server] [-y]`          | Remove a server; deletes a provisioned cloud server too   |
+| `servers cancel <provision-id> [--no-wait]`             | Cancel a provisioning run and delete what it created      |
+| `servers label <server> [key=value ...] [--remove key]` | Show or change the labels placement selectors match       |
+| `servers metrics <server> [--range] [-m]`               | A server's CPU, memory, disk and load                     |
+| `servers mesh [rotate-key <server> [-y]]`               | The private network between servers; rotate a WG key      |
+| `servers drain <server> [--force] [--status] [-y]`      | Move replicas off a server; maintenance, safe to reboot   |
+| `servers resume <server>`                               | Take a drained server back into service                   |
+| `db create\|list\|info\|query\|tables`                  | Database services and read-only queries                   |
+| `db volume [resize\|move\|recover\|delete\|undelete]`   | A database's volume; move it, or recover a lost server's  |
+| `db volume migrations\|abandoned`                       | Volume moves; copies recoveries left on lost servers      |
+| `db tcp-proxy [show\|enable\|disable]`                  | Publish a database's port behind a source allowlist       |
+| `db rotate-credentials`, `db rotations`                 | Rotate database passwords; redeploy everything using them |
+| `db backups list\|run\|policy\|restore\|download`       | Backups, schedules and PITR, restores, downloads          |
+| `db pitr status\|restore [--to] [--into-new]`           | PITR windows in local time and UTC; restore to a moment   |
+| `db recovery policy [get\|set] [--enable] [--grace]`    | Automatic recovery of a lost server's volume              |
+| `cron status\|runs\|run\|cancel\|logs`                  | Cron services: schedule, run history, run now, output     |
+| `cron set [--schedule] [--timezone] [--retries] …`      | Change a cron service's schedule and run rules            |
+| `cron pause\|resume`, `cron preview <schedule>`         | Pause or resume scheduling; a schedule's next slots       |
+| `previews list [--all]`                                 | The project's pull request previews                       |
+| `previews approve\|redeploy\|destroy <preview>`         | Approve a fork's commit, redeploy, or tear down           |
+| `environments list\|create\|diff`                       | Environments: clone one, compare two (no values shown)    |
+| `environments promote\|delete`                          | Propose a promotion as a change set; delete (typed slug)  |
+| `tokens list\|create\|revoke`                           | Workspace API tokens for CI and scripts                   |
+| `shell [service] [--replica] [-- cmd]`                  | Interactive shell, or a command, in a running replica     |
+| `runtime [service]`, `runtime set nodes\|cloudflare`    | Where a service runs; move it to Cloudflare Containers    |
+| `version`, `completion`                                 | Build info, shell completion                              |
+| `up`, `db connect`                                      | Not available on the control plane yet (exit 10)          |
 
 Every command takes `--json`, `--profile`, `--no-input`, `--no-color` and
 `--debug` (HTTP traces with credentials redacted). Run

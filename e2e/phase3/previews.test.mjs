@@ -121,7 +121,7 @@ function previewWhere(projectId, number, check, what, timeoutMs = 300_000) {
       intervalMs: 2000,
       explain: async () => {
         const p = await previewOf(projectId, number);
-        if (!p) return "no preview; GitHub saw " + JSON.stringify(github.requests.slice(-5));
+        if (!p) return `no preview; GitHub saw ${JSON.stringify(github.requests.slice(-5))}`;
         const deployments = [];
         for (const s of p.services) {
           if (!s.deployment_id) continue;
@@ -346,6 +346,7 @@ describe("PR previews on the real stack", () => {
       });
       await api.put(`/v1/services/${whoami.service.id}/variables?environment_id=${prodId}`, {
         set: [
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: Roundhouse reference syntax, resolved by the control plane.
           { key: "DERIVED", value: "x-${{shared.API_SECRET}}" },
           { key: "PUBLIC_MARK", value: "visible-mark" },
         ],
