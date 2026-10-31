@@ -925,11 +925,12 @@ function setRecoveryStatus(
  * Mirrors the minute tick's `tickPolicy` for one policy: watch an offline server through
  * the grace period, then recover onto an eligible server from the newest backup, or say
  * why it can't. A `blocked` status stays until the server comes back, as the tick only
- * re-checks it.
+ * re-checks it. Nobody reads an automatic recovery's restore, so each tick advances it.
  */
 function tickRecovery(policy: RecoveryPolicy, now: number) {
   if (policy.status === "recovering" && policy.restore_id) {
-    const restore = db.data.restores.find((row) => row.id === policy.restore_id);
+    const found = db.data.restores.find((row) => row.id === policy.restore_id);
+    const restore = found && advanceRestore(found);
     if (!restore || restore.status === "queued" || restore.status === "running") return;
     setRecoveryStatus(
       policy,

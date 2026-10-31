@@ -2,12 +2,8 @@ import { isValidCron, nextCronRuns } from "@roundhouse/shared";
 import {
   Badge,
   Button,
-  Checkbox,
   EmptyState,
-  Input,
-  Label,
   SaveBar,
-  Select,
   SettingsRow,
   SettingsSection,
   SettingsStack,
@@ -27,6 +23,7 @@ import {
   DatabaseIcon,
   DownloadIcon,
   HardDriveUploadIcon,
+  InfoIcon,
   PinIcon,
   Trash2Icon,
   TriangleAlertIcon,
@@ -35,7 +32,7 @@ import { type FormEvent, useId, useState } from "react";
 import { ConfirmDialog } from "../../components/confirm-dialog";
 import { ErrorState } from "../../components/error-state";
 import { SettingsField } from "../../components/settings-field";
-import type { Backup, BackupPolicy, RestoreBody } from "../../lib/api/backups-client";
+import type { Backup, BackupPolicy, PitrStatus, RestoreBody } from "../../lib/api/backups-client";
 import { errorMessage, isApiError } from "../../lib/api/client";
 import type { Environment, Service } from "../../lib/api/deploy-types";
 import { formatBytes, formatDuration, formatRelativeTime, formatTimestamp } from "../../lib/format";
@@ -47,6 +44,7 @@ import {
   useBackups,
   useCreateBackup,
   useDeleteBackup,
+  usePitrStatus,
   useRestore,
   useRestoreBackup,
   useSaveBackupPolicy,
@@ -55,7 +53,12 @@ import { useMe } from "../../queries/me";
 import { useEnvironmentGate } from "../access/environment-gate";
 import { findService, useProjectEnvironment } from "../projects/use-project-environment";
 import type { ServicePageProps } from "../services/service-layout";
-import { defaultRestoreSlug } from "./database-meta";
+import { PitrSection } from "./pitr-section";
+import {
+  destinationBody,
+  RestoreDestinationFields,
+  useRestoreDestination,
+} from "./restore-destination";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "info";
 
@@ -124,21 +127,42 @@ function numberOrError(value: string, min: number, max: number): number | string
     : n;
 }
 
+/** Why the point-in-time switch can't be turned on now, or `null` when it can. */
+function pitrBlocker(
+  scheduled: boolean,
+  savedOn: boolean,
+  status: PitrStatus | undefined,
+): string | null {
+  if (!scheduled) {
+    return savedOn
+      ? "Turning off scheduled backups turns this off too: base backups follow the schedule."
+      : "Turn on scheduled backups first: base backups follow the schedule.";
+  }
+  return savedOn ? null : (status?.unavailable_reason ?? null);
+}
+
 function PolicySection({
   service,
   environment,
   policy,
   canEdit,
+  supportsPitr,
+  pitrStatus,
   onStorageMissing,
 }: {
   service: Service;
   environment: Environment;
   policy: BackupPolicy;
   canEdit: boolean;
+  /** Whether the engine has point-in-time recovery (Postgres). */
+  supportsPitr: boolean;
+  pitrStatus: PitrStatus | undefined;
   onStorageMissing: () => void;
 }) {
   const save = useSaveBackupPolicy(service.id);
   const [enabled, setEnabled] = useState(policy.enabled);
+  const [pitr, setPitr] = useState(policy.pitr);
+  const pitrId = useId();
   const [schedule, setSchedule] = useState(policy.schedule);
   const [keepLast, setKeepLast] = useState(String(policy.keep_last));
   const [maxAge, setMaxAge] = useState(
@@ -155,7 +179,10 @@ function PolicySection({
   const age = maxAge.trim() === "" ? null : numberOrError(maxAge, 1, 3650);
   const preview = cronOk ? nextCronRuns(cron, Date.now(), 3) : [];
   const snapshot = policy.method === "snapshot";
+  const pitrOn = supportsPitr && enabled && pitr;
+  const blocker = supportsPitr ? pitrBlocker(enabled, policy.pitr, pitrStatus) : null;
   const dirty =
+    pitrOn !== (supportsPitr && policy.pitr) ||
     enabled !== policy.enabled ||
     cron !== policy.schedule ||
     keep !== policy.keep_last ||
@@ -164,6 +191,7 @@ function PolicySection({
 
   function reset() {
     setEnabled(policy.enabled);
+    setPitr(policy.pitr);
     setSchedule(policy.schedule);
     setKeepLast(String(policy.keep_last));
     setMaxAge(policy.max_age_days === null ? "" : String(policy.max_age_days));
@@ -186,6 +214,9 @@ function PolicySection({
         keep_last: keep,
         max_age_days: age,
         ...(snapshot ? { quiesce: quiesce ? ("stop" as const) : ("none" as const) } : {}),
+        // NOTE: The API refuses PITR without the schedule, so turning the schedule off
+        // turns PITR off with it rather than failing the save.
+        ...(supportsPitr ? { pitr: pitrOn } : {}),
       },
       {
         onSuccess: () => toast({ title: "Backup policy saved", tone: "success" }),
@@ -201,7 +232,7 @@ function PolicySection({
     <form onSubmit={onSubmit} noValidate aria-label="Backup policy">
       <SettingsSection
         title="Schedule"
-        description={`${snapshot ? "A snapshot of the volume" : "A logical dump of the database"}, compressed and encrypted to the project's key before it leaves ${environment.name}'s server.`}
+        description={`${snapshot ? "A snapshot of the volume" : pitrOn ? "A base backup of the database's files" : "A logical dump of the database"}, compressed and encrypted to the project's key before it leaves ${environment.name}'s server.`}
         actions={
           <Badge tone={policy.enabled ? "success" : "neutral"}>
             {policy.enabled ? "On" : "Off"}
@@ -217,6 +248,34 @@ function PolicySection({
           >
             <Switch id={enabledId} checked={enabled} onCheckedChange={setEnabled} />
           </SettingsRow>
+          {supportsPitr ? (
+            <SettingsRow
+              label="Point-in-time recovery"
+              description={
+                <>
+                  Archives the write-ahead log as it is written, so the database can be restored to
+                  any second since its oldest base backup, not only to a backup. Scheduled backups
+                  become base backups, and saving a change restarts the database once.
+                  {blocker ? (
+                    <span className="mt-1 flex items-start gap-1.5 text-foreground">
+                      <InfoIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                      {blocker}
+                    </span>
+                  ) : null}
+                </>
+              }
+              htmlFor={pitrId}
+              control="switch"
+            >
+              <Switch
+                id={pitrId}
+                checked={pitrOn}
+                disabled={blocker !== null}
+                onCheckedChange={setPitr}
+                aria-describedby={`${pitrId}-description`}
+              />
+            </SettingsRow>
+          ) : null}
           <SettingsField
             label="Schedule (cron, UTC)"
             description="Five fields: minute, hour, day of month, month, day of week."
@@ -259,6 +318,13 @@ function PolicySection({
             >
               <Switch id={quiesceId} checked={quiesce} onCheckedChange={setQuiesce} />
             </SettingsRow>
+          ) : pitrOn ? (
+            <SettingsRow
+              label="Method"
+              description="pg_basebackup copies the data files while the database runs; the archived write-ahead log replays on top of them."
+            >
+              <p className="text-sm text-foreground md:text-right">Base backup</p>
+            </SettingsRow>
           ) : (
             <SettingsRow
               label="Method"
@@ -283,44 +349,6 @@ function PolicySection({
 // Restore
 // -----------------------------------------------------------------------------
 
-type RestoreMode = RestoreBody["mode"];
-
-const SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-
-function ModeOption({
-  mode,
-  checked,
-  disabled,
-  title,
-  description,
-  onSelect,
-}: {
-  mode: RestoreMode;
-  checked: boolean;
-  disabled?: boolean;
-  title: string;
-  description: string;
-  onSelect: (mode: RestoreMode) => void;
-}) {
-  return (
-    <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border bg-background px-3 py-2 transition-colors has-[:checked]:border-accent-text has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
-      <input
-        type="radio"
-        name="restore-mode"
-        value={mode}
-        checked={checked}
-        disabled={disabled}
-        onChange={() => onSelect(mode)}
-        className="mt-0.5 size-3.5 shrink-0 accent-accent-text focus-visible:ring-2 focus-visible:ring-ring"
-      />
-      <span className="grid gap-0.5">
-        <span className="text-sm text-foreground">{title}</span>
-        <span className="text-xs text-muted-foreground">{description}</span>
-      </span>
-    </label>
-  );
-}
-
 function RestoreDialog({
   service,
   environment,
@@ -338,38 +366,19 @@ function RestoreDialog({
 }) {
   const restore = useRestoreBackup(service.id, environment.id, service.project_id);
   const snapshot = backup?.method === "snapshot";
-  const [chosen, setChosen] = useState<RestoreMode>("new_service");
-  const mode: RestoreMode = snapshot ? "in_place" : chosen;
-  const [skipSafety, setSkipSafety] = useState(false);
-  const [slug, setSlug] = useState("");
-  const [targetEnvId, setTargetEnvId] = useState(environment.id);
-  const skipId = useId();
-  const slugId = useId();
-  const envId = useId();
-  const placeholder = defaultRestoreSlug(service.slug, Date.now());
-  const slugError =
-    slug.trim() !== "" && !SLUG.test(slug.trim())
-      ? "Lowercase letters, digits and dashes, starting and ending with a letter or digit."
-      : null;
-  const target = environments.find((env) => env.id === targetEnvId) ?? environment;
+  const destination = useRestoreDestination(environment.id, !snapshot);
+  const { mode } = destination;
 
   function reset() {
     restore.reset();
-    setChosen("new_service");
-    setSkipSafety(false);
-    setSlug("");
-    setTargetEnvId(environment.id);
+    destination.reset();
   }
 
-  const body: RestoreBody =
-    mode === "new_service"
-      ? {
-          mode,
-          confirm: service.slug,
-          ...(slug.trim() ? { slug: slug.trim() } : {}),
-          ...(targetEnvId !== backup?.environment_id ? { target_environment_id: targetEnvId } : {}),
-        }
-      : { mode, confirm: service.slug, ...(skipSafety ? { skip_safety_backup: true } : {}) };
+  const body: RestoreBody = destinationBody(
+    destination,
+    service.slug,
+    backup?.environment_id ?? environment.id,
+  );
 
   return (
     <ConfirmDialog
@@ -390,7 +399,7 @@ function RestoreDialog({
       confirmLabel={mode === "new_service" ? "Restore into a new service" : "Restore in place"}
       destructive={mode === "in_place"}
       confirmText={service.slug}
-      confirmDisabled={mode === "new_service" && slugError !== null}
+      confirmDisabled={mode === "new_service" && destination.slugError !== null}
       pending={restore.isPending}
       error={restore.isError ? actionError(restore.error) : null}
       onConfirm={() => {
@@ -408,106 +417,50 @@ function RestoreDialog({
         );
       }}
     >
-      <fieldset className="grid gap-2">
-        <legend className="mb-1 text-sm font-medium text-foreground">Restore into</legend>
-        <ModeOption
-          mode="new_service"
-          checked={mode === "new_service"}
-          disabled={snapshot}
-          title="A new service"
-          description={
-            snapshot
-              ? "Only a dump can go into a new service: a snapshot carries the old passwords."
-              : `Adds a database of the same engine and version with fresh credentials, then restores into it. ${service.name} keeps running untouched.`
-          }
-          onSelect={setChosen}
-        />
-        <ModeOption
-          mode="in_place"
-          checked={mode === "in_place"}
-          title={`${service.name}, in place`}
-          description={`Replaces everything in ${service.name} in ${environment.name}. The database is stopped while it restores.`}
-          onSelect={setChosen}
-        />
-      </fieldset>
-      {mode === "new_service" ? (
-        <div className="grid gap-3">
-          <div className="grid gap-1.5">
-            <Label htmlFor={slugId}>New service slug</Label>
-            <Input
-              id={slugId}
-              value={slug}
-              placeholder={placeholder}
-              onChange={(event) => setSlug(event.target.value)}
-              aria-invalid={slugError ? true : undefined}
-              aria-describedby={`${slugId}-hint`}
-              autoComplete="off"
-              spellCheck={false}
-              className="font-mono"
-            />
-            <p
-              id={`${slugId}-hint`}
-              className={slugError ? "text-xs text-danger" : "text-xs text-muted-foreground"}
-            >
-              {slugError ?? "Leave empty for the name shown; a number is added if it is taken."}
-            </p>
-          </div>
-          {environments.length > 1 ? (
-            <div className="grid gap-1.5">
-              <Label htmlFor={envId}>Environment</Label>
-              <Select
-                id={envId}
-                value={targetEnvId}
-                onChange={(event) => setTargetEnvId(event.target.value)}
-              >
-                {environments.map((env) => (
-                  <option key={env.id} value={env.id}>
-                    {env.name}
-                  </option>
-                ))}
-              </Select>
-            </div>
-          ) : null}
-          <p className="text-xs text-muted-foreground">
-            The new database is added and deployed in {target.name}, so this needs permission to
-            manage services and variables and to deploy there.
-          </p>
-        </div>
-      ) : (
-        <div className="flex items-start gap-2">
-          <Checkbox
-            id={skipId}
-            checked={skipSafety}
-            onChange={(event) => setSkipSafety(event.target.checked)}
-          />
-          <Label htmlFor={skipId} className="grid gap-0.5 font-normal">
-            <span className="text-sm text-foreground">Skip the safety backup</span>
-            <span className="text-xs text-muted-foreground">
-              By default the current data is backed up first, so the restore can be undone.
-            </span>
-          </Label>
-        </div>
-      )}
+      <RestoreDestinationFields
+        destination={destination}
+        service={service}
+        environment={environment}
+        environments={environments}
+        newServiceUnavailable={
+          snapshot
+            ? "Only a dump can go into a new service: a snapshot carries the old passwords."
+            : undefined
+        }
+      />
     </ConfirmDialog>
   );
 }
 
-function RestoreStatus({
-  restoreId,
-  workspaceId,
-  projectId,
-  services,
-  environments,
-}: {
+/** Props for {@link RestoreStatus}. */
+export interface RestoreStatusProps {
   restoreId: string;
   workspaceId: string;
   projectId: string;
   services: readonly Service[];
   environments: readonly Environment[];
-}) {
+}
+
+/**
+ * A started restore as a status line, polled until it ends: queued, running (with what
+ * is happening to the database), and how it finished, with a link to a new service. A
+ * point-in-time restore names the moment it restores to.
+ *
+ * @param props - The restore and the project's services and environments.
+ * @returns The status line, or nothing while it loads.
+ */
+export function RestoreStatus({
+  restoreId,
+  workspaceId,
+  projectId,
+  services,
+  environments,
+}: RestoreStatusProps) {
   const restore = useRestore(restoreId);
   if (!restore.data) return null;
-  const { status, error, mode, target_service_id, target_environment_id } = restore.data;
+  const { status, error, mode, target_service_id, target_environment_id, target_time } =
+    restore.data;
+  const to = target_time === null ? "" : ` to ${formatTimestamp(target_time)}`;
   const tone =
     status === "failed"
       ? "border-danger/40 bg-danger/10"
@@ -521,15 +474,15 @@ function RestoreStatus({
   const text =
     mode === "new_service"
       ? {
-          queued: "Restore queued",
-          running: `Restoring into ${name}… it starts, turns healthy, then takes the data`,
-          succeeded: `Restored into ${name}`,
+          queued: `Restore${to} queued`,
+          running: `Restoring into ${name}${to}… it starts, turns healthy, then takes the data`,
+          succeeded: `Restored into ${name}${to}`,
           failed: `Restore into ${name} failed${error ? `: ${error}` : ""}`,
         }[status]
       : {
-          queued: "Restore queued",
-          running: "Restoring… the database is stopped until it finishes",
-          succeeded: "Restore finished",
+          queued: `Restore${to} queued`,
+          running: `Restoring${to}… the database is stopped until it finishes`,
+          succeeded: target_time === null ? "Restore finished" : `Restored${to}`,
           failed: `Restore failed${error ? `: ${error}` : ""}`,
         }[status];
   return (
@@ -674,8 +627,9 @@ function BackupRow({
  * next-runs preview, "Back up now", and the backups with their status, size and
  * duration, each restorable into a new service (the default) or in place (typed slug,
  * fresh session, progress until it finishes) and downloadable as an
- * encrypted file. Without backup storage it says so and links instance admins to the
- * setting.
+ * encrypted file. A Postgres service adds point-in-time recovery: its switch in the
+ * policy and a section with the restorable windows and a restore to any second in them.
+ * Without backup storage it says so and links instance admins to the setting.
  *
  * @param props - Workspace, project and service ids.
  * @returns The tab.
@@ -691,6 +645,8 @@ export function BackupsTab({ workspaceId, projectId, serviceId }: ServicePagePro
   const backups = useBackups(serviceId, environment?.id);
   const create = useCreateBackup(serviceId, environment?.id ?? "");
   const remove = useDeleteBackup(serviceId, environment?.id ?? "");
+  const supportsPitr = service?.database?.engine === "postgres";
+  const pitrStatus = usePitrStatus(serviceId, environment?.id, supportsPitr);
   const [missingStorage, setMissingStorage] = useState(false);
   const [restoring, setRestoring] = useState<Backup | null>(null);
   const [deleting, setDeleting] = useState<Backup | null>(null);
@@ -740,8 +696,20 @@ export function BackupsTab({ workspaceId, projectId, serviceId }: ServicePagePro
           environment={environment}
           policy={policy.data}
           canEdit={canManage}
+          supportsPitr={supportsPitr}
+          pitrStatus={pitrStatus.data}
           onStorageMissing={onStorageMissing}
         />
+        {supportsPitr ? (
+          <PitrSection
+            workspaceId={workspaceId}
+            service={service}
+            environment={environment}
+            environments={project.data?.environments ?? [environment]}
+            status={pitrStatus}
+            onStarted={setRestoreId}
+          />
+        ) : null}
         <section aria-labelledby="backups-list" className="min-w-0">
           <header className="mb-2 flex flex-wrap items-center justify-between gap-3">
             <div>
