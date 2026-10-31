@@ -292,7 +292,10 @@ func (h *harness) sealRestore(id, url, identity string) *protocol.SealedBox {
 
 func (h *harness) waitFor(what string, pred func(m protocol.AgentMessage) bool) protocol.AgentMessage {
 	h.t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	// NOTE: integration jobs start engine and helper containers (pg_basebackup,
+	// mongodump, ...) that take well over a minute when the whole suite runs
+	// in parallel on one engine; jobs themselves are allowed far longer.
+	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {
 		h.mu.Lock()
 		for _, m := range h.sent {
