@@ -24,8 +24,8 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | Databases                       | Postgres, MySQL, Valkey/Redis and MongoDB as services          | Available                                                    |
 | Volumes                         | Persistent storage mounted into a service                      | Available                                                    |
 | Backups                         | Scheduled database backups to R2 in your account               | Available                                                    |
-| Point-in-time restore           | Restore Postgres to any moment in its backup window            | In progress — see [TODO.md](TODO.md)                         |
-| Automatic recovery              | Restore a lost server's databases onto a healthy one           | In progress — see [TODO.md](TODO.md)                         |
+| Point-in-time restore           | Restore Postgres to any moment in its backup window            | Available                                                    |
+| Automatic recovery              | Restore a lost server's databases onto a healthy one           | Available                                                    |
 | **Networking**                  |                                                                |                                                              |
 | Private networking              | WireGuard mesh; services reach each other at `.internal` names | Available                                                    |
 | Domains & HTTPS                 | A generated domain or your own, certificates by Caddy          | Available                                                    |
