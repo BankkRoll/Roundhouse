@@ -180,12 +180,20 @@ func TestShellIntegrationSession(t *testing.T) {
 	})
 
 	m.ResizeExec(&protocol.ExecResize{Type: protocol.TypeExecResize, ControlHeader: header(), SessionID: "shl_it", Cols: 123, Rows: 45})
-	// The resize and the input batch travel separately; give the engine a
-	// moment to apply the size before stty reads it.
-	time.Sleep(200 * time.Millisecond)
-	m.ExecInput(sealInput(t, key, ns, "shl_it", 1, "stty size\r"))
+	// The resize and the input travel separately and a busy engine applies
+	// the size late, so stty runs again until it reports the new one.
+	seq := int64(1)
+	next := time.Now()
 	waitFor(t, "the new terminal size", func() bool {
-		return strings.Contains(rec.output(t, "shl_it"), "45 123")
+		if strings.Contains(rec.output(t, "shl_it"), "45 123") {
+			return true
+		}
+		if time.Now().After(next) {
+			m.ExecInput(sealInput(t, key, ns, "shl_it", seq, "stty size\r"))
+			seq++
+			next = time.Now().Add(500 * time.Millisecond)
+		}
+		return false
 	})
 	if processes(t, c, ctr, "sh -l") == "" {
 		t.Fatal("no login shell runs during the session")
