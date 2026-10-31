@@ -783,7 +783,7 @@ export async function applyWalRetention(db: Db, s3: S3Config, now = Date.now()):
   let deleted = 0;
   for (const stream of streams) {
     if (deleted >= WAL_DELETE_BATCH) break;
-    const [oldest] = await db
+    const kept = await db
       .select({ walStart: backups.walStart })
       .from(backups)
       .where(
@@ -792,18 +792,22 @@ export async function applyWalRetention(db: Db, s3: S3Config, now = Date.now()):
           eq(backups.method, "base"),
           inArray(backups.status, ["succeeded", "queued", "running"]),
         ),
-      )
-      .orderBy(asc(backups.walStart))
-      .limit(1);
-    if (!oldest && stream.status === "active") continue;
+      );
+    // NOTE: a base still running has no start yet; it begins past all WAL
+    // archived so far, so only the started ones bound what may go.
+    const oldest = kept
+      .map((b) => b.walStart)
+      .filter((s): s is string => s !== null)
+      .sort()[0];
+    if (!oldest && (stream.status === "active" || kept.length)) continue;
     const doomed = await db
       .select({ name: walSegments.name })
       .from(walSegments)
       .where(
         and(
           eq(walSegments.streamId, stream.id),
-          ...(oldest?.walStart
-            ? [lt(walSegments.name, oldest.walStart), sql`${walSegments.name} NOT LIKE '%.history'`]
+          ...(oldest
+            ? [lt(walSegments.name, oldest), sql`${walSegments.name} NOT LIKE '%.history'`]
             : []),
         ),
       )
