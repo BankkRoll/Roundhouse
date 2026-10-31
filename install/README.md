@@ -127,6 +127,14 @@ containers, and the registry listens on `127.0.0.1:5000` only.
 ## Notes
 
 - Supports Ubuntu 22.04/24.04 and Debian 12, amd64/arm64.
+- MongoDB 8.0 and later can't start on Linux kernels 6.19 to 7.0.13: the
+  TCMalloc they bundle breaks the kernel's rseq ABI, so `mongod` exits at
+  startup ([SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)).
+  Kernel 7.0.14 fixes it. Ubuntu 24.04 with a newer hardware-enablement
+  kernel can land in that range; check with `uname -r`. The scheduler never
+  places a MongoDB 8.0+ service on such a server, the deploy fails naming
+  the kernel when no other server can take it, and the server page warns.
+  Other engines are unaffected.
 - The binary is verified against `SHA256SUMS`, which is Ed25519-signed with
   the release key embedded in `install.sh`. The embedded key is a placeholder
   until the first release; see `infra/release-signing.md`.

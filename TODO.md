@@ -28,10 +28,13 @@ These are covered by tests against fakes only:
 
 ## Watch in CI
 
-- MongoDB 8.0 sometimes never became ready on runner image `20261025.353.1`
-  (Linux 7.0 kernel). It has passed since, so the cause is unconfirmed; test
-  containers print their log tail on failure. If it is the kernel, real
-  nodes on that kernel are affected too.
+- MongoDB 8.0+ can't start on Linux kernels 6.19 to 7.0.13, which the
+  ubuntu-24.04 runners now use: its bundled TCMalloc breaks the rseq ABI
+  ([SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)), fixed in
+  kernel 7.0.14. The agent's MongoDB integration tests skip on those
+  kernels (`dockertest.SkipIfMongoKernelAffected`), and the scheduler keeps
+  MongoDB 8.0+ off such servers. Once the runners reach 7.0.14, check that
+  the backup and dbquery MongoDB tests run there again instead of skipping.
 - Some dashboard tests time out only when the whole web suite runs on a
   heavily loaded machine; each passes on its own.
 

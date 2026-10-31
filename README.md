@@ -21,7 +21,7 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | Cloud servers                   | Create servers on Hetzner, DigitalOcean, Vultr or Linode       | Available                                                    |
 | Cloudflare Containers           | Run a stateless HTTP service on Cloudflare instead of servers  | Preview — tested against a fake API; needs live verification |
 | **Data**                        |                                                                |                                                              |
-| Databases                       | Postgres, MySQL, Valkey/Redis and MongoDB as services          | Available                                                    |
+| Databases                       | Postgres, MySQL, Valkey/Redis and MongoDB as services[^mongo]  | Available                                                    |
 | Volumes                         | Persistent storage mounted into a service                      | Available                                                    |
 | Backups                         | Scheduled database backups to R2 in your account               | Available                                                    |
 | Point-in-time restore           | Restore Postgres to any moment in its backup window            | Available                                                    |
@@ -46,6 +46,10 @@ Roundhouse is a source-available, self-hosted platform for deploying application
 | Signed control channel          | Agents dial out and verify every Ed25519-signed message        | Available                                                    |
 | Audit log                       | Who did what and when                                          | Available                                                    |
 | Members & roles                 | Owner, admin, member and viewer across workspaces              | Available                                                    |
+
+[^mongo]: MongoDB 8.0 and later can't start on Linux kernels 6.19 to 7.0.13
+([SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)); Roundhouse
+places them on other servers. See [install/README.md](install/README.md#notes).
 
 ## Install
 
