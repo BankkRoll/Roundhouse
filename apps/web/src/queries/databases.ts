@@ -29,6 +29,8 @@ import { patchProjectService } from "./services";
 export const dataKeys = {
   volume: (serviceId: string, environmentId: string) =>
     ["services", serviceId, "volume", environmentId] as const,
+  abandonedCopies: (serviceId: string, environmentId: string) =>
+    ["services", serviceId, "volume", environmentId, "abandoned-copies"] as const,
   schema: (serviceId: string, environmentId: string) =>
     ["services", serviceId, "database", "schema", environmentId] as const,
   browse: (serviceId: string, environmentId: string, op: DatabaseQueryOp) =>
@@ -99,6 +101,29 @@ export function useVolume(serviceId: string, environmentId: string | undefined, 
       }
     },
     enabled: enabled && Boolean(environmentId),
+  });
+}
+
+/** How often abandoned copies are re-read while a delete waits for its server's answer. */
+export const ABANDONED_COPY_POLL_MS = 10_000;
+
+/**
+ * The copies recoveries left on lost servers for a service's volume in an environment,
+ * re-read while a delete has been sent and not yet confirmed.
+ *
+ * @param serviceId - Service id.
+ * @param environmentId - Environment id; the query waits while it is unknown.
+ * @returns The copies query.
+ */
+export function useAbandonedCopies(serviceId: string, environmentId: string | undefined) {
+  return useQuery({
+    queryKey: dataKeys.abandonedCopies(serviceId, environmentId ?? ""),
+    queryFn: ({ signal }) => dataApi.listAbandonedCopies(serviceId, environmentId!, signal),
+    enabled: Boolean(environmentId),
+    refetchInterval: (query) =>
+      query.state.data?.copies.some((copy) => copy.state === "deleting")
+        ? ABANDONED_COPY_POLL_MS
+        : false,
   });
 }
 

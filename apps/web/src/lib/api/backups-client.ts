@@ -1,6 +1,7 @@
 /**
  * Typed endpoint functions and wire types for backups (ADR 0004): a service's backup
- * policy, its backups, restores, downloads and the instance's backup storage.
+ * policy, its backups, restores, downloads, point-in-time recovery, automatic recovery
+ * and the instance's backup storage.
  *
  * Types come from the API's route contracts (`apps/api/src/contracts/backups.ts`).
  *
@@ -13,15 +14,26 @@ import type {
   BodyOf,
   downloadBackup,
   listBackups,
+  PitrStatus,
   putBackupPolicy,
   putBackupStorage,
+  putRecoveryPolicy,
+  RecoveryPolicy,
   ResponseOf,
   Restore,
   restoreBackup,
+  restorePitr,
 } from "../../../../api/src/contracts";
 import { request } from "./client";
 
-export type { Backup, BackupPolicy, BackupStorage, Restore };
+export type { Backup, BackupPolicy, BackupStorage, PitrStatus, RecoveryPolicy, Restore };
+
+/** `POST /v1/services/{serviceId}/pitr/restore` body. */
+export type PitrRestoreBody = BodyOf<typeof restorePitr>;
+/** `PUT /v1/services/{serviceId}/recovery-policy` body. */
+export type RecoveryPolicyPatch = BodyOf<typeof putRecoveryPolicy>;
+/** A restorable range of time; `to` is the newest point and is exclusive. */
+export type PitrRange = PitrStatus["windows"][number];
 
 /** `PUT /v1/services/{serviceId}/backup-policy` body. */
 export type BackupPolicyPatch = BodyOf<typeof putBackupPolicy>;
@@ -126,6 +138,54 @@ export const backupsApi = {
    */
   getRestore: (restoreId: string, signal?: AbortSignal) =>
     request<Restore>("GET", `/v1/restores/${seg(restoreId)}`, { signal }),
+  /**
+   * Reads a service's point-in-time recovery: whether it is on, why it can't be, the WAL
+   * stream archiving now and the restorable windows.
+   *
+   * @param serviceId - Service id.
+   * @param environmentId - Environment id.
+   * @param signal - Abort signal.
+   * @returns The status.
+   */
+  getPitr: (serviceId: string, environmentId: string, signal?: AbortSignal) =>
+    request<PitrStatus>("GET", `/v1/services/${seg(serviceId)}/pitr`, {
+      query: { environment_id: environmentId },
+      signal,
+    }),
+  /**
+   * Restores a database to a moment inside a restorable window. Needs a fresh session
+   * (403 `reauth_required` otherwise) and the typed service slug; 422
+   * `pitr_target_unavailable` when no base backup and WAL cover the time.
+   *
+   * @param serviceId - Service id.
+   * @param body - Environment, target time, mode and the typed service slug.
+   * @returns The started restore.
+   */
+  restorePitr: (serviceId: string, body: PitrRestoreBody) =>
+    request<Restore>("POST", `/v1/services/${seg(serviceId)}/pitr/restore`, { body }),
+  /**
+   * Reads a service's automatic recovery, or the defaults when none is saved.
+   *
+   * @param serviceId - Service id.
+   * @param environmentId - Environment id.
+   * @param signal - Abort signal.
+   * @returns The policy with its live status.
+   */
+  getRecoveryPolicy: (serviceId: string, environmentId: string, signal?: AbortSignal) =>
+    request<RecoveryPolicy>("GET", `/v1/services/${seg(serviceId)}/recovery-policy`, {
+      query: { environment_id: environmentId },
+      signal,
+    }),
+  /**
+   * Turns automatic recovery on or off, or changes its grace period. Needs a fresh
+   * session.
+   *
+   * @param serviceId - Service id.
+   * @param body - Environment and the fields to change.
+   * @returns The saved policy.
+   */
+  putRecoveryPolicy: (serviceId: string, body: RecoveryPolicyPatch) =>
+    request<RecoveryPolicy>("PUT", `/v1/services/${seg(serviceId)}/recovery-policy`, { body }),
   /**
    * Reads the instance's backup bucket, without its secret.
    *

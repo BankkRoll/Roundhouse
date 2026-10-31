@@ -12,7 +12,9 @@
  * There is no agent: the data browser answers from the seeded relations in
  * `./data-db`, backups and restores advance one status each time they are read
  * (`queued` → `running` → `succeeded`), and a volume move one phase each time it is
- * read, so polling sees them finish.
+ * read, so polling sees them finish. The active WAL stream has archived up to the moment
+ * it is read, and a recovery policy and an abandoned copy are brought up to date when
+ * read, as the minute tick would have.
  *
  * @module
  */
@@ -22,6 +24,7 @@ import {
   DATABASE_ENGINE_SPECS,
   DEFAULT_BACKUP_KEEP_LAST,
   DEFAULT_BACKUP_SCHEDULE,
+  DEFAULT_RECOVERY_GRACE_MINUTES,
   databasePrincipals,
   databaseVersion,
   freeSlug,
@@ -42,8 +45,16 @@ import {
 } from "../../../api/src/contracts";
 import { isAllowlistEntry } from "../features/databases/allowlist";
 import { defaultRestoreSlug } from "../features/databases/database-meta";
-import type { Backup, BackupPolicy, Restore } from "../lib/api/backups-client";
 import type {
+  Backup,
+  BackupPolicy,
+  PitrRange,
+  PitrStatus,
+  RecoveryPolicy,
+  Restore,
+} from "../lib/api/backups-client";
+import type {
+  AbandonedCopy,
   DatabasePrincipal,
   DatabaseQueryOp,
   DatabaseQueryResult,
@@ -60,10 +71,11 @@ import {
   invalid,
   notFound,
   recordAudit,
+  requireFreshSession,
   requireWorkspace,
   unauthorized,
 } from "./common";
-import { makeVolume, renderMockDatabase } from "./data-db";
+import { type DbAbandonedCopy, type DbWalStream, makeVolume, renderMockDatabase } from "./data-db";
 import { db, nextId } from "./db";
 import type { DbVariable } from "./deploy-db";
 import { broadcastRealtime, startDeployment } from "./deploy-handlers";
@@ -169,6 +181,14 @@ function staleSession(): Response | null {
   return db.data.knobs.reauthRequired
     ? apiError(403, "reauth_required", "Confirm your password to continue")
     : null;
+}
+
+/**
+ * The fresh-session guard of the newer routes: the knob above, or a session past the
+ * re-authentication window, which the dashboard answers with its password prompt.
+ */
+function freshSession(): Response | null {
+  return staleSession() ?? (db.sessionStale ? requireFreshSession() : null);
 }
 
 // -----------------------------------------------------------------------------
@@ -577,8 +597,58 @@ function recoverVolume(
   if (!target) return notFound("Node");
   const reason = ineligibility(target, volume);
   if (reason) return apiError(422, "migration_target_ineligible", `${target.name}: ${reason}`);
+  const restore = beginRecovery({
+    backup,
+    volume,
+    target,
+    requestedBy: guard.user.id,
+    trigger: "manual",
+  });
+  audit(project.workspace_id, guard.user.id, "restore.started", "restore", restore.id, {
+    project_id: project.id,
+    backup_id: backup.id,
+    mode: "in_place",
+    service_id: backup.service_id,
+    environment_id: backup.environment_id,
+    safety_backup_id: null,
+    recovery: {
+      lost_node_id: volume.node_id,
+      target_node_id: target.id,
+      abandoned_volume_id: volume.id,
+      volume_id: volumeOf(backup.service_id, backup.environment_id)?.id,
+    },
+  });
+  return HttpResponse.json(restore, { status: 202 });
+}
+
+/**
+ * Mirrors `beginVolumeRecovery`: abandons the lost copy (deleted once its server is back
+ * and the grace period ends), pins an empty volume to the target and queues the restore
+ * into it.
+ */
+function beginRecovery(input: {
+  backup: Backup;
+  volume: Volume;
+  target: (typeof db.nodes)[number];
+  requestedBy: string | null;
+  trigger: Restore["trigger"];
+}): Restore {
+  const { backup, volume, target } = input;
   const now = Date.now();
   touch(volume, { status: "abandoned" });
+  db.data.abandonedCopies.push({
+    volume_id: volume.id,
+    service_id: volume.service_id,
+    environment_id: volume.environment_id,
+    node_id: volume.node_id,
+    node_name: volume.node_name,
+    size_mb: volume.size_mb,
+    used_bytes: volume.used_bytes,
+    abandoned_at: now,
+    delete_after: now + VOLUME_DELETE_GRACE_MS,
+    delete_sent_at: null,
+    cleaned_at: null,
+  });
   const fresh: Volume = {
     ...volume,
     id: nextId("vol"),
@@ -596,7 +666,7 @@ function recoverVolume(
   db.data.volumes.push(fresh);
   const restore: Restore = {
     id: nextId("rst"),
-    trigger: "manual",
+    trigger: input.trigger,
     target_time: null,
     backup_id: backup.id,
     mode: "in_place",
@@ -606,27 +676,325 @@ function recoverVolume(
     target_node_id: target.id,
     status: "queued",
     error: null,
-    requested_by: guard.user.id,
+    requested_by: input.requestedBy,
     started_at: null,
     finished_at: null,
     created_at: now,
   };
   db.data.restores.push(restore);
-  audit(project.workspace_id, guard.user.id, "restore.started", "restore", restore.id, {
-    project_id: project.id,
-    backup_id: backup.id,
-    mode: "in_place",
-    service_id: backup.service_id,
-    environment_id: backup.environment_id,
-    safety_backup_id: null,
-    recovery: {
-      lost_node_id: volume.node_id,
-      target_node_id: target.id,
-      abandoned_volume_id: volume.id,
-      volume_id: fresh.id,
-    },
+  return restore;
+}
+
+// -----------------------------------------------------------------------------
+// Abandoned copies
+// -----------------------------------------------------------------------------
+
+const SETTLED: readonly Volume["status"][] = ["ready", "degraded"];
+
+/** Mirrors `cleanupBlocker`: why an abandoned copy must stay for now, or `null`. */
+function cleanupBlocker(copy: DbAbandonedCopy): string | null {
+  const live = volumeOf(copy.service_id, copy.environment_id);
+  if (!live?.node_id || !SETTLED.includes(live.status)) {
+    return "The service has no ready volume on another server yet; the old copy is kept";
+  }
+  if (live.node_id === copy.node_id) {
+    return "The service's volume lives on this server again; the old copy is kept";
+  }
+  const restores = db.data.restores.filter(
+    (row) =>
+      row.target_service_id === copy.service_id &&
+      row.target_environment_id === copy.environment_id,
+  );
+  if (restores.some((row) => row.status === "queued" || row.status === "running")) {
+    return "A restore of the service is running; the old copy is kept until it ends";
+  }
+  if (!restores.some((row) => row.status === "succeeded" && row.created_at >= copy.abandoned_at)) {
+    return "No restore into the replacement volume has succeeded; the old copy may hold the only data and is kept";
+  }
+  return null;
+}
+
+/**
+ * Mirrors `abandonedCopies`, with the minute tick folded in: once the grace period has
+ * ended and nothing blocks it, the delete is sent, and the read after that sees the
+ * server's confirmation.
+ */
+function presentCopy(copy: DbAbandonedCopy, now: number): AbandonedCopy {
+  const node = nodeById(copy.node_id);
+  let state: AbandonedCopy["state"];
+  let message: string | null = null;
+  if (copy.delete_sent_at !== null && node && node.status !== "offline") copy.cleaned_at ??= now;
+  if (copy.cleaned_at !== null || !node) {
+    state = "deleted";
+    message = node ? null : "The server was removed, and its disk with it";
+  } else if (copy.delete_sent_at !== null) {
+    state = "deleting";
+  } else if (node.status === "offline") {
+    state = "waiting_for_server";
+    message = `${node.name} is offline; the copy is deleted once it is back`;
+  } else {
+    message = cleanupBlocker(copy);
+    if (message) state = "kept";
+    else if (now < copy.delete_after) state = "scheduled";
+    else {
+      state = "deleting";
+      copy.delete_sent_at = now;
+    }
+  }
+  return {
+    volume_id: copy.volume_id,
+    node_id: copy.node_id,
+    node_name: node?.name ?? copy.node_name,
+    state,
+    message,
+    size_mb: copy.size_mb,
+    used_bytes: copy.used_bytes,
+    abandoned_at: copy.abandoned_at,
+    delete_after: copy.delete_after,
+    delete_sent_at: copy.delete_sent_at,
+    cleaned_at: state === "deleted" ? copy.cleaned_at : null,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Point-in-time recovery
+// -----------------------------------------------------------------------------
+
+/** Mirrors `pitrIneligibility`: why it can't be turned on, or `null` when it can. */
+function pitrIneligibility(service: Service, environmentId: string): string | null {
+  if (service.database?.engine !== "postgres") {
+    return "Point-in-time recovery is available for Postgres databases only";
+  }
+  const config = db.deploy.configs
+    .filter((row) => row.service_id === service.id && row.environment_id === environmentId)
+    .sort((a, b) => b.version - a.version)[0];
+  if (config?.deploy.start_command) {
+    return "The database has a custom start command; point-in-time recovery sets its own";
+  }
+  return null;
+}
+
+function streamsOf(serviceId: string, environmentId: string): DbWalStream[] {
+  return db.data.walStreams.filter(
+    (row) =>
+      row.service_id === serviceId &&
+      row.environment_id === environmentId &&
+      row.status !== "deleted",
+  );
+}
+
+const WAL_SEGMENT_BYTES = 16 * MiB;
+/** How far the archive trails the database: about one `archive_timeout`. */
+const ARCHIVE_LAG_MS = 5_000;
+
+/** The active stream has archived up to a few seconds ago: WAL ships continuously. */
+function catchUp(stream: DbWalStream, now: number): DbWalStream {
+  const upTo = now - ARCHIVE_LAG_MS;
+  const last = stream.last_archived_at ?? stream.created_at;
+  if (stream.status !== "active" || upTo <= last) return stream;
+  const segments = Math.max(1, Math.round((upTo - last) / (4 * 60_000)));
+  stream.segment_count += segments;
+  stream.bytes_stored += Math.round(segments * WAL_SEGMENT_BYTES * 0.3);
+  stream.first_archived_at ??= last;
+  stream.last_archived_at = upTo;
+  return stream;
+}
+
+/** Succeeded base backups that finished while `stream` archived. */
+function basesOf(stream: DbWalStream): Backup[] {
+  const last = stream.last_archived_at;
+  if (last === null) return [];
+  return db.data.backups.filter(
+    (row) =>
+      row.service_id === stream.service_id &&
+      row.environment_id === stream.environment_id &&
+      row.method === "base" &&
+      row.status === "succeeded" &&
+      row.finished_at !== null &&
+      row.finished_at >= stream.created_at &&
+      row.finished_at < last,
+  );
+}
+
+/** Mirrors `pitrWindows`: each stream's range from its oldest base backup, merged. */
+function pitrWindows(serviceId: string, environmentId: string): PitrRange[] {
+  const ranges = streamsOf(serviceId, environmentId)
+    .flatMap((stream) => {
+      const finished = basesOf(stream).map((row) => row.finished_at!);
+      return finished.length ? [{ from: Math.min(...finished), to: stream.last_archived_at! }] : [];
+    })
+    .sort((a, b) => a.from - b.from);
+  const merged: PitrRange[] = [];
+  for (const range of ranges) {
+    const last = merged.at(-1);
+    if (last && range.from <= last.to) last.to = Math.max(last.to, range.to);
+    else merged.push({ ...range });
+  }
+  return merged;
+}
+
+/** Mirrors `planPitrRestore`: the newest base backup before `target` with WAL past it. */
+function planPitr(serviceId: string, environmentId: string, target: number): Backup | null {
+  const candidates = streamsOf(serviceId, environmentId)
+    .filter((stream) => (stream.last_archived_at ?? 0) > target)
+    .flatMap(basesOf)
+    .filter((row) => row.finished_at! <= target)
+    .sort((a, b) => b.finished_at! - a.finished_at!);
+  return candidates[0] ?? null;
+}
+
+/** A new active stream for the live volume, with its first base backup queued at once. */
+function startStream(service: Service, environmentId: string, now: number) {
+  db.data.walStreams.push({
+    id: nextId("wal"),
+    service_id: service.id,
+    environment_id: environmentId,
+    status: "active",
+    segment_count: 0,
+    bytes_stored: 0,
+    first_archived_at: null,
+    last_archived_at: null,
+    created_at: now,
   });
-  return HttpResponse.json(restore, { status: 202 });
+  newBackup(service, environmentId, {
+    trigger: "schedule",
+    pinned: false,
+    requested_by: null,
+    method: "base",
+  });
+}
+
+/**
+ * Mirrors `applyPitrChange`: on, the live volume gets a stream and a first base backup;
+ * off, the stream is retired and kept for restores until retention removes it.
+ */
+function applyPitrChange(service: Service, environmentId: string, pitr: boolean, now: number) {
+  const active = streamsOf(service.id, environmentId).filter((row) => row.status === "active");
+  if (!pitr) {
+    for (const stream of active) stream.status = "retired";
+    return;
+  }
+  const volume = volumeOf(service.id, environmentId);
+  if (active.length > 0 || !volume?.node_id || volume.status !== "ready") return;
+  startStream(service, environmentId, now);
+}
+
+/**
+ * An in-place restore replaces the data, so the WAL archived so far no longer leads to
+ * it: the stream is retired and a new one starts with its own base backup.
+ */
+function restartStream(service: Service, environmentId: string, now: number) {
+  const active = streamsOf(service.id, environmentId).filter((row) => row.status === "active");
+  if (active.length === 0) return;
+  for (const stream of active) stream.status = "retired";
+  startStream(service, environmentId, now);
+}
+
+// -----------------------------------------------------------------------------
+// Automatic recovery
+// -----------------------------------------------------------------------------
+
+function defaultRecoveryPolicy(serviceId: string, environmentId: string): RecoveryPolicy {
+  return {
+    id: null,
+    service_id: serviceId,
+    environment_id: environmentId,
+    enabled: false,
+    grace_minutes: DEFAULT_RECOVERY_GRACE_MINUTES,
+    enabled_by: null,
+    status: "idle",
+    message: null,
+    lost_node_id: null,
+    restore_id: null,
+    triggered_at: null,
+    updated_at: null,
+  };
+}
+
+function setRecoveryStatus(
+  policy: RecoveryPolicy,
+  status: RecoveryPolicy["status"],
+  message: string | null,
+  patch: Partial<RecoveryPolicy> = {},
+) {
+  if (policy.status === status && policy.message === message) return;
+  Object.assign(policy, { status, message, updated_at: Date.now(), ...patch });
+}
+
+/**
+ * Mirrors the minute tick's `tickPolicy` for one policy: watch an offline server through
+ * the grace period, then recover onto an eligible server from the newest backup, or say
+ * why it can't. A `blocked` status stays until the server comes back, as the tick only
+ * re-checks it.
+ */
+function tickRecovery(policy: RecoveryPolicy, now: number) {
+  if (policy.status === "recovering" && policy.restore_id) {
+    const restore = db.data.restores.find((row) => row.id === policy.restore_id);
+    if (!restore || restore.status === "queued" || restore.status === "running") return;
+    setRecoveryStatus(
+      policy,
+      restore.status === "succeeded" ? "recovered" : "failed",
+      restore.status === "succeeded" ? null : (restore.error ?? "The recovery restore failed"),
+    );
+    return;
+  }
+  const volume = volumeOf(policy.service_id, policy.environment_id);
+  const node = volume?.node_id ? nodeById(volume.node_id) : undefined;
+  if (!volume?.node_id || (node && node.status !== "offline")) {
+    if (policy.status === "watching" || policy.status === "blocked") {
+      setRecoveryStatus(policy, "idle", null, { lost_node_id: null });
+    }
+    return;
+  }
+  if (policy.status === "blocked") return;
+  const due = (node?.last_heartbeat_at ?? now) + policy.grace_minutes * 60_000;
+  if (node && now < due) {
+    setRecoveryStatus(
+      policy,
+      "watching",
+      `${node.name} is offline; recovery starts at ${new Date(due).toISOString()} unless it comes back`,
+      { lost_node_id: node.id },
+    );
+    return;
+  }
+  const block = (reason: string) =>
+    setRecoveryStatus(policy, "blocked", reason, { lost_node_id: volume.node_id });
+  const backup = db.data.backups
+    .filter(
+      (row) =>
+        row.service_id === policy.service_id &&
+        row.environment_id === policy.environment_id &&
+        row.status === "succeeded",
+    )
+    .sort((a, b) => b.created_at - a.created_at)[0];
+  if (!backup) return block("The service has no succeeded backup to recover from");
+  const workspaceId = liveProject(volume.project_id)?.workspace_id;
+  const target = db.nodes.find(
+    (row) => row.workspace_id === workspaceId && ineligibility(row, volume) === null,
+  );
+  if (!target) return block("No other server can take the volume: none is online with Docker");
+  const restore = beginRecovery({
+    backup,
+    volume,
+    target,
+    requestedBy: policy.enabled_by,
+    trigger: "automatic",
+  });
+  setRecoveryStatus(policy, "recovering", null, {
+    lost_node_id: volume.node_id,
+    triggered_at: now,
+    restore_id: restore.id,
+  });
+}
+
+function presentRecoveryPolicy(serviceId: string, environmentId: string): RecoveryPolicy {
+  const stored = db.data.recoveryPolicies.find(
+    (row) => row.service_id === serviceId && row.environment_id === environmentId,
+  );
+  if (!stored) return defaultRecoveryPolicy(serviceId, environmentId);
+  if (!stored.enabled) return { ...stored, status: "idle", message: null, lost_node_id: null };
+  tickRecovery(stored, Date.now());
+  return { ...stored };
 }
 
 function migrationTargetsOf(volume: Volume, workspaceId: string): MigrationTargets {
@@ -1020,12 +1388,29 @@ interface QueryInput {
 
 interface PolicyInput {
   environment_id: string;
+  pitr?: boolean;
   enabled?: boolean;
   schedule?: string;
   keep_last?: number;
   max_age_days?: number | null;
   quiesce?: "none" | "stop";
   databases?: string[] | null;
+}
+
+interface PitrRestoreInput {
+  environment_id: string;
+  target_time: number;
+  mode: "in_place" | "new_service";
+  target_environment_id?: string;
+  slug?: string;
+  confirm: string;
+  skip_safety_backup?: boolean;
+}
+
+interface RecoveryPolicyInput {
+  environment_id: string;
+  enabled?: boolean;
+  grace_minutes?: number;
 }
 
 interface RestoreInput {
@@ -1063,6 +1448,144 @@ function requireInstanceAdmin(): Response | null {
   return user.instance_admin
     ? null
     : apiError(403, "forbidden", "Only instance admins can perform instance:manage");
+}
+
+/**
+ * Mirrors `startRestore` after access and the fresh session are checked: the typed slug,
+ * then a restore into a new service or in place (a recovery when `target_node_id` is
+ * set). `targetTime` makes it a point-in-time restore of `backup`, a base backup.
+ */
+function startRestore(
+  found: Extract<ReturnType<typeof backupAccess>, { ok: true }>,
+  body: RestoreInput,
+  targetTime: number | null,
+): Response {
+  const { backup, service, project } = found;
+  if (body.confirm !== service.slug) {
+    return invalid("confirm must equal the service's slug");
+  }
+  if (body.target_node_id !== undefined && body.mode !== "in_place") {
+    return invalid("target_node_id applies to in_place restores only");
+  }
+  if (body.mode === "new_service") {
+    const target = environmentOf(project.id, body.target_environment_id ?? backup.environment_id);
+    if (!target) return notFound("Environment");
+    for (const action of ["services:manage", "variables:manage", "deployments:create"] as const) {
+      if (!can(found.guard.membership.role, action)) {
+        return apiError(
+          403,
+          "forbidden",
+          `Restoring into a new service creates and deploys a database: it needs ${action}`,
+        );
+      }
+    }
+    const engine = (backup.engine as ServiceDatabaseEngine | null) ?? service.database?.engine;
+    if (!engine || backup.method === "snapshot") {
+      return apiError(
+        422,
+        "restore_mode_unsupported",
+        engine
+          ? "A snapshot of a database carries its passwords; restore it in place, or restore a dump into a new service"
+          : "Only a database backup can be restored into a new service; restore this snapshot in place",
+      );
+    }
+    if (backup.status !== "succeeded") return conflict("Only a succeeded backup can be restored");
+    if (!db.data.storage) return storageNotConfigured();
+    const now = Date.now();
+    const added = addDatabase({
+      project,
+      environment: target,
+      engine,
+      version: databaseVersion(engine, backup.engine_version ?? service.database?.version)!.version,
+      sizeMb: volumeOf(backup.service_id, backup.environment_id)?.size_mb,
+      name: `${service.name} restore ${new Date(now).toISOString().slice(0, 10)}`.slice(0, 100),
+      slug: body.slug ?? defaultRestoreSlug(service.slug, now),
+      userId: found.guard.user.id,
+      deploy: true,
+      auditMetadata: { backup_id: backup.id },
+    });
+    const restore: Restore = {
+      id: nextId("rst"),
+      trigger: "manual",
+      target_time: targetTime,
+      backup_id: backup.id,
+      mode: "new_service",
+      target_service_id: added.service.id,
+      target_environment_id: target.id,
+      safety_backup_id: null,
+      target_node_id: null,
+      status: "queued",
+      error: null,
+      requested_by: found.guard.user.id,
+      started_at: null,
+      finished_at: null,
+      created_at: now,
+    };
+    db.data.restores.push(restore);
+    audit(project.workspace_id, found.guard.user.id, "restore.started", "restore", restore.id, {
+      project_id: project.id,
+      backup_id: backup.id,
+      mode: "new_service",
+      source_service_id: backup.service_id,
+      service_id: added.service.id,
+      environment_id: target.id,
+      ...(targetTime === null ? {} : { target_time: targetTime }),
+    });
+    broadcastRealtime(project.id, { type: "service.updated", service: added.service });
+    return HttpResponse.json(restore, { status: 202 });
+  }
+  if (body.target_environment_id && body.target_environment_id !== backup.environment_id) {
+    return invalid("in_place restores into the backup's environment");
+  }
+  if (backup.status !== "succeeded") return conflict("Only a succeeded backup can be restored");
+  if (!db.data.storage) return storageNotConfigured();
+  const busy = db.data.restores.find(
+    (row) =>
+      row.target_service_id === backup.service_id &&
+      row.target_environment_id === backup.environment_id &&
+      (row.status === "queued" || row.status === "running"),
+  );
+  if (busy) return conflict(`Restore ${busy.id} is already running for this service`);
+  if (body.target_node_id !== undefined) {
+    return recoverVolume(found, body.target_node_id);
+  }
+  const now = Date.now();
+  const safety = body.skip_safety_backup
+    ? null
+    : newBackup(service, backup.environment_id, {
+        trigger: "pre_restore",
+        pinned: false,
+        requested_by: found.guard.user.id,
+      });
+  const restore: Restore = {
+    id: nextId("rst"),
+    trigger: "manual",
+    target_time: targetTime,
+    backup_id: backup.id,
+    mode: "in_place",
+    target_service_id: backup.service_id,
+    target_environment_id: backup.environment_id,
+    safety_backup_id: safety?.id ?? null,
+    target_node_id: null,
+    status: "queued",
+    error: null,
+    requested_by: found.guard.user.id,
+    started_at: null,
+    finished_at: null,
+    created_at: now,
+  };
+  db.data.restores.push(restore);
+  restartStream(service, backup.environment_id, now);
+  audit(project.workspace_id, found.guard.user.id, "restore.started", "restore", restore.id, {
+    project_id: project.id,
+    backup_id: backup.id,
+    mode: "in_place",
+    service_id: backup.service_id,
+    environment_id: backup.environment_id,
+    safety_backup_id: restore.safety_backup_id,
+    ...(targetTime === null ? {} : { target_time: targetTime }),
+  });
+  return HttpResponse.json(restore, { status: 202 });
 }
 
 /** Data-service route handlers: databases and volumes, the data browser, backups. */
@@ -1134,6 +1657,21 @@ export const dataHandlers = [
     }
     const volume = volumeOf(found.service.id, input.query.environment_id!);
     return volume ? HttpResponse.json(volume) : notFound("Volume");
+  }),
+
+  http.get(mswPath("listAbandonedCopies"), async ({ request, params }) => {
+    const input = await validate("listAbandonedCopies", request, params);
+    if (!input.ok) return input.response;
+    const found = serviceAccess(input.params.serviceId ?? "", actionOf("listAbandonedCopies"));
+    if (!found.ok) return found.response;
+    const env = environmentOf(found.project.id, input.query.environment_id);
+    if (!env) return notFound("Environment");
+    const now = Date.now();
+    const copies = db.data.abandonedCopies
+      .filter((row) => row.service_id === found.service.id && row.environment_id === env.id)
+      .sort((a, b) => b.abandoned_at - a.abandoned_at)
+      .map((row) => presentCopy(row, now));
+    return HttpResponse.json({ copies });
   }),
 
   http.patch(mswPath("resizeVolume"), async ({ request, params }) => {
@@ -1688,12 +2226,28 @@ export const dataHandlers = [
     );
     const enabled = body.enabled ?? current?.enabled ?? true;
     if (enabled && !db.data.storage) return storageNotConfigured();
+    const pitr = body.pitr ?? current?.pitr ?? false;
+    if (pitr && !enabled) {
+      return apiError(
+        422,
+        "invalid_request",
+        "Point-in-time recovery needs scheduled backups: its base backups follow the schedule",
+      );
+    }
+    if (pitr && !current?.pitr) {
+      const unavailable = pitrIneligibility(service, env.id);
+      if (unavailable) return conflict(unavailable);
+    }
     const next = {
       id: current?.id ?? nextId("bpl"),
       service_id: service.id,
       environment_id: env.id,
       enabled,
-      method: service.database ? ("dump" as const) : ("snapshot" as const),
+      method: pitr
+        ? ("base" as const)
+        : service.database
+          ? ("dump" as const)
+          : ("snapshot" as const),
       schedule: body.schedule ?? current?.schedule ?? DEFAULT_BACKUP_SCHEDULE,
       timezone: "UTC",
       keep_last: body.keep_last ?? current?.keep_last ?? DEFAULT_BACKUP_KEEP_LAST,
@@ -1701,10 +2255,12 @@ export const dataHandlers = [
         body.max_age_days !== undefined ? body.max_age_days : (current?.max_age_days ?? null),
       quiesce: body.quiesce ?? current?.quiesce ?? "none",
       databases: body.databases !== undefined ? body.databases : (current?.databases ?? null),
-      pitr: false,
+      pitr,
     };
+    const pitrChanged = pitr !== (current?.pitr ?? false);
     if (current) Object.assign(current, next);
     else db.data.policies.push(next);
+    if (pitrChanged) applyPitrChange(service, env.id, pitr, Date.now());
     audit(
       found.project.workspace_id,
       found.guard.user.id,
@@ -1715,6 +2271,7 @@ export const dataHandlers = [
         service_id: service.id,
         environment_id: env.id,
         changed: Object.keys(body).filter((key) => key !== "environment_id"),
+        pitr,
       },
     );
     return HttpResponse.json(toPolicy(service, env.id));
@@ -1866,134 +2423,151 @@ export const dataHandlers = [
   http.post(mswPath("restoreBackup"), async ({ request, params }) => {
     const input = await validate<RestoreInput>("restoreBackup", request, params);
     if (!input.ok) return input.response;
-    const body = input.body;
     const found = backupAccess(input.params.backupId ?? "", actionOf("restoreBackup"));
     if (!found.ok) return found.response;
     const stale = staleSession();
     if (stale) return stale;
-    const { backup, service, project } = found;
-    if (body.confirm !== service.slug) {
+    return startRestore(found, input.body, null);
+  }),
+
+  // ---------------------------------------------------------------------------
+  // Point-in-time recovery
+  // ---------------------------------------------------------------------------
+  http.get(mswPath("getPitrStatus"), async ({ request, params }) => {
+    const input = await validate("getPitrStatus", request, params);
+    if (!input.ok) return input.response;
+    const found = serviceAccess(input.params.serviceId ?? "", actionOf("getPitrStatus"));
+    if (!found.ok) return found.response;
+    const env = environmentOf(found.project.id, input.query.environment_id);
+    if (!env) return notFound("Environment");
+    const { service } = found;
+    const policy = toPolicy(service, env.id);
+    const now = Date.now();
+    const active = streamsOf(service.id, env.id).find((row) => row.status === "active");
+    if (active && policy.pitr) catchUp(active, now);
+    const status: PitrStatus = {
+      service_id: service.id,
+      environment_id: env.id,
+      enabled: policy.pitr,
+      unavailable_reason: pitrIneligibility(service, env.id),
+      stream: active
+        ? {
+            id: active.id,
+            status: active.status,
+            segment_count: active.segment_count,
+            bytes_stored: active.bytes_stored,
+            first_archived_at: active.first_archived_at,
+            last_archived_at: active.last_archived_at,
+            created_at: active.created_at,
+          }
+        : null,
+      windows: pitrWindows(service.id, env.id),
+      base_backups: db.data.backups.filter(
+        (row) =>
+          row.service_id === service.id &&
+          row.environment_id === env.id &&
+          row.method === "base" &&
+          row.status === "succeeded",
+      ).length,
+    };
+    return HttpResponse.json(status);
+  }),
+
+  http.post(mswPath("restorePitr"), async ({ request, params }) => {
+    const input = await validate<PitrRestoreInput>("restorePitr", request, params);
+    if (!input.ok) return input.response;
+    const body = input.body;
+    const found = serviceAccess(input.params.serviceId ?? "", actionOf("restorePitr"));
+    if (!found.ok) return found.response;
+    const env = environmentOf(found.project.id, body.environment_id);
+    if (!env) return notFound("Environment");
+    const stale = freshSession();
+    if (stale) return stale;
+    if (body.confirm !== found.service.slug) {
       return invalid("confirm must equal the service's slug");
     }
-    if (body.target_node_id !== undefined && body.mode !== "in_place") {
-      return invalid("target_node_id applies to in_place restores only");
+    if (body.target_time > Date.now()) return invalid("target_time is in the future");
+    const backup = planPitr(found.service.id, env.id, body.target_time);
+    if (!backup) {
+      const windows = pitrWindows(found.service.id, env.id);
+      return apiError(
+        422,
+        "pitr_target_unavailable",
+        windows.length
+          ? `No base backup and archived WAL cover that time; restorable: ${windows
+              .map((w) => `${new Date(w.from).toISOString()} to ${new Date(w.to).toISOString()}`)
+              .join(", ")}`
+          : "Nothing is restorable to a point in time yet: point-in-time recovery needs a base backup and WAL archived after it",
+      );
     }
-    if (body.mode === "new_service") {
-      const target = environmentOf(project.id, body.target_environment_id ?? backup.environment_id);
-      if (!target) return notFound("Environment");
-      for (const action of ["services:manage", "variables:manage", "deployments:create"] as const) {
-        if (!can(found.guard.membership.role, action)) {
-          return apiError(
-            403,
-            "forbidden",
-            `Restoring into a new service creates and deploys a database: it needs ${action}`,
-          );
-        }
-      }
-      const engine = (backup.engine as ServiceDatabaseEngine | null) ?? service.database?.engine;
-      if (!engine || backup.method !== "dump") {
+    const { environment_id: _environment, target_time, ...restore } = body;
+    return startRestore({ ...found, backup }, restore, target_time);
+  }),
+
+  // ---------------------------------------------------------------------------
+  // Automatic recovery
+  // ---------------------------------------------------------------------------
+  http.get(mswPath("getRecoveryPolicy"), async ({ request, params }) => {
+    const input = await validate("getRecoveryPolicy", request, params);
+    if (!input.ok) return input.response;
+    const found = serviceAccess(input.params.serviceId ?? "", actionOf("getRecoveryPolicy"));
+    if (!found.ok) return found.response;
+    const env = environmentOf(found.project.id, input.query.environment_id);
+    if (!env) return notFound("Environment");
+    return HttpResponse.json(presentRecoveryPolicy(found.service.id, env.id));
+  }),
+
+  http.put(mswPath("putRecoveryPolicy"), async ({ request, params }) => {
+    const input = await validate<RecoveryPolicyInput>("putRecoveryPolicy", request, params);
+    if (!input.ok) return input.response;
+    const body = input.body;
+    const found = serviceAccess(input.params.serviceId ?? "", actionOf("putRecoveryPolicy"));
+    if (!found.ok) return found.response;
+    const env = environmentOf(found.project.id, body.environment_id);
+    if (!env) return notFound("Environment");
+    const stale = freshSession();
+    if (stale) return stale;
+    for (const action of ["services:manage", "deployments:create"] as const) {
+      if (!can(found.guard.membership.role, action)) {
         return apiError(
-          422,
-          "restore_mode_unsupported",
-          engine
-            ? "A snapshot of a database carries its passwords; restore it in place, or restore a dump into a new service"
-            : "Only a database backup can be restored into a new service; restore this snapshot in place",
+          403,
+          "forbidden",
+          `Automatic recovery replaces the volume and redeploys: it needs ${action}`,
         );
       }
-      if (backup.status !== "succeeded") return conflict("Only a succeeded backup can be restored");
-      if (!db.data.storage) return storageNotConfigured();
-      const now = Date.now();
-      const added = addDatabase({
-        project,
-        environment: target,
-        engine,
-        version: databaseVersion(engine, backup.engine_version ?? service.database?.version)!
-          .version,
-        sizeMb: volumeOf(backup.service_id, backup.environment_id)?.size_mb,
-        name: `${service.name} restore ${new Date(now).toISOString().slice(0, 10)}`.slice(0, 100),
-        slug: body.slug ?? defaultRestoreSlug(service.slug, now),
-        userId: found.guard.user.id,
-        deploy: true,
-        auditMetadata: { backup_id: backup.id },
-      });
-      const restore: Restore = {
-        id: nextId("rst"),
-        trigger: "manual",
-        target_time: null,
-        backup_id: backup.id,
-        mode: "new_service",
-        target_service_id: added.service.id,
-        target_environment_id: target.id,
-        safety_backup_id: null,
-        target_node_id: null,
-        status: "queued",
-        error: null,
-        requested_by: found.guard.user.id,
-        started_at: null,
-        finished_at: null,
-        created_at: now,
-      };
-      db.data.restores.push(restore);
-      audit(project.workspace_id, found.guard.user.id, "restore.started", "restore", restore.id, {
-        project_id: project.id,
-        backup_id: backup.id,
-        mode: "new_service",
-        source_service_id: backup.service_id,
-        service_id: added.service.id,
-        environment_id: target.id,
-      });
-      broadcastRealtime(project.id, { type: "service.updated", service: added.service });
-      return HttpResponse.json(restore, { status: 202 });
     }
-    if (body.target_environment_id && body.target_environment_id !== backup.environment_id) {
-      return invalid("in_place restores into the backup's environment");
+    const { service, project, guard } = found;
+    if (!volumeOf(service.id, env.id)) {
+      return conflict("The service has no volume in this environment to recover");
     }
-    if (backup.status !== "succeeded") return conflict("Only a succeeded backup can be restored");
-    if (!db.data.storage) return storageNotConfigured();
-    const busy = db.data.restores.find(
-      (row) =>
-        row.target_service_id === backup.service_id &&
-        row.target_environment_id === backup.environment_id &&
-        (row.status === "queued" || row.status === "running"),
+    const current = db.data.recoveryPolicies.find(
+      (row) => row.service_id === service.id && row.environment_id === env.id,
     );
-    if (busy) return conflict(`Restore ${busy.id} is already running for this service`);
-    if (body.target_node_id !== undefined) {
-      return recoverVolume(found, body.target_node_id);
-    }
-    const safety = body.skip_safety_backup
-      ? null
-      : newBackup(service, backup.environment_id, {
-          trigger: "pre_restore",
-          pinned: false,
-          requested_by: found.guard.user.id,
-        });
-    const restore: Restore = {
-      id: nextId("rst"),
-      trigger: "manual",
-      target_time: null,
-      backup_id: backup.id,
-      mode: "in_place",
-      target_service_id: backup.service_id,
-      target_environment_id: backup.environment_id,
-      safety_backup_id: safety?.id ?? null,
-      target_node_id: null,
-      status: "queued",
-      error: null,
-      requested_by: found.guard.user.id,
-      started_at: null,
-      finished_at: null,
-      created_at: Date.now(),
+    const enabled = body.enabled ?? current?.enabled ?? false;
+    if (enabled && !db.data.storage) return storageNotConfigured();
+    const now = Date.now();
+    const turnedOn = enabled && !current?.enabled;
+    const next: RecoveryPolicy = {
+      ...(current ?? defaultRecoveryPolicy(service.id, env.id)),
+      id: current?.id ?? nextId("rcp"),
+      enabled,
+      grace_minutes: body.grace_minutes ?? current?.grace_minutes ?? DEFAULT_RECOVERY_GRACE_MINUTES,
+      // NOTE: Whoever last saves it enabled is whose access recoveries run with.
+      enabled_by: enabled ? guard.user.id : (current?.enabled_by ?? null),
+      ...(turnedOn || !enabled
+        ? { status: "idle" as const, message: null, lost_node_id: null }
+        : {}),
+      updated_at: now,
     };
-    db.data.restores.push(restore);
-    audit(project.workspace_id, found.guard.user.id, "restore.started", "restore", restore.id, {
+    if (current) Object.assign(current, next);
+    else db.data.recoveryPolicies.push(next);
+    audit(project.workspace_id, guard.user.id, "recovery.policy_updated", "service", service.id, {
       project_id: project.id,
-      backup_id: backup.id,
-      mode: "in_place",
-      service_id: backup.service_id,
-      environment_id: backup.environment_id,
-      safety_backup_id: restore.safety_backup_id,
+      environment_id: env.id,
+      enabled,
+      grace_minutes: next.grace_minutes,
     });
-    return HttpResponse.json(restore, { status: 202 });
+    return HttpResponse.json(presentRecoveryPolicy(service.id, env.id));
   }),
 
   http.get(mswPath("getRestore"), async ({ request, params }) => {
