@@ -2734,6 +2734,14 @@
           "notNull": false,
           "autoincrement": false
         },
+        "pitr": {
+          "name": "pitr",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
         "next_run_at": {
           "name": "next_run_at",
           "type": "integer",
@@ -2957,6 +2965,20 @@
           "autoincrement": false,
           "default": false
         },
+        "wal_stream_id": {
+          "name": "wal_stream_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "wal_start": {
+          "name": "wal_start",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "error": {
           "name": "error",
           "type": "text",
@@ -3099,6 +3121,19 @@
           "tableTo": "nodes",
           "columnsFrom": [
             "node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "backups_wal_stream_id_wal_streams_id_fk": {
+          "name": "backups_wal_stream_id_wal_streams_id_fk",
+          "tableFrom": "backups",
+          "tableTo": "wal_streams",
+          "columnsFrom": [
+            "wal_stream_id"
           ],
           "columnsTo": [
             "id"
@@ -3332,6 +3367,212 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "recovery_policies": {
+      "name": "recovery_policies",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "environment_id": {
+          "name": "environment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "grace_minutes": {
+          "name": "grace_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 30
+        },
+        "enabled_by": {
+          "name": "enabled_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'idle'"
+        },
+        "message": {
+          "name": "message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "lost_node_id": {
+          "name": "lost_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "restore_id": {
+          "name": "restore_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "triggered_at": {
+          "name": "triggered_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "recovery_policies_svc_env_uq": {
+          "name": "recovery_policies_svc_env_uq",
+          "columns": [
+            "service_id",
+            "environment_id"
+          ],
+          "isUnique": true
+        },
+        "recovery_policies_enabled_idx": {
+          "name": "recovery_policies_enabled_idx",
+          "columns": [
+            "enabled"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "recovery_policies_project_id_projects_id_fk": {
+          "name": "recovery_policies_project_id_projects_id_fk",
+          "tableFrom": "recovery_policies",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "recovery_policies_service_id_services_id_fk": {
+          "name": "recovery_policies_service_id_services_id_fk",
+          "tableFrom": "recovery_policies",
+          "tableTo": "services",
+          "columnsFrom": [
+            "service_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "recovery_policies_environment_id_environments_id_fk": {
+          "name": "recovery_policies_environment_id_environments_id_fk",
+          "tableFrom": "recovery_policies",
+          "tableTo": "environments",
+          "columnsFrom": [
+            "environment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "recovery_policies_enabled_by_users_id_fk": {
+          "name": "recovery_policies_enabled_by_users_id_fk",
+          "tableFrom": "recovery_policies",
+          "tableTo": "users",
+          "columnsFrom": [
+            "enabled_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "recovery_policies_lost_node_id_nodes_id_fk": {
+          "name": "recovery_policies_lost_node_id_nodes_id_fk",
+          "tableFrom": "recovery_policies",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "lost_node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "recovery_policies_restore_id_restores_id_fk": {
+          "name": "recovery_policies_restore_id_restores_id_fk",
+          "tableFrom": "recovery_policies",
+          "tableTo": "restores",
+          "columnsFrom": [
+            "restore_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "restores": {
       "name": "restores",
       "columns": {
@@ -3387,6 +3628,42 @@
         "target_node_id": {
           "name": "target_node_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "trigger": {
+          "name": "trigger",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'manual'"
+        },
+        "abandoned_volume_id": {
+          "name": "abandoned_volume_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "target_time": {
+          "name": "target_time",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "wal_end": {
+          "name": "wal_end",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "wal_files": {
+          "name": "wal_files",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -3530,6 +3807,19 @@
           "tableTo": "nodes",
           "columnsFrom": [
             "target_node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "restores_abandoned_volume_id_volumes_id_fk": {
+          "name": "restores_abandoned_volume_id_volumes_id_fk",
+          "tableFrom": "restores",
+          "tableTo": "volumes",
+          "columnsFrom": [
+            "abandoned_volume_id"
           ],
           "columnsTo": [
             "id"
@@ -4130,6 +4420,20 @@
           "notNull": false,
           "autoincrement": false
         },
+        "abandoned_at": {
+          "name": "abandoned_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cleaned_at": {
+          "name": "cleaned_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "integer",
@@ -4167,6 +4471,15 @@
           "name": "volumes_delete_after_idx",
           "columns": [
             "status",
+            "delete_after"
+          ],
+          "isUnique": false
+        },
+        "volumes_abandoned_idx": {
+          "name": "volumes_abandoned_idx",
+          "columns": [
+            "status",
+            "cleaned_at",
             "delete_after"
           ],
           "isUnique": false
@@ -4218,6 +4531,287 @@
           "tableTo": "nodes",
           "columnsFrom": [
             "node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "wal_segments": {
+      "name": "wal_segments",
+      "columns": {
+        "stream_id": {
+          "name": "stream_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "size_raw": {
+          "name": "size_raw",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "size_stored": {
+          "name": "size_stored",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "wal_segments_archived_idx": {
+          "name": "wal_segments_archived_idx",
+          "columns": [
+            "stream_id",
+            "archived_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "wal_segments_stream_id_wal_streams_id_fk": {
+          "name": "wal_segments_stream_id_wal_streams_id_fk",
+          "tableFrom": "wal_segments",
+          "tableTo": "wal_streams",
+          "columnsFrom": [
+            "stream_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "wal_segments_stream_id_name_pk": {
+          "columns": [
+            "stream_id",
+            "name"
+          ],
+          "name": "wal_segments_stream_id_name_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "wal_streams": {
+      "name": "wal_streams",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "environment_id": {
+          "name": "environment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "volume_id": {
+          "name": "volume_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
+        },
+        "segment_count": {
+          "name": "segment_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "bytes_stored": {
+          "name": "bytes_stored",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "first_archived_at": {
+          "name": "first_archived_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_archived_at": {
+          "name": "last_archived_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_file": {
+          "name": "last_file",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "retired_at": {
+          "name": "retired_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "wal_streams_active_uq": {
+          "name": "wal_streams_active_uq",
+          "columns": [
+            "service_id",
+            "environment_id"
+          ],
+          "isUnique": true,
+          "where": "status = 'active'"
+        },
+        "wal_streams_volume_idx": {
+          "name": "wal_streams_volume_idx",
+          "columns": [
+            "volume_id",
+            "status"
+          ],
+          "isUnique": false
+        },
+        "wal_streams_svc_env_idx": {
+          "name": "wal_streams_svc_env_idx",
+          "columns": [
+            "service_id",
+            "environment_id",
+            "id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "wal_streams_project_id_projects_id_fk": {
+          "name": "wal_streams_project_id_projects_id_fk",
+          "tableFrom": "wal_streams",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wal_streams_service_id_services_id_fk": {
+          "name": "wal_streams_service_id_services_id_fk",
+          "tableFrom": "wal_streams",
+          "tableTo": "services",
+          "columnsFrom": [
+            "service_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wal_streams_environment_id_environments_id_fk": {
+          "name": "wal_streams_environment_id_environments_id_fk",
+          "tableFrom": "wal_streams",
+          "tableTo": "environments",
+          "columnsFrom": [
+            "environment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wal_streams_volume_id_volumes_id_fk": {
+          "name": "wal_streams_volume_id_volumes_id_fk",
+          "tableFrom": "wal_streams",
+          "tableTo": "volumes",
+          "columnsFrom": [
+            "volume_id"
           ],
           "columnsTo": [
             "id"
