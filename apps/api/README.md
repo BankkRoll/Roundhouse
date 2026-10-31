@@ -144,6 +144,9 @@ body with code `mcp_disabled`.
 | `get_node_health` (status, usage, mesh, drain, replicas)        | `nodes:read`, `services:read` |
 | `list_degraded_services` (with the server each waits on)        | `services:read`               |
 | `drain_node` (`force` stops volume services), `resume_node`     | `nodes:manage`                |
+| `list_databases`, `list_backups`, `get_metrics`                 | `services:read`               |
+| `get_pitr_status` (restorable windows, WAL stream)              | `services:read`               |
+| `get_recovery_policy`, `list_abandoned_copies`                  | `services:read`               |
 
 There is no tool that reads a secret value, deletes anything, opens a shell,
 manages domains, tokens or members, or adds or removes servers. Draining and

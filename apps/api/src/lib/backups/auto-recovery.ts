@@ -41,6 +41,7 @@ import {
 import { REGISTRY_LISTEN, VOLUMES_PROTOCOL_VERSION } from "@roundhouse/protocol";
 import {
   type Action,
+  DEFAULT_RECOVERY_GRACE_MINUTES,
   type RecoveryPolicyStatus,
   resolveAccess,
   schedule,
@@ -482,6 +483,30 @@ async function tickPolicy(
     },
   });
   return "triggered";
+}
+
+/**
+ * A service's automatic recovery in an environment, or the defaults when
+ * none is saved. Shared by the REST route and the MCP tool, which check
+ * access first.
+ *
+ * @param db - Database client.
+ * @param serviceId - The service.
+ * @param environmentId - The environment.
+ * @returns The `RecoveryPolicy` wire shape.
+ */
+export async function recoveryPolicyView(db: Db, serviceId: string, environmentId: string) {
+  const [policy] = await db
+    .select()
+    .from(recoveryPolicies)
+    .where(
+      and(
+        eq(recoveryPolicies.serviceId, serviceId),
+        eq(recoveryPolicies.environmentId, environmentId),
+      ),
+    )
+    .limit(1);
+  return toApiRecoveryPolicy(policy, serviceId, environmentId, DEFAULT_RECOVERY_GRACE_MINUTES);
 }
 
 /**
