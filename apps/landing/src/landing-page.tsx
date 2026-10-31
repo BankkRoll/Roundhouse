@@ -3,8 +3,9 @@
  *
  * Responsibilities:
  * - Say what the product is and show it working: every picture of the product is a live
- *   fragment of the real dashboard, and the visitor can forge a signed command and watch it
- *   refused.
+ *   fragment of the real dashboard.
+ * - Show how it is built to stay safe, and match published advisories from comparable
+ *   platforms against those choices.
  * - Make no API calls: there is no control plane behind it.
  * - Stay inside the CSP: no inline scripts and no third-party requests.
  *

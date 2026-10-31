@@ -247,3 +247,87 @@
   outline: 2px solid var(--ring);
   outline-offset: 4px;
 }
+
+/* Advisory table: a real table on wide screens. Below 1024px each row becomes its own
+   block (platform and severity, advisory and date, what went wrong, what stops it), so
+   nothing scrolls sideways and the headers live on as labels where they are needed. */
+.lp-advisories th,
+.lp-advisories td {
+  padding: 16px 20px 16px 0;
+  vertical-align: top;
+}
+
+.lp-advisories thead th {
+  padding-block: 4px;
+  font-weight: 400;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.lp-advisories tbody tr {
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 1023px) {
+  .lp-advisories thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .lp-advisories,
+  .lp-advisories tbody {
+    display: block;
+  }
+
+  .lp-advisories tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 16px;
+    padding-block: 20px;
+  }
+
+  .lp-advisories tbody th,
+  .lp-advisories tbody td {
+    display: block;
+    padding: 0;
+    min-width: 0;
+  }
+
+  .lp-advisories [data-label="Platform"] {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .lp-advisories [data-label="Severity"] {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .lp-advisories [data-label="Advisory"] {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .lp-advisories [data-label="Published"] {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+    color: var(--muted-foreground);
+  }
+
+  .lp-advisories [data-label="What went wrong"],
+  .lp-advisories [data-label="What stops it here"] {
+    grid-column: 1 / -1;
+    margin-top: 6px;
+  }
+
+  .lp-advisories [data-label="What stops it here"]::before {
+    content: "What stops it here: ";
+    color: var(--muted-foreground);
+  }
+}

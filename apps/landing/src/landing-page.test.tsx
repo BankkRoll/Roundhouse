@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LandingPage } from "./landing-page";
+import { ADVISORIES, CLASS_ORDER, CLASSES, SEVERITY_RANK, type Severity } from "./model/cves";
+import { DEFENCES } from "./model/defences";
 import { PAGE_SECTIONS } from "./sections/header";
 
 const fetchSpy = vi.fn();
@@ -63,8 +65,11 @@ describe("landing page content", () => {
 
   it("points every GitHub link at the project repository", async () => {
     await renderLanding();
+    // Advisories for other platforms link to their own repositories on purpose.
+    const advisories = screen.getByTestId("advisories");
     const external = screen
       .getAllByRole("link")
+      .filter((link) => !advisories.contains(link))
       .map((link) => link.getAttribute("href") ?? "")
       .filter((href) => href.includes("github.com"));
     expect(external.length).toBeGreaterThan(0);
@@ -101,16 +106,90 @@ describe("landing page content", () => {
   });
 });
 
-describe("the live thing", () => {
-  it("rejects a tampered envelope and accepts the original", async () => {
+describe("security section", () => {
+  it("names a heading for every block and links every claim to its code", async () => {
+    await renderLanding();
+    const section = document.getElementById("security");
+    expect(section).toBeInstanceOf(HTMLElement);
+    const scope = within(section as HTMLElement);
+    expect(scope.getByRole("heading", { level: 2 })).toHaveTextContent(/secure by the way/i);
+    expect(scope.getAllByRole("heading", { level: 3 }).length).toBeGreaterThanOrEqual(5);
+    const code = scope.getAllByRole("link", { name: /^See the code/ });
+    expect(code.length).toBe(DEFENCES.length);
+    for (const link of code) {
+      expect(link.getAttribute("href")).toMatch(
+        /^https:\/\/github\.com\/BankkRoll\/Roundhouse\/blob\/main\//,
+      );
+    }
+    expect(scope.getByRole("link", { name: /security policy/i })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/SECURITY\.md$/),
+    );
+    expect(scope.getByRole("link", { name: /october 2026 review/i })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/review-2026-10\.md$/),
+    );
+  });
+
+  it("lists every advisory in a captioned table, linked to its official advisory", async () => {
     const { user } = await renderLanding();
-    const demo = screen.getByTestId("envelope-demo");
-    await waitFor(() => expect(demo).toHaveAttribute("data-result", "accepted"));
-    await user.click(within(demo).getByRole("switch", { name: /tamper/i }));
-    await waitFor(() => expect(demo).toHaveAttribute("data-result", "rejected"));
-    expect(within(demo).getByRole("status")).toHaveTextContent(/REJECTED · bad_signature/);
-    await user.click(within(demo).getByRole("switch", { name: /tamper/i }));
-    await waitFor(() => expect(demo).toHaveAttribute("data-result", "accepted"));
+    const explorer = screen.getByTestId("advisories");
+    const table = within(explorer).getByRole("table");
+    expect(table).toHaveAccessibleDescription(/published security advisories/i);
+    expect(within(table).getAllByRole("row").length).toBeLessThan(ADVISORIES.length + 1);
+    await user.click(
+      within(explorer).getByRole("button", { name: `Show all ${ADVISORIES.length} advisories` }),
+    );
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(ADVISORIES.length);
+    for (const row of rows) {
+      const link = within(row).getByRole("link", { name: /^(CVE|GHSA)-/ });
+      expect(link.textContent).toMatch(/^(CVE-\d{4}-\d{4,}|GHSA(-[23456789cfghjmpqrvwx]{4}){3})$/);
+      expect(link.getAttribute("href")).toMatch(/^https:\/\//);
+      expect(link).toHaveAttribute("target", "_blank");
+    }
+  });
+
+  it("sorts newest first, or most severe first", async () => {
+    const { user } = await renderLanding();
+    const table = within(screen.getByTestId("advisories")).getByRole("table");
+    const dates = () =>
+      within(table)
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => row.getAttribute("data-published") ?? "");
+    expect(dates()).toEqual([...dates()].sort().reverse());
+    await user.click(within(table).getByRole("button", { name: /severity/i }));
+    const severities = within(table)
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => SEVERITY_RANK[row.getAttribute("data-severity") as Severity]);
+    expect(severities).toEqual([...severities].sort((a, b) => a - b));
+  });
+
+  it("filters by kind of flaw and names what blocks it here", async () => {
+    const { user } = await renderLanding();
+    const explorer = screen.getByTestId("advisories");
+    const group = within(explorer).getByRole("group", { name: /kind of flaw/i });
+    const kinds = within(group).getAllByRole("button");
+    expect(kinds[0]).toHaveAttribute("aria-pressed", "true");
+    const kind = CLASS_ORDER.find((value) => ADVISORIES.some((a) => a.kind === value));
+    if (!kind) throw new Error("no advisory classes");
+    await user.click(
+      within(group).getByRole("button", { name: new RegExp(`^${CLASSES[kind].label}`) }),
+    );
+    const rows = within(within(explorer).getByRole("table")).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(ADVISORIES.filter((a) => a.kind === kind).length);
+    for (const row of rows) expect(row).toHaveAttribute("data-class", kind);
+    const verdict = within(explorer).getByTestId("class-verdict");
+    for (const id of CLASSES[kind].defences) {
+      expect(verdict).toHaveTextContent(DEFENCES.find((d) => d.id === id)?.title ?? id);
+    }
+    await user.click(kinds[0] as HTMLElement);
+    expect(kinds[0]).toHaveAttribute("aria-pressed", "true");
+    expect(within(explorer).getByTestId("class-verdict")).toHaveTextContent(
+      `${ADVISORIES.length} advisories`,
+    );
   });
 });
 
