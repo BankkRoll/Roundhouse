@@ -9,12 +9,12 @@ require (
 	github.com/BankkRoll/Roundhouse/packages/protocol/go v0.0.0
 	github.com/coder/websocket v1.8.15
 	github.com/go-sql-driver/mysql v1.10.1
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/klauspost/compress v1.20.3
 	github.com/moby/buildkit v0.34.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/shirou/gopsutil/v4 v4.26.10
-	github.com/tonistiigi/fsutil v0.0.0-20260819142231-83cac42c1c52
+	github.com/tonistiigi/fsutil v0.0.0-20261027232937-ca65610c2295
 	github.com/vishvananda/netlink v1.3.1
 	go.mongodb.org/mongo-driver/v2 v2.9.2
 	golang.org/x/crypto v0.58.0
